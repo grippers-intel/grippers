@@ -2,7 +2,7 @@
 
 # 🤖 Gripper
 
-*조명이 제한된 공간에서 물품을 꺼내오는 레일 없는 이송 로봇*
+**특수환경 장물(長物) 통과 — 무인 멸균 암실에서 긴 물체를 꺼내오는 모바일 매니퓰레이터**
 
 ⭐ 팀 프로젝트입니다 — 이슈와 제안 환영합니다 🙏
 
@@ -15,149 +15,197 @@
 - [🚀 About](#-about)
 - [🎯 Mission Scenario](#-mission-scenario)
 - [🔀 Sequence Diagrams](#-sequence-diagrams)
+- [🧠 AI Components](#-ai-components)
 - [✨ Key Features](#-key-features)
-- [🏗️ Architecture](#️-architecture)
-- [🤖 Hardware](#-hardware)
+- [🧱 Architecture](#-architecture)
+- [🔩 Hardware](#-hardware)
 - [📁 Repository Structure](#-repository-structure)
-- [🛠️ Getting Started](#️-getting-started)
+- [🔧 Getting Started](#-getting-started)
 - [🧪 Testing](#-testing)
 - [📊 Results](#-results)
-- [🗓️ Roadmap](#️-roadmap)
+- [📅 Milestones](#-milestones)
+- [⚠️ Risks](#-risks)
 - [👥 Team](#-team)
 - [🤝 Contributing](#-contributing)
 - [📃 License](#-license)
-- [🗨️ Contacts](#️-contacts)
+- [📮 Contacts](#-contacts)
+
+> **용어** — 이 문서에서 **Gripper**는 시스템 전체(모바일 매니퓰레이터)를 가리킵니다. 팔 끝단 부품은 **엔드이펙터**로 표기하여 구분합니다.
 
 ---
 
 ## 🚀 About
 
-반도체 팹의 물류 자동화는 천장 레일을 따라 움직이는 **OHT(Overhead Hoist Transfer)** 가 담당합니다. 검증된 기술이지만, 레일은 **고정 인프라**입니다. 레일을 깔 수 없거나 깔 만큼 물량이 나오지 않는 공간 — 후공정 라인, 소량 다품종 생산, 연구시설 — 에서는 여전히 사람이 직접 드나듭니다.
+> **확정 문장**
+>
+> 작업실에서 키보드로 입력된 명령을 받은 로봇이 스스로 주행해 **사람이 들어갈 수 없는 무인 멸균 암실**에 진입하고, IR 기반 인식으로 장물을 찾아 파지한 뒤, **사전에 주어지지 않은** 좁은 출구의 개구부를 추정해 통과 가능한 자세로 파지 자세를 재조정하여, **어디에도 접촉하지 않고** 작업실로 반송한다.
 
-그중에서도 **조명이 제한된 구역**은 사람의 출입 부담이 특히 큽니다.
+### 왜 이 문제인가
 
-| 환경 | 조명 조건 | 사람 출입이 부담스러운 이유 |
-|---|---|---|
-| **옐로우룸** | 단파장(UV·청색) 차단, 호박색 조명만 | 감광재 노출 위험, 파티클 유입, 가운·에어샤워 절차 |
-| **암실** | 거의 무광 | 시야 확보 불가, 안전사고 위험, 감광 소재 보호 |
+반도체 팹의 물류 자동화는 천장 레일 위의 **OHT**가 담당합니다. 검증된 기술이지만 레일은 **고정 인프라**입니다. 레일을 깔 수 없는 공간 — 그중에서도 **사람이 들어갈 수 없는 구역** — 에서는 여전히 사람이 방호 절차를 거쳐 직접 드나듭니다.
 
-**Gripper는 이 구역에 사람 대신 들어가 물품을 꺼내오는 최소 시스템입니다.**
+암실 겸 멸균실은 사람이 못 들어가는 이유가 둘입니다. **시야 확보가 불가능하고, 사람 자체가 최대 오염원**입니다. 그래서 벽 접촉이 곧 오염이고, 성공 기준이 이진값으로 유지됩니다.
 
-레일 없는 이동 플랫폼(메카넘 AMR) 위에 6-DOF 매니퓰레이터를 얹어, 조명 조건이 전혀 다른 두 공간을 왕복하며 물품을 회수합니다.
+### AI가 필요한 이유
 
-> [!NOTE]
-> 이 프로젝트의 목표는 상용 수준 시스템 구현이 아닙니다. **레일 없는 이송·이재에서 무엇이 진짜 어려운 문제인지 측정하고 기록하는 것**이 목표입니다. 시도했으나 채택하지 않은 설계와 그 근거는 [`docs/rejected-designs.md`](docs/rejected-designs.md)에 정리합니다.
+물체 길이와 통로 개구부 치수를 **사전에 주지 않습니다.** 그러면 비전 추정 오차와 안전 마진 사이에 트레이드오프가 생기고, 이 지점이 학습이 개입할 자리입니다.
 
-### 왜 조명 제약이 기술적으로 어려운가
+반대로 치수를 미리 알면 고전 모션 플래닝으로 풀립니다. 따라서 **치수 미지(未知)를 전제로 문제를 정의**하는 것이 이 프로젝트의 설계 조건입니다.
 
-일반적인 색상 기반 인식(HSV segmentation)은 **조명의 스펙트럼이 일정하다는 암묵적 가정** 위에 서 있습니다. 이 가정이 두 번 깨집니다.
+여기에 명령이 **자연어 텍스트**로 들어오고, 인식 환경이 **열화된 조명(IR)** 이라는 조건이 겹칩니다. 규칙 기반으로는 성립하지 않습니다.
 
-- **옐로우룸** — 단파장 성분이 제거되어 있어 파란색 물체가 거의 검게 보입니다. 색상(H) 채널 자체가 붕괴하므로, 일반 환경에서 튜닝한 임계값이 그대로 통하지 않습니다.
-- **암실** — 가시광 자체가 없어 RGB 파이프라인이 성립하지 않습니다.
-- **경계 통과 순간** — 조도가 급변하면서 카메라 오토 노출·오토 화이트밸런스가 재수렴하는 0.5~2초 동안 인식 결과가 신뢰할 수 없게 됩니다.
+### 조명 도메인 전이
 
-Gripper는 이 문제를 **조명 도메인별 프로파일 전환 + 능동 조명 + 형상 기반 보조 인식**의 조합으로 다룹니다.
+한 미션 안에서 두 조명 도메인을 왕복합니다. 조명 조건이 별도 실험이 아니라 **경로 자체에 내장**됩니다.
+
+| 도메인 | 조명 | 이 구간에서 하는 일 | 인식 수단 | 난이도 |
+|---|---|---|---|---|
+| **작업실** | 정상광 | 명령 수신, 반송 후 장물 배치 | RGB + YOLO | 하 |
+| **경계 (도어)** | 조도 급변 | 프로파일 전환 · 정착 대기. **이 구간 인식 결과 미채택** | — (주행은 LiDAR로 계속) | 중 |
+| **암실 겸 멸균실** | 거의 무광 | **장물 식별 및 파지 — 미션의 핵심.** 접촉 0회 제약 | IR 스테레오 + IR 능동 조명. RGB 파이프라인 성립 안 함 | **상** |
+| 옐로우 룸 | 단색광 | (여유 시) 색상 채널 붕괴 조건 추가 측정 | 명도·형상 위주 + 마커 폴백 | 상 |
+
+> [!IMPORTANT]
+> **능동 조명은 반드시 IR이어야 합니다.** 가시광 LED를 켜면 암실이라는 전제 자체가 깨집니다. IR은 감광성 소재를 노출시키지 않으면서 센서에만 보이므로, "사람은 못 보고 로봇만 보는" 구성이 성립합니다.
 
 ---
 
 ## 🎯 Mission Scenario
 
 ```
-   [ 일반 환경 ]                          [ 제한 조명 구역 ]
-   ┌─────────────┐        통로/도어         ┌─────────────┐
-   │  Station B  │ ◄──────────────────────► │  Station A  │
-   │  (반출 지점) │                          │ (암실/옐로우룸)│
-   └─────────────┘                          └─────────────┘
+[ 작업실 · 정상광 ]                        [ 암실 겸 멸균실 · 무광 ]
+┌──────────────┐    ① 출발 → 좌회전        ┌──────────────┐
+│  명령 입력    │ ─────────────────────►  │   장물 파지    │
+│  장물 배치    │ ◄─────────────────────  │               │
+└──────────────┘  ② 좁은 출구 → 좌회전     └──────────────┘
 ```
 
-| # | Phase | 동작 | 성공 판정 |
-|---|---|---|---|
-| 1 | `IDLE` | 관제 지시 수신 (대상 물품 ID) | 명령 파싱 |
-| 2 | `TRANSIT_TO_A` | 팔을 크래들에 안착 후 A로 주행 | |
-| 3 | `LIGHT_ADAPT` | 조명 프로파일 전환, 능동 조명 점등 | |
-| 4 | `DOCKING_A` | ArUco 기반 정밀 도킹 | |
-| 5 | `IDENTIFY` | 대상 물품 식별 | |
-| 6 | `GRASP` | Top-down 파지 + 부하 기반 검증 | |
-| 7 | `STOW` | 차체 트레이 적재 후 팔 접기 | |
-| 8 | `TRANSIT_TO_B` | B로 주행 (장애물 회피 포함) | |
-| 9 | `NARROW_PASS` | 장축 물체 자세 계획 후 협로 통과 | |
-| 10 | `DOCKING_B` → `RELEASE` | 도킹 후 지정 슬롯 배치 | |
+**진입과 퇴출 경로가 다릅니다.** 진입은 일반 도어(빈손), 퇴출은 좁은 출구(장물 파지 상태). 따라서 **자세 재조정이 미션당 1회 강제**됩니다.
 
-> 성공 판정 기준(수치)은 1주차 실측 후 확정합니다.
+| # | 상태 | 동작 | 주 담당 |
+|---|---|---|---|
+| 1 | `IDLE` | 작업실에서 키보드 명령 수신 → 대상 물체 확정 | VLA-L |
+| 2 | `TRANSIT_OUT` | 팔 크래들 안착·토크 차단 → 작업실 퇴출 → 좌회전. **회피기동 구간** | ROS2 / 주행 |
+| 3 | `LIGHT_ADAPT` | 암실 경계 진입. 노출·WB 고정, **IR 능동 조명 점등**, 정착 대기 | VLA-V |
+| 4 | `DOCKING` | 마커 기반 폐루프 정렬 → 오도메트리 누적오차 리셋 | VLA-V / 주행 |
+| 5 | `IDENTIFY` | **정지 상태에서** IR 영상 기반 장물 검출 · N프레임 합의 | YOLO / VLA-V |
+| 6 | `GRASP` | 파지 + **서보 부하값으로 검증** → 실패 시 재인식 후 재시도 | VLA-A |
+| 7 | `POSE_PLAN` | 출구 개구부 추정 → 통과 가능 자세 φ 산출 | VLA-V / 기하 |
+| 8 | `NARROW_EXIT` | **자세 재조정 후 좁은 출구 저속 통과 — 프로젝트 핵심 동작** | VLA-A / 중심잡기 |
+| 9 | `RETURN` | 좌회전 → 조명 프로파일 복귀 → 작업실 재입장. **회피기동 구간** | ROS2 / 주행 |
+| 10 | `RELEASE` | 지정 슬롯 배치 → 팔 접기 → 결과 보고 | VLA-A |
+
+> [!WARNING]
+> **장물을 차체 트레이에 싣지 않습니다.** 트레이에 실으면 좁은 출구를 그냥 지나가게 되어 자세 재조정의 존재 이유가 사라집니다. 장물은 **암이 든 채** 이동하며, 주행 안정성과 상충하므로 저속 프로파일이 필수입니다.
+
+### 기하 제약
+
+개구부는 **높이** 제한(30cm)이고 장물은 0.5m입니다. 따라서 물체를 **눕혀야** 통과합니다. 이를 강제하려면 초기 파지 자세가 **수직**이어야 합니다 (예: 랙에 세워진 것을 집음). 처음부터 수평으로 잡으면 자세를 바꿀 이유가 사라집니다.
+
+### 유즈케이스
+
+| # | 시나리오 | 검증 대상 |
+|---|---|---|
+| 1 | 정상 통과 | 전체 파이프라인 |
+| 2 | **통과 불가 판정 후 거부** | "못 지나갑니다"라고 판단하는 능력 — 시스템 완결성 |
+| 3 | 추정 실패 시 복구 | 재인식·재시도 루프 |
+
+### 성공 기준 (M4 측정 대상)
+
+| 지표 | 목표 | 측정 방법 |
+|---|---|---|
+| 통과 성공률 | **90% 이상** | 20회 시도 중 성공 횟수 |
+| 벽 접촉 횟수 | **0회** (멸균실 = 접촉이 곧 오염) | 접촉 센서 또는 영상 판독 |
+| 소요 시간 | 미정 — 주행 루트 확정 후 산정 | 명령 입력 → 반송 완료 |
+| 개구부높이 / 물체길이 | **0.6** (30cm / 50cm) | 고정 파라미터 |
+
+위 지표를 **조명 조건 3종(정상광 / 암실 / 옐로우 룸)별로 반복 측정**하여 4×3 비교표를 만듭니다. 이 표가 포스터의 핵심 근거입니다.
+
+| 지표 \\ 조명 | 정상광 | 암실 | 옐로우 룸 |
+|---|---|---|---|
+| 통과 성공률 | | | |
+| 벽 접촉 횟수 | | | |
+| 소요 시간 | | | |
+| 인식 복구 시간 | | | |
 
 ### 성공 등급
 
-프로젝트 기간이 제한되어 있어, 달성 목표를 3단계로 사전 정의했습니다.
-
-| 등급 | 범위 | 달성 |
+| 등급 | 범위 | 목표 시점 |
 |---|---|---|
-| 🥉 **Minimum** | 도킹 → 파지 → 반대편 배치 (조명 전환 없음, 고정 경로) | |
-| 🥈 **Target** | 조명 전환 구간 왕복 + 장애물 회피 + 파지 실패 복구 | |
-| 🥇 **Stretch** | 장축 물체 자세 계획 협로 통과, 다품목 선택 회수 | |
+| 🥉 **Minimum** | 정상광 범위, 고정 경로 주행 → Pick and Place → 복귀 · 조명 전환 없음 | M2 종료 (8/23) |
+| 🥈 **Target** | 암실 왕복 + 조명 도메인 전환 + **좁은 출구 자세 재조정 통과** · 정적 장애물 회피 + 파지 실패 재시도 | M3–M4 (8/30–9/4) |
+| 🥇 **Stretch** | 동적 장애물 회피, 다품목 선택 회수, 옐로우 룸 추가 측정, 자유 문형 자연어 | 여유 시 |
 
 ---
 
 ## 🔀 Sequence Diagrams
 
-모든 상호작용은 도메인(`MissionTask`)과 **포트** 사이에서만 일어납니다. ROS2 노드, Feetech 서보 SDK, OpenCV는 다이어그램에 등장하지 않습니다 — 어댑터 뒤에 숨어 있기 때문입니다.
-
 <details open>
 <summary><b>① 전체 미션 흐름</b></summary>
-
-일반 환경(Station B) ↔ 제한 조명 구역(Station A) 왕복 회수 미션의 단계별 흐름입니다.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor OP as 관제
-    participant T as MissionTask<br/>(Domain)
-    participant P as Perception
+    actor OP as 작업자<br/>(격벽 밖)
+    participant L as VLA-L<br/>명령 해석
+    participant T as mission_orchestrator<br/>(FSM · Domain)
+    participant V as VLA-V / YOLO<br/>Perception
     participant B as BaseDriver
-    participant A as ArmDriver
+    participant A as VLA-A<br/>ArmDriver
 
-    OP->>T: mission(target_id, A → B)
+    Note over OP,A: ① IDLE — 작업실 · 정상광
+    OP->>L: 키보드 텍스트 명령 입력
+    L-->>T: MissionSpec(대상, 제약)
+    Note right of L: 진입 후 추가 명령 없음<br/>로봇 단독 수행
 
-    Note over OP,A: ━━━ ① TRANSIT_TO_A ━━━
+    Note over OP,A: ② TRANSIT_OUT — 회피기동 구간
     T->>A: fold_to_cradle() → torque_off()
-    Note right of A: 크래들 안착 · 서보 전류 0
-    T->>B: navigate_to(STATION_A)
-    B-->>T: arrived
+    T->>B: 작업실 퇴출 → 좌회전 (빈손, 일반 도어)
+    B-->>T: 정적 장애물 회피 후 arrived
 
-    Note over OP,A: ━━━ ② LIGHT_ADAPT ━━━
-    T->>P: set_light_profile(YELLOW_ROOM)
-    Note right of P: 노출·WB 고정 · 능동 조명<br/>정착 대기 중 인식 결과 미채택
-    P-->>T: profile_ready
+    Note over OP,A: ③ LIGHT_ADAPT — 암실 경계
+    T->>V: set_light_profile(DARKROOM)
+    Note right of V: 노출·WB 고정 · IR 능동 조명 점등<br/>이 구간 인식 결과 미채택<br/>주행은 LiDAR로 계속
+    V-->>T: profile_ready
 
-    Note over OP,A: ━━━ ③ DOCKING_A ━━━
-    T->>P: 폐루프 마커 정렬 (상세: docking)
-    P-->>T: 정렬 완료
+    Note over OP,A: ④ DOCKING — 폐루프 정렬
+    T->>V: detect_marker() (IR 반사 마커)
+    V-->>T: 정렬 오차
+    T->>B: 보정 명령 (홀로노믹 strafe)
     Note right of B: 오도메트리 누적오차 리셋
 
-    Note over OP,A: ━━━ ④ IDENTIFY ━━━
-    T->>P: detect_targets() × N 프레임
-    P-->>T: target 확정
+    Note over OP,A: ⑤ IDENTIFY — 정지 상태에서만
+    T->>V: detect_target() × N 프레임 합의
+    V-->>T: 장물 pose · 길이 L · 폭 w
+    Note right of V: IR 스테레오 raw 기반<br/>치수는 사전에 주어지지 않음
 
-    Note over OP,A: ━━━ ⑤ GRASP ━━━
-    T->>A: 파지 + 부하 검증 (상세: grasp-retry)
+    Note over OP,A: ⑥ GRASP — 수직 파지
+    T->>A: 파지 + 서보 부하 검증 (상세: grasp-retry)
     A-->>T: 파지 성공 (시도 n회)
+    Note right of A: 장물은 암이 든 채 이동<br/>트레이 적재 없음 — 저속 프로파일
 
-    Note over OP,A: ━━━ ⑥ STOW & TRANSIT_TO_B ━━━
-    T->>A: place_on_tray() → fold_to_cradle()
-    T->>P: set_light_profile(NORMAL)
-    T->>B: navigate_to(STATION_B)
-    B-->>T: 장애물 회피 후 arrived
+    Note over OP,A: ⑦ POSE_PLAN — 개구부 추정
+    T->>V: measure_gap()
+    V-->>T: 개구부 높이 H_gap
+    T->>T: solve φ (상세: narrow-exit)
+    alt 해 존재
+        Note right of T: 통과 가능 자세 확정
+    else 해 없음
+        T-->>OP: "통과 불가" 판정 후 거부 · 원위치 복귀
+    end
 
-    Note over OP,A: ━━━ ⑦ NARROW_PASS (Stretch) ━━━
-    T->>A: 자세 계획 후 통과 (상세: narrow-pass)
-    A-->>T: 통과 완료
+    Note over OP,A: ⑧ NARROW_EXIT — 핵심 동작
+    T->>A: 자세 재조정 후 저속 통과 (상세: narrow-exit)
+    A-->>T: 무접촉 통과 완료
 
-    Note over OP,A: ━━━ ⑧ DOCKING_B & RELEASE ━━━
-    T->>P: 폐루프 마커 정렬
-    T->>A: move_to_cartesian(slot) → set_gripper(OPEN)
-    Note right of A: 슬롯 물리 가이드가 잔여 오차 흡수
-    T->>A: fold_to_cradle()
+    Note over OP,A: ⑨ RETURN — 회피기동 구간
+    T->>V: set_light_profile(NORMAL)
+    T->>B: 좌회전 → 작업실 재입장
+    B-->>T: arrived
 
-    T-->>OP: mission_complete(결과, 시도 횟수)
+    Note over OP,A: ⑩ RELEASE
+    T->>A: 지정 슬롯 배치 → fold_to_cradle()
+    T-->>OP: 결과 보고 (성공 여부 · 접촉 횟수 · 소요 시간)
 
     opt E-STOP (임의 시점)
         OP->>T: emergency_stop()
@@ -172,7 +220,7 @@ sequenceDiagram
 <details>
 <summary><b>② 파지 검증 및 자동 재시도</b></summary>
 
-그리퍼를 닫은 뒤 **서보 부하값으로 물체 유무를 판정**합니다. 별도의 힘/토크 센서 없이 폐루프를 구성하는 것이 핵심입니다.
+엔드이펙터를 닫은 뒤 **서보 부하값으로 물체 유무를 판정**합니다. 별도의 힘/토크 센서 없이 폐루프를 구성하는 것이 핵심입니다.
 
 ```mermaid
 sequenceDiagram
@@ -208,273 +256,336 @@ sequenceDiagram
 
 | 항목 | 내용 |
 |---|---|
-| 감지 방식 | 그리퍼 서보 부하 비율 (`load_ratio`) |
+| 감지 방식 | 엔드이펙터 서보 부하 비율 (`load_ratio`) |
 | 임계값 | |
 | 재시도 상한 | `MAX_RETRY` — 초과 시 상위 상태로 실패 보고 |
-| 실패 시 동작 | 그리퍼 개방 → 재인식 → 목표 자세 보정 |
+| 실패 시 동작 | 개방 → 재인식 → 목표 자세 보정 |
 
 </details>
 
 <details>
-<summary><b>③ 장축 물체 협로 통과 (Stretch)</b></summary>
-
-긴 물체를 든 채 좁은 통로를 지날 때, 그리퍼 요(yaw) 회전으로 진행 방향 투영 폭을 줄입니다.
+<summary><b>③ 장물 자세 재조정 통과 (핵심 동작)</b></summary>
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant T as MissionTask<br/>(Domain)
-    participant P as Perception
+    participant T as mission_orchestrator<br/>(FSM · Domain)
+    participant V as VLA-V<br/>Perception
     participant B as BaseDriver
-    participant A as ArmDriver
+    participant A as VLA-A<br/>ArmDriver
 
-    Note over T,A: 장축 물체 자세 계획 후 협로 통과
+    Note over T,A: 장물 자세 재조정 후 좁은 출구 통과 — 프로젝트 핵심 동작
 
-    T->>A: pick_from_tray()
-    T->>P: measure_object_bbox()
-    P-->>T: L (길이), w (폭)
-    T->>P: measure_gap()
-    P-->>T: D_gap, 통로 중심선
+    Note over T,A: 전제 · 개구부는 높이 제한(30cm)이고 장물은 0.5m<br/>수직으로 파지되어 있으므로 눕히지 않으면 통과 불가
 
-    Note over T: solve θ<br/>L·|sinθ| + w·|cosθ| ≤ D_gap − margin<br/>해 구간 중 서보 부하 최소 해 선택
+    T->>V: measure_object_dims()
+    V-->>T: L (길이), w (폭)
+    T->>V: measure_gap()
+    V-->>T: H_gap (개구부 높이), 중심선
+    Note right of V: 치수는 사전에 주어지지 않음<br/>추정 오차 ↔ 안전 마진 트레이드오프
 
-    T->>B: align_to_centerline()
-    B-->>T: 정렬 완료
-    T->>A: rotate_wrist(θ)
-    A-->>T: is_settled = true
-    T->>B: drive_straight(저속)
-    B-->>T: 통과 완료
-    T->>A: rotate_wrist(0)
+    Note over T: solve φ<br/>L·|sin φ| + w·|cos φ| ≤ H_gap − margin<br/>φ = 장축과 수평면 사이 각도
+
+    alt 해 구간 없음
+        T-->>T: 통과 불가 판정 → 거부 · 복귀
+    else 해 구간 존재
+        Note over T: 해 구간 중 손목 서보 부하 최소 φ 선택 (발열 억제)
+        T->>B: align_to_centerline()
+        B-->>T: 정렬 완료
+        T->>A: reorient_wrist(φ)
+        A-->>T: is_settled = true
+        Note right of A: 중심잡기 — 무게중심이 베이스 밖으로<br/>가감속이 외란으로 작용
+        T->>B: drive_straight(저속 프로파일)
+        loop 통과 중
+            T->>V: monitor_clearance()
+            V-->>T: 상하좌우 여유
+            Note right of V: 접촉 예상 시 즉시 정지<br/>벽 접촉 = 오염 = 즉시 실패
+        end
+        B-->>T: 통과 완료 (접촉 0회)
+    end
 ```
 
 ```
-W_proj(θ) = L·|sin θ| + w·|cos θ|   ≤   D_gap − margin
+H_proj(φ) = L·|sin φ| + w·|cos φ|   ≤   H_gap − margin
 
-  L      : 물체 길이
-  w      : 물체 폭
-  θ      : 진행축 대비 물체 요 각도
-  D_gap  : 통로 유효 폭
-  margin : 안전 여유
+  L      : 물체 길이 (0.5 m, 추정값)
+  w      : 물체 폭 (추정값)
+  φ      : 장축과 수평면 사이 각도 (파지 시 90°)
+  H_gap  : 개구부 높이 (약 0.3 m, 추정값)
+  margin : 안전 마진 — 추정 오차에 따라 결정
 ```
 
-해 구간이 여러 개일 경우, **손목 서보 부하가 최소가 되는 θ** 를 선택합니다. 장시간 유지 시 발열을 억제하기 위함입니다.
+해 구간 중 **손목 서보 부하가 최소가 되는 φ** 를 선택합니다(발열 억제). **해 구간이 없으면 통과 불가로 판정하고 거부**합니다 — 유즈케이스 2에 해당합니다.
 
 </details>
 
-> 다이어그램 원본과 상세 설명은 [`docs/sequences.md`](docs/sequences.md)에도 있습니다.
+> 다이어그램 원본은 [`docs/sequences.md`](docs/sequences.md)에도 있습니다.
+
+---
+
+## 🧠 AI Components
+
+### VLA 3분할
+
+| 파트 | 역할 | 담당 |
+|---|---|---|
+| **V (Vision)** | 암실 장물·개구부 인식. YOLO를 프론트엔드로 배치 | 김동혁 |
+| **L (Language)** | 키보드 텍스트 명령 해석·인코딩 | 이승용 |
+| **A (Action)** | 파지·자세 전환 액션 시퀀스 | 임성혁 |
+
+> [!IMPORTANT]
+> **V → L → A 사이의 텐서 shape과 좌표계를 8/14까지 문서로 고정합니다.** 여기가 어긋나면 통합 단계에서 전부 무너집니다. 변경은 PR + 3인 합의로만 가능합니다.
+
+### 구성 요소
+
+| 구성 | 역할 | 기법 | 실행 위치 |
+|---|---|---|---|
+| 자연어 명령 해석 | 텍스트 → `MissionSpec` | VLA-L | 온디바이스 |
+| 물체 검출 | 장물 식별, 바운딩박스 | YOLO 파인튜닝 | 온디바이스 |
+| 조명 도메인 적응 | 정상광 / IR 도메인 | RGB 사전학습 → IR 파인튜닝 | 온디바이스 |
+| 치수·자세 추정 | `L`, `w`, `H_gap`, 주축 각도 | 세그멘테이션 + 기하 | 온디바이스 |
+| 자세 전환 정책 | 마진 결정 및 액션 | 강화학습 (김희수) | 온디바이스 |
+
+### 데이터
+
+| 도메인 | 수집 방법 | 규모 |
+|---|---|---|
+| 정상광 RGB | 실제 촬영 | |
+| 암실 IR | **RealSense IR 스테레오 raw** 취득 | |
+| 시연 에피소드 | **리더/팔로워 텔레오퍼레이션** | |
+
+리더/팔로워 암이 교육장에 있으므로 텔레오퍼레이션으로 시연 데이터를 직접 수집할 수 있습니다. **VLA 학습의 핵심 경로**입니다.
+
+### 가속기 선택 근거
+
+> 가산점 항목 — 선택 근거 문서화
+
+| 단계 | 위치 | 근거 |
+|---|---|---|
+| **학습** | AI training server GPU | 데이터셋 규모·에폭 반복. 온디바이스로는 불가 |
+| **추론** | 온디바이스 | 시연 시 네트워크 의존 제거, 지연 시간 확보 |
+
+온디바이스 추론 가속기 후보는 M1에서 벤치마크 후 결정합니다.
+
+| 후보 | 성능 | 장점 | 단점 |
+|---|---|---|---|
+| CPU only | — | 추가 부품 없음 | 실시간 추론 불가 (기준선) |
+| Hailo-8L (AI HAT+) | 13 TOPS | M.2 직결, 저전력 | 지원 모델 제한, 전용 컴파일 |
+| Intel NPU + OpenVINO | 가변 | 성숙한 툴체인, 팀 내 INT8 경험 | 별도 보드 → 무게·전력 |
+
+| 항목 | 후보 A | 후보 B | 기준선(CPU) |
+|---|---|---|---|
+| 추론 지연 (ms) | | | |
+| 소비 전력 (W) | | | |
+| 추가 중량 (g) | | | |
 
 ---
 
 ## ✨ Key Features
 
-> 아래 항목은 설계 기준이며, 구현 상태는 [Roadmap](#️-roadmap)을 참고하세요.
+### 🗣️ 자연어 텍스트 명령 (VLA-L)
+
+격벽 밖 작업자가 키보드로 명령을 입력하면 로봇이 무인 멸균실에 **단독 진입**합니다. 진입 후 추가 명령은 없습니다. 명령 문형은 최소 10종 확보하며, 동의어와 제약조건("세워서", "천천히", "짧은 쪽부터")을 포함합니다.
 
 ### 🔦 조명 도메인 전이에 강건한 인식
 
-조명 조건별로 **인식 프로파일을 분리**하고, 공간 경계를 넘을 때 명시적으로 전환합니다.
-
 - 카메라 **오토 노출·오토 화이트밸런스 비활성화** 후 도메인별 고정값 적용
-- 옐로우룸: 색상(H) 대신 **명도 대비와 형상** 위주 판별 + ArUco 폴백
-- 암실: 로봇 탑재 **능동 조명(LED)** 또는 IR 기반 뎁스 센싱 활용
-- 전환 직후 **정착 대기 구간**을 상태 머신에 명시 — 이 구간에서는 인식 결과를 채택하지 않음
+- 암실: **IR 능동 조명 + IR 스테레오 raw** 기반 인식
+- 전환 직후 **정착 대기 구간**을 FSM 상태로 명시 — 이 구간 인식 결과 미채택
+- 주행은 LiDAR로 계속 — **조명과 무관하게 동작**
 
-> [!IMPORTANT]
-> 주행 중에는 비전 판단을 수행하지 않습니다. **도킹 완료 후 정지 상태에서만** 물체를 식별합니다. 모션 블러와 조도 변동을 동시에 배제하기 위한 설계입니다.
-
-**도메인별 인식 파라미터**
-
-| 도메인 | 노출 | 화이트밸런스 | 주 판별 방식 | HSV 임계 |
+| 도메인 | 노출 | 화이트밸런스 | 조명 | 주 판별 방식 |
 |---|---|---|---|---|
-| 일반 | | | | |
-| 옐로우룸 | | | | |
-| 암실 | | | | |
+| 정상광 | | | 환경광 | |
+| 암실 | | — | IR 프로젝터 | |
+| 옐로우 룸 | | | 환경광 | |
 
-### 🎯 ArUco 기반 정밀 도킹
+### 🎯 마커 기반 정밀 도킹
 
-메카넘 휠은 롤러 슬립으로 오도메트리 누적 오차가 큽니다. 스테이션 진입 마지막 구간은 오도메트리를 신뢰하지 않고, 마커 기준 **폐루프 visual servoing**으로 정렬합니다.
-
-메카넘의 홀로노믹 특성을 활용해 자세를 유지한 채 횡방향(strafe) 보정이 가능합니다.
+메카넘 휠은 롤러 슬립으로 오도메트리 누적 오차가 큽니다. 진입 마지막 구간은 마커 기준 **폐루프 정렬**로 오차를 리셋합니다. 암실에서는 RGB 마커가 보이지 않으므로 **IR 반사 재질 마커**를 사용합니다.
 
 ### 🤏 부하 기반 파지 검증 및 자동 재시도
 
-그리퍼를 닫은 뒤 **서보 부하값으로 물체 유무를 판정**합니다. 파지 실패 시 재인식 → 위치 보정 → 재시도 루프로 진입합니다.
+엔드이펙터를 닫은 뒤 **서보 부하값으로 물체 유무를 판정**합니다. 별도 힘센서 없이 폐루프를 구성합니다.
 
-열린 제어(open-loop)가 아니라는 점을 보여주는 핵심 기능이며, 별도 힘 센서 없이 구현합니다.
+### 📐 장물 자세 재조정 통과 (핵심 동작)
 
-### 📐 장축 물체 자세 계획 (Narrow Passage Traversal)
+0.5m 장물을 높이 30cm 개구부로 통과시키기 위해 **손목 자유도로 물체 각도만 변경**합니다. 통과 중 여유 거리를 감시하며 **접촉 0회**를 성공 기준으로 삼습니다.
 
-긴 물체를 든 채로 좁은 통로를 지날 때, **그리퍼 요(yaw) 회전으로 진행 방향 투영 폭을 줄여** 통과합니다.
+**파지 변경 3방식 — 범위 결정 근거**
 
-진행 방향에 수직한 투영 폭은 다음과 같습니다.
+| 방식 | 내용 | 필요 조건 / 걸림돌 | 판정 |
+|---|---|---|---|
+| **자세 재조정** | 손목 회전으로 물체 각도만 변경 | 손목 자유도만 있으면 가능 | **MVP 채택** |
+| 파지점 이동 | 내려놓고 다른 지점을 다시 파지 | 거치대 필요. **내려놓기 = 오염** | 확장 과제 (M3 여유 시) |
+| 핸드오버 | 두 그리퍼 간 물체 전달 | 두 번째 암 필요. 인핸드 조작은 미해결 연구 영역 | 제외 |
 
-```
-W_proj(θ) = L·|sin θ| + w·|cos θ|   ≤   D_gap − margin
+### ⚖️ 중심잡기
 
-  L : 물체 길이     w : 물체 폭
-  θ : 진행축 대비 물체 요 각도
-  D_gap : 통로 유효 폭
-```
+메카넘 카 위에서 장물을 파지하면 무게중심이 베이스 밖으로 나갑니다. 주행 가감속과 자세 전환이 모두 외란으로 작용하므로, 저속 프로파일 + 가감속 제한 + 자세 안정화 제어를 병행합니다.
 
-파이프라인:
+### 🔌 전원 도메인 분리
 
-1. 비전으로 물체의 최소 외접 사각형 추정 → `L`, `w` 산출
-2. LiDAR로 통로 양측 직선 피팅 → `D_gap`, 통로 중심선 계산
-3. 부등식을 만족하는 `θ` 구간을 구하고, 서보 부하가 최소가 되는 해 선택
-4. 통로 진입 전 정지 상태에서 회전 → 저속 직진 통과 → 통과 후 복귀
-
-### 🔌 팔·베이스 전원 도메인 분리
-
-6축 동시 기동 시 순간 전류로 공통 전원 레일이 강하하면 제어보드가 리셋됩니다. 팔 서보는 **전용 배터리 팩**에서 급전하고, 접지만 한 점에서 공통으로 묶습니다.
+팔 서보 6축은 **3S LiPo 전용 팩**에서 급전하고, GND만 스타 접지로 공통입니다. 미분리 시 6축 동시 기동 순간 전류로 Pi가 리셋됩니다.
 
 ### 🧰 Transport Pose & 크래들
 
-주행 중에는 팔을 접어 섀시 크래들에 **물리적으로 안착**시키고 서보 토크를 차단합니다. 무게중심 하강, 진동 억제, 서보 발열·전류 소비 제거를 동시에 달성합니다.
+주행 중(빈손 구간)에는 팔을 접어 크래들에 물리 안착시키고 토크를 차단합니다. 무게중심 하강, 서보 발열·전류 제거.
 
 ---
 
-## 🏗️ Architecture
+## 🧱 Architecture
 
-도메인 로직을 하드웨어와 완전히 분리한 **Ports & Adapters (헥사고날) 구조**입니다. 태스크 로직은 ROS2도, 서보 SDK도 알지 못합니다.
+### Ports & Adapters
 
-```mermaid
-graph TB
-    subgraph Domain["Domain (순수 Python)"]
-        T[MissionTask]
-        S[TaskState 계층]
-        V[Pose2D / PoseInFrame<br/>JointPositions]
-    end
-
-    subgraph Ports["Ports (interface)"]
-        BD[BaseDriver]
-        AD[ArmDriver]
-        PC[Perception]
-        TF[TransformProvider]
-    end
-
-    subgraph Real["Adapters :: Real"]
-        R1[Ros2MecanumBase]
-        R2[FeetechArm]
-        R3[DualProfilePerception]
-        R4[Ros2TfProvider]
-    end
-
-    subgraph Fake["Adapters :: Fake (CI)"]
-        F1[FakeBase]
-        F2[FakeArm]
-        F3[ScriptedPerception]
-        F4[StubTfProvider]
-    end
-
-    T --> S --> V
-    T --> BD & AD & PC & TF
-    BD -.-> R1 & F1
-    AD -.-> R2 & F2
-    PC -.-> R3 & F3
-    TF -.-> R4 & F4
-```
-
-### Ports
+도메인 로직을 하드웨어에서 분리합니다. 태스크 로직은 ROS2도 서보 SDK도 알지 못합니다.
 
 | Port | 책임 | Real Adapter | Fake Adapter |
 |---|---|---|---|
-| `BaseDriver` | 병진·회전 명령, 오도메트리 | `Ros2MecanumBase` | `FakeBase` |
-| `ArmDriver` | 관절/직교 이동, 그리퍼, 부하 조회 | `FeetechArm` | `FakeArm` |
-| `Perception` | 물체 검출, 마커 검출, 조명 프로파일 | `DualProfilePerception` | `ScriptedPerception` |
+| `BaseDriver` | 병진·회전 명령, 오도메트리, 회피기동 | `Ros2MecanumBase` | `FakeBase` |
+| `ArmDriver` | 관절/직교 이동, 엔드이펙터, 부하 조회 | `FeetechArm` | `FakeArm` |
+| `Perception` | 검출, 치수 추정, 마커, 조명 프로파일 | `LearnedPerception` | `ScriptedPerception` |
 | `TransformProvider` | 프레임 간 좌표 변환 | `Ros2TfProvider` | `StubTfProvider` |
+| `CommandInterpreter` *(제안)* | 텍스트 → `MissionSpec` | `VlaLanguageAdapter` | `ScriptedInterpreter` |
 
-> 포트 시그니처는 2주차 리팩터링 세션에서 확정합니다.
+- 각 포트는 **Real 어댑터와 Fake 어댑터를 둘 다** 가집니다
+- **CI는 매 push마다 Fake 어댑터로 전체 미션 파이프라인을 실행**합니다 — 인터페이스 불일치를 통합 시점이 아니라 커밋 시점에 검출
+- 로봇 1대를 5명이 나눠 쓰는 병목을 구조로 해소하기 위한 설계입니다
 
-### 설계 제약
+> `CommandInterpreter` 추가 여부는 M1에서 확정합니다.
 
-팀 내 코드 리뷰 기준으로 다음 세 가지를 적용합니다.
+### ROS2 노드 분할
+
+> [!WARNING]
+> **기능 축으로 나누지 않습니다.** 자율주행·회피기동·Pick and Place는 동시에 도는 것이 아니라 **순차 단계**입니다. 순차 단계를 노드로 쪼개면 동시성 이득은 없고 직렬화 지연·분산 상태·브레이크포인트 불가만 남습니다.
+>
+> **분할 기준은 둘 — 동시에 도는가, 하드웨어를 소유하는가.** 결과적으로 포트 경계와 거의 일치합니다.
+
+| 노드 | 책임 | 분리 근거 | 오너 |
+|---|---|---|---|
+| `mission_orchestrator` | FSM 전체. 포트를 호출해 순차 로직 진행 | 순차 로직은 한 프로세스에 모음 — 디버거 추적 가능 | 이승용 |
+| `perception` | 카메라 소유, 조명 프로파일 전환, YOLO, 마커 | 상시 구동 + 디바이스 소유 | 김동혁 · 김희수 |
+| `vla_inference` | V/L/A 모델 추론 | 모델 로딩이 느리고 의존성이 다름 → 단독 재시작 필요 | 임성혁 · 이승용 · 김동혁 |
+| `arm_driver` | Feetech SDK, 관절/직교 이동, 엔드이펙터, 부하 조회 | 상시 구동 + 디바이스 소유 | 임성혁 |
+| `base_driver` | 메카넘 주행, LiDAR, **회피기동 포함** | 상시 구동 + 디바이스 소유 | 조현우 |
+| `hud` | 대시보드 — `/mission/state`만 구독 | 시연 중 끊겨도 미션에 영향 없어야 함 | 김희수 |
+
+> [!CAUTION]
+> **회피기동을 별도 노드로 만들지 않습니다.** 독립 노드로 두면 `/cmd_vel` 발행 주체가 둘이 되고, 두 명령이 경합해 로봇이 떨리거나 타이밍에 따라만 재현되는 버그가 납니다. **`/cmd_vel` 발행 주체는 언제나 1개**입니다.
+
+### 관측성 3원칙
+
+디버깅은 노드 수가 아니라 경계에서 무엇이 보이느냐에 달려 있습니다.
+
+- **상태 전이를 토픽으로 발행** — `/mission/state`를 `transient_local` QoS로. 중간에 붙어도 현재 상태 즉시 파악. HUD도 이 토픽 하나만 구독
+- **포트 호출을 전부 로깅** — 인자와 반환값을 남기면 그것이 곧 재현 가능한 시나리오
+- **`ros2 bag record -a` 습관화** — 실기 시행은 되돌릴 수 없고, 로봇 1대를 5명이 나눠 쓰므로 **녹화가 곧 시간**
+
+### 코드 리뷰 기준
 
 | 제약 | 목적 |
 |---|---|
-| 원시값(`float`, `tuple`) 직접 전달 금지 | 단위·좌표계 혼동 차단 (`PoseInFrame`이 프레임 ID를 보유) |
+| 원시값(`float`, `tuple`) 직접 전달 금지 | 단위·좌표계 혼동 차단 |
 | `else` 사용 지양 | 조건 분기 대신 State 객체가 다음 상태를 반환 |
-| 클래스당 인스턴스 변수 2개 이하 지향 | 비대한 God Node 방지 |
+| 클래스당 인스턴스 변수 2개 이하 지향 | God Node 방지 |
+
+### 운영 규칙
+
+- 파라미터 선언은 **launch 또는 노드 중 한 쪽에서만** — 중복 시 `ParameterAlreadyDeclaredException`
+- 지연이 문제되면 **composable node**로 전환. 처음부터 도입할 필요는 없음
+- 노드 경계 = 파일 경계 = 오너 경계
 
 ---
 
-## 🤖 Hardware
+## 🔩 Hardware
 
-| 구분 | 사양 |
-|---|---|
-| **모바일 베이스** | MentorPi (메카넘 4륜, 홀로노믹) |
-| **컴퓨트** | Raspberry Pi 5 / Ubuntu 24.04 / ROS 2 Jazzy |
-| **매니퓰레이터** | SO-ARM101 Follower, 6-DOF, STS3215 버스 서보 |
-| **팔 전원** | 3S LiPo 전용 팩 (동작 전압 9–12.6V) |
-| **베이스 전원** | MentorPi 기본 배터리 |
-| **거리 센서** | 360° 2D LiDAR (팔 차폐 섹터 마스킹 적용) |
-| **비전** | 뎁스 카메라 (eye-to-hand) + 능동 LED 조명 |
-| **마커** | ArUco (스테이션 도킹 기준) |
-| **마운트** | |
-| **크래들** | |
+**예산 50만원.** 주요 장비가 교육장에 보유되어 있으므로 실제 발주는 통로 구조물·마운트·물체·소모품 중심입니다.
+
+| 구분 | 사양 | 상태 |
+|---|---|---|
+| 이동 베이스 | **메카넘 휠 카** — 전방향 이동, 게걸음으로 좁은 통로 진입 유리 | ✅ 교육장 보유 |
+| 로봇 암 | **리더 / 팔로워 2대** — 텔레오퍼레이션 데이터 수집 | ✅ 교육장 보유 |
+| 카메라 | **Intel RealSense** — 액티브 IR 깊이 + RGB, 640×480 | ⚠️ 요청 중 (8/7 회신) |
+| 엔드이펙터 핑거 | 기본 2지 + **V홈 핑거(검토)** — 원통 자기정렬. **핑거 팁만 교체** | ⚠️ 8/7 결정 |
+| LiDAR | 360° 2D — 조명과 무관하게 동작. 팔 차폐 섹터 마스킹 필요 | ⚠️ 기본 탑재 여부 확인 |
+| 라인 레이저 | 백업안 — RealSense 미확보 시. **클래스 2 이하(1mW 미만)** | ⚠️ 미정 |
+| 운반 물체 | **길이 0.5m 원통형** — 수수깡 / 빨대 / 배관 스티로폼 (경량) | 발주 |
+| 통로 개구부 | **높이 약 30cm** — 물체 길이의 60%. 가변 구조 | 발주 |
+| 암실 구조물 | 암막 파티션 + 좁은 출구. 도어 입구와 출구 별도. **벽면은 접촉 판독 가능 재질** | 발주 |
+| 팔 전용 전원 | **3S LiPo** — 전원 도메인 분리 필수 | 발주 |
+| 크래들 | 자작 — Transport Pose 물리 안착 | 자작 |
+| 도킹 마커 | ArUco — **암실용 IR 반사 재질 필요** | 발주 |
+
+> ⚠️ **부품 구매요청 마감: 8/11** · 담당 김동혁 · 비품 DB와 동기화 필요
 
 ### 전원 도메인
 
 ```
-Domain A ── MentorPi 배터리 ──► Pi / LiDAR / 카메라
-Domain B ── MentorPi 배터리 ──► 메카넘 모터 드라이버
-Domain C ── 3S LiPo (전용)  ──► 팔 서보 6축
-                              └─ GND만 스타 접지로 공통
+메카넘 카 배터리 ──┬──► 컴퓨트 / LiDAR / RealSense   (로직)
+                   └──► 메카넘 모터 드라이버           (구동)
+
+3S LiPo (전용)    ─────► 팔 서보 6축                  (매니퓰레이터)
+                         └─ GND만 스타 접지로 공통
 ```
 
-> [!WARNING]
-> 팔 서보와 제어보드의 전력선을 공유하면 서보 기동 시 언더볼티지로 Pi가 리셋됩니다. 검증 명령: `vcgencmd get_throttled` → `0x0`
+검증 명령: `vcgencmd get_throttled` → `0x0` (6축 동시 기동 + 급가속 조건에서)
 
 ### 실측 데이터
 
 | 항목 | 값 | 판정 기준 |
 |---|---|---|
 | 결합 중량 | | |
-| 무게중심 높이 | | |
+| 무게중심 높이 (장물 파지 시) | | |
 | 최소 휠 하중 비율 | | ≥ 15% |
 | 팔 실용 리치 | | |
 | 어깨 서보 온도 (3분 유지) | | < 60°C |
 | `get_throttled` (최악 조건) | | `0x0` |
+| 파지 신뢰도 (미끄러짐·자전) | | M2 초반 단독 측정 |
 
 ---
 
 ## 📁 Repository Structure
 
 ```
-gripper/
+grippers/
 ├── domain/                 # 순수 Python. 하드웨어 의존성 없음
-│   ├── task/               #   MissionTask, TaskState 계층
-│   ├── values/             #   Pose2D, PoseInFrame, JointPositions
-│   └── planning/           #   협로 통과 자세 계획, 오차 모델
+│   ├── task/               #   FSM, TaskState 계층
+│   ├── values/             #   Pose2D, PoseInFrame, JointPositions, ObjectDims
+│   └── planning/           #   자세 재조정 계획, 마진 결정, 오차 모델
 ├── ports/                  # 인터페이스 정의 (ABC)
 ├── adapters/
-│   ├── real/               #   ROS2 / Feetech / OpenCV 구현
+│   ├── real/               #   ROS2 / Feetech / 추론 런타임 구현
 │   └── fake/               #   테스트용 구현
+├── vla/                    # V / L / A 모듈, 인터페이스 스펙
+├── perception/             # 데이터셋, YOLO 학습, IR 파이프라인
 ├── ros2_ws/                # ROS2 노드, launch, 파라미터
-├── hud/                    # 실시간 상태 대시보드 (web)
+├── hud/                    # 실시간 대시보드
 ├── tests/                  # pytest — 하드웨어 불필요
 ├── docs/
 │   ├── architecture.puml
-│   ├── sequences.md        #   미션 및 기능별 시퀀스 다이어그램
-│   ├── error-budget.md     #   오차 전파 분석
-│   ├── measurements.md     #   실측 리포트
-│   └── rejected-designs.md #   채택하지 않은 설계와 근거
+│   ├── sequences.md
+│   ├── vla-interface.md    #   V/L/A 텐서 shape·좌표계 (8/14 freeze)
+│   ├── error-budget.md
+│   ├── measurements.md
+│   └── rejected-designs.md
 └── hardware/               # 마운트·크래들 도면, BOM, 배선도
 ```
 
 ---
 
-## 🛠️ Getting Started
+## 🔧 Getting Started
 
 ### Prerequisites
 
-- Ubuntu 24.04 / ROS 2 Jazzy
+- **Linux** (개발 환경 기준. 불가능한 모듈은 사유를 명시)
+- ROS 2 — 배포판 및 Docker 이미지 통일 예정
 - Python 3.12+
-- (실기 구동 시) MentorPi + SO-ARM101 조립 및 전원 도메인 분리 완료
 
 ### Installation
 
 ```bash
-git clone https://github.com/<org>/gripper.git
-cd gripper
+git clone https://github.com/grippers-intel/grippers.git
+cd grippers
 ```
 
 <!-- TODO: 의존성 설치 및 빌드 절차 -->
@@ -491,19 +602,21 @@ cd gripper
 
 | 증상 | 확인 사항 |
 |---|---|
-| 주행 중 Pi 리셋 | `vcgencmd get_throttled` — 전원 도메인 분리 여부 |
-| 로봇이 제자리에서 정지 | LiDAR 스캔에 팔이 장애물로 검출 — 각도 필터 설정 확인 |
-| 조명 전환 후 인식 실패 | 카메라 오토 노출·AWB 비활성화 여부 확인 |
-| Strafe 시 경로 휘어짐 | 휠 하중 균등성 — 각 바퀴 ≥ 총중량의 15% |
-| `ParameterAlreadyDeclaredException` | launch 파일과 노드 내 파라미터 중복 선언 |
+| 주행 중 컴퓨트 리셋 | `vcgencmd get_throttled` — 전원 도메인 분리 여부 |
+| 로봇이 제자리에서 정지 | LiDAR 스캔에 팔이 장애물로 검출 — 각도 마스킹 확인 |
+| 조명 전환 후 인식 실패 | 오토 노출·AWB 비활성화, 도메인 프로파일 전환 여부 |
+| 암실에서 마커 미검출 | IR 반사 마커 사용 여부, IR 프로젝터 점등 확인 |
+| 주행 중 로봇이 떨림 | `/cmd_vel` 발행 주체가 2개 이상인지 확인 |
+| 장물이 그리퍼 안에서 자전 | 마찰 패드 또는 V홈 핑거 적용 여부 |
+| `ParameterAlreadyDeclaredException` | launch와 노드 양쪽 파라미터 중복 선언 |
 
 ---
 
 ## 🧪 Testing
 
-도메인 로직은 **하드웨어 없이 전량 검증**하는 것을 목표로 합니다. 로봇 1대를 팀원이 대기하며 나눠 쓰는 병목을 제거하기 위한 설계입니다.
+도메인 로직은 **하드웨어 없이 전량 검증**하는 것을 목표로 합니다.
 
-CI는 매 push마다 Fake 어댑터 기반 전체 미션 파이프라인을 실행합니다. 인터페이스 불일치를 통합 시점이 아니라 커밋 시점에 검출하는 것이 목적입니다.
+CI는 매 push마다 lint + unittest + Fake 어댑터 기반 전체 미션 파이프라인을 실행합니다.
 
 <!-- TODO: 테스트 실행 명령 -->
 
@@ -511,98 +624,152 @@ CI는 매 push마다 Fake 어댑터 기반 전체 미션 파이프라인을 실�
 
 ## 📊 Results
 
-> 상세 데이터는 [`docs/measurements.md`](docs/measurements.md) 참고. 성공률은 시행 횟수와 함께 이항분포 95% 신뢰구간을 병기합니다.
+> 상세 데이터는 [`docs/measurements.md`](docs/measurements.md). 성공률은 시행 횟수와 함께 이항분포 95% 신뢰구간을 병기합니다.
 
-| 지표 | Week 2 | Week 3 | Week 4 |
-|---|---|---|---|
-| 도킹 위치 오차 (RMS) | | | |
-| 파지 성공률 | | | |
-| 조명 전환 후 인식 복구 시간 | | | |
-| 왕복 미션 완주율 | | | |
-| 협로 통과 성공률 | | | |
+| 지표 | 목표 | M2 | M3 | M4 |
+|---|---|---|---|---|
+| 통과 성공률 | ≥ 90% | | | |
+| 벽 접촉 횟수 | 0회 | | | |
+| 소요 시간 | | | | |
+| 파지 성공률 | | | | |
+| 도킹 정렬 오차 (RMS) | | | | |
+| 인식 복구 시간 | | | | |
+| 추론 지연 | | | | |
 
 ---
 
-## 🗓️ Roadmap
+## 📅 Milestones
 
-**Week 1 — Spike**
-- [ ] 마운트 인터페이스 플레이트 제작
-- [ ] 전원 도메인 분리 및 언더볼티지 검증
-- [ ] LiDAR 팔 차폐 섹터 측정 및 마스킹
-- [ ] 조명 조건별(일반/옐로우룸/암실) 카메라 특성 실측
-- [ ] 팔 실용 리치 및 서보 발열 한계 확인
+> **최종 발표: 2026년 9월 8일 (화)**
 
-**Week 2 — Refactor & Ports**
-- [ ] Spike 코드 리팩터링 세션
-- [ ] 포트 4종 시그니처 확정
-- [ ] Fake 어댑터 구현 및 CI 구축
-- [ ] Transport Pose 크래들 제작
-- [ ] Minimum 등급 달성
+| 마일스톤 | 기간 | 완료 조건 (Exit criteria) | 리드 |
+|---|---|---|---|
+| **M0 · 킥오프 + 주제 확정** | 8/4 – 8/7 | ~~주제·환경·명령방식·카메라·물체 규격 확정~~ ✅, RealSense 확보 확인, Repo + README, 역할 확정, issue 티켓 생성, Discord 링크 업로드 | 이승용 |
+| **M1 · 설계** | 8/8 – 8/14 | 유즈케이스·성공 기준 수치화, HLD 확정, **VLA V/L/A 인터페이스 freeze**, UML 2종, 부품 발주 완료 | 이승용 |
+| **M2 · 모듈 프로토타입** | 8/15 – 8/23 | YOLO 탐지 동작, VLA 각 파트 단독 추론, 암 단독 파지, 메카넘 주행·중심잡기 단독 검증, 시연 데이터 1차 수집, CI 그린 | 각 담당 |
+| **M3 · 통합** | 8/24 – 8/30 | ROS2 상에서 End-to-end 1회 성공 (명령 → 동작). 하드웨어 연동 완료. **확장 기능 컷오프 결정** | 조현우 · 임성혁 |
+| **M4 · MVP 완성** | 8/31 – 9/4 | 성공 기준 충족 및 측정 기록, 버그 수정, 데모 리허설, README + 향후 계획 작성 | 전원 |
+| **M5 · 발표 준비** | 9/1 – 9/8 | 포스터 → **9/6 인쇄물 제출**, 9/7 최종 점검, **9/8 발표** | 김희수 |
 
-**Week 3 — Integration**
-- [ ] Real 어댑터 순차 투입
-- [ ] 실기 통합 테스트
-- [ ] 조명 전환 구간 검증
-- [ ] 파지 실패 감지·재시도 구현
-- [ ] Target 등급 도전
+### 고정 데드라인
 
-**Week 4 — Stabilize**
-- [ ] 반복 성공률 개선
-- [ ] HUD 대시보드 완성
-- [ ] 협로 통과 기능 (Stretch)
-- [ ] 시연 리허설 및 문서화
+- [x] **8/4 (화)** — 주제 확정 (F안) + 환경 확정 (멸균실) + 명령 방식 확정 (키보드 입력) · 전원
+- [ ] **8/7 (금)** — RealSense 확보 확인 + Repo·README·issue 티켓 완료 + Discord 업로드 · 이승용
+- [ ] **8/7 (금)** — AI training server 계정 요청 · 이승용
+- [ ] **8/11 (화)** — 부품 구매요청 양식 제출 · 김동혁
+- [ ] **8/14 (금)** — HLD 확정 + VLA V/L/A 인터페이스 freeze · 이승용
+- [ ] **8/23 (토)** — 모듈별 단독 데모 (팀 내부 시연) · 전원
+- [ ] **8/30 (토)** — End-to-end 1회 성공 + 확장 기능 컷오프 · 전원
+- [ ] **9/4 (금)** — MVP feature freeze, 이후 버그 수정만 · 전원
+- [ ] **9/6 (일)** — 포스터 인쇄물 제출 (D-2) · 김희수
+- [ ] **9/7 (월)** — 프로젝트 최종 점검 · 전원
+- [ ] **9/8 (화)** — 프로젝트 발표 (D-day) · 전원
+
+### 주간 리듬
+
+- **매주 월 저녁** — 스탠드업: 지난주 완료 / 이번주 목표 / 블로커
+- **매주 금 저녁** — 마일스톤 progress 업데이트, issue 티켓 추가·할당 (이승용)
+- **격주** — 강사 consultation 예약 (가산점 항목)
+
+### 가산점 체크리스트
+
+- [ ] Hardware와 입/출력 연계
+- [ ] GitHub 협업 관리 — Milestone 선언, PR review 이력
+- [ ] CI/CD + unittest + 정적분석(lint) 활용
+- [ ] 강사 consultation 활용 (최소 2회, 기록 남기기)
+- [ ] 효율적인 가속기 선택 및 사용 근거 명시
+- [ ] Linux 개발 환경
+
+---
+
+## ⚠️ Risks
+
+| 리스크 | 영향 | 대응 |
+|---|---|---|
+| **주행 중 자세 흔들림 / 전복** | 통과 실패, 벽 접촉 | 0.5m 경량 원통으로 확정해 모멘트 최소화. 저속 프로파일 + 가감속 제한 |
+| **RealSense 미확보** | 암실 실험 불가 → 미션 자체 불가 | 8/7까지 회신 확인. 미확보 시 예산으로 즉시 구매 |
+| **암실 IR 영상 YOLO 학습 데이터 부족** | 핵심 구간 IDENTIFY 실패 | RGB 사전학습 후 IR 파인튜닝. 마커/형상 기반 폴백 유지 |
+| **암실에서 ArUco 미검출** | 도킹 불가 → 파지 정밀도 붕괴 | IR 반사 마커 재질 테스트. M1에 실측 |
+| **장물 파지 미끄러짐 / 자전** | 자세 전환 중 낙하 → 핵심 동작 실패 | 마찰 패드 우선, 불충분 시 V홈 핑거 3D 프린트. M2 초반 단독 측정 |
+| **VLA 3분할 인터페이스 충돌** | M3 통합 실패 | 8/14 freeze, 변경은 PR + 3인 합의. 더미 데이터로 조기 결합 테스트 |
+| 조명 경계 재수렴 지연 | 경계 구간 오인식 | 오토 노출·AWB 비활성화. 정착 대기를 FSM 상태로 명시 |
+| LiDAR가 팔을 장애물로 오인식 | 제자리 정지 | 팔 차폐 섹터 실측 후 각도 마스킹 |
+| 텍스트 명령 표현력 부족 | VLA-L이 키워드 파서로 축소 | 명령 문형 10종 이상 확보 |
+| 부품 배송 지연 / 미승인 | M2 전체 지연 | 8/11까지 발주, 대체 부품 2안, 시뮬레이션 선행 개발 |
+| 학습 데이터 부족 | 모델 성능 미달 | 사전학습 모델 zero-shot 폴백, 규칙 기반 백업 경로 |
+| 강화학습 미수렴 | 제어 품질 미달 | 보상 단순화, PID 등 고전 제어 백업 |
+| 공용 장비 점유 충돌 | 데이터 수집·테스트 지연 | 메카넘 카·암 사용 시간 팀 단위 예약 |
+| 발표 당일 하드웨어 고장 | 시연 불가 | 백업 영상 사전 촬영, 예비 부품 확보 |
 
 ---
 
 ## 👥 Team
 
-포트 경계를 기준으로 역할을 분담했습니다. 각 담당자는 다른 영역의 구현을 읽지 않고도 자기 몫을 완결할 수 있습니다.
+| 이름 | 핵심 롤 | 세부 담당 | 주요 산출물 |
+|---|---|---|---|
+| **임성혁** | VLA-A (Action) · 하드웨어 총괄 | Action head 설계·학습, 액션 시퀀스 정의, 기구부/전장 총괄, 조립 및 배선 | Action 모듈, 하드웨어 완성체 |
+| **이승용** | Git Master · VLA-L (Language) | Milestone 선언, issue 발행·할당, 전체 설계 총괄, 자연어 명령 파싱·인코딩 | HLD 문서, Language 모듈, 마일스톤 보드 |
+| **김동혁** | Git Slave · VLA-V (Vision) · 발주 | Conflict 해결 및 로그 추적, `git blame` 담당, Vision 인코더 연결, 부품 발주·장부 관리 | Vision 모듈, 구매 장부, 브랜치 히스토리 |
+| **조현우** | 중심잡기 · 코드 수장 · ROS2 | 구조 설계, 자세 안정화 제어, ROS2 노드 구성·통신, 코드 리뷰 및 성능 분석 | ROS2 패키지, Stabilizer 제어기 |
+| **김희수** | Perception · 데이터 · UI/UX | 프리비주얼, 3D 소스 생성(640×480), YOLO 탐지, 강화학습, 데이터 시각화, UI/UX | 데이터셋, YOLO/RL 모델, 대시보드 |
 
-| 역할 | 담당 영역 | 담당자 |
-|---|---|---|
-| **System / Integration** | 아키텍처, 포트 정의, ROS2 노드 통합 | |
-| **Domain / Geometry** | IK 제약, 좌표 변환, 협로 자세 계획, 오차 전파 분석 | |
-| **Measurement / Calibration** | 카메라·조명 특성화, 검증 실험 | |
-| **Mechanical / Electrical** | 마운트·크래들, 전원 도메인, 하네스 | |
-| **Interface / Visualization** | HUD 대시보드, 시연 연출, 문서 비주얼 | |
+**공통 책임** — 본인 영역 unittest 작성 · 타인 PR 1일 내 review · 금요일 마일스톤 progress 업데이트 · 막히면 24시간 내 공유
 
 ---
 
 ## 🤝 Contributing
 
-### Branch Strategy
+### 브랜치 & PR
 
+- `main` 브랜치에 **직접 push 금지**
+- topic branch → PR 등록 → **peer review 후 approval** → merge
+- 브랜치 네이밍: `feat/`, `fix/`, `docs/`, `refactor/` + 짧은 설명
+- 커밋 메시지에 issue 번호 참조, PR 본문에 `Closes #N`
+
+### Git 운영 (Master / Slave 체계)
+
+| 역할 | 담당 | 책임 |
+|---|---|---|
+| **Master** | 이승용 | Milestone 선언, issue 발행·할당, 머지 순서 조율, 릴리즈 태깅 |
+| **Slave** | 김동혁 | Conflict 해결 주도, 커밋 로그·`git blame` 추적, 사고 시 원인 커밋 특정, 히스토리 정리 |
+
+대형 리팩터링은 사전 공지 후 단독 PR로 분리합니다 (conflict 지옥 방지).
+
+### 품질
+
+| 항목 | 도구 / 규칙 |
+|---|---|
+| 정적분석 | **ruff** (또는 `pylint`) |
+| 포맷 | **black** |
+| CI/CD | PR마다 lint + unittest 자동 실행 |
+| 코드 리뷰 최종 판단 | 조현우 |
+| 개발 환경 | Linux 기준 |
+
+```bash
+ruff check .
+black .
 ```
-main        ← 시연 가능 상태만 유지
-└─ develop  ← 통합 브랜치
-   ├─ feat/<port-name>-<summary>
-   ├─ fix/<summary>
-   └─ docs/<summary>
-```
-
-### Rules
-
-- `main` 직접 push 금지 — PR과 리뷰 1인 승인 필수
-- 공유 브랜치에서는 `git reset` 대신 `git revert` 사용
-- 도메인 코드 변경 시 대응 테스트 동반
-- 의존성 추가 시 `requirements.txt` 갱신
 
 ---
 
 ## 📃 License
 
-MIT License. 자세한 내용은 [LICENSE](LICENSE) 참고.
+본 프로젝트 코드는 MIT License로 배포합니다. 자세한 내용은 [LICENSE](LICENSE) 참고.
 
-SO-ARM101 및 관련 설계는 원 저작자의 라이선스를 따릅니다.
+LeRobot 기반 구성 요소는 **Apache License 2.0** 을 따릅니다. 해당 코드를 포함하거나 파생한 파일에는 원 라이선스 고지를 유지합니다.
 
 ---
 
+## 📮 Contacts
+
+프로젝트 관련 문의는 [Issues](../../issues)로 남겨주세요.
 
 **References**
 
-- [SO-ARM101 (Hugging Face LeRobot)](https://github.com/huggingface/lerobot)
-- [ROS 2 Jazzy Documentation](https://docs.ros.org/en/jazzy/)
-- [Nav2](https://docs.nav2.org/)
+- [LeRobot](https://github.com/huggingface/lerobot)
+- [ROS 2 Documentation](https://docs.ros.org/)
+- [PlantUML Sequence Diagram](https://plantuml.com/sequence-diagram)
+- [PlantUML Class Diagram](https://plantuml.com/class-diagram)
 
 <div align="center">
 
