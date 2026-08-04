@@ -149,7 +149,7 @@ sequenceDiagram
 
     Note over T,A: 장물 자세 재조정 후 좁은 출구 통과 — 프로젝트 핵심 동작
 
-    Note over T,A: 전제 · 개구부는 높이 제한(30cm)이고 장물은 0.5m<br/>수직으로 파지되어 있으므로 눕히지 않으면 통과 불가
+    Note over T,A: 전제 · 개구부는 높이 제한(30cm)이고 장물은 0.5m<br/>수직으로 파지되어 있으므로 눕히지 않으면 통과 불가<br/>요(yaw)는 진행축과 정렬한 상태를 전제 — 폭 제약 회피
 
     T->>V: measure_object_dims()
     V-->>T: L (길이), w (폭)
@@ -164,9 +164,11 @@ sequenceDiagram
     else 해 구간 존재
         Note over T: 해 구간 중 손목 서보 부하 최소 φ 선택 (발열 억제)
         T->>B: align_to_centerline()
-        B-->>T: 정렬 완료
-        T->>A: reorient_wrist(φ)
+        B-->>T: 정렬 완료 (요 오차 이내)
+        Note right of B: 요 정렬이 선행되어야<br/>높이 제약만 남는다
+        T->>A: reorient(φ)  — IK 전체 관여
         A-->>T: is_settled = true
+        Note right of A: 수직→수평은 피치 회전<br/>손목만으로 리치 부족 시 어깨·팔꿈치 동반
         Note right of A: 중심잡기 — 무게중심이 베이스 밖으로<br/>가감속이 외란으로 작용
         T->>B: drive_straight(저속 프로파일)
         loop 통과 중
