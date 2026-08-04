@@ -28,7 +28,6 @@
 - [👥 Team](#-team)
 - [🤝 Contributing](#-contributing)
 - [📃 License](#-license)
-- [📮 Contacts](#-contacts)
 
 > **용어** — 이 문서에서 **Gripper**는 시스템 전체(모바일 매니퓰레이터)를 가리킵니다. 팔 끝단 부품은 **엔드이펙터**로 표기하여 구분합니다.
 
