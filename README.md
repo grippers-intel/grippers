@@ -760,9 +760,6 @@ LeRobot 기반 구성 요소는 **Apache License 2.0** 을 따릅니다. 해당 
 
 ---
 
-## 📮 Contacts
-
-프로젝트 관련 문의는 [Issues](../../issues)로 남겨주세요.
 
 **References**
 
