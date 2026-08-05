@@ -1,0 +1,165 @@
+@startuml Grippers_Architecture
+title Grippers — Ports & Adapters
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam defaultFontColor #1F2937
+
+skinparam note {
+  BackgroundColor #FFF8DC
+  BorderColor #D6C070
+  FontColor #000000
+}
+
+' ============================================================
+package "Domain :: Values" #E8F4FD {
+  class Pose2D {
+    - x : Meters
+    - y : Meters
+    - theta : Radians
+  }
+  class PoseInFrame {
+    - frame_id : FrameId
+    - pose : Pose3D
+    + transformed_to(frame, tf) : PoseInFrame
+  }
+  class JointPositions {
+    - angles : tuple<Radians>
+    + within(limits) : bool
+  }
+  class ObjectDims {
+    - length : Meters
+    - width : Meters
+    + projected_height(phi) : Meters
+  }
+  enum GripperState {
+    OPEN
+    CLOSED
+  }
+}
+
+' ============================================================
+package "Domain :: Task (FSM)" #FFF4E5 {
+  abstract class TaskState {
+    + {abstract} execute(ctx) : TaskState
+    + {abstract} name() : str
+  }
+  class Idle
+  class TransitOut
+  class LightAdapt
+  class Docking
+  class Identify
+  class Grasp
+  class PosePlan
+  class NarrowExit
+  class Return
+  class Release
+
+  TaskState <|-- Idle
+  TaskState <|-- TransitOut
+  TaskState <|-- LightAdapt
+  TaskState <|-- Docking
+  TaskState <|-- Identify
+  TaskState <|-- Grasp
+  TaskState <|-- PosePlan
+  TaskState <|-- NarrowExit
+  TaskState <|-- Return
+  TaskState <|-- Release
+
+  class MissionOrchestrator {
+    - state : TaskState
+    - ctx : TaskContext
+    + step() : void
+  }
+  class TaskContext
+  class ReorientationPlanner {
+    + solve_phi(dims, gap, margin) : Radians?
+    --
+    해 없으면 None → 통과 불가 판정
+  }
+
+  MissionOrchestrator *-- TaskState
+  MissionOrchestrator *-- TaskContext
+  PosePlan ..> ReorientationPlanner
+}
+
+ReorientationPlanner ..> ObjectDims
+
+' ============================================================
+package "Ports" #EDE7F6 {
+  interface CommandInterpreter {
+    + parse(text) : MissionSpec
+  }
+  interface Perception {
+    + detect_target() : PoseInFrame
+    + measure_object_dims() : ObjectDims
+    + measure_gap() : Meters
+    + detect_marker(id) : PoseInFrame
+    + set_light_profile(domain)
+    + monitor_clearance() : Meters
+  }
+  interface TransformProvider {
+    + lookup(src, dst) : Transform
+  }
+  interface BaseDriver {
+    + drive(twist)
+    + strafe(dy)
+    + align_to_centerline()
+    + stop()
+  }
+  interface ArmDriver {
+    + move_to(jp : JointPositions)
+    + move_to_cartesian(p : PoseInFrame)
+    + reorient(phi : Radians)
+    + set_gripper(g : GripperState)
+    + load() : float
+    + hold_position()
+  }
+}
+
+TaskContext --> CommandInterpreter
+TaskContext --> Perception
+TaskContext --> TransformProvider
+TaskContext --> BaseDriver
+TaskContext --> ArmDriver
+
+' ============================================================
+package "Adapters :: Real" #E8F5E9 {
+  class VlaLanguageAdapter
+  class LearnedPerception
+  class Ros2TfProvider
+  class Ros2MecanumBase
+  class FeetechArm
+}
+
+package "Adapters :: Fake (CI)" #FCE4EC {
+  class ScriptedInterpreter
+  class ScriptedPerception
+  class StubTfProvider
+  class FakeBase
+  class FakeArm
+}
+
+CommandInterpreter <|.. VlaLanguageAdapter
+CommandInterpreter <|.. ScriptedInterpreter
+Perception <|.. LearnedPerception
+Perception <|.. ScriptedPerception
+TransformProvider <|.. Ros2TfProvider
+TransformProvider <|.. StubTfProvider
+BaseDriver <|.. Ros2MecanumBase
+BaseDriver <|.. FakeBase
+ArmDriver <|.. FeetechArm
+ArmDriver <|.. FakeArm
+
+note bottom of FakeBase
+  하드웨어 없이 CI에서
+  전체 미션 파이프라인 실행
+end note
+
+note right of PoseInFrame
+  프레임 ID를 타입에 담아
+  좌표계 혼동을 차단
+end note
+
+@enduml

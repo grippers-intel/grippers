@@ -1,0 +1,46 @@
+name: 버그 (Bug)
+description: 재현되는 문제를 등록합니다
+title: "[Bug] "
+labels: ["type:bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 증상
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 재현 절차
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대 동작
+
+  - type: dropdown
+    id: env
+    attributes:
+      label: 발생 환경
+      options:
+        - Fake 어댑터 (시뮬레이션)
+        - 실기 · 정상광
+        - 실기 · 암실
+        - CI
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 로그 / rosbag
+      description: 관련 로그, 토픽 덤프, 영상 링크
+      render: shell

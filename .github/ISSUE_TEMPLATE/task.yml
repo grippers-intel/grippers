@@ -1,0 +1,52 @@
+name: 작업 (Task)
+description: 마일스톤 태스크를 등록합니다
+title: "[Task] "
+labels: ["type:feat"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: 작업 내용
+      description: 무엇을 하는 작업인지
+    validations:
+      required: true
+
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: 마일스톤
+      options: ["M0", "M1", "M2", "M3", "M4", "M5"]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 영역
+      options:
+        - domain
+        - vla
+        - perception
+        - ros2
+        - hardware
+        - docs
+        - infra
+    validations:
+      required: true
+
+  - type: textarea
+    id: dod
+    attributes:
+      label: 완료 조건 (Definition of Done)
+      description: 무엇이 되면 이 이슈를 닫는가
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: input
+    id: due
+    attributes:
+      label: 목표 완료일
+      placeholder: "2026-08-14"
