@@ -28,7 +28,6 @@
 - [👥 Team](#-team)
 - [🤝 Contributing](#-contributing)
 - [📃 License](#-license)
-- [📮 Contacts](#-contacts)
 - [📚 References](#-references)
 
 > **파일명 규약** — `docs/` 하위 문서는 **snake_case(언더스코어)** 로 통일합니다.
