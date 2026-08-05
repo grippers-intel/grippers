@@ -28,8 +28,11 @@
 - [👥 Team](#-team)
 - [🤝 Contributing](#-contributing)
 - [📃 License](#-license)
+- [📮 Contacts](#-contacts)
 - [📚 References](#-references)
 
+> **파일명 규약** — `docs/` 하위 문서는 **snake_case(언더스코어)** 로 통일합니다.
+>
 > **용어** — 이 문서에서 **Grippers**는 시스템 전체(모바일 매니퓰레이터)를 가리킵니다. 팔 끝단 부품은 **엔드이펙터**로 표기하여 구분합니다.
 
 ---
@@ -591,7 +594,7 @@ grippers/
 │   ├── architecture.puml
 │   ├── sequences.md
 │   ├── vla_interface.md    #   V/L/A 텐서 shape·좌표계 (8/14 freeze)
-│   ├── error_budget.md
+│   ├── error_budget.md     #   오차 전파 분석
 │   ├── measurements.md
 │   └── rejected_designs.md
 └── hardware/               # 마운트·크래들 도면, BOM, 배선도
@@ -787,6 +790,7 @@ black .
 본 프로젝트 코드는 MIT License로 배포합니다. 자세한 내용은 [LICENSE](LICENSE) 참고.
 
 LeRobot 기반 구성 요소는 **Apache License 2.0** 을 따릅니다. 해당 코드를 포함하거나 파생한 파일에는 원 라이선스 고지를 유지합니다.
+
 
 ---
 
