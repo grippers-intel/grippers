@@ -1,28 +1,51 @@
-# ─────────────────────────────────────
-# 기본 소유자 — 위에서 아래로, 마지막 매칭이 이김
-# ─────────────────────────────────────
+# ─────────────────────────────────────────────────────────
+# CODEOWNERS — Grippers
+#
+# 아이디 ↔ 실명 ↔ 역할
+#   @sysy009   이승용   Git Master · VLA-L(Language) · 전체 설계 총괄
+#   @Feroninn  김동혁   Git Slave · VLA-V(Vision) · 발주
+#   @alex7663  임성혁   VLA-A(Action) · 하드웨어 총괄
+#   @kica927   조현우   중심잡기 · 코드 수장 · ROS2
+#   @Hease     김희수   Perception · 데이터 · UI/UX
+#
+# 규칙: 위에서 아래로 읽으며 "마지막으로 매칭된 줄"만 적용됨 (누적 아님)
+#      따라서 넓은 경로를 먼저, 구체적인 경로를 나중에 쓴다.
+# 파일명 규약: docs/ 하위 문서는 snake_case(언더스코어)
+# ─────────────────────────────────────────────────────────
+
+# 기본 소유자 — 전체 설계 총괄
 *                           @sysy009
 
-# 도메인 · 아키텍처
+# ── 문서 ────────────────────────────────────────────────
+/docs/                      @sysy009
+/README.md                  @sysy009
+
+# ── 도메인 · 아키텍처 (코드 수장 + 설계 총괄) ─────────────
 /domain/                    @kica927 @sysy009
 /ports/                     @kica927 @sysy009
 /adapters/                  @kica927
 
-# VLA — 인터페이스는 3인 합의
-/vla/                       @alex7663 @sysy009 @Feroninn
-/docs/vla-interface.md      @alex7663 @sysy009 @Feroninn
-
-# ROS2
+# ── ROS2 · 주행 · 중심잡기 ──────────────────────────────
 /ros2_ws/                   @kica927
+/tests/                     @kica927
 
-# 인식 · 데이터
-/perception/                @hease @Feroninn
+# ── VLA (V/L/A 3인) ────────────────────────────────────
+/vla/                       @alex7663 @sysy009 @Feroninn
 
-# UI
-/hud/                       @hease
+# ── 인식 · 데이터 (perception 노드 오너) ─────────────────
+/perception/                @Hease @Feroninn
 
-# 하드웨어
+# ── UI · 대시보드 ──────────────────────────────────────
+/hud/                       @Hease
+
+# ── 하드웨어 ───────────────────────────────────────────
 /hardware/                  @alex7663
 
-# CI · 저장소 설정
+# ── 저장소 설정 · CI (Git Master + Slave) ───────────────
 /.github/                   @sysy009 @Feroninn
+/pyproject.toml             @kica927
+/.gitignore                 @Feroninn
+
+# ── VLA 인터페이스 — 8/14 freeze, 3인 합의 필수 ──────────
+# (반드시 /docs/ 규칙보다 아래에 위치할 것 — 마지막 매칭이 이김)
+/docs/vla_interface.md      @alex7663 @sysy009 @Feroninn

@@ -216,3 +216,28 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 개인 작업 메모 (커밋하지 않음)
+/notes/
+*.local.md
+*.draft.md
+ 
+# 환경
+.env
+.env.*
+ 
+# 학습 산출물 — 저장소에 넣지 않음
+*.pt
+*.pth
+*.onnx
+*.hef
+/data/
+/runs/
+/datasets/
+ 
+# ROS2
+/ros2_ws/build/
+/ros2_ws/install/
+/ros2_ws/log/
+*.bag
+/rosbags/
