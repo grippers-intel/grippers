@@ -1,0 +1,28 @@
+# ─────────────────────────────────────
+# 기본 소유자 — 위에서 아래로, 마지막 매칭이 이김
+# ─────────────────────────────────────
+*                           @sysy009
+
+# 도메인 · 아키텍처
+/domain/                    @kica927 @sysy009
+/ports/                     @kica927 @sysy009
+/adapters/                  @kica927
+
+# VLA — 인터페이스는 3인 합의
+/vla/                       @alex7663 @sysy009 @Feroninn
+/docs/vla-interface.md      @alex7663 @sysy009 @Feroninn
+
+# ROS2
+/ros2_ws/                   @kica927
+
+# 인식 · 데이터
+/perception/                @hease @Feroninn
+
+# UI
+/hud/                       @hease
+
+# 하드웨어
+/hardware/                  @alex7663
+
+# CI · 저장소 설정
+/.github/                   @sysy009 @Feroninn
