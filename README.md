@@ -590,10 +590,10 @@ grippers/
 ├── docs/
 │   ├── architecture.puml
 │   ├── sequences.md
-│   ├── vla-interface.md    #   V/L/A 텐서 shape·좌표계 (8/14 freeze)
-│   ├── error-budget.md
+│   ├── vla_interface.md    #   V/L/A 텐서 shape·좌표계 (8/14 freeze)
+│   ├── error_budget.md
 │   ├── measurements.md
-│   └── rejected-designs.md
+│   └── rejected_designs.md
 └── hardware/               # 마운트·크래들 도면, BOM, 배선도
 ```
 
