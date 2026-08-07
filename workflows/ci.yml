@@ -1,37 +1,136 @@
 name: CI
 
+# README "Testing": 매 push마다 lint + unittest + Fake 어댑터 기반 전체 미션 파이프라인 실행
+# README "Contributing > 품질": PR마다 lint + unittest 자동 실행
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # ── 정적분석 (ruff) + 포맷 검사 (black) ───────────────────────────────
   lint:
-    name: lint
-    runs-on: ubuntu-latest
+    name: Lint (ruff + black)
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - name: Install linters
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install lint tools
         run: pip install ruff black
-      - name: Ruff
+
+      - name: ruff check
         run: ruff check .
-      - name: Black
+
+      - name: black --check
         run: black --check .
 
+  # ── 하드웨어 불필요 unittest: domain/ + Fake 어댑터 기반 전체 미션 파이프라인 ──
   test:
-    name: test
-    runs-on: ubuntu-latest
+    name: Unit tests (Fake adapters)
+    runs-on: ubuntu-24.04
+    needs: lint
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
+          cache: "pip"
+
       - name: Install dependencies
         run: |
-          pip install pytest
+          pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      - name: Pytest (Fake 어댑터 기반 · 하드웨어 불필요)
-        run: pytest tests/ -v
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          pip install pytest pytest-cov
+
+      # domain/, ports/, adapters/fake는 ROS2·하드웨어 의존성이 없는 순수 Python이라
+      # 패키징(pyproject) 없이도 PYTHONPATH만 잡아주면 바로 import 가능합니다.
+      - name: Run domain / Fake-adapter test suite
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: pytest tests/ -v --cov=domain --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 14
+
+  # ── ROS2 Jazzy 워크스페이스 빌드 검증 (M3부터 활성화) ─────────────────────
+  # ros2_ws/src에 패키지가 생기기 전까지는 이 잡이 할 일이 없어 사실상 no-op으로 끝납니다.
+  # x86_64 ros:jazzy-ros-base 이미지를 그대로 씁니다 — 컴파일 오류만 잡으면 되므로
+  # arm64 에뮬레이션(QEMU)까지 갈 필요가 없고, docker-build 잡보다 훨씬 빠릅니다.
+  ros2-build:
+    name: colcon build (ROS2 Jazzy)
+    runs-on: ubuntu-24.04
+    needs: lint
+    container:
+      image: ros:jazzy-ros-base
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rosdep dependencies
+        shell: bash
+        run: |
+          apt-get update
+          rosdep update
+          rosdep install --from-paths ros2_ws/src --ignore-src -r -y --rosdistro jazzy
+
+      - name: colcon build
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cd ros2_ws
+          colcon build --symlink-install --event-handlers console_direct+
+
+      # domain/ports/adapters의 pytest와는 별개로, 실제 ROS2 인터페이스
+      # (msg/srv/action) 생성과 노드 빌드 자체가 깨지지 않는지 확인하는 용도입니다.
+      - name: colcon test (ROS2 레벨 launch_testing 등)
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cd ros2_ws
+          colcon test --event-handlers console_direct+
+          colcon test-result --verbose
+
+  # ── IntelPi 컨테이너(Pi 5 · ROS2 Jazzy) 빌드 검증 ────────────────────────
+  # 위 ros2-build가 "컴파일이 되는가"를 x86_64에서 빠르게 확인한다면,
+  # 이 잡은 "Pi 5(arm64)에 실제로 배포 가능한 이미지가 만들어지는가"를 확인합니다.
+  docker-build:
+    name: Build IntelPi image (linux/arm64)
+    runs-on: ubuntu-24.04
+    needs: [test, ros2-build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (arm64 에뮬레이션)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 실제 IntelPi Dockerfile 경로에 맞게 file: 값을 조정하세요.
+      - name: Build IntelPi image for Raspberry Pi 5 (arm64)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          platforms: linux/arm64
+          push: false
+          tags: intelpi:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
