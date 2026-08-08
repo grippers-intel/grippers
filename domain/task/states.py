@@ -15,16 +15,28 @@ class IdleState(State):
 
 class TransitOutState(State):
     name = "TRANSIT_OUT"
+    MAX_RETRIES = 5
 
-    def __init__(self, target=None):
+    def __init__(self, target=None, retries=0):
         # TODO: 실제 파지 지점 근처 목표 좌표로 교체
         self.target = target or Pose2D(x=1.0, y=0.0, theta=0.0)
+        self.retries = retries
 
     def execute(self, ports):
         arrived = ports.base.drive_to(self.target)
         if not arrived:
-            return TransitOutState(self.target)  # 재시도
+            if self.retries >= self.MAX_RETRIES:
+                return TransitOutFailedState()
+            return TransitOutState(self.target, self.retries + 1)
         return LightAdaptState()
+
+
+class TransitOutFailedState(State):
+    name = "TRANSIT_OUT_FAILED"
+
+    def execute(self, ports):
+        ports.base.stop()
+        return None
 
 
 class LightAdaptState(State):
