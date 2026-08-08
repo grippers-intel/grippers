@@ -20,6 +20,7 @@ from domain.adapters.real.ros2_mecanum_base import Ros2MecanumBase
 from domain.adapters.real.ros2_arm_driver import Ros2ArmDriver
 # TODO: Ros2Perception 어댑터 (perception 노드 만든 뒤 추가)
 from domain.adapters.fake.fake_perception import FakePerception
+from domain.adapters.real.ros2_perception import Ros2Perception
 
 
 class MissionOrchestratorNode(Node):
@@ -40,6 +41,7 @@ class MissionOrchestratorNode(Node):
             callback_group=cb_group,
         )
         self._estop_flag = threading.Event()
+        self.declare_parameter('use_fake_perception', True)
 
         self._fsm_thread = threading.Thread(target=self._run_fsm, daemon=True)
         self._fsm_thread.start()
@@ -53,7 +55,7 @@ class MissionOrchestratorNode(Node):
         ports = Ports(
             base=Ros2MecanumBase(self),
             arm=Ros2ArmDriver(self),
-            perception=FakePerception(),  # perception 노드 붙기 전까지 임시
+            perception=self._make_perception(),
             estop=self._estop_flag,
         )
         task = MissionTask(ports)
@@ -62,6 +64,14 @@ class MissionOrchestratorNode(Node):
             msg = MissionState()
             msg.state = state.name
             self._state_pub.publish(msg)
+
+    def _make_perception(self):
+        use_fake = self.get_parameter('use_fake_perception').value
+        if use_fake:
+            self.get_logger().warn('use_fake_perception=True — FakePerception 사용 중')
+            return FakePerception()
+        return Ros2Perception(self)
+
 
 
 def main(args=None):
