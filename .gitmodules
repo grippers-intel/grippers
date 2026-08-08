@@ -1,0 +1,3 @@
+[submodule "third_party/soarm_provided_d"]
+	path = third_party/soarm_provided_d
+	url = https://github.com/th2102da/soarm_provided_d.git

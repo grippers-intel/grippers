@@ -1,0 +1,6 @@
+float64 phi
+---
+bool settled
+---
+float64 current_phi
+float64 wrist_load
