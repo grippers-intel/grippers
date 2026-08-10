@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from domain.ports.arm_driver import ArmDriver
 
 

@@ -575,7 +575,21 @@ MentorPi 배터리  ──┬──► Pi 5 / AI HAT+ / LiDAR / RealSense   (로
 ## 📁 Repository Structure
 
 ```
+## 📁 Repository Structure
+
+```
 grippers/
+├── README.md
+├── LICENSE                 # MIT (+ LeRobot Apache 2.0 고지)
+├── pyproject.toml          # ruff / black 설정 — 벤더 코드는 lint 대상에서 제외
+├── .gitignore
+├── .gitmodules             # third_party/soarm_provided_d
+├── .github/
+│   ├── CODEOWNERS          #   경로별 리뷰어 자동 지정
+│   ├── pull_request_template.md
+│   ├── ISSUE_TEMPLATE/     #   task.yml, bug.yml, config.yml
+│   └── workflows/
+│       └── ci.yml          #   lint → test → colcon build → docker build
 ├── domain/                 # 순수 Python. 하드웨어 의존성 없음 (ROS2 import 금지)
 │   ├── task/               #   State 제너레이터 기반 FSM (IDLE~RELEASE)
 │   ├── values.py           #   Pose2D, Point3 등 domain 전용 값 객체
@@ -588,21 +602,31 @@ grippers/
 │       ├── grippers_interfaces/  # 공통 msg/srv/action (base ↔ arm ↔ mission 유일한 접점)
 │       ├── grippers_base/        # base_driver_node — controller/odom_publisher_node 위에 얹는 어댑터
 │       ├── grippers_arm/         # arm_driver_node — soarm_lab(third_party) 래핑
+│       ├── grippers_perception/  # perception_node — 카메라 소유, 조명 프로파일, 검출
+│       ├── grippers_vla/         # V/L/A 추론 노드 (미착수)
 │       ├── grippers_mission/     # mission_orchestrator_node — domain/task FSM을 스레드 분리 실행
 │       ├── grippers_bringup/     # launch 재조합 (대회용 bringup.launch.py 전체는 미사용)
 │       └── (app/ bringup/ driver/ interfaces/ navigation/ peripherals/
-│            simulations/ slam/ yolov5_ros2/ 등 — 대회 때 쓰던 MentorPi 소스 보존)
+│            simulations/ slam/ yolov5_ros2/ 등 — 대회 때 쓰던 MentorPi 소스 보존.
+│            우리 코드가 아니므로 pyproject.toml에서 lint 제외)
 ├── third_party/
 │   └── soarm_provided_d/   # git submodule — soarm_lab(FK/IK/시뮬/실물 백엔드)
 ├── tests/                  # pytest — 하드웨어·ROS2 불필요, domain/ + Fake 어댑터만 사용
 ├── docs/
-│   ├── architecture.puml
-│   ├── sequences.md
+│   ├── hld.md              #   High Level Design — 인터페이스·FSM·미결 사항 (8/14 freeze)
+│   ├── architecture.puml   #   클래스 다이어그램
+│   ├── sequences.md        #   시퀀스 다이어그램
 │   ├── vla_interface.md    #   V/L/A 텐서 shape·좌표계 (8/14 freeze)
 │   ├── error_budget.md     #   오차 전파 분석
-│   ├── measurements.md
-│   └── rejected_designs.md
+│   ├── measurements.md     #   실측 리포트
+│   ├── purchase_ledger.md  #   구매 장부
+│   └── rejected_designs.md #   채택하지 않은 설계와 근거
 └── hardware/               # 마운트·크래들 도면, BOM, 배선도
+```
+
+> **설계 초안과의 차이**: 최초 설계에선 `ports/`, `adapters/`가 저장소 최상위였는데, 실제 구현에서는 `domain/ports/`, `domain/adapters/`로 domain 아래 중첩시켰습니다. 두 위치 모두 ROS2 비의존이라는 원칙은 동일하게 지켜지며, `domain` 패키지 하나만 import하면 FSM+포트+Fake어댑터가 다 따라오는 게 실제로 더 편해서 이렇게 정착했습니다.
+
+> **lint 범위**: `pyproject.toml`이 `ros2_ws/src`의 MentorPi 벤더 패키지와 `third_party/`를 ruff·black 대상에서 제외합니다. 검사 대상은 `domain/`, `tests/`, `ros2_ws/src/grippers_*` 입니다. 벤더 코드까지 검사하면 963건이 잡히지만, 우리 코드만 보면 자동수정으로 전부 해소됩니다.
 ```
 
 > **설계 초안과의 차이**: 최초 설계에선 `ports/`, `adapters/`가 저장소 최상위였는데, 실제 구현에서는 `domain/ports/`, `domain/adapters/`로 domain 아래 중첩시켰습니다. 두 위치 모두 ROS2 비의존이라는 원칙은 동일하게 지켜지며, `domain` 패키지 하나만 import하면 FSM+포트+Fake어댑터가 다 따라오는 게 실제로 더 편해서 이렇게 정착했습니다.

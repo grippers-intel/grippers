@@ -1,6 +1,5 @@
 #!/usr/bin/python3
-# coding=utf8
-import Jetson.GPIO as GPIO
+from Jetson import GPIO
 
 LED_PIN = 24  # LED对应引脚号 (pin number corresponding to LED)
 
@@ -12,17 +11,22 @@ GPIO.setwarnings(False)  # 关闭警告打印(close alarm print)
 
 GPIO.setup(LED_PIN, GPIO.OUT)  # 设置引脚为输出模式(set pin as output mode)
 
+
 def on():
     GPIO.output(LED_PIN, 0)
+
 
 def off():
     GPIO.output(LED_PIN, 1)
 
+
 def set(new_state):
     GPIO.output(LED_PIN, new_state)
 
+
 if __name__ == "__main__":
     import time
+
     while True:
         on()
         time.sleep(1)

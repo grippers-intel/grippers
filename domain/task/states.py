@@ -1,7 +1,7 @@
-# -*- coding: utf-8 -*-
 """README 미션 흐름 그대로: IDLE -> TRANSIT_OUT -> LIGHT_ADAPT -> DOCKING
 -> IDENTIFY -> GRASP -> POSE_PLAN -> NARROW_EXIT -> RETURN -> RELEASE.
 각 State.execute(ports)가 다음 State를 반환하는 제너레이터 체인."""
+
 from domain.task.state import State
 from domain.values import Pose2D
 
@@ -36,7 +36,6 @@ class TransitOutFailedState(State):
 
     def execute(self, ports):
         ports.base.stop()
-        return None
 
 
 class LightAdaptState(State):
@@ -131,7 +130,6 @@ class ReleaseState(State):
 
     def execute(self, ports):
         ports.arm.set_gripper(100.0)
-        return None  # 정상 종료
 
 
 class EstopState(State):
@@ -139,7 +137,6 @@ class EstopState(State):
 
     def execute(self, ports):
         ports.base.stop()
-        return None
 
 
 class NarrowExitFailedState(State):
@@ -147,7 +144,6 @@ class NarrowExitFailedState(State):
 
     def execute(self, ports):
         ports.base.stop()
-        return None
 
 
 class GraspFailedState(State):

@@ -3,18 +3,18 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
 
+
 class JoyListener(Node):
     def __init__(self):
-        super().__init__('joy_listener')
-        self.subscription = self.create_subscription(
-            Joy,
-            '/joy',
-            self.joy_callback,
-            10)
-        self.subscription 
+        super().__init__("joy_listener")
+        self.subscription = self.create_subscription(Joy, "/joy", self.joy_callback, 10)
+        self.subscription
 
     def joy_callback(self, msg):
-        self.get_logger().info('Received Joy: Axes: %s Buttons: %s' % (msg.axes, msg.buttons))
+        self.get_logger().info(
+            "Received Joy: Axes: %s Buttons: %s" % (msg.axes, msg.buttons)
+        )
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -23,6 +23,6 @@ def main(args=None):
     joy_listener.destroy_node()
     rclpy.shutdown()
 
-if __name__ == '__main__':
-    main()
 
+if __name__ == "__main__":
+    main()

@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
-import math
 import rclpy
-from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from rclpy.node import Node
+from sdk import pid
 from tf2_ros import Buffer, TransformListener
 from transforms3d.euler import quat2euler  # 使用 transforms3d 替代 tf_transformations
-from sdk import pid
+
 
 def qua2rpy(x, y, z, w):
     roll, pitch, yaw = quat2euler([w, x, y, z])
     return roll, pitch, yaw
 
+
 class SlaveTFListener(Node):
     def __init__(self):
-        super().__init__('tf_listener')
+        super().__init__("tf_listener")
 
         # 获取参数
-        self.declare_parameter('cmd_vel', '/robot_1/hiwonder_controller/cmd_vel')
-        self.declare_parameter('base_frame', 'robot_1/base_footprint')  # 不要以 '/' 开头
-        self.declare_parameter('target_frame', 'row2')  # 不要以 '/' 开头
+        self.declare_parameter("cmd_vel", "/robot_1/hiwonder_controller/cmd_vel")
+        self.declare_parameter(
+            "base_frame", "robot_1/base_footprint"
+        )  # 不要以 '/' 开头
+        self.declare_parameter("target_frame", "row2")  # 不要以 '/' 开头
 
-        self.cmd_vel = self.get_parameter('cmd_vel').get_parameter_value().string_value
-        self.base_frame = self.get_parameter('base_frame').get_parameter_value().string_value
-        self.target_frame = self.get_parameter('target_frame').get_parameter_value().string_value
+        self.cmd_vel = self.get_parameter("cmd_vel").get_parameter_value().string_value
+        self.base_frame = (
+            self.get_parameter("base_frame").get_parameter_value().string_value
+        )
+        self.target_frame = (
+            self.get_parameter("target_frame").get_parameter_value().string_value
+        )
 
         # 创建发布器
         self.robot_vel_publisher = self.create_publisher(Twist, self.cmd_vel, 10)
@@ -44,7 +51,9 @@ class SlaveTFListener(Node):
         try:
             # 查找相对的 tf
             now = rclpy.time.Time()
-            trans = self.tf_buffer.lookup_transform(self.base_frame, self.target_frame, now)
+            trans = self.tf_buffer.lookup_transform(
+                self.base_frame, self.target_frame, now
+            )
         except Exception as e:
             self.get_logger().warn(f"Failed to get transform: {e}")
             self.robot_vel_publisher.publish(msg)
@@ -87,6 +96,7 @@ class SlaveTFListener(Node):
 
         self.robot_vel_publisher.publish(msg)
 
+
 def main(args=None):
     rclpy.init(args=args)
     node = SlaveTFListener()
@@ -101,5 +111,6 @@ def main(args=None):
         node.destroy_node()
         rclpy.shutdown()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

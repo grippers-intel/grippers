@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-# encoding: utf-8
+import queue
+import threading
+
 import cv2
 import fps
-import queue
-import rclpy
-import threading
-import numpy as np
 import mediapipe as mp
-from rclpy.node import Node
+import numpy as np
+import rclpy
 from cv_bridge import CvBridge
+from rclpy.node import Node
 from sensor_msgs.msg import Image
+
 
 class SegmentationNode(Node):
     def __init__(self, name):
@@ -22,8 +23,10 @@ class SegmentationNode(Node):
         self.fps = fps.FPS()
         self.image_queue = queue.Queue(maxsize=2)
         self.BG_COLOR = (192, 192, 192)  # gray
-        self.image_sub = self.create_subscription(Image, '/ascamera/camera_publisher/rgb0/image', self.image_callback, 1)
-        self.get_logger().info('\033[1;32m%s\033[0m' % 'start')
+        self.image_sub = self.create_subscription(
+            Image, "/ascamera/camera_publisher/rgb0/image", self.image_callback, 1
+        )
+        self.get_logger().info("\033[1;32m%s\033[0m" % "start")
         threading.Thread(target=self.main, daemon=True).start()
 
     def image_callback(self, ros_image):
@@ -35,10 +38,10 @@ class SegmentationNode(Node):
             # 将图像放入队列(put the image into the queue)
         self.image_queue.put(rgb_image)
 
-
     def main(self):
         with self.mp_selfie_segmentation.SelfieSegmentation(
-            model_selection=1) as selfie_segmentation:
+            model_selection=1
+        ) as selfie_segmentation:
             bg_image = None
             while self.running:
                 try:
@@ -57,38 +60,39 @@ class SegmentationNode(Node):
                 # Draw selfie segmentation on the background image.
                 # To improve segmentation around boundaries, consider applying a joint
                 # bilateral filter to "results.segmentation_mask" with "image".
-                condition = np.stack(
-                        (results.segmentation_mask,) * 3, axis=-1) > 0.1
+                condition = np.stack((results.segmentation_mask,) * 3, axis=-1) > 0.1
                 # The background can be customized.
                 #   a) Load an image (with the same width and height of the input image) to
                 #      be the background, e.g., bg_image = cv2.imread('/path/to/image/file')
                 #   b) Blur the input image by applying image filtering, e.g.,
                 #      bg_image = cv2.GaussianBlur(image,(55,55),0)
                 if bg_image is None:
-                  bg_image = np.zeros(image.shape, dtype=np.uint8)
-                  bg_image[:] = self.BG_COLOR
+                    bg_image = np.zeros(image.shape, dtype=np.uint8)
+                    bg_image[:] = self.BG_COLOR
                 output_image = np.where(condition, image, bg_image)
                 self.fps.update()
                 result_image = self.fps.show_fps(output_image)
-                cv2.imshow('MediaPipe Selfie Segmentation', result_image)
+                cv2.imshow("MediaPipe Selfie Segmentation", result_image)
                 key = cv2.waitKey(1)
-                if key == ord('q') or key == 27:  # 按q或者esc退出(press Q or Esc to quit)
+                if (
+                    key == ord("q") or key == 27
+                ):  # 按q或者esc退出(press Q or Esc to quit)
                     break
         cv2.destroyAllWindows()
         rclpy.shutdown()
 
 
 def main():
-    node = SegmentationNode('self_segmentation')
+    node = SegmentationNode("self_segmentation")
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         node.destroy_node()
         rclpy.shutdown()
-        print('shutdown')
+        print("shutdown")
     finally:
-        print('shutdown finish')
+        print("shutdown finish")
 
 
 if __name__ == "__main__":
-  main()
+    main()

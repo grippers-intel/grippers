@@ -1,14 +1,12 @@
-import cv2
-import math
 import copy
+import math
+from math import cos, floor, pi, sin
+
+import cv2
 import numpy as np
-from typing import Tuple, List
-from math import sin, cos, pi, floor
 
 
-def normalize_radians(
-    angle: float
-) -> float:
+def normalize_radians(angle: float) -> float:
     """__normalize_radians
 
     Parameters
@@ -86,13 +84,17 @@ def is_inside_rect(
             rect_tuple = ((cx, cy), (width, height), angle)
             box = cv2.boxPoints(rect_tuple)
 
-            x_max = int(np.max(box[:,0]))
-            x_min = int(np.min(box[:,0]))
-            y_max = int(np.max(box[:,1]))
-            y_min = int(np.min(box[:,1]))
+            x_max = int(np.max(box[:, 0]))
+            x_min = int(np.min(box[:, 0]))
+            y_max = int(np.max(box[:, 1]))
+            y_min = int(np.min(box[:, 1]))
 
-            if (x_min >= 0) and (x_max <= width_of_outer_rect) and \
-                (y_min >= 0) and (y_max <= height_of_outer_rect):
+            if (
+                (x_min >= 0)
+                and (x_max <= width_of_outer_rect)
+                and (y_min >= 0)
+                and (y_max <= height_of_outer_rect)
+            ):
                 # All 4 vertices are within the perimeter rectangle
                 results.append(True)
             else:
@@ -151,10 +153,10 @@ def bounding_box_from_rotated_rect(
         rect_tuple = ((cx, cy), (width, height), angle)
         box = cv2.boxPoints(rect_tuple)
 
-        x_max = int(np.max(box[:,0]))
-        x_min = int(np.min(box[:,0]))
-        y_max = int(np.max(box[:,1]))
-        y_min = int(np.min(box[:,1]))
+        x_max = int(np.max(box[:, 0]))
+        x_min = int(np.min(box[:, 0]))
+        y_max = int(np.max(box[:, 1]))
+        y_min = int(np.min(box[:, 1]))
 
         cx = int((x_min + x_max) // 2)
         cy = int((y_min + y_max) // 2)
@@ -167,9 +169,9 @@ def bounding_box_from_rotated_rect(
 
 
 def image_rotation_without_crop(
-    images: List[np.ndarray],
+    images: list[np.ndarray],
     angles: np.ndarray,
-) -> List[np.ndarray]:
+) -> list[np.ndarray]:
     """Conversion to bounding rectangle without rotation.
 
     Parameters
@@ -189,14 +191,14 @@ def image_rotation_without_crop(
     # https://stackoverflow.com/questions/22041699/rotate-an-image-without-cropping-in-opencv-in-c
     for image, angle in zip(images, angles):
         height, width = image.shape[:2]
-        image_center = (width//2, height//2)
+        image_center = (width // 2, height // 2)
         rotation_matrix = cv2.getRotationMatrix2D(image_center, int(angle), 1)
-        abs_cos = abs(rotation_matrix[0,0])
-        abs_sin = abs(rotation_matrix[0,1])
+        abs_cos = abs(rotation_matrix[0, 0])
+        abs_sin = abs(rotation_matrix[0, 1])
         bound_w = int(height * abs_sin + width * abs_cos)
         bound_h = int(height * abs_cos + width * abs_sin)
-        rotation_matrix[0, 2] += bound_w/2 - image_center[0]
-        rotation_matrix[1, 2] += bound_h/2 - image_center[1]
+        rotation_matrix[0, 2] += bound_w / 2 - image_center[0]
+        rotation_matrix[1, 2] += bound_h / 2 - image_center[1]
         rotated_image = cv2.warpAffine(image, rotation_matrix, (bound_w, bound_h))
         rotated_images.append(rotated_image)
 
@@ -206,7 +208,7 @@ def image_rotation_without_crop(
 def crop_rectangle(
     image: np.ndarray,
     rects: np.ndarray,
-) -> List[np.ndarray]:
+) -> list[np.ndarray]:
     """rect has to be upright.
 
     Parameters
@@ -260,8 +262,8 @@ def crop_rectangle(
         rect_height = int(rect[3])
 
         croped_image = image[
-            cy-rect_height//2:cy+rect_height-rect_height//2,
-            cx-rect_width//2:cx+rect_width-rect_width//2,
+            cy - rect_height // 2 : cy + rect_height - rect_height // 2,
+            cx - rect_width // 2 : cx + rect_width - rect_width // 2,
         ]
         croped_images.append(croped_image)
 
@@ -272,7 +274,7 @@ def rotate_and_crop_rectangle(
     image: np.ndarray,
     rects_tmp: np.ndarray,
     operation_when_cropping_out_of_range: str,
-) -> List[np.ndarray]:
+) -> list[np.ndarray]:
     """Crop a rotated rectangle from a image.
 
     Parameters
@@ -315,17 +317,17 @@ def rotate_and_crop_rectangle(
     width = image.shape[1]
 
     # Determine if rect is inside the entire image
-    if operation_when_cropping_out_of_range == 'padding':
-        size = (int(math.sqrt(width ** 2 + height ** 2)) + 2) * 2
+    if operation_when_cropping_out_of_range == "padding":
+        size = (int(math.sqrt(width**2 + height**2)) + 2) * 2
         image = pad_image(
             image=image,
             resize_width=size,
             resize_height=size,
         )
-        rects[:, 0] = rects[:, 0] + abs(size-width) / 2
-        rects[:, 1] = rects[:, 1] + abs(size-height) / 2
+        rects[:, 0] = rects[:, 0] + abs(size - width) / 2
+        rects[:, 1] = rects[:, 1] + abs(size - height) / 2
 
-    elif operation_when_cropping_out_of_range == 'ignore':
+    elif operation_when_cropping_out_of_range == "ignore":
         inside_or_outsides = is_inside_rect(
             rects=rects,
             width_of_outer_rect=width,
@@ -347,16 +349,18 @@ def rotate_and_crop_rectangle(
         angles=rects[..., 4:5],
     )
 
-    for rotated_rect_bbx_upright_image, rect in zip(rotated_rect_bbx_upright_images, rects):
-        crop_cx = rotated_rect_bbx_upright_image.shape[1]//2
-        crop_cy = rotated_rect_bbx_upright_image.shape[0]//2
+    for rotated_rect_bbx_upright_image, rect in zip(
+        rotated_rect_bbx_upright_images, rects
+    ):
+        crop_cx = rotated_rect_bbx_upright_image.shape[1] // 2
+        crop_cy = rotated_rect_bbx_upright_image.shape[0] // 2
         rect_width = int(rect[2])
         rect_height = int(rect[3])
 
         rotated_croped_images.append(
             rotated_rect_bbx_upright_image[
-                crop_cy-rect_height//2:crop_cy+(rect_height-rect_height//2),
-                crop_cx-rect_width//2:crop_cx+(rect_width-rect_width//2),
+                crop_cy - rect_height // 2 : crop_cy + (rect_height - rect_height // 2),
+                crop_cx - rect_width // 2 : crop_cx + (rect_width - rect_width // 2),
             ]
         )
 
@@ -367,7 +371,7 @@ def keep_aspect_resize_and_pad(
     image: np.ndarray,
     resize_width: int,
     resize_height: int,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Resize the image based on the long side to fit inside
     the specified bounding rectangle while maintaining the aspect ratio,
     and padding the short side to the specified size.
@@ -393,10 +397,7 @@ def keep_aspect_resize_and_pad(
     """
     image_height = image.shape[0]
     image_width = image.shape[1]
-    padded_image = np.zeros(
-        (resize_height, resize_width, 3),
-        np.uint8
-    )
+    padded_image = np.zeros((resize_height, resize_width, 3), np.uint8)
     ash = resize_height / image_height
     asw = resize_width / image_width
     if asw < ash:
@@ -439,15 +440,10 @@ def pad_image(
     image_height = image.shape[0]
     image_width = image.shape[1]
 
-    if resize_width < image_width:
-        resize_width = image_width
-    if resize_height < image_height:
-        resize_height = image_height
+    resize_width = max(resize_width, image_width)
+    resize_height = max(resize_height, image_height)
 
-    padded_image = np.zeros(
-        (resize_height, resize_width, 3),
-        np.uint8
-    )
+    padded_image = np.zeros((resize_height, resize_width, 3), np.uint8)
     start_h = int(resize_height / 2 - image_height / 2)
     end_h = int(resize_height / 2 + image_height / 2)
     start_w = int(resize_width / 2 - image_width / 2)
@@ -463,7 +459,7 @@ def rotated_rect_to_points(
     width: float,
     height: float,
     rotation: float,
-) -> List[List[int]]:
+) -> list[list[int]]:
     """Obtain coordinates for drawing a rotated rectangle
 
     Parameters
@@ -500,14 +496,14 @@ def rotated_rect_to_points(
     """
     b = cos(rotation) * 0.5
     a = sin(rotation) * 0.5
-    p0x = cx - a*height - b*width
-    p0y = cy + b*height - a*width
-    p1x = cx + a*height - b*width
-    p1y = cy - b*height - a*width
-    p2x = int(2*cx - p0x)
-    p2y = int(2*cy - p0y)
-    p3x = int(2*cx - p1x)
-    p3y = int(2*cy - p1y)
+    p0x = cx - a * height - b * width
+    p0y = cy + b * height - a * width
+    p1x = cx + a * height - b * width
+    p1y = cy - b * height - a * width
+    p2x = int(2 * cx - p0x)
+    p2y = int(2 * cy - p0y)
+    p3x = int(2 * cx - p1x)
+    p3y = int(2 * cy - p1y)
     p0x, p0y, p1x, p1y = int(p0x), int(p0y), int(p1x), int(p1y)
 
-    return [[p0x,p0y], [p1x,p1y], [p2x,p2y], [p3x,p3y]]
+    return [[p0x, p0y], [p1x, p1y], [p2x, p2y], [p3x, p3y]]

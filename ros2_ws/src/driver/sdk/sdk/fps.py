@@ -1,7 +1,8 @@
 #!/usr/bin/python3
-# coding=utf8
-import cv2
 import time
+
+import cv2
+
 
 class FPS:
     def __init__(self):
@@ -23,8 +24,7 @@ class FPS:
     def show_fps(self, img):
         line = cv2.LINE_AA
         font = cv2.FONT_HERSHEY_PLAIN
-        fps_text = 'FPS: {:.2f}'.format(self.fps)
+        fps_text = f"FPS: {self.fps:.2f}"
         cv2.putText(img, fps_text, (11, 20), font, 1.0, (32, 32, 32), 4, line)
         cv2.putText(img, fps_text, (10, 20), font, 1.0, (240, 240, 240), 1, line)
         return img
-

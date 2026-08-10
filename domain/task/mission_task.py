@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
 from dataclasses import dataclass
-from domain.task.states import IdleState, EstopState
+
+from domain.task.states import EstopState, IdleState
 
 
 @dataclass

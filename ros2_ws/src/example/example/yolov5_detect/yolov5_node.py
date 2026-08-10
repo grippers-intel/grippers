@@ -1,31 +1,35 @@
 #!/usr/bin/env python3
-# encoding: utf-8
 # @data:2022/11/07
 # @author:aiden
 # yolov5目标检测(yolov5 target detection)
 import os
-import time
 import queue
-import rclpy
 import signal
 import threading
+import time
+
 import numpy as np
-import sdk.fps as fps
-from sdk import common
-from rclpy.node import Node
+import rclpy
 from cv_bridge import CvBridge
+from example.yolov5_detect.yolov5_trt import YoLov5TRT
+from interfaces.msg import ObjectInfo, ObjectsInfo
+from rclpy.node import Node
+from sdk import common, fps
 from sensor_msgs.msg import Image
 from std_srvs.srv import Trigger
-from interfaces.msg import ObjectInfo, ObjectsInfo
-from example.yolov5_detect.yolov5_trt import YoLov5TRT
 
 MODE_PATH = os.path.split(os.path.realpath(__file__))[0]
+
 
 class Yolov5Node(Node):
     def __init__(self, name):
         rclpy.init()
-        super().__init__(name, allow_undeclared_parameters=True, automatically_declare_parameters_from_overrides=True)
-        
+        super().__init__(
+            name,
+            allow_undeclared_parameters=True,
+            automatically_declare_parameters_from_overrides=True,
+        )
+
         self.bgr_image = None
         self.start = False
         self.running = True
@@ -33,33 +37,44 @@ class Yolov5Node(Node):
         self.bridge = CvBridge()
         self.image_queue = queue.Queue(maxsize=2)
         signal.signal(signal.SIGINT, self.shutdown)
-        
-        self.fps = fps.FPS()  # fps计算器(FPS calculator)
-        engine = self.get_parameter('engine').value
-        lib = self.get_parameter('lib').value
-        conf_thresh = self.get_parameter('conf').value
-        self.get_logger().info('\033[1;32m%s\033[0m' % str(conf_thresh))
-        
-        self.classes = self.get_parameter('classes').value
-        
-        self.yolov5 = YoLov5TRT(os.path.join(MODE_PATH, engine), os.path.join(MODE_PATH, lib), self.classes, conf_thresh)
-        self.create_service(Trigger, '/yolov5/start', self.start_srv_callback)  # 进入玩法(enter the game)
-        self.create_service(Trigger, '/yolov5/stop', self.stop_srv_callback)  # 退出玩法(exit the game)
-        self.camera = 'depth_cam'
-        self.image_sub = self.create_subscription(Image, '/%s/rgb/image_raw' % self.camera, self.image_callback, 1)
 
-        self.object_pub = self.create_publisher(ObjectsInfo, '~/object_detect', 1)
-        self.result_image_pub = self.create_publisher(Image, '~/object_image', 1)
+        self.fps = fps.FPS()  # fps计算器(FPS calculator)
+        engine = self.get_parameter("engine").value
+        lib = self.get_parameter("lib").value
+        conf_thresh = self.get_parameter("conf").value
+        self.get_logger().info("\033[1;32m%s\033[0m" % str(conf_thresh))
+
+        self.classes = self.get_parameter("classes").value
+
+        self.yolov5 = YoLov5TRT(
+            os.path.join(MODE_PATH, engine),
+            os.path.join(MODE_PATH, lib),
+            self.classes,
+            conf_thresh,
+        )
+        self.create_service(
+            Trigger, "/yolov5/start", self.start_srv_callback
+        )  # 进入玩法(enter the game)
+        self.create_service(
+            Trigger, "/yolov5/stop", self.stop_srv_callback
+        )  # 退出玩法(exit the game)
+        self.camera = "depth_cam"
+        self.image_sub = self.create_subscription(
+            Image, "/%s/rgb/image_raw" % self.camera, self.image_callback, 1
+        )
+
+        self.object_pub = self.create_publisher(ObjectsInfo, "~/object_detect", 1)
+        self.result_image_pub = self.create_publisher(Image, "~/object_image", 1)
         threading.Thread(target=self.image_proc, daemon=True).start()
-        self.create_service(Trigger, '~/init_finish', self.get_node_state)
-        self.get_logger().info('\033[1;32m%s\033[0m' % 'start')
+        self.create_service(Trigger, "~/init_finish", self.get_node_state)
+        self.get_logger().info("\033[1;32m%s\033[0m" % "start")
 
     def get_node_state(self, request, response):
         response.success = True
         return response
 
     def start_srv_callback(self, request, response):
-        self.get_logger().info('\033[1;32m%s\033[0m' % "start yolov5 detect")
+        self.get_logger().info("\033[1;32m%s\033[0m" % "start yolov5 detect")
 
         self.start = True
         response.success = True
@@ -67,7 +82,7 @@ class Yolov5Node(Node):
         return response
 
     def stop_srv_callback(self, request, response):
-        self.get_logger().info('\033[1;32m%s\033[0m' % "stop yolov5 detect")
+        self.get_logger().info("\033[1;32m%s\033[0m" % "stop yolov5 detect")
 
         self.start = False
         response.success = True
@@ -82,10 +97,10 @@ class Yolov5Node(Node):
             self.image_queue.get()
             # 将图像放入队列(put the image into the queue)
         self.image_queue.put(bgr_image)
-   
+
     def shutdown(self, signum, frame):
         self.running = False
-        self.get_logger().info('\033[1;32m%s\033[0m' % "shutdown")
+        self.get_logger().info("\033[1;32m%s\033[0m" % "shutdown")
 
     def image_proc(self):
         while self.running:
@@ -112,34 +127,36 @@ class Yolov5Node(Node):
                         objects_info.append(object_info)
 
                         common.plot_one_box(
-                        box,
-                        image,
-                        color=color,
-                        label="{}:{:.2f}".format(
-                            self.classes[cls_id], cls_conf
-                        ),
-                    )
+                            box,
+                            image,
+                            color=color,
+                            label=f"{self.classes[cls_id]}:{cls_conf:.2f}",
+                        )
                     object_msg = ObjectsInfo()
                     object_msg.objects = objects_info
                     self.object_pub.publish(object_msg)
                 else:
                     time.sleep(0.01)
             except BaseException as e:
-                print('error', e)
+                print("error", e)
 
             self.fps.update()
             result_image = self.fps.show_fps(image)
-            self.result_image_pub.publish(self.bridge.cv2_to_imgmsg(result_image, "bgr8"))
+            self.result_image_pub.publish(
+                self.bridge.cv2_to_imgmsg(result_image, "bgr8")
+            )
         else:
             time.sleep(0.01)
-        self.yolov5.destroy() 
+        self.yolov5.destroy()
         rclpy.shutdown()
 
+
 def main():
-    node = Yolov5Node('yolov5')
+    node = Yolov5Node("yolov5")
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
+
 
 if __name__ == "__main__":
     main()

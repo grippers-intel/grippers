@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-# encoding: utf-8
-import os
 import queue
-import rclpy
 import threading
-import numpy as np
-from rclpy.node import Node
-from cv_bridge import CvBridge
-from sensor_msgs.msg import Image
-from pyzbar import pyzbar
+
 import cv2
+import numpy as np
+import rclpy
+from cv_bridge import CvBridge
+from pyzbar import pyzbar
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+
 
 class QRCodeDetectNode(Node):
     def __init__(self, name):
@@ -18,7 +18,9 @@ class QRCodeDetectNode(Node):
         self.running = True
         self.bridge = CvBridge()
         self.image_queue = queue.Queue(maxsize=2)
-        self.image_sub = self.create_subscription(Image, '/ascamera/camera_publisher/rgb0/image', self.image_callback, 1)
+        self.image_sub = self.create_subscription(
+            Image, "/ascamera/camera_publisher/rgb0/image", self.image_callback, 1
+        )
         threading.Thread(target=self.main, daemon=True).start()
 
     def image_callback(self, ros_image):
@@ -42,36 +44,52 @@ class QRCodeDetectNode(Node):
             for obj in decoded_objects:
                 points = obj.polygon
                 if len(points) > 4:
-                    hull = cv2.convexHull(np.array([point for point in points], dtype=np.float32))
+                    hull = cv2.convexHull(
+                        np.array([point for point in points], dtype=np.float32)
+                    )
                     points = hull.reshape(-1, 2)
                 for j in range(len(points)):
-                    cv2.line(image, tuple(points[j]), tuple(points[(j+1) % len(points)]), (0, 255, 0), 3)
+                    cv2.line(
+                        image,
+                        tuple(points[j]),
+                        tuple(points[(j + 1) % len(points)]),
+                        (0, 255, 0),
+                        3,
+                    )
                 x = obj.rect.left
                 y = obj.rect.top
                 barcode_data = obj.data.decode("utf-8")
                 print(barcode_data)
-                cv2.putText(image, barcode_data, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                cv2.putText(
+                    image,
+                    barcode_data,
+                    (x, y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 0),
+                    2,
+                )
 
-            cv2.imshow('image', image)
+            cv2.imshow("image", image)
             key = cv2.waitKey(1)
-            if key == ord('q') or key == 27:
+            if key == ord("q") or key == 27:
                 break
 
         cv2.destroyAllWindows()
         rclpy.shutdown()
 
+
 def main():
-    node = QRCodeDetectNode('qrcode_detect')
+    node = QRCodeDetectNode("qrcode_detect")
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         node.destroy_node()
         rclpy.shutdown()
-        print('shutdown')
+        print("shutdown")
     finally:
-        print('shutdown finish')
+        print("shutdown finish")
+
 
 if __name__ == "__main__":
     main()
-
-

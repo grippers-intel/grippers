@@ -1,20 +1,21 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+
 
 def generate_launch_description():
     ld = LaunchDescription()
     ascamera_node = Node(
-        namespace= "ascamera_hp60c",
-        package='ascamera',
-        executable='ascamera_node',
+        namespace="ascamera_hp60c",
+        package="ascamera",
+        executable="ascamera_node",
         respawn=True,
-        output='both',
+        output="both",
         parameters=[
             {"usb_bus_no": -1},
             {"usb_path": "null"},
-            {"confiPath": "/home/ubuntu/third_party_ros2/third_party_ws/src/ascamera/configurationfiles"},
+            {
+                "confiPath": "/home/ubuntu/third_party_ros2/third_party_ws/src/ascamera/configurationfiles"
+            },
             {"color_pcl": True},
             {"pub_tfTree": True},
             {"depth_width": 640},
@@ -23,9 +24,13 @@ def generate_launch_description():
             {"rgb_height": 480},
             {"fps": 15},
         ],
-        remappings=[              
-        ('/ascamera_hp60c/ascamera/rgb0/image', '/depth_cam/rgb/image_raw'),
-        ('/ascamera_hp60c/ascamera/depth0/image_raw', '/depth_cam/depth0/image_raw'),]
+        remappings=[
+            ("/ascamera_hp60c/ascamera/rgb0/image", "/depth_cam/rgb/image_raw"),
+            (
+                "/ascamera_hp60c/ascamera/depth0/image_raw",
+                "/depth_cam/depth0/image_raw",
+            ),
+        ],
     )
 
     # ascamera_node2 = Node(
@@ -52,5 +57,3 @@ def generate_launch_description():
     # ld.add_action(ascamera_node2)
 
     return ld
-
-

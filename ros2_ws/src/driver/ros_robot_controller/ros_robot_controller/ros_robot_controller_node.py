@@ -1,26 +1,36 @@
 #!/usr/bin/env python3
-# encoding: utf-8
 # @Author: Aiden
 # @Date: 2023/08/28
 # stm32 ros2 package
 
 import math
-import time
-import rclpy
-import signal
 import threading
+import time
+
+import rclpy
 import yaml  # 已导入 PyYAML
 from rclpy.node import Node
-from std_srvs.srv import Trigger
-from sensor_msgs.msg import Imu, Joy
-from std_msgs.msg import UInt16, Bool
-from ros_robot_controller.ros_robot_controller_sdk import Board, PacketReportKeyEvents
-from ros_robot_controller_msgs.srv import GetBusServoState, GetPWMServoState
 from ros_robot_controller_msgs.msg import (
-    ButtonState, BuzzerState, MotorsState, BusServoState, LedState,
-    SetBusServoState, ServosPosition, SetPWMServoState, Sbus, OLEDState,
-    RGBStates, PWMServoState
+    BusServoState,
+    ButtonState,
+    BuzzerState,
+    LedState,
+    MotorsState,
+    OLEDState,
+    PWMServoState,
+    RGBStates,
+    Sbus,
+    ServosPosition,
+    SetBusServoState,
+    SetPWMServoState,
 )
+from ros_robot_controller_msgs.srv import GetBusServoState, GetPWMServoState
+from sensor_msgs.msg import Imu, Joy
+from std_msgs.msg import Bool, UInt16
+from std_srvs.srv import Trigger
+
+from ros_robot_controller.ros_robot_controller_sdk import Board, PacketReportKeyEvents
+
 
 class RosRobotController(Node):
     gravity = 9.80665
@@ -32,26 +42,36 @@ class RosRobotController(Node):
         self.board.enable_reception()
         self.running = True
 
-        self.declare_parameter('imu_frame', 'imu_link')
-        self.declare_parameter('init_finish', False)
-        self.IMU_FRAME = self.get_parameter('imu_frame').value
+        self.declare_parameter("imu_frame", "imu_link")
+        self.declare_parameter("init_finish", False)
+        self.IMU_FRAME = self.get_parameter("imu_frame").value
 
-        self.imu_pub = self.create_publisher(Imu, '~/imu_raw', 1)
-        self.joy_pub = self.create_publisher(Joy, '~/joy', 1)
-        self.sbus_pub = self.create_publisher(Sbus, '~/sbus', 1)
-        self.button_pub = self.create_publisher(ButtonState, '~/button', 1)
-        self.battery_pub = self.create_publisher(UInt16, '~/battery', 1)
-        self.create_subscription(LedState, '~/set_led', self.set_led_state, 5)
-        self.create_subscription(BuzzerState, '~/set_buzzer', self.set_buzzer_state, 5)
-        self.create_subscription(OLEDState, '~/set_oled', self.set_oled_state, 5)
-        self.create_subscription(MotorsState, '~/set_motor', self.set_motor_state, 10)
-        self.create_subscription(Bool, '~/enable_reception', self.enable_reception, 1)
-        self.create_subscription(SetBusServoState, '~/bus_servo/set_state', self.set_bus_servo_state, 10)
-        self.create_subscription(ServosPosition, '~/bus_servo/set_position', self.set_bus_servo_position, 10)
-        self.create_subscription(SetPWMServoState, '~/pwm_servo/set_state', self.set_pwm_servo_state, 10)
-        self.create_service(GetBusServoState, '~/bus_servo/get_state', self.get_bus_servo_state)
-        self.create_service(GetPWMServoState, '~/pwm_servo/get_state', self.get_pwm_servo_state)
-        self.create_subscription(RGBStates, '~/set_rgb', self.set_rgb_states, 10)
+        self.imu_pub = self.create_publisher(Imu, "~/imu_raw", 1)
+        self.joy_pub = self.create_publisher(Joy, "~/joy", 1)
+        self.sbus_pub = self.create_publisher(Sbus, "~/sbus", 1)
+        self.button_pub = self.create_publisher(ButtonState, "~/button", 1)
+        self.battery_pub = self.create_publisher(UInt16, "~/battery", 1)
+        self.create_subscription(LedState, "~/set_led", self.set_led_state, 5)
+        self.create_subscription(BuzzerState, "~/set_buzzer", self.set_buzzer_state, 5)
+        self.create_subscription(OLEDState, "~/set_oled", self.set_oled_state, 5)
+        self.create_subscription(MotorsState, "~/set_motor", self.set_motor_state, 10)
+        self.create_subscription(Bool, "~/enable_reception", self.enable_reception, 1)
+        self.create_subscription(
+            SetBusServoState, "~/bus_servo/set_state", self.set_bus_servo_state, 10
+        )
+        self.create_subscription(
+            ServosPosition, "~/bus_servo/set_position", self.set_bus_servo_position, 10
+        )
+        self.create_subscription(
+            SetPWMServoState, "~/pwm_servo/set_state", self.set_pwm_servo_state, 10
+        )
+        self.create_service(
+            GetBusServoState, "~/bus_servo/get_state", self.get_bus_servo_state
+        )
+        self.create_service(
+            GetPWMServoState, "~/pwm_servo/get_state", self.get_pwm_servo_state
+        )
+        self.create_subscription(RGBStates, "~/set_rgb", self.set_rgb_states, 10)
 
         # 加载并设置舵机偏移量从 YAML 文件
         self.load_servo_offsets()
@@ -61,21 +81,23 @@ class RosRobotController(Node):
 
         self.clock = self.get_clock()
         threading.Thread(target=self.pub_callback, daemon=True).start()
-        self.create_service(Trigger, '~/init_finish', self.get_node_state)
-        self.get_logger().info('\033[1;32m%s\033[0m' % 'start')
+        self.create_service(Trigger, "~/init_finish", self.get_node_state)
+        self.get_logger().info("\033[1;32m%s\033[0m" % "start")
 
     def load_servo_offsets(self):
         """
         从 YAML 文件中读取舵机偏差设置。
         """
-        config_path = '/home/ubuntu/software/Servo_upper_computer/servo_config.yaml'
+        config_path = "/home/ubuntu/software/Servo_upper_computer/servo_config.yaml"
         try:
-            with open(config_path, 'r') as file:
+            with open(config_path, "r") as file:
                 config = yaml.safe_load(file)
 
             # 确保config是字典
             if not isinstance(config, dict):
-                self.get_logger().error(f"YAML 配置文件格式错误: {config_path}，应为字典格式。")
+                self.get_logger().error(
+                    f"YAML 配置文件格式错误: {config_path}，应为字典格式。"
+                )
                 return
 
             # 遍历ID1到ID4并设置偏移量
@@ -100,7 +122,7 @@ class RosRobotController(Node):
 
     def pub_callback(self):
         while self.running:
-            if getattr(self, 'enable_reception', False):
+            if getattr(self, "enable_reception", False):
                 self.pub_button_data(self.button_pub)
                 self.pub_joy_data(self.joy_pub)
                 self.pub_imu_data(self.imu_pub)
@@ -112,7 +134,9 @@ class RosRobotController(Node):
         rclpy.shutdown()
 
     def enable_reception(self, msg):
-        self.get_logger().info('\033[1;32m%s\033[0m' % ('enable_reception ' + str(msg.data)))
+        self.get_logger().info(
+            "\033[1;32m%s\033[0m" % ("enable_reception " + str(msg.data))
+        )
         self.enable_reception = msg.data
         self.board.enable_reception(msg.data)
 
@@ -121,7 +145,7 @@ class RosRobotController(Node):
 
     def set_buzzer_state(self, msg):
         self.board.set_buzzer(msg.freq, msg.on_time, msg.off_time, msg.repeat)
-    
+
     def set_rgb_states(self, msg):
         pixels = []
         for state in msg.states:
@@ -184,19 +208,29 @@ class RosRobotController(Node):
                             data.extend([[i.present_id[1], i.position[1]]])
                     if i.offset:
                         if i.offset[0]:
-                            self.board.bus_servo_set_offset(i.present_id[1], i.offset[1])
+                            self.board.bus_servo_set_offset(
+                                i.present_id[1], i.offset[1]
+                            )
                     if i.position_limit:
                         if i.position_limit[0]:
-                            self.board.bus_servo_set_angle_limit(i.present_id[1], i.position_limit[1:])
+                            self.board.bus_servo_set_angle_limit(
+                                i.present_id[1], i.position_limit[1:]
+                            )
                     if i.voltage_limit:
                         if i.voltage_limit[0]:
-                            self.board.bus_servo_set_vin_limit(i.present_id[1], i.voltage_limit[1:])
+                            self.board.bus_servo_set_vin_limit(
+                                i.present_id[1], i.voltage_limit[1:]
+                            )
                     if i.max_temperature_limit:
                         if i.max_temperature_limit[0]:
-                            self.board.bus_servo_set_temp_limit(i.present_id[1], i.max_temperature_limit[1])
+                            self.board.bus_servo_set_temp_limit(
+                                i.present_id[1], i.max_temperature_limit[1]
+                            )
                     if i.enable_torque:
                         if i.enable_torque[0]:
-                            self.board.bus_servo_enable_torque(i.present_id[1], i.enable_torque[1])
+                            self.board.bus_servo_enable_torque(
+                                i.present_id[1], i.enable_torque[1]
+                            )
                     if i.save_offset:
                         if i.save_offset[0]:
                             self.board.bus_servo_save_offset(i.present_id[1])
@@ -205,7 +239,7 @@ class RosRobotController(Node):
                             servo_id.append(i.present_id[1])
         if data != []:
             self.board.bus_servo_set_position(msg.duration, data)
-        if servo_id != []:    
+        if servo_id != []:
             self.board.bus_servo_stop(servo_id)
 
     def get_bus_servo_state(self, request, response):
@@ -323,19 +357,44 @@ class RosRobotController(Node):
             msg.angular_velocity.y = math.radians(gy)
             msg.angular_velocity.z = math.radians(gz)
 
-            msg.orientation_covariance = [0.01, 0.0, 0.0,
-                                          0.0, 0.01, 0.0,
-                                          0.0, 0.0, 0.01]
-            msg.angular_velocity_covariance = [0.01, 0.0, 0.0,
-                                              0.0, 0.01, 0.0,
-                                              0.0, 0.0, 0.01]
-            msg.linear_acceleration_covariance = [0.0004, 0.0, 0.0,
-                                                 0.0, 0.0004, 0.0,
-                                                 0.0, 0.0, 0.004]
+            msg.orientation_covariance = [
+                0.01,
+                0.0,
+                0.0,
+                0.0,
+                0.01,
+                0.0,
+                0.0,
+                0.0,
+                0.01,
+            ]
+            msg.angular_velocity_covariance = [
+                0.01,
+                0.0,
+                0.0,
+                0.0,
+                0.01,
+                0.0,
+                0.0,
+                0.0,
+                0.01,
+            ]
+            msg.linear_acceleration_covariance = [
+                0.0004,
+                0.0,
+                0.0,
+                0.0,
+                0.0004,
+                0.0,
+                0.0,
+                0.0,
+                0.004,
+            ]
             pub.publish(msg)
 
+
 def main():
-    node = RosRobotController('ros_robot_controller')
+    node = RosRobotController("ros_robot_controller")
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -343,9 +402,10 @@ def main():
         node.board.set_motor_speed([[1, 0], [2, 0], [3, 0], [4, 0]])
         node.destroy_node()
         rclpy.shutdown()
-        print('shutdown')
+        print("shutdown")
     finally:
-        print('shutdown finish')
+        print("shutdown finish")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

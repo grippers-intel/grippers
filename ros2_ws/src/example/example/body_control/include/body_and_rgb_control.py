@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-# encoding: utf-8
 # @data:2022/11/07
 # @author:aiden
 # 肌体控制融合RGB(body control combined with RGB)
+import faulthandler
 import os
-import cv2
-import time
 import queue
-import rclpy
 import signal
 import threading
-import numpy as np
-import faulthandler
-import sdk.fps as fps
+import time
+
+import cv2
 import mediapipe as mp
-from rclpy.node import Node
-from cv_bridge import CvBridge
-from std_srvs.srv import Trigger
-from sensor_msgs.msg import Image
+import numpy as np
+import rclpy
 from app.common import ColorPicker
-from sdk.common import vector_2d_angle
-from geometry_msgs.msg import Twist, Point
+from cv_bridge import CvBridge
+from geometry_msgs.msg import Point, Twist
+from rclpy.node import Node
 from ros_robot_controller_msgs.msg import BuzzerState, MotorsState, MotorState
+from sdk import fps
+from sdk.common import vector_2d_angle
+from sensor_msgs.msg import Image
+from std_srvs.srv import Trigger
 
 faulthandler.enable()
 
@@ -43,10 +43,20 @@ LEFT_ANKLE = mp_pose.PoseLandmark.LEFT_ANKLE
 RIGHT_KNEE = mp_pose.PoseLandmark.RIGHT_KNEE
 RIGHT_ANKLE = mp_pose.PoseLandmark.RIGHT_ANKLE
 
+
 def get_body_center(h, w, landmarks):
     landmarks = np.array([(lm.x * w, lm.y * h) for lm in landmarks])
-    center = ((landmarks[LEFT_HIP] + landmarks[LEFT_SHOULDER] + landmarks[RIGHT_HIP] + landmarks[RIGHT_SHOULDER])/4).astype(int)
+    center = (
+        (
+            landmarks[LEFT_HIP]
+            + landmarks[LEFT_SHOULDER]
+            + landmarks[RIGHT_HIP]
+            + landmarks[RIGHT_SHOULDER]
+        )
+        / 4
+    ).astype(int)
     return center.tolist()
+
 
 def get_joint_landmarks(img, landmarks):
     """
@@ -58,12 +68,14 @@ def get_joint_landmarks(img, landmarks):
     landmarks = [(lm.x * w, lm.y * h) for lm in landmarks]
     return np.array(landmarks)
 
+
 def get_dif(list1, list2):
     if len(list1) != len(list2):
-        return 255*3
+        return 255 * 3
     else:
         d = np.absolute(np.array(list1) - np.array(list2))
         return sum(d)
+
 
 def joint_angle(landmarks):
     """
@@ -72,48 +84,62 @@ def joint_angle(landmarks):
     :return: 关节角度(joint angle)
     """
     angle_list = []
-    left_hand_angle1 = vector_2d_angle(landmarks[LEFT_SHOULDER] - landmarks[LEFT_ELBOW], landmarks[LEFT_WRIST] - landmarks[LEFT_ELBOW])
+    left_hand_angle1 = vector_2d_angle(
+        landmarks[LEFT_SHOULDER] - landmarks[LEFT_ELBOW],
+        landmarks[LEFT_WRIST] - landmarks[LEFT_ELBOW],
+    )
     angle_list.append(int(left_hand_angle1))
-   
-    left_hand_angle2 = vector_2d_angle(landmarks[LEFT_HIP] - landmarks[LEFT_SHOULDER], landmarks[LEFT_WRIST] - landmarks[LEFT_SHOULDER])
+
+    left_hand_angle2 = vector_2d_angle(
+        landmarks[LEFT_HIP] - landmarks[LEFT_SHOULDER],
+        landmarks[LEFT_WRIST] - landmarks[LEFT_SHOULDER],
+    )
     angle_list.append(int(left_hand_angle2))
 
-    right_hand_angle1 = vector_2d_angle(landmarks[RIGHT_SHOULDER] - landmarks[RIGHT_ELBOW], landmarks[RIGHT_WRIST] - landmarks[RIGHT_ELBOW])
+    right_hand_angle1 = vector_2d_angle(
+        landmarks[RIGHT_SHOULDER] - landmarks[RIGHT_ELBOW],
+        landmarks[RIGHT_WRIST] - landmarks[RIGHT_ELBOW],
+    )
     angle_list.append(int(right_hand_angle1))
 
-    right_hand_angle2 = vector_2d_angle(landmarks[RIGHT_HIP] - landmarks[RIGHT_SHOULDER], landmarks[RIGHT_WRIST] - landmarks[RIGHT_SHOULDER])
+    right_hand_angle2 = vector_2d_angle(
+        landmarks[RIGHT_HIP] - landmarks[RIGHT_SHOULDER],
+        landmarks[RIGHT_WRIST] - landmarks[RIGHT_SHOULDER],
+    )
     angle_list.append(int(right_hand_angle2))
-    
+
     return angle_list
+
 
 def joint_distance(landmarks):
     distance_list = []
 
     d1 = landmarks[LEFT_HIP] - landmarks[LEFT_SHOULDER]
     d2 = landmarks[LEFT_HIP] - landmarks[LEFT_WRIST]
-    dis1 = d1[0]**2 + d1[1]**2
-    dis2 = d2[0]**2 + d2[1]**2
-    distance_list.append(round(dis1/dis2, 1))
-   
+    dis1 = d1[0] ** 2 + d1[1] ** 2
+    dis2 = d2[0] ** 2 + d2[1] ** 2
+    distance_list.append(round(dis1 / dis2, 1))
+
     d1 = landmarks[RIGHT_HIP] - landmarks[RIGHT_SHOULDER]
     d2 = landmarks[RIGHT_HIP] - landmarks[RIGHT_WRIST]
-    dis1 = d1[0]**2 + d1[1]**2
-    dis2 = d2[0]**2 + d2[1]**2
-    distance_list.append(round(dis1/dis2, 1))
-    
+    dis1 = d1[0] ** 2 + d1[1] ** 2
+    dis2 = d2[0] ** 2 + d2[1] ** 2
+    distance_list.append(round(dis1 / dis2, 1))
+
     d1 = landmarks[LEFT_HIP] - landmarks[LEFT_ANKLE]
     d2 = landmarks[LEFT_ANKLE] - landmarks[LEFT_KNEE]
-    dis1 = d1[0]**2 + d1[1]**2
-    dis2 = d2[0]**2 + d2[1]**2
-    distance_list.append(round(dis1/dis2, 1))
-   
+    dis1 = d1[0] ** 2 + d1[1] ** 2
+    dis2 = d2[0] ** 2 + d2[1] ** 2
+    distance_list.append(round(dis1 / dis2, 1))
+
     d1 = landmarks[RIGHT_HIP] - landmarks[RIGHT_ANKLE]
     d2 = landmarks[RIGHT_ANKLE] - landmarks[RIGHT_KNEE]
-    dis1 = d1[0]**2 + d1[1]**2
-    dis2 = d2[0]**2 + d2[1]**2
-    distance_list.append(round(dis1/dis2, 1))
-    
+    dis1 = d1[0] ** 2 + d1[1] ** 2
+    dis2 = d2[0] ** 2 + d2[1] ** 2
+    distance_list.append(round(dis1 / dis2, 1))
+
     return distance_list
+
 
 class BodyControlNode(Node):
     def __init__(self, name):
@@ -124,8 +150,9 @@ class BodyControlNode(Node):
         self.body_detector = mp_pose.Pose(
             static_image_mode=False,
             min_tracking_confidence=0.7,
-            min_detection_confidence=0.7)
-        
+            min_detection_confidence=0.7,
+        )
+
         self.color_picker = ColorPicker(Point(), 2)
         signal.signal(signal.SIGINT, self.shutdown)
         self.fps = fps.FPS()  # fps计算器(FPS calculator)
@@ -144,31 +171,39 @@ class BodyControlNode(Node):
         self.right_hand_count = []
         self.left_leg_count = []
         self.right_leg_count = []
-        
+
         self.detect_status = [0, 0, 0, 0]
         self.move_status = [0, 0, 0, 0]
         self.last_status = 0
         self.bridge = CvBridge()
         self.image_queue = queue.Queue(maxsize=2)
 
-        self.machine_type = os.environ.get('MACHINE_TYPE')
-        #self.joints_pub = self.create_publisher(ServosPosition, '/servo_controller', 1) # 舵机控制(servo control)
-        self.mecanum_pub = self.create_publisher(Twist, '/controller/cmd_vel', 1)  # 底盘控制(chassis control)
+        self.machine_type = os.environ.get("MACHINE_TYPE")
+        # self.joints_pub = self.create_publisher(ServosPosition, '/servo_controller', 1) # 舵机控制(servo control)
+        self.mecanum_pub = self.create_publisher(
+            Twist, "/controller/cmd_vel", 1
+        )  # 底盘控制(chassis control)
 
-        camera = 'depth_cam'
-        self.create_subscription(Image, '/ascamera/camera_publisher/rgb0/image' , self.image_callback, 1)
-        self.buzzer_pub = self.create_publisher(BuzzerState, '/ros_robot_controller/set_buzzer', 1)
-        self.motor_pub = self.create_publisher(MotorsState, '/ros_robot_controller/set_motor', 1)
+        camera = "depth_cam"
+        self.create_subscription(
+            Image, "/ascamera/camera_publisher/rgb0/image", self.image_callback, 1
+        )
+        self.buzzer_pub = self.create_publisher(
+            BuzzerState, "/ros_robot_controller/set_buzzer", 1
+        )
+        self.motor_pub = self.create_publisher(
+            MotorsState, "/ros_robot_controller/set_motor", 1
+        )
 
-        #self.controller = ActionGroupController(self.create_publisher(ServosPosition, 'servo_controller', 1), '/home/ubuntu/software/arm_pc/ActionGroups')
-        #self.client = self.create_client(Trigger, '/controller_manager/init_finish')
-        #self.client.wait_for_service()
+        # self.controller = ActionGroupController(self.create_publisher(ServosPosition, 'servo_controller', 1), '/home/ubuntu/software/arm_pc/ActionGroups')
+        # self.client = self.create_client(Trigger, '/controller_manager/init_finish')
+        # self.client.wait_for_service()
         self.mecanum_pub.publish(Twist())
-        #self.controller.run_action('camera_up')
+        # self.controller.run_action('camera_up')
 
         threading.Thread(target=self.main, daemon=True).start()
-        self.create_service(Trigger, '~/init_finish', self.get_node_state)
-        self.get_logger().info('\033[1;32m%s\033[0m' % 'start')
+        self.create_service(Trigger, "~/init_finish", self.get_node_state)
+        self.get_logger().info("\033[1;32m%s\033[0m" % "start")
 
     def get_node_state(self, request, response):
         response.success = True
@@ -188,7 +223,7 @@ class BodyControlNode(Node):
 
     def move(self, *args):
         if args[0].angular.z == 1:
-            #set_servo_position(self.joints_pub, 0.1, ((9, 650), ))
+            # set_servo_position(self.joints_pub, 0.1, ((9, 650), ))
             time.sleep(0.2)
             motor1 = MotorState()
             motor1.id = 2
@@ -200,7 +235,7 @@ class BodyControlNode(Node):
             msg.data = [motor1, motor2]
             self.motor_pub.publish(msg)
             time.sleep(11)
-            #set_servo_position(self.joints_pub, 0.1, ((9, 500), ))
+            # set_servo_position(self.joints_pub, 0.1, ((9, 500), ))
             motor1 = MotorState()
             motor1.id = 2
             motor1.rps = 0.0
@@ -211,7 +246,7 @@ class BodyControlNode(Node):
             msg.data = [motor1, motor2]
             self.motor_pub.publish(msg)
         elif args[0].angular.z == -1:
-            #set_servo_position(self.joints_pub, 0.1, ((9, 350), ))
+            # set_servo_position(self.joints_pub, 0.1, ((9, 350), ))
             time.sleep(0.2)
             motor1 = MotorState()
             motor1.id = 2
@@ -223,7 +258,7 @@ class BodyControlNode(Node):
             msg.data = [motor1, motor2]
             self.motor_pub.publish(msg)
             time.sleep(12)
-            #set_servo_position(self.joints_pub, 0.1, ((9, 500), ))
+            # set_servo_position(self.joints_pub, 0.1, ((9, 500), ))
             motor1 = MotorState()
             motor1.id = 2
             motor1.rps = 0.0
@@ -238,7 +273,7 @@ class BodyControlNode(Node):
             time.sleep(args[1])
             self.mecanum_pub.publish(Twist())
             time.sleep(0.1)
-        self.stop_flag =True
+        self.stop_flag = True
         self.move_finish = True
 
     def buzzer_warn(self):
@@ -254,18 +289,27 @@ class BodyControlNode(Node):
         results = self.body_detector.process(image)
         if results is not None and results.pose_landmarks is not None:
             twist = Twist()
-            
+
             landmarks = get_joint_landmarks(image, results.pose_landmarks.landmark)
-            
+
             # 叉腰标定(hands-on-hips calibration)
             angle_list = joint_angle(landmarks)
-            #print(angle_list)
-            if -150 < angle_list[0] < -90 and -30 < angle_list[1] < -10 and 90 < angle_list[2] < 150 and 10 < angle_list[3] < 30:
+            # print(angle_list)
+            if (
+                -150 < angle_list[0] < -90
+                and -30 < angle_list[1] < -10
+                and 90 < angle_list[2] < 150
+                and 10 < angle_list[3] < 30
+            ):
                 self.count_akimbo += 1  # 叉腰检测+1(hands-on-hips detection+1)
-                self.count_no_akimbo = 0  # 没有叉腰检测归零(clear no hands-on-hips detection)
+                self.count_no_akimbo = (
+                    0  # 没有叉腰检测归零(clear no hands-on-hips detection)
+                )
             else:
                 self.count_akimbo = 0  # 叉腰检测归零(clear hands-on-hips detection)
-                self.count_no_akimbo += 1  # 没有叉腰检测+1(no hands-on-hips detection+1)
+                self.count_no_akimbo += (
+                    1  # 没有叉腰检测+1(no hands-on-hips detection+1)
+                )
                 # 当连续5次都检测到叉腰且当前不在标定状态(If hands-on-hips posture is detected for 5 consecutive times, and not under calibrated status)
             if self.count_akimbo > 5 and not self.calibrating:
                 self.count_akimbo = 0  # 检测归零(clear detection)
@@ -292,24 +336,39 @@ class BodyControlNode(Node):
                 self.current_color, image = self.color_picker(image, image.copy())
                 # 没有标定颜色且检测到当前中心颜色，且在标定状态，还没标定好(Color is not calibrated.
                 # Color of body center is detected and calibrated but the calibration isn't finished)
-                if self.lock_color is None and self.current_color is not None and self.calibrating and not self.have_lock:
+                if (
+                    self.lock_color is None
+                    and self.current_color is not None
+                    and self.calibrating
+                    and not self.have_lock
+                ):
                     self.have_lock = True  # 标定好了(the calibration is completed)
                     self.buzzer_warn()  # 标定好蜂鸣器提示(calibrate buzzer warning)
-                    self.lock_color = self.current_color[1]  # 保存标定的颜色(save calibrated)
+                    self.lock_color = self.current_color[
+                        1
+                    ]  # 保存标定的颜色(save calibrated)
                 # print(self.current_color[1])
                 # 已经有标定颜色且测到当前中心颜色，不在标定状态(There is calibrated color and color of body center is detected but not be calibrated)
-                if self.lock_color is not None and self.current_color is not None and not self.calibrating:
+                if (
+                    self.lock_color is not None
+                    and self.current_color is not None
+                    and not self.calibrating
+                ):
                     # 比较当前颜色和标定颜色是否一致(compare the current color and the calibrated color)
                     res = get_dif(list(self.lock_color), list(self.current_color[1]))
                     # print(res)
                     # print(self.lock_color, self.current_color[1])
-                    if res < 50:  # 如果是则表示当前可以控制(if they are consistent, it means that control function can be implemented)
+                    if (
+                        res < 50
+                    ):  # 如果是则表示当前可以控制(if they are consistent, it means that control function can be implemented)
                         self.can_control = True
                     else:  # 如果不是则表示当前不可以控制(if they are not consistent, it means that control function cannot be implemented)
                         self.can_control = False
-                if self.can_control:  # 可以控制则进入姿态检测部分(if control function can be implemented, move to posture detection part)
-                    distance_list = (joint_distance(landmarks))
-                    
+                if (
+                    self.can_control
+                ):  # 可以控制则进入姿态检测部分(if control function can be implemented, move to posture detection part)
+                    distance_list = joint_distance(landmarks)
+
                     if distance_list[0] < 1:
                         self.detect_status[0] = 1
                     if distance_list[1] < 1:
@@ -318,24 +377,26 @@ class BodyControlNode(Node):
                         self.detect_status[2] = 1
                     if 0 < distance_list[3] < 2:
                         self.detect_status[3] = 1
-                    
+
                     self.left_hand_count.append(self.detect_status[0])
                     self.right_hand_count.append(self.detect_status[1])
                     self.left_leg_count.append(self.detect_status[2])
-                    self.right_leg_count.append(self.detect_status[3])                   
-                    #print(distance_list) 
-                    
+                    self.right_leg_count.append(self.detect_status[3])
+                    # print(distance_list)
+
                     if len(self.left_hand_count) == 4:
-                        count = [sum(self.left_hand_count), 
-                                 sum(self.right_hand_count), 
-                                 sum(self.left_leg_count), 
-                                 sum(self.right_leg_count)]
+                        count = [
+                            sum(self.left_hand_count),
+                            sum(self.right_hand_count),
+                            sum(self.left_leg_count),
+                            sum(self.right_leg_count),
+                        ]
 
                         self.left_hand_count = []
                         self.right_hand_count = []
                         self.left_leg_count = []
                         self.right_leg_count = []
-                    
+
                         if self.stop_flag:
                             if count[self.last_status - 1] <= 2:
                                 self.stop_flag = False
@@ -354,37 +415,44 @@ class BodyControlNode(Node):
                             if self.move_status[0]:
                                 self.move_finish = False
                                 self.last_status = 1
-                                if self.machine_type == 'MentorPi_Mecanum':
+                                if self.machine_type == "MentorPi_Mecanum":
                                     twist.linear.y = -0.3
-                                elif self.machine_type == 'MentorPi_Acker':
+                                elif self.machine_type == "MentorPi_Acker":
                                     twist.angular.z = -1
-                                threading.Thread(target=self.move, args=(twist, 1)).start()
+                                threading.Thread(
+                                    target=self.move, args=(twist, 1)
+                                ).start()
                             elif self.move_status[1]:
                                 self.move_finish = False
                                 self.last_status = 2
-                                if self.machine_type == 'MentorPi_Mecanum':
+                                if self.machine_type == "MentorPi_Mecanum":
                                     twist.linear.y = 0.3
-                                elif self.machine_type == 'MentorPi_Acker':
+                                elif self.machine_type == "MentorPi_Acker":
                                     twist.angular.z = 1
-                                threading.Thread(target=self.move, args=(twist, 1)).start()
+                                threading.Thread(
+                                    target=self.move, args=(twist, 1)
+                                ).start()
                             elif self.move_status[2]:
                                 self.move_finish = False
                                 self.last_status = 3
                                 twist.linear.x = 0.3
-                                threading.Thread(target=self.move, args=(twist, 1)).start()
+                                threading.Thread(
+                                    target=self.move, args=(twist, 1)
+                                ).start()
                             elif self.move_status[3]:
                                 self.move_finish = False
                                 self.last_status = 4
                                 twist.linear.x = -0.3
-                                threading.Thread(target=self.move, args=(twist, 1)).start()
+                                threading.Thread(
+                                    target=self.move, args=(twist, 1)
+                                ).start()
 
                     self.detect_status = [0, 0, 0, 0]
             cv2.circle(image, tuple(center), 10, (255, 255, 0), -1)
             result_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             self.drawing.draw_landmarks(
-                result_image,
-                results.pose_landmarks,
-                mp_pose.POSE_CONNECTIONS)
+                result_image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS
+            )
             return cv2.flip(result_image, 1)
         else:
             return image_flip
@@ -401,21 +469,23 @@ class BodyControlNode(Node):
             try:
                 result_image = self.image_proc(np.copy(image))
             except BaseException as e:
-                self.get_logger().info('\033[1;32m%s\033[0m' % e)
+                self.get_logger().info("\033[1;32m%s\033[0m" % e)
                 result_image = cv2.flip(cv2.cvtColor(image, cv2.COLOR_RGB2BGR), 1)
             self.fps.update()
             result_image = self.fps.show_fps(result_image)
             cv2.imshow(self.name, result_image)
             key = cv2.waitKey(1)
-            if key == ord('q') or key == 27:  # 按q或者esc退出(press Q or Esc to exit)
+            if key == ord("q") or key == 27:  # 按q或者esc退出(press Q or Esc to exit)
                 self.mecanum_pub.publish(Twist())
                 self.running = False
         rclpy.shutdown()
 
+
 def main():
-    node = BodyControlNode('body_control')
+    node = BodyControlNode("body_control")
     rclpy.spin(node)
     node.destroy_node()
+
 
 if __name__ == "__main__":
     main()

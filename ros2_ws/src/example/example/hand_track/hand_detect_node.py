@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-# encoding: utf-8
 # @data:2022/11/07
 # @author:aiden
 # 手检测(hand detection)
-import cv2
-import rclpy
+import faulthandler
 import queue
 import threading
-import numpy as np
-import faulthandler
-import sdk.fps as fps
+
+import cv2
 import mediapipe as mp
-from rclpy.node import Node
+import numpy as np
+import rclpy
 from cv_bridge import CvBridge
-from std_srvs.srv import Trigger
-from sensor_msgs.msg import Image
 from interfaces.msg import Point2D
+from rclpy.node import Node
+from sdk import fps
+from sensor_msgs.msg import Image
+from std_srvs.srv import Trigger
 
 mp_hands = mp.solutions.hands
 WRIST = mp_hands.HandLandmark.WRIST
@@ -24,6 +24,7 @@ THUMB_MCP = mp_hands.HandLandmark.THUMB_MCP
 PINKY_MCP = mp_hands.HandLandmark.PINKY_MCP
 
 faulthandler.enable()
+
 
 def get_hand_landmarks(img, landmarks):
     """
@@ -36,10 +37,15 @@ def get_hand_landmarks(img, landmarks):
     landmarks = [(lm.x * w, lm.y * h) for lm in landmarks]
     return np.array(landmarks)
 
+
 class HandDetectNode(Node):
     def __init__(self, name):
         rclpy.init()
-        super().__init__(name, allow_undeclared_parameters=True, automatically_declare_parameters_from_overrides=True)
+        super().__init__(
+            name,
+            allow_undeclared_parameters=True,
+            automatically_declare_parameters_from_overrides=True,
+        )
         self.name = name
         self.drawing = mp.solutions.drawing_utils
 
@@ -47,25 +53,33 @@ class HandDetectNode(Node):
             static_image_mode=False,
             max_num_hands=1,
             min_tracking_confidence=0.05,
-            min_detection_confidence=0.8
+            min_detection_confidence=0.8,
         )
         self.fps = fps.FPS()  # fps计算器(FPS calculator)
         self.running = True
         self.image_queue = queue.Queue(maxsize=2)
         self.bridge = CvBridge()
-        self.camera = 'ascamera'
-        self.enable_display = self.get_parameter('enable_display').value
-        self.result_publisher = self.create_publisher(Image, '~/image_result', 1)   # 图像处理结果发布(publish image processing result)
-        self.image_sub = self.create_subscription(Image, '/%s/camera_publisher/rgb0/image' % self.camera, self.image_callback, 1)  # 摄像头订阅(subscribe to the camera)
-        self.point_publisher = self.create_publisher(Point2D, '~/center', 1)
+        self.camera = "ascamera"
+        self.enable_display = self.get_parameter("enable_display").value
+        self.result_publisher = self.create_publisher(
+            Image, "~/image_result", 1
+        )  # 图像处理结果发布(publish image processing result)
+        self.image_sub = self.create_subscription(
+            Image,
+            "/%s/camera_publisher/rgb0/image" % self.camera,
+            self.image_callback,
+            1,
+        )  # 摄像头订阅(subscribe to the camera)
+        self.point_publisher = self.create_publisher(Point2D, "~/center", 1)
 
         threading.Thread(target=self.image_proc, daemon=True).start()
-        self.create_service(Trigger, '~/init_finish', self.get_node_state)
-        self.get_logger().info('\033[1;32m%s\033[0m' % 'start')
+        self.create_service(Trigger, "~/init_finish", self.get_node_state)
+        self.get_logger().info("\033[1;32m%s\033[0m" % "start")
 
     def get_node_state(self, request, response):
         response.success = True
         return response
+
     def image_proc(self):
         while self.running:
             point = Point2D()
@@ -86,29 +100,44 @@ class HandDetectNode(Node):
                         self.drawing.draw_landmarks(
                             bgr_image,
                             hand_landmarks,
-                            mp.solutions.hands.HAND_CONNECTIONS)
-                        landmarks = get_hand_landmarks(image_flip, hand_landmarks.landmark)
-                        center_x1 = (landmarks[WRIST][0] + landmarks[MIDDLE_FINGER_MCP][0])/2
-                        center_y1 = (landmarks[WRIST][1] + landmarks[MIDDLE_FINGER_MCP][1])/2
-                        center_x2 = (landmarks[THUMB_MCP][0] + landmarks[PINKY_MCP][0])/2
-                        center_y2 = (landmarks[THUMB_MCP][1] + landmarks[PINKY_MCP][1])/2
-                        center_x = int((center_x1 + center_x2)/2)
-                        center_y = int((center_y1 + center_y2)/2)
+                            mp.solutions.hands.HAND_CONNECTIONS,
+                        )
+                        landmarks = get_hand_landmarks(
+                            image_flip, hand_landmarks.landmark
+                        )
+                        center_x1 = (
+                            landmarks[WRIST][0] + landmarks[MIDDLE_FINGER_MCP][0]
+                        ) / 2
+                        center_y1 = (
+                            landmarks[WRIST][1] + landmarks[MIDDLE_FINGER_MCP][1]
+                        ) / 2
+                        center_x2 = (
+                            landmarks[THUMB_MCP][0] + landmarks[PINKY_MCP][0]
+                        ) / 2
+                        center_y2 = (
+                            landmarks[THUMB_MCP][1] + landmarks[PINKY_MCP][1]
+                        ) / 2
+                        center_x = int((center_x1 + center_x2) / 2)
+                        center_y = int((center_y1 + center_y2) / 2)
 
-                        cv2.circle(bgr_image, (center_x, center_y), 10, (0, 255, 255), -1)
+                        cv2.circle(
+                            bgr_image, (center_x, center_y), 10, (0, 255, 255), -1
+                        )
 
                         point.x = center_x
                         point.y = center_y
                         point.width = w
                         point.height = h
             except Exception as e:
-                self.get_logger().info('\033[1;32m%s\033[0m' % e)
+                self.get_logger().info("\033[1;32m%s\033[0m" % e)
             self.fps.update()
             if self.enable_display:
                 cv2.imshow(self.name, bgr_image)
                 cv2.waitKey(1)
             result_image = self.fps.show_fps(bgr_image)
-            self.result_publisher.publish(self.bridge.cv2_to_imgmsg(result_image, "bgr8"))
+            self.result_publisher.publish(
+                self.bridge.cv2_to_imgmsg(result_image, "bgr8")
+            )
             self.point_publisher.publish(point)
 
     def image_callback(self, ros_image):
@@ -121,11 +150,13 @@ class HandDetectNode(Node):
             # 将图像放入队列(put the image into the queue)
         self.image_queue.put(rgb_image)
 
+
 def main():
-    node = HandDetectNode('hand_detect')
+    node = HandDetectNode("hand_detect")
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
+
 
 if __name__ == "__main__":
     main()
