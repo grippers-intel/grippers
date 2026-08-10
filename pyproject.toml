@@ -39,10 +39,12 @@ select = ["E", "F", "I", "UP", "B"]
 line-length = 100
 target-version = ["py312"]
 
-# black은 정규식 하나로 받는다. ruff의 exclude와 같은 범위를 유지할 것.
+# black은 정규식 하나로 받는다 (re.VERBOSE — 공백 무시).
+# ruff의 exclude와 같은 범위를 유지할 것.
 extend-exclude = '''
 /(
     third_party
   | ros2_ws/src/(app|bringup|calibration|driver|example|interfaces|multi|navigation|peripherals|simulations|slam|yolov5_ros2)
 )/
+| .*/test/test_(copyright|flake8|pep257)\.py
 '''
