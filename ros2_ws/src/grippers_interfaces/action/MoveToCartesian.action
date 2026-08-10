@@ -1,0 +1,7 @@
+geometry_msgs/Point target
+float32 grip
+bool down
+---
+bool reached
+---
+float64 distance_remaining

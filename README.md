@@ -576,19 +576,25 @@ MentorPi 배터리  ──┬──► Pi 5 / AI HAT+ / LiDAR / RealSense   (로
 
 ```
 grippers/
-├── domain/                 # 순수 Python. 하드웨어 의존성 없음
-│   ├── task/               #   FSM, TaskState 계층
-│   ├── values/             #   Pose2D, PoseInFrame, JointPositions, ObjectDims
-│   └── planning/           #   자세 재조정 계획, 마진 결정, 오차 모델
-├── ports/                  # 인터페이스 정의 (ABC)
-├── adapters/
-│   ├── real/               #   ROS2 / Feetech / 추론 런타임 구현
-│   └── fake/               #   테스트용 구현
-├── vla/                    # V / L / A 모듈, 인터페이스 스펙
-├── perception/             # 데이터셋, YOLO 학습, IR 파이프라인
-├── ros2_ws/                # ROS2 노드, launch, 파라미터
-├── hud/                    # 실시간 대시보드
-├── tests/                  # pytest — 하드웨어 불필요
+├── domain/                 # 순수 Python. 하드웨어 의존성 없음 (ROS2 import 금지)
+│   ├── task/               #   State 제너레이터 기반 FSM (IDLE~RELEASE)
+│   ├── values.py           #   Pose2D, Point3 등 domain 전용 값 객체
+│   ├── ports/              #   인터페이스 정의 (ABC) — BaseDriver, ArmDriver, Perception
+│   └── adapters/
+│       ├── real/           #   ROS2 액션/서비스 클라이언트 (Ros2MecanumBase, Ros2ArmDriver)
+│       └── fake/           #   테스트용 구현 (FakeBase, FakeArm, FakePerception)
+├── ros2_ws/
+│   └── src/
+│       ├── grippers_interfaces/  # 공통 msg/srv/action (base ↔ arm ↔ mission 유일한 접점)
+│       ├── grippers_base/        # base_driver_node — controller/odom_publisher_node 위에 얹는 어댑터
+│       ├── grippers_arm/         # arm_driver_node — soarm_lab(third_party) 래핑
+│       ├── grippers_mission/     # mission_orchestrator_node — domain/task FSM을 스레드 분리 실행
+│       ├── grippers_bringup/     # launch 재조합 (대회용 bringup.launch.py 전체는 미사용)
+│       └── (app/ bringup/ driver/ interfaces/ navigation/ peripherals/
+│            simulations/ slam/ yolov5_ros2/ 등 — 대회 때 쓰던 MentorPi 소스 보존)
+├── third_party/
+│   └── soarm_provided_d/   # git submodule — soarm_lab(FK/IK/시뮬/실물 백엔드)
+├── tests/                  # pytest — 하드웨어·ROS2 불필요, domain/ + Fake 어댑터만 사용
 ├── docs/
 │   ├── architecture.puml
 │   ├── sequences.md
@@ -599,6 +605,8 @@ grippers/
 └── hardware/               # 마운트·크래들 도면, BOM, 배선도
 ```
 
+> **설계 초안과의 차이**: 최초 설계에선 `ports/`, `adapters/`가 저장소 최상위였는데, 실제 구현에서는 `domain/ports/`, `domain/adapters/`로 domain 아래 중첩시켰습니다. 두 위치 모두 ROS2 비의존이라는 원칙은 동일하게 지켜지며, `domain` 패키지 하나만 import하면 FSM+포트+Fake어댑터가 다 따라오는 게 실제로 더 편해서 이렇게 정착했습니다.
+
 ---
 
 ## 🔧 Getting Started
@@ -606,25 +614,114 @@ grippers/
 ### Prerequisites
 
 - **Linux** (개발 환경 기준. 불가능한 모듈은 사유를 명시)
-- **ROS 2 Jazzy** — Docker 이미지 통일 예정
-- Python 3.12+
+- **ROS 2 Humble** — `IntelPi` Docker 이미지(`ros:humble-export`)로 통일. 호스트 Pi 5의 OS 레벨 ROS2(Jazzy)는 사용하지 않음 — 반드시 컨테이너 안에서만 `ros2` 명령 실행
+- **Python 3.10** (실제 `IntelPi` 컨테이너 내장 버전 — Humble/Ubuntu 22.04 기준. ⚠️ CI(`ros2-build`, `test` job)는 `ubuntu-24.04` + Python 3.12로 도는데, `domain/` 순수 파이썬 코드는 버전 특이 문법을 쓰지 않아 지금까진 문제없었습니다. 3.10 전용 문법(예: `match` 구문 이하 버전 미지원 없음, 최신 `typing` 문법 등)은 피해주세요)
+- Git (submodule 지원 — `third_party/soarm_provided_d` clone에 필요)
+- `MACHINE_TYPE=MentorPi_Mecanum` 환경변수 — `IntelPi` 이미지에 이미 설정되어 있음(`env | grep -i machine`으로 확인). `controller/odom_publisher_node`가 이 값으로 mecanum 역기구학 경로를 타므로, 다른 이미지로 새로 빌드하는 경우 반드시 유지해야 함
+- **디스크 여유 공간 확인 필수**: Pi 5의 기본 저장장치(microSD/eMMC)가 ROS2 Humble + MentorPi 패키지 15개 + Docker 레이어로 쉽게 90%+ 찹니다. 설치 전 `df -h /`로 확인하고, 부족하면 Pi 호스트에서 `docker builder prune -a`로 빌드 캐시부터 정리하세요. 여유 없이 `pip install`이나 `colcon build`를 돌리면 `OSError: No space left on device`로 조용히 실패합니다
 
 ### Installation
 
+**1. [Pi 5 호스트] 저장소 clone (서브모듈 포함)**
+
 ```bash
-git clone https://github.com/grippers-intel/grippers.git
-cd grippers
+mkdir -p ~/docker/shared
+git clone --recurse-submodules https://github.com/grippers-intel/grippers.git ~/docker/shared/grippers
+```
+`--recurse-submodules`를 빼먹으면 `third_party/soarm_provided_d`(SO-ARM101 제어 라이브러리)가 빈 폴더로 받아집니다. 이미 clone했는데 비어있다면:
+```bash
+cd ~/docker/shared/grippers
+git submodule update --init --recursive
 ```
 
-<!-- TODO: 의존성 설치 및 빌드 절차 -->
+**2. [Pi 5 호스트] `IntelPi` 컨테이너 스크립트(`ros_start.sh`)의 마운트 경로 확인**
+
+`ros_start.sh`가 아래 세 경로를 컨테이너 안으로 마운트하도록 되어 있어야 합니다:
+```bash
+-v ${HOME}/docker/shared/grippers/ros2_ws:/ros2_ws \
+-v ${HOME}/docker/shared/grippers:/grippers \
+-v ${HOME}/docker/shared/grippers/third_party:/third_party \
+```
+
+**3. [Pi 5 호스트] 컨테이너 기동 → 진입**
+
+```bash
+./ros_start.sh
+./exec_shell.sh
+```
+
+**4. [IntelPi 컨테이너] Python 의존성 설치**
+
+```bash
+pip3 install --no-cache-dir pyserial mujoco numpy pytest
+```
+
+**5. [IntelPi 컨테이너] PYTHONPATH 등록 (매 세션 반복 방지)**
+
+```bash
+echo 'export PYTHONPATH="/grippers:/third_party/soarm_provided_d:${PYTHONPATH}"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**6. [IntelPi 컨테이너] 빌드**
+
+```bash
+cd /ros2_ws
+sudo rosdep init 2>/dev/null
+rosdep update
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install
+source install/setup.zsh
+```
+
+`Summary: N packages finished`가 뜨고 실패한 패키지가 없으면 완료입니다.
 
 ### Run — 시뮬레이션 (하드웨어 불필요)
 
-<!-- TODO -->
+가장 빠른 검증은 `domain/task`의 FSM을 Fake 어댑터로 끝까지 돌리는 것입니다 (ROS2도 필요 없음):
+
+```bash
+cd /grippers
+python3 -m pytest tests/ -v
+```
+`IDLE → TRANSIT_OUT → ... → RELEASE`까지 전체 미션 파이프라인이 통과하면 도메인 로직은 정상입니다.
+
+ROS2 프로세스 3개(`base_driver`/`arm_driver`/`mission_orchestrator`)가 실제로 액션/서비스로 통신하는 것까지 하드웨어 없이 보고 싶다면, `mission_orchestrator_node.py`에서 `Ros2MecanumBase`/`Ros2ArmDriver` 대신 `FakeBase`/`FakeArm`을 임시로 주입하고 3개 노드를 각 터미널에서 띄우면 됩니다. (상시 지원되는 launch 인자화는 TODO — 지금은 코드를 임시로 바꿔서 확인)
 
 ### Run — 실기
 
-<!-- TODO -->
+MentorPi 베이스와 SO-ARM101이 모두 시리얼로 연결된 상태를 전제로 합니다. 터미널 4개가 필요합니다 (모두 `./exec_shell.sh`로 진입).
+
+```bash
+# 터미널 1 — MentorPi 저수준 드라이버 (odom, ekf, 모터)
+cd /ros2_ws && source install/setup.zsh
+export need_compile=False
+ros2 launch controller controller.launch.py
+
+# 터미널 2 — base_driver (grippers_base)
+cd /ros2_ws && source install/setup.zsh
+ros2 run grippers_base base_driver
+
+# 터미널 3 — arm_driver (grippers_arm)
+cd /ros2_ws && source install/setup.zsh
+ros2 run grippers_arm arm_driver
+
+# 터미널 4 — mission_orchestrator (grippers_mission)
+cd /ros2_ws && source install/setup.zsh
+ros2 run grippers_mission mission_orchestrator
+```
+
+상태 흐름 확인:
+```bash
+ros2 topic echo /mission/state
+```
+
+> **주의**: `mission_orchestrator`가 `TRANSIT_OUT`에 들어가는 순간 실제로 `/cmd_vel`이 발행되어 베이스가 움직입니다. 처음 실행 시 바퀴를 들어두거나 충분한 공간을 확보하세요.
+
+`grippers_bringup`(위 4개를 하나의 launch로 묶은 것)은 아직 하드웨어 상시 연결 상태에서 검증 전이라, 지금은 터미널을 나눠 개별 실행하는 걸 권장합니다. 검증되면 아래로 대체됩니다:
+```bash
+ros2 launch grippers_bringup bringup.launch.py
+```
 
 ### Troubleshooting
 
@@ -637,6 +734,8 @@ cd grippers
 | 주행 중 로봇이 떨림 | `/cmd_vel` 발행 주체가 2개 이상인지 확인 |
 | 장물이 그리퍼 안에서 자전 | 마찰 패드 또는 V홈 핑거 적용 여부 |
 | `ParameterAlreadyDeclaredException` | launch와 노드 양쪽 파라미터 중복 선언 |
+| `ros_robot_controller`가 `/dev/rrc` 못 찾음 | MentorPi 베이스 보드 자체가 시리얼로 미연결. `ls /dev/ttyUSB* /dev/ttyACM*`로 실제 연결된 장치 확인 |
+| `git push` 시 `.../vscode-server/.../node: Permission denied` | VS Code Remote-SSH가 넣은 `credential.helper`가 root 경로를 가리켜서 `ubuntu` 유저로는 실행 불가. `sudo git config --system --unset-all credential.helper` 후 `git config --global credential.helper store`로 교체, push 시 비밀번호 자리에 GitHub Personal Access Token(classic, `repo` 스코프) 입력 |
 
 ---
 
@@ -646,7 +745,17 @@ cd grippers
 
 CI는 매 push마다 lint + unittest + Fake 어댑터 기반 전체 미션 파이프라인을 실행합니다.
 
-<!-- TODO: 테스트 실행 명령 -->
+```bash
+cd /grippers
+export PYTHONPATH="/grippers:${PYTHONPATH}"
+python3 -m pytest tests/ -v
+```
+
+현재 `tests/test_mission_task.py`가 검증하는 것:
+- `test_full_mission_completes` — `IDLE`에서 시작해 `RELEASE`로 정상 종료하는지 (전체 상태 전이 순서 포함)
+- `test_estop_interrupts_immediately` — E-STOP 플래그가 켜지면 어느 상태에 있든 즉시 `ESTOP`으로 전이하는지
+
+ROS2 레벨 빌드 검증(`colcon test`)은 CI의 `ros2-build` job이 담당하며, `ros2_ws/src`에 실제 launch_testing 기반 테스트가 추가되기 전까지는 컴파일 성공 여부만 확인합니다.
 
 ---
 
@@ -796,7 +905,7 @@ LeRobot 기반 구성 요소는 **Apache License 2.0** 을 따릅니다. 해당 
 ## 📚 References
 
 - [LeRobot / SO-ARM101](https://github.com/huggingface/lerobot)
-- [ROS 2 Jazzy Documentation](https://docs.ros.org/en/jazzy/)
+- [ROS 2 Humble Documentation](https://docs.ros.org/en/humble/)
 - [Raspberry Pi AI HAT+ (Hailo-8L)](https://www.raspberrypi.com/products/ai-hat/)
 - [Intel RealSense SDK](https://github.com/IntelRealSense/librealsense)
 - [PlantUML Sequence Diagram](https://plantuml.com/sequence-diagram)

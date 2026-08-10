@@ -241,3 +241,6 @@ __marimo__/
 /ros2_ws/log/
 *.bag
 /rosbags/
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/

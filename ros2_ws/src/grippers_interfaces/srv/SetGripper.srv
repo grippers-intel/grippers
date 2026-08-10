@@ -1,0 +1,4 @@
+bool closed
+---
+bool ok
+float32 load_ratio
