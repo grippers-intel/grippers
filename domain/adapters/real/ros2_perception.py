@@ -19,13 +19,9 @@ from domain.values import Point3, Pose2D
 class Ros2Perception(Perception):
     def __init__(self, node):
         self._node = node
-        self._detect_client = node.create_client(
-            DetectTarget, "perception/detect_target"
-        )
+        self._detect_client = node.create_client(DetectTarget, "perception/detect_target")
         self._gap_client = node.create_client(MeasureGap, "perception/measure_gap")
-        self._light_client = node.create_client(
-            SetLightProfile, "perception/set_light_profile"
-        )
+        self._light_client = node.create_client(SetLightProfile, "perception/set_light_profile")
         self._clearance_client = node.create_client(
             MonitorClearance, "perception/monitor_clearance"
         )
@@ -35,9 +31,7 @@ class Ros2Perception(Perception):
         future = self._detect_client.call_async(DetectTarget.Request())
         rclpy.spin_until_future_complete(self._node, future)
         res = future.result()
-        pose = Point3(
-            x=res.pose.position.x, y=res.pose.position.y, z=res.pose.position.z
-        )
+        pose = Point3(x=res.pose.position.x, y=res.pose.position.y, z=res.pose.position.z)
         dims = Point3(x=res.dims.x, y=res.dims.y, z=res.dims.z)
         return res.found, pose, dims
 
@@ -46,9 +40,7 @@ class Ros2Perception(Perception):
         future = self._gap_client.call_async(MeasureGap.Request())
         rclpy.spin_until_future_complete(self._node, future)
         res = future.result()
-        centerline = Pose2D(
-            x=res.centerline.x, y=res.centerline.y, theta=res.centerline.theta
-        )
+        centerline = Pose2D(x=res.centerline.x, y=res.centerline.y, theta=res.centerline.theta)
         return SimpleNamespace(h_gap=res.h_gap, centerline=centerline)
 
     def set_light_profile(self, profile: str) -> bool:

@@ -4,9 +4,7 @@ soarm_lab.arm을 그대로 감싼다. 새 IK/서보 로직은 없음."""
 import sys
 import time
 
-sys.path.insert(
-    0, "/third_party/soarm_provided_d"
-)  # PYTHONPATH 미설정 환경 대비 안전장치
+sys.path.insert(0, "/third_party/soarm_provided_d")  # PYTHONPATH 미설정 환경 대비 안전장치
 
 import rclpy
 from grippers_interfaces.action import MoveToCartesian
@@ -68,9 +66,7 @@ class ArmDriverNode(Node):
 
     def _on_set_gripper(self, request, response):
         try:
-            soarm.arm.grip(
-                request.closed and 0.0 or 100.0
-            )  # TODO: 실제 열림/닫힘 각도로 교체
+            soarm.arm.grip(request.closed and 0.0 or 100.0)  # TODO: 실제 열림/닫힘 각도로 교체
             response.ok = True
             response.load_ratio = self._read_load()
         except Exception as e:

@@ -64,20 +64,14 @@ class PerceptionNode(Node):
             self._on_monitor_clearance,
             callback_group=cb_group,
         )
-        self.get_logger().info(
-            "perception_node ready (vision pipeline: NOT IMPLEMENTED)"
-        )
+        self.get_logger().info("perception_node ready (vision pipeline: NOT IMPLEMENTED)")
 
     def _on_image(self, msg):
-        self._latest_frame = (
-            msg  # TODO: cv_bridge.imgmsg_to_cv2 후 YOLO/마커 파이프라인 연결
-        )
+        self._latest_frame = msg  # TODO: cv_bridge.imgmsg_to_cv2 후 YOLO/마커 파이프라인 연결
 
     # ---- 서비스 콜백 (전부 TODO — 지금은 정직하게 미구현 응답) ----
     def _on_detect_target(self, request, response):
-        self.get_logger().warn(
-            "detect_target: 비전 파이프라인 미구현 — found=False 반환"
-        )
+        self.get_logger().warn("detect_target: 비전 파이프라인 미구현 — found=False 반환")
         response.found = False
         response.pose = Pose()
         response.dims = Vector3()
@@ -90,9 +84,7 @@ class PerceptionNode(Node):
         return response
 
     def _on_set_light_profile(self, request, response):
-        self.get_logger().info(
-            f"set_light_profile({request.profile}): 카메라 노출/AWB 제어 TODO"
-        )
+        self.get_logger().info(f"set_light_profile({request.profile}): 카메라 노출/AWB 제어 TODO")
         response.ready = True  # 프로파일 전환 자체는 실패로 볼 이유가 없어 True
         return response
 

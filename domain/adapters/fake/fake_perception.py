@@ -4,9 +4,7 @@ from domain.ports.perception import Perception
 
 
 class FakePerception(Perception):
-    def __init__(
-        self, found: bool = True, contact_risk: bool = False, h_gap: float = 0.3
-    ):
+    def __init__(self, found: bool = True, contact_risk: bool = False, h_gap: float = 0.3):
         self._found = found
         self._contact_risk = contact_risk
         self._h_gap = h_gap
@@ -21,9 +19,7 @@ class FakePerception(Perception):
         )
 
     def measure_gap(self):
-        return SimpleNamespace(
-            h_gap=self._h_gap, centerline=SimpleNamespace(x=0, y=0, theta=0)
-        )
+        return SimpleNamespace(h_gap=self._h_gap, centerline=SimpleNamespace(x=0, y=0, theta=0))
 
     def set_light_profile(self, profile):
         return True

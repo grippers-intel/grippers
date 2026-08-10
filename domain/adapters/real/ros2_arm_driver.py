@@ -13,9 +13,7 @@ from domain.ports.arm_driver import ArmDriver
 class Ros2ArmDriver(ArmDriver):
     def __init__(self, node):
         self._node = node
-        self._move_client = ActionClient(
-            node, MoveToCartesian, "arm_driver/move_to_cartesian"
-        )
+        self._move_client = ActionClient(node, MoveToCartesian, "arm_driver/move_to_cartesian")
         self._gripper_client = node.create_client(SetGripper, "arm_driver/set_gripper")
         self._load_client = node.create_client(GetLoad, "arm_driver/get_load")
 
