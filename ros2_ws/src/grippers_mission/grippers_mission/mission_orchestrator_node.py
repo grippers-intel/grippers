@@ -1,6 +1,8 @@
-"""mission_orchestrator_node — domain/task의 FSM을 ROS2로 감싼다.
+"""
+mission_orchestrator_node — domain/task의 FSM을 ROS2로 감싼다.
 FSM 자체는 별도 스레드에서 순차 실행, rclpy는 MultiThreadedExecutor로
-스핀해서 E-STOP이 FSM 블로킹 도중에도 즉시 들어올 수 있게 한다."""
+스핀해서 E-STOP이 FSM 블로킹 도중에도 즉시 들어올 수 있게 한다.
+"""
 
 import sys
 import threading
