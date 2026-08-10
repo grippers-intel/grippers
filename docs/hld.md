@@ -74,6 +74,8 @@ README는 **왜 이 문제인가**를 설명합니다. HLD는 **무엇을 어떻
    FakeBase      FakeArm     FakePerception
 ```
 
+> 클래스 단위 구조는 [`class_diagram.md`](class_diagram.md) 를 참고하세요.
+
 - **포트는 3종**입니다 (`BaseDriver`, `ArmDriver`, `Perception`). `TransformProvider` 는 도입하지 않았고, 좌표 변환은 각 Real 어댑터 안에서 수행합니다.
 - `Ports` 데이터클래스는 여기에 **`estop` (threading.Event 유사 객체)** 를 하나 더 들고 있습니다. 포트 ABC가 아니라 인터럽트 플래그입니다.
 - `MissionTask.run()` 은 **제너레이터**로, 매 전이마다 상태를 `yield` 합니다. 노드가 이를 받아 `/mission/state` 로 발행합니다.
@@ -246,7 +248,7 @@ IDLE → TRANSIT_OUT → LIGHT_ADAPT → DOCKING → IDENTIFY
      → GRASP → POSE_PLAN → NARROW_EXIT → RETURN → RELEASE → (None)
 ```
 
-각 `State.execute(ports)` 가 다음 State 인스턴스를 반환하고, 미션 종료 시 `None` 을 반환합니다. 상태는 불변이며 재시도는 새 인스턴스로 표현합니다.
+각 `State.execute(ports)` 가 다음 State 인스턴스를 반환하고, 미션 종료 시 `None` 을 반환합니다. State 클래스 계층은 [`class_diagram.md`](class_diagram.md#fsm-state-계층) 에 있습니다. 상태는 불변이며 재시도는 새 인스턴스로 표현합니다.
 
 ### 6.2 상태 표
 
@@ -378,7 +380,8 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 |---|---|
 | [`../README.md`](../README.md) | 배경, 미션 시나리오, 성공 기준 |
 | [`sequences.md`](sequences.md) | 시퀀스 다이어그램 |
-| [`architecture.puml`](architecture.puml) | 클래스 다이어그램 |
+| [`class_diagram.md`](class_diagram.md) | 클래스 다이어그램 — 포트·State·노드 계층 (Mermaid) |
+| [`architecture.puml`](architecture.puml) | 위와 같은 구조의 PlantUML 버전 |
 | [`vla_interface.md`](vla_interface.md) | V/L/A 텐서·좌표계 |
 | [`error_budget.md`](error_budget.md) | 오차 전파 |
 | [`rejected_designs.md`](rejected_designs.md) | 채택하지 않은 설계 |

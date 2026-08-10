@@ -614,7 +614,8 @@ grippers/
 ├── tests/                  # pytest — 하드웨어·ROS2 불필요, domain/ + Fake 어댑터만 사용
 ├── docs/
 │   ├── hld.md              #   High Level Design — 인터페이스·FSM·미결 사항 (8/14 freeze)
-│   ├── architecture.puml   #   클래스 다이어그램
+│   ├── class_diagram.md    #   클래스 다이어그램 (Mermaid) — 포트·State·노드 계층
+│   ├── architecture.puml   #   위와 같은 구조의 PlantUML 버전
 │   ├── sequences.md        #   시퀀스 다이어그램
 │   ├── vla_interface.md    #   V/L/A 텐서 shape·좌표계 (8/14 freeze)
 │   ├── error_budget.md     #   오차 전파 분석
