@@ -1,9 +1,8 @@
 #!/usr/bin/python3
+# coding=utf8
 # 麦克纳姆轮底盘运动学(Mecanum wheel chassis kinematic)
 import math
-
-from ros_robot_controller_msgs.msg import MotorsState, MotorState
-
+from ros_robot_controller_msgs.msg import MotorState, MotorsState
 
 class MecanumChassis:
     # wheelbase = 0.1368   # 前后轴距(distance between front and real axles)
@@ -44,18 +43,10 @@ class MecanumChassis:
         # v3 = vx + vy + vp
         # v4 = vx - vy + vp
         # v_s = [self.speed_covert(v) for v in [v1, v2, -v3, -v4]]
-        motor1 = (
-            linear_x - linear_y - angular_z * (self.wheelbase + self.track_width) / 2
-        )
-        motor2 = (
-            linear_x + linear_y - angular_z * (self.wheelbase + self.track_width) / 2
-        )
-        motor3 = (
-            linear_x + linear_y + angular_z * (self.wheelbase + self.track_width) / 2
-        )
-        motor4 = (
-            linear_x - linear_y + angular_z * (self.wheelbase + self.track_width) / 2
-        )
+        motor1 = (linear_x - linear_y - angular_z * (self.wheelbase + self.track_width) / 2)
+        motor2 = (linear_x + linear_y - angular_z * (self.wheelbase + self.track_width) / 2)
+        motor3 = (linear_x + linear_y + angular_z * (self.wheelbase + self.track_width) / 2)
+        motor4 = (linear_x - linear_y + angular_z * (self.wheelbase + self.track_width) / 2)
         v_s = [self.speed_covert(v) for v in [-motor1, -motor2, motor3, motor4]]
         data = []
         for i in range(len(v_s)):
@@ -63,7 +54,7 @@ class MecanumChassis:
             msg.id = i + 1
             msg.rps = float(v_s[i])
             data.append(msg)
-
+        
         msg = MotorsState()
         msg.data = data
         return msg

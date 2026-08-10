@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
+# encoding: utf-8
 # 轨迹点发布(publish trajectory points)
+import cv2
 import enum
+import time
+import rclpy
+import os
 import queue
 import threading
-import time
-
-import cv2
-import mediapipe as mp
 import numpy as np
-import rclpy
+import mediapipe as mp
+from rclpy.node import Node
 from cv_bridge import CvBridge
-from interfaces.msg import PixelPosition, Points
-from mediapipe.framework.formats import landmark_pb2
+from std_srvs.srv import Trigger
+from sensor_msgs.msg import Image
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-from rclpy.node import Node
+from sdk.common import vector_2d_angle, distance
+from interfaces.msg import Points, PixelPosition
+from mediapipe.framework.formats import landmark_pb2
 from ros_robot_controller_msgs.msg import BuzzerState
-from sdk.common import distance, vector_2d_angle
-from sensor_msgs.msg import Image
-from std_srvs.srv import Trigger
 
 MARGIN = 10  # pixels
 FONT_SIZE = 1
 FONT_THICKNESS = 1
-HANDEDNESS_TEXT_COLOR = (255, 255, 0)  # yellow
-
+HANDEDNESS_TEXT_COLOR = (255, 255, 0) # yellow
 
 def hand_angle(landmarks):
     """
@@ -40,23 +40,16 @@ def hand_angle(landmarks):
     angle_ = vector_2d_angle(landmarks[0] - landmarks[6], landmarks[7] - landmarks[8])
     angle_list.append(angle_)
     # middle 中指
-    angle_ = vector_2d_angle(
-        landmarks[0] - landmarks[10], landmarks[11] - landmarks[12]
-    )
+    angle_ = vector_2d_angle(landmarks[0] - landmarks[10], landmarks[11] - landmarks[12])
     angle_list.append(angle_)
     # ring 无名指
-    angle_ = vector_2d_angle(
-        landmarks[0] - landmarks[14], landmarks[15] - landmarks[16]
-    )
+    angle_ = vector_2d_angle(landmarks[0] - landmarks[14], landmarks[15] - landmarks[16])
     angle_list.append(angle_)
     # pink 小拇指
-    angle_ = vector_2d_angle(
-        landmarks[0] - landmarks[18], landmarks[19] - landmarks[20]
-    )
+    angle_ = vector_2d_angle(landmarks[0] - landmarks[18], landmarks[19] - landmarks[20])
     angle_list.append(angle_)
     angle_list = [abs(a) for a in angle_list]
     return angle_list
-
 
 def h_gesture(angle_list):
     """
@@ -64,103 +57,47 @@ def h_gesture(angle_list):
     :param angle_list: 各个手指弯曲的角度(the bending angle of each finger)
     :return : 手势名称字符串(gesture name string)
     """
-    thr_angle = 65.0
-    thr_angle_thumb = 10.0
-    thr_angle_s = 49.0
+    thr_angle = 65.
+    thr_angle_thumb = 10.
+    thr_angle_s = 49.
     gesture_str = "none"
     # print(angle_list[0], angle_list[1], angle_list[2], angle_list[3], angle_list[4])
-    if (
-        (angle_list[0] > thr_angle_thumb)
-        and (angle_list[1] > thr_angle)
-        and (angle_list[2] > thr_angle)
-        and (angle_list[3] > thr_angle)
-        and (angle_list[4] > thr_angle)
-    ):
+    if (angle_list[0] > thr_angle_thumb) and (angle_list[1] > thr_angle) and (angle_list[2] > thr_angle) and (
+            angle_list[3] > thr_angle) and (angle_list[4] > thr_angle):
         gesture_str = "fist"
-    elif (
-        (angle_list[0] < thr_angle_s)
-        and (angle_list[1] < thr_angle_s)
-        and (angle_list[2] > thr_angle)
-        and (angle_list[3] > thr_angle)
-        and (angle_list[4] > thr_angle)
-    ):
+    elif (angle_list[0] < thr_angle_s) and (angle_list[1] < thr_angle_s) and (angle_list[2] > thr_angle) and (
+            angle_list[3] > thr_angle) and (angle_list[4] > thr_angle):
         gesture_str = "hand_heart"
-    elif (
-        (angle_list[0] < thr_angle_s)
-        and (angle_list[1] < thr_angle_s)
-        and (angle_list[2] > thr_angle)
-        and (angle_list[3] > thr_angle)
-        and (angle_list[4] < thr_angle_s)
-    ):
+    elif (angle_list[0] < thr_angle_s) and (angle_list[1] < thr_angle_s) and (angle_list[2] > thr_angle) and (
+            angle_list[3] > thr_angle) and (angle_list[4] < thr_angle_s):
         gesture_str = "nico-nico-ni"
-    elif (
-        (angle_list[0] < thr_angle_s)
-        and (angle_list[1] > thr_angle)
-        and (angle_list[2] > thr_angle)
-        and (angle_list[3] > thr_angle)
-        and (angle_list[4] > thr_angle)
-    ):
+    elif (angle_list[0] < thr_angle_s) and (angle_list[1] > thr_angle) and (angle_list[2] > thr_angle) and (
+            angle_list[3] > thr_angle) and (angle_list[4] > thr_angle):
         gesture_str = "hand_heart"
-    elif (
-        (angle_list[0] > 5)
-        and (angle_list[1] < thr_angle_s)
-        and (angle_list[2] > thr_angle)
-        and (angle_list[3] > thr_angle)
-        and (angle_list[4] > thr_angle)
-    ):
+    elif (angle_list[0] > 5) and (angle_list[1] < thr_angle_s) and (angle_list[2] > thr_angle) and (
+            angle_list[3] > thr_angle) and (angle_list[4] > thr_angle):
         gesture_str = "one"
-    elif (
-        (angle_list[0] > thr_angle_thumb)
-        and (angle_list[1] < thr_angle_s)
-        and (angle_list[2] < thr_angle_s)
-        and (angle_list[3] > thr_angle)
-        and (angle_list[4] > thr_angle)
-    ):
+    elif (angle_list[0] > thr_angle_thumb) and (angle_list[1] < thr_angle_s) and (angle_list[2] < thr_angle_s) and (
+            angle_list[3] > thr_angle) and (angle_list[4] > thr_angle):
         gesture_str = "two"
-    elif (
-        (angle_list[0] > thr_angle_thumb)
-        and (angle_list[1] < thr_angle_s)
-        and (angle_list[2] < thr_angle_s)
-        and (angle_list[3] < thr_angle_s)
-        and (angle_list[4] > thr_angle)
-    ):
+    elif (angle_list[0] > thr_angle_thumb) and (angle_list[1] < thr_angle_s) and (angle_list[2] < thr_angle_s) and (
+            angle_list[3] < thr_angle_s) and (angle_list[4] > thr_angle):
         gesture_str = "three"
-    elif (
-        (angle_list[0] > thr_angle_thumb)
-        and (angle_list[1] > thr_angle)
-        and (angle_list[2] < thr_angle_s)
-        and (angle_list[3] < thr_angle_s)
-        and (angle_list[4] < thr_angle_s)
-    ):
+    elif (angle_list[0] > thr_angle_thumb) and (angle_list[1] > thr_angle) and (angle_list[2] < thr_angle_s) and (
+            angle_list[3] < thr_angle_s) and (angle_list[4] < thr_angle_s):
         gesture_str = "OK"
-    elif (
-        (angle_list[0] > thr_angle_thumb)
-        and (angle_list[1] < thr_angle_s)
-        and (angle_list[2] < thr_angle_s)
-        and (angle_list[3] < thr_angle_s)
-        and (angle_list[4] < thr_angle_s)
-    ):
+    elif (angle_list[0] > thr_angle_thumb) and (angle_list[1] < thr_angle_s) and (angle_list[2] < thr_angle_s) and (
+            angle_list[3] < thr_angle_s) and (angle_list[4] < thr_angle_s):
         gesture_str = "four"
-    elif (
-        (angle_list[0] < thr_angle_s)
-        and (angle_list[1] < thr_angle_s)
-        and (angle_list[2] < thr_angle_s)
-        and (angle_list[3] < thr_angle_s)
-        and (angle_list[4] < thr_angle_s)
-    ):
+    elif (angle_list[0] < thr_angle_s) and (angle_list[1] < thr_angle_s) and (angle_list[2] < thr_angle_s) and (
+            angle_list[3] < thr_angle_s) and (angle_list[4] < thr_angle_s):
         gesture_str = "five"
-    elif (
-        (angle_list[0] < thr_angle_s)
-        and (angle_list[1] > thr_angle)
-        and (angle_list[2] > thr_angle)
-        and (angle_list[3] > thr_angle)
-        and (angle_list[4] < thr_angle_s)
-    ):
+    elif (angle_list[0] < thr_angle_s) and (angle_list[1] > thr_angle) and (angle_list[2] > thr_angle) and (
+            angle_list[3] > thr_angle) and (angle_list[4] < thr_angle_s):
         gesture_str = "six"
     else:
         "none"
     return gesture_str
-
 
 def draw_points(img, points, thickness=4, color=(200, 200, 0)):
     points = np.array(points).astype(dtype=int)
@@ -170,22 +107,16 @@ def draw_points(img, points, thickness=4, color=(200, 200, 0)):
                 break
             cv2.line(img, p, points[i + 1], color, thickness)
 
-
 class State(enum.Enum):
     NULL = 0
     START = 1
     TRACKING = 2
     RUNNING = 3
 
-
 class HandTrajectoryNode(Node):
     def __init__(self, name):
         rclpy.init()
-        super().__init__(
-            name,
-            allow_undeclared_parameters=True,
-            automatically_declare_parameters_from_overrides=True,
-        )
+        super().__init__(name, allow_undeclared_parameters=True, automatically_declare_parameters_from_overrides=True)
 
         self.name = name
         self.start = False
@@ -197,43 +128,27 @@ class HandTrajectoryNode(Node):
         self.image_sub = None
         self.count_miss = 0
         self.last_point = [0, 0]
-        model_path = "/home/ubuntu/ros2_ws/src/example/example/mediapipe_example/model/hand_landmarker.task"
+        model_path = '/home/ubuntu/ros2_ws/src/example/example/mediapipe_example/model/hand_landmarker.task'
         base_options = python.BaseOptions(model_asset_path=model_path)
-        options = vision.HandLandmarkerOptions(
-            base_options=base_options, min_hand_detection_confidence=0.2, num_hands=2
-        )
+        options = vision.HandLandmarkerOptions(base_options=base_options, min_hand_detection_confidence=0.2, num_hands=2)
         self.detector = vision.HandLandmarker.create_from_options(options)
 
         self.bridge = CvBridge()
         self.image_queue = queue.Queue(maxsize=2)
 
-        # self.camera_type = os.environ['DEPTH_CAMERA_TYPE']
-        self.buzzer_pub = self.create_publisher(
-            BuzzerState, "/ros_robot_controller/set_buzzer", 1
-        )
-        self.point_publisher = self.create_publisher(
-            Points, "~/points", 1
-        )  # 使用~可以自动加上前缀名称(using ~ can automatically add a prefix name)
-        self.result_publisher = self.create_publisher(
-            Image, "~/image_result", 1
-        )  # 图像处理结果发布(publish the result of image processing)
-        self.create_service(
-            Trigger, "~/enter", self.enter_srv_callback
-        )  # 进入玩法(enter the game)
-        self.create_service(
-            Trigger, "~/exit", self.exit_srv_callback
-        )  # 退出玩法(exit the game)
-        self.create_service(
-            Trigger, "~/start", self.start_srv_callback
-        )  # 进入玩法(enter the game)
-        self.create_service(
-            Trigger, "~/stop", self.stop_srv_callback
-        )  # 退出玩法(exit the game)
-
-        self.debug = self.get_parameter("debug").value
+        #self.camera_type = os.environ['DEPTH_CAMERA_TYPE']
+        self.buzzer_pub = self.create_publisher(BuzzerState, '/ros_robot_controller/set_buzzer', 1)
+        self.point_publisher = self.create_publisher(Points, '~/points', 1)  # 使用~可以自动加上前缀名称(using ~ can automatically add a prefix name)
+        self.result_publisher = self.create_publisher(Image, '~/image_result', 1)  # 图像处理结果发布(publish the result of image processing)
+        self.create_service(Trigger, '~/enter', self.enter_srv_callback)  # 进入玩法(enter the game)
+        self.create_service(Trigger, '~/exit', self.exit_srv_callback)  # 退出玩法(exit the game)
+        self.create_service(Trigger, '~/start', self.start_srv_callback)  # 进入玩法(enter the game)
+        self.create_service(Trigger, '~/stop', self.stop_srv_callback)  # 退出玩法(exit the game)
+        
+        self.debug = self.get_parameter('debug').value
         threading.Thread(target=self.image_proc, daemon=True).start()
-        self.create_service(Trigger, "~/init_finish", self.get_node_state)
-        self.get_logger().info("\033[1;32m%s\033[0m" % "start")
+        self.create_service(Trigger, '~/init_finish', self.get_node_state)
+        self.get_logger().info('\033[1;32m%s\033[0m' % 'start')
         # self.enter_srv_callback(request=Trigger.Request(), response=Trigger.Response())
         # self.start_srv_callback(request=Trigger.Request(), response=Trigger.Response())
 
@@ -242,17 +157,15 @@ class HandTrajectoryNode(Node):
         return response
 
     def enter_srv_callback(self, request, response):
-        self.get_logger().info("\033[1;32m%s\033[0m" % "enter")
+        self.get_logger().info('\033[1;32m%s\033[0m' % "enter")
         if self.image_sub is None:
-            self.image_sub = self.create_subscription(
-                Image, "/ascamera/camera_publisher/rgb0/image", self.image_callback, 1
-            )  # 摄像头订阅(subscribe camera)
+             self.image_sub = self.create_subscription(Image, '/ascamera/camera_publisher/rgb0/image', self.image_callback, 1)  # 摄像头订阅(subscribe camera)
         response.success = True
         response.message = "enter"
         return response
 
     def exit_srv_callback(self, request, response):
-        self.get_logger().info("\033[1;32m%s\033[0m" % "exit")
+        self.get_logger().info('\033[1;32m%s\033[0m' % "exit")
         self.start = False
         try:
             if self.image_sub is not None:
@@ -265,7 +178,7 @@ class HandTrajectoryNode(Node):
         return response
 
     def start_srv_callback(self, request, response):
-        self.get_logger().info("\033[1;32m%s\033[0m" % "start hand trajectory")
+        self.get_logger().info('\033[1;32m%s\033[0m' % "start hand trajectory")
 
         self.state = State.NULL
         self.points = []
@@ -279,7 +192,7 @@ class HandTrajectoryNode(Node):
         return response
 
     def stop_srv_callback(self, request, response):
-        self.get_logger().info("\033[1;32m%s\033[0m" % "stop hand trajectory")
+        self.get_logger().info('\033[1;32m%s\033[0m' % "stop hand trajectory")
 
         self.start = False
 
@@ -323,21 +236,15 @@ class HandTrajectoryNode(Node):
 
                             # Draw the hand landmarks.
                             hand_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
-                            hand_landmarks_proto.landmark.extend(
-                                [
-                                    landmark_pb2.NormalizedLandmark(
-                                        x=landmark.x, y=landmark.y, z=landmark.z
-                                    )
-                                    for landmark in hand_landmarks
-                                ]
-                            )
+                            hand_landmarks_proto.landmark.extend([
+                              landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in hand_landmarks
+                            ])
                             mp.solutions.drawing_utils.draw_landmarks(
-                                annotated_image,
-                                hand_landmarks_proto,
-                                mp.solutions.hands.HAND_CONNECTIONS,
-                                mp.solutions.drawing_styles.get_default_hand_landmarks_style(),
-                                mp.solutions.drawing_styles.get_default_hand_connections_style(),
-                            )
+                              annotated_image,
+                              hand_landmarks_proto,
+                              mp.solutions.hands.HAND_CONNECTIONS,
+                              mp.solutions.drawing_styles.get_default_hand_landmarks_style(),
+                              mp.solutions.drawing_styles.get_default_hand_connections_style())
 
                             # Get the top left corner of the detected hand's bounding box.
                             height, width, _ = annotated_image.shape
@@ -345,51 +252,30 @@ class HandTrajectoryNode(Node):
                             y_coordinates = [landmark.y for landmark in hand_landmarks]
                             text_x = int(min(x_coordinates) * width)
                             text_y = int(min(y_coordinates) * height) - MARGIN
-
+                            
                             if handedness[0].category_name == "Left":
-                                handedness[0].category_name = "Right"
+                                handedness[0].category_name = 'Right'
                             elif handedness[0].category_name == "Right":
-                                handedness[0].category_name = "Left"
+                                handedness[0].category_name = 'Left'
 
                             # Draw handedness (left or right hand) on the image.
-                            cv2.putText(
-                                annotated_image,
-                                f"{handedness[0].category_name}",
-                                (text_x, text_y),
-                                cv2.FONT_HERSHEY_DUPLEX,
-                                FONT_SIZE,
-                                HANDEDNESS_TEXT_COLOR,
-                                FONT_THICKNESS,
-                                cv2.LINE_AA,
-                            )
-                            if handedness[0].category_name == "Right":
+                            cv2.putText(annotated_image, f"{handedness[0].category_name}",
+                                        (text_x, text_y), cv2.FONT_HERSHEY_DUPLEX,
+                                        FONT_SIZE, HANDEDNESS_TEXT_COLOR, FONT_THICKNESS, cv2.LINE_AA)
+                            if handedness[0].category_name == 'Right':
                                 p1 = hand_landmarks[0]
                                 p2 = hand_landmarks[2]
                                 p3 = hand_landmarks[9]
                                 p4 = hand_landmarks[17]
-                                hand_center = [
-                                    int((p1.x + p2.x + p3.x + p4.x) / 4 * width),
-                                    int((p1.y + p2.y + p3.y + p4.y) / 4 * height),
-                                ]
-                                cv2.circle(
-                                    annotated_image,
-                                    tuple(hand_center),
-                                    10,
-                                    (255, 255, 0),
-                                    -1,
-                                )
+                                hand_center = [int((p1.x + p2.x + p3.x + p4.x)/4*width), int((p1.y + p2.y + p3.y + p4.y)/4*height)]
+                                cv2.circle(annotated_image, tuple(hand_center), 10, (255, 255, 0), -1)
                                 # cv2.circle(annotated_image, (int(hand_landmarks[0].x*width), int(hand_landmarks[0].y*height)), 10, (255, 255, 0), -1)
                                 # cv2.circle(annotated_image, (int(hand_landmarks[4].x*width), int(hand_landmarks[4].y*height)), 10, (255, 255, 0), -1)
-                                landmarks = np.array(
-                                    [
-                                        [landmark.x, landmark.y]
-                                        for landmark in hand_landmarks
-                                    ]
-                                )
-                                angle_list = hand_angle(landmarks)
-                                gesture = h_gesture(angle_list)
+                                landmarks = np.array([[landmark.x, landmark.y] for landmark in hand_landmarks])
+                                angle_list = (hand_angle(landmarks))
+                                gesture = (h_gesture(angle_list))
                         if self.state != State.TRACKING:
-                            if gesture == "five":
+                            if gesture == "five":  
                                 self.count += 1
                                 if self.count > 5:
                                     self.count = 0
@@ -440,13 +326,10 @@ class HandTrajectoryNode(Node):
             else:
                 time.sleep(0.01)
             if self.debug:
-                cv2.imshow(
-                    "annotated_image", cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)
-                )
+                cv2.imshow('annotated_image', cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
                 cv2.waitKey(1)
-            self.result_publisher.publish(
-                self.bridge.cv2_to_imgmsg(annotated_image, "rgb8")
-            )
+            self.result_publisher.publish(self.bridge.cv2_to_imgmsg(annotated_image, "rgb8"))
+
 
     def image_callback(self, ros_image):
         cv_image = self.bridge.imgmsg_to_cv2(ros_image, "rgb8")
@@ -457,13 +340,11 @@ class HandTrajectoryNode(Node):
         # 将图像放入队列(put the image into the queue)
         self.image_queue.put(rgb_image)
 
-
 def main():
-    node = HandTrajectoryNode("hand_trajectory")
+    node = HandTrajectoryNode('hand_trajectory')
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
-
 
 if __name__ == "__main__":
     main()

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
+import math
 import rclpy
-from geometry_msgs.msg import Twist
 from rclpy.node import Node
-from sdk import pid
+from geometry_msgs.msg import Twist
 from tf2_ros import Buffer, TransformListener
 from transforms3d.euler import quat2euler
+from sdk import pid
 
 
 def qua2rpy(x, y, z, w):
@@ -15,24 +16,16 @@ def qua2rpy(x, y, z, w):
 
 class SlaveTFListener(Node):
     def __init__(self):
-        super().__init__("tf_listener")
-
+        super().__init__('tf_listener')
+        
         # 获取参数
-        self.declare_parameter("cmd_vel", "/robot_1/robot_controller/cmd_vel")
-        self.declare_parameter("base_frame", "robot_1/base_footprint")  # 移除前导斜杠
-        self.declare_parameter("target_frame", "point2")  # 移除前导斜杠
+        self.declare_parameter('cmd_vel', '/robot_1/robot_controller/cmd_vel')
+        self.declare_parameter('base_frame', 'robot_1/base_footprint')  # 移除前导斜杠
+        self.declare_parameter('target_frame', 'point2')  # 移除前导斜杠
 
-        cmd_vel = self.get_parameter("cmd_vel").get_parameter_value().string_value
-        self.base_frame = (
-            self.get_parameter("base_frame")
-            .get_parameter_value()
-            .string_value.strip("/")
-        )  # 去掉斜杠
-        self.target_frame = (
-            self.get_parameter("target_frame")
-            .get_parameter_value()
-            .string_value.strip("/")
-        )  # 去掉斜杠
+        cmd_vel = self.get_parameter('cmd_vel').get_parameter_value().string_value
+        self.base_frame = self.get_parameter('base_frame').get_parameter_value().string_value.strip('/')  # 去掉斜杠
+        self.target_frame = self.get_parameter('target_frame').get_parameter_value().string_value.strip('/')  # 去掉斜杠
 
         # 发布器
         self.robot_vel_publisher = self.create_publisher(Twist, cmd_vel, 10)
@@ -54,9 +47,7 @@ class SlaveTFListener(Node):
         try:
             # 获取相对的tf
             now = rclpy.time.Time()
-            trans = self.tf_buffer.lookup_transform(
-                self.base_frame, self.target_frame, now
-            )
+            trans = self.tf_buffer.lookup_transform(self.base_frame, self.target_frame, now)
         except Exception as e:
             self.get_logger().warn(f"Failed to get transform: {e}")
             self.robot_vel_publisher.publish(msg)
@@ -118,5 +109,5 @@ def main(args=None):
         rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

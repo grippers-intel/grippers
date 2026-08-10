@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
+# encoding: utf-8
 # 加载obj模型文件(load obj model file)
-
 
 class OBJ:
     def __init__(self, filename, swapyz=False):
-        """Loads a Wavefront OBJ file."""
+        """Loads a Wavefront OBJ file. """
         self.vertices = []
         self.normals = []
         self.texcoords = []
@@ -12,33 +12,31 @@ class OBJ:
 
         material = None
         for line in open(filename, "r"):
-            if line.startswith("#"):
-                continue
+            if line.startswith('#'): continue
             values = line.split()
-            if not values:
-                continue
-            if values[0] == "v":
+            if not values: continue
+            if values[0] == 'v':
                 v = list(map(float, values[1:]))
                 if swapyz and len(v) > 3:
                     v = v[0], v[2], v[1], v[3], v[4], v[5]
                 elif swapyz:
                     v = v[0], v[2], v[1]
                 self.vertices.append(v)
-            elif values[0] == "vn":
+            elif values[0] == 'vn':
                 v = list(map(float, values[1:4]))
                 if swapyz:
                     v = v[0], v[2], v[1]
                 self.normals.append(v)
-            elif values[0] == "vt":
+            elif values[0] == 'vt':
                 self.texcoords.append(map(float, values[1:3]))
-            elif values[0] in ("usemtl", "usemat"):
+            elif values[0] in ('usemtl', 'usemat'):
                 material = values[1]
-            elif values[0] == "f":
+            elif values[0] == 'f':
                 face = []
                 texcoords = []
                 norms = []
                 for v in values[1:]:
-                    w = v.split("/")
+                    w = v.split('/')
                     face.append(int(w[0]))
                     if len(w) >= 2 and len(w[1]) > 0:
                         texcoords.append(int(w[1]))

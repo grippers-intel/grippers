@@ -1,46 +1,43 @@
 #!/usr/bin/env python3
+# encoding: utf-8
 # @data:2022/11/07
 # @author:aiden
 # 人体跟踪(body tracking)
-import faulthandler
-import math
 import os
+import cv2
+import math
 import queue
+import rclpy
 import signal
 import threading
-
-import cv2
 import numpy as np
-import rclpy
+import faulthandler
+import sdk.pid as pid
+import sdk.fps as fps
+from sdk import common
+from rclpy.node import Node
 from cv_bridge import CvBridge
+from std_srvs.srv import Trigger
+from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist
 from interfaces.msg import ObjectsInfo
-from rclpy.node import Node
-from sdk import common, fps, pid
-from sensor_msgs.msg import Image
-from servo_controller.action_group_controller import ActionGroupController
 from servo_controller_msgs.msg import ServosPosition
-from std_srvs.srv import Trigger
+from servo_controller.action_group_controller import ActionGroupController
 
 faulthandler.enable()
-
 
 class BodyControlNode(Node):
     def __init__(self, name):
         rclpy.init()
-        super().__init__(
-            name,
-            allow_undeclared_parameters=True,
-            automatically_declare_parameters_from_overrides=True,
-        )
+        super().__init__(name, allow_undeclared_parameters=True, automatically_declare_parameters_from_overrides=True)
         self.name = name
-
+       
         self.pid_d = pid.PID(0.1, 0, 0)
-        # self.pid_d = pid.PID(0, 0, 0)
-
+        #self.pid_d = pid.PID(0, 0, 0)
+        
         self.pid_angular = pid.PID(0.002, 0, 0)
-        # self.pid_angular = pid.PID(0, 0, 0)
-
+        #self.pid_angular = pid.PID(0, 0, 0)
+        
         self.go_speed, self.turn_speed = 0.007, 0.04
         self.linear_x, self.angular = 0, 0
         self.running = True
@@ -56,38 +53,29 @@ class BodyControlNode(Node):
         self.depth_frame = None
         self.center = None
         self.bridge = CvBridge()
-        self.machine_type = os.environ.get("MACHINE_TYPE")
+        self.machine_type = os.environ.get('MACHINE_TYPE')
 
-        camera = "depth_cam"
-        self.create_subscription(Image, "/yolov5/object_image", self.image_callback, 1)
-        self.create_subscription(
-            Image, "/ascamera/camera_publisher/rgb0/image", self.depth_image_callback, 1
-        )
-        self.create_subscription(
-            ObjectsInfo, "/yolov5/object_detect", self.get_object_callback, 1
-        )
-        self.mecanum_pub = self.create_publisher(
-            Twist, "/controller/cmd_vel", 1
-        )  # 底盘控制(chassis control)
+        camera = 'depth_cam'
+        self.create_subscription(Image, '/yolov5/object_image', self.image_callback, 1)
+        self.create_subscription(Image, '/ascamera/camera_publisher/rgb0/image' , self.depth_image_callback, 1)
+        self.create_subscription(ObjectsInfo, '/yolov5/object_detect', self.get_object_callback, 1)
+        self.mecanum_pub = self.create_publisher(Twist, '/controller/cmd_vel', 1)  # 底盘控制(chassis control)
 
-        self.controller = ActionGroupController(
-            self.create_publisher(ServosPosition, "servo_controller", 1),
-            "/home/ubuntu/software/arm_pc/ActionGroups",
-        )
-        self.client = self.create_client(Trigger, "/controller_manager/init_finish")
+        self.controller = ActionGroupController(self.create_publisher(ServosPosition, 'servo_controller', 1), '/home/ubuntu/software/arm_pc/ActionGroups')
+        self.client = self.create_client(Trigger, '/controller_manager/init_finish')
         self.client.wait_for_service()
-        self.client = self.create_client(Trigger, "/yolov5/start")
+        self.client = self.create_client(Trigger, '/yolov5/start')
         self.client.wait_for_service()
 
         self.future = self.client.call_async(Trigger.Request())
         rclpy.spin_until_future_complete(self, self.future)
 
         self.mecanum_pub.publish(Twist())
-        self.controller.run_action("camera_up")
+        self.controller.run_action('camera_up')
 
         threading.Thread(target=self.main, daemon=True).start()
-        self.create_service(Trigger, "~/init_finish", self.get_node_state)
-        self.get_logger().info("\033[1;32m%s\033[0m" % "start")
+        self.create_service(Trigger, '~/init_finish', self.get_node_state)
+        self.get_logger().info('\033[1;32m%s\033[0m' % 'start')
 
     def get_node_state(self, request, response):
         response.success = True
@@ -100,24 +88,14 @@ class BodyControlNode(Node):
     def get_object_callback(self, msg):
         for i in msg.objects:
             class_name = i.class_name
-            if class_name == "person":
+            if class_name == 'person':
                 if i.box[1] < 10:
-                    self.center = [
-                        int((i.box[0] + i.box[2]) / 2),
-                        int(i.box[1]) + abs(int((i.box[1] - i.box[3]) / 4)),
-                    ]
+                    self.center = [int((i.box[0] + i.box[2])/2), int(i.box[1]) + abs(int((i.box[1] - i.box[3])/4))]
                 else:
-                    self.center = [
-                        int((i.box[0] + i.box[2]) / 2),
-                        int(i.box[1]) + abs(int((i.box[1] - i.box[3]) / 3)),
-                    ]
+                    self.center = [int((i.box[0] + i.box[2])/2), int(i.box[1]) + abs(int((i.box[1] - i.box[3])/3))]
 
     def depth_image_callback(self, depth_image):
-        self.depth_frame = np.ndarray(
-            shape=(depth_image.height, depth_image.width),
-            dtype=np.uint16,
-            buffer=depth_image.data,
-        )
+        self.depth_frame = np.ndarray(shape=(depth_image.height, depth_image.width), dtype=np.uint16, buffer=depth_image.data)
 
     def image_callback(self, ros_image):
         cv_image = self.bridge.imgmsg_to_cv2(ros_image, "rgb8")
@@ -132,48 +110,48 @@ class BodyControlNode(Node):
         twist = Twist()
         if self.center is not None:
             h, w = rgb_image.shape[:-1]
-            cv2.circle(rgb_image, tuple(self.center), 10, (0, 255, 255), -1)
+            cv2.circle(rgb_image, tuple(self.center), 10, (0, 255, 255), -1) 
             #################
             roi_h, roi_w = 5, 5
             w_1 = self.center[0] - roi_w
             w_2 = self.center[0] + roi_w
-            w_1 = max(w_1, 0)
-            w_2 = min(w_2, w)
+            if w_1 < 0:
+                w_1 = 0
+            if w_2 > w:
+                w_2 = w
             h_1 = self.center[1] - roi_h
             h_2 = self.center[1] + roi_h
-            h_1 = max(h_1, 0)
-            h_2 = min(h_2, h)
-
+            if h_1 < 0:
+                h_1 = 0
+            if h_2 > h:
+                h_2 = h
+            
             cv2.rectangle(rgb_image, (w_1, h_1), (w_2, h_2), (0, 255, 255), 2)
             roi = self.depth_frame[h_1:h_2, w_1:w_2]
             distances = roi[np.logical_and(roi > 0, roi < 40000)]
             if len(distances) != 0:
-                distance = int(np.mean(distances) / 10)
+                distance = int(np.mean(distances)/10)
             else:
                 distance = 0
             ################
-            if distance > 600:
+            if distance > 600: 
                 distance = 600
             elif distance < 60:
                 distance = 60
-
+            
             if abs(distance - 150) < 15:
                 distance = 150
             self.pid_d.update(distance - 150)  # 更新pid(update pid)
             self.linear_x = -common.set_range(self.pid_d.output, -0.4, 0.4)
-
-            if abs(self.center[0] - w / 2) < 30:
-                self.center[0] = w / 2
-            self.pid_angular.update(self.center[0] - w / 2)  # 更新pid(update pid)
+            
+            if abs(self.center[0] - w/2) < 30:
+                self.center[0] = w/2
+            self.pid_angular.update(self.center[0] - w/2)  # 更新pid(update pid)
             twist.linear.x = self.linear_x
-            if self.machine_type != "MentorPi_Acker":
+            if self.machine_type != 'MentorPi_Acker':
                 twist.angular.z = common.set_range(self.pid_angular.output, -0.8, 0.8)
             else:
-                twist.angular.z = (
-                    twist.linear.x
-                    * math.tan(common.set_range(self.pid_angular.output, -0.316, 0.316))
-                    / 0.216
-                )
+                twist.angular.z = twist.linear.x*math.tan(common.set_range(self.pid_angular.output, -0.316, 0.316))/0.216
                 if twist.linear.x < 0:
                     twist.angular.z = -twist.angular.z
             self.mecanum_pub.publish(twist)
@@ -193,22 +171,20 @@ class BodyControlNode(Node):
                 result_image = self.image_proc(image)
             except BaseException as e:
                 result_image = image.copy()
-                self.get_logger().info("\033[1;32m%s\033[0m" % e)
+                self.get_logger().info('\033[1;32m%s\033[0m' % e)
             self.center = None
             cv2.imshow(self.name, cv2.cvtColor(result_image, cv2.COLOR_RGB2BGR))
             key = cv2.waitKey(1)
-            if key == ord("q") or key == 27:  # 按q或者esc退出(press Q or Esc to exit)
+            if key == ord('q') or key == 27:  # 按q或者esc退出(press Q or Esc to exit)
                 self.mecanum_pub.publish(Twist())
                 self.running = False
 
         rclpy.shutdown()
 
-
 def main():
-    node = BodyControlNode("body_control")
+    node = BodyControlNode('body_control')
     rclpy.spin(node)
     node.destroy_node()
-
 
 if __name__ == "__main__":
     main()

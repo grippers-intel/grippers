@@ -1,0 +1,9 @@
+{
+  // 이 저장소를 열면 VS Code가 설치 알림을 띄웁니다.
+  // 알림이 안 뜨면 확장 탭에서 @recommended 로 검색하세요.
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.black-formatter",
+    "charliermarsh.ruff"
+  ]
+}

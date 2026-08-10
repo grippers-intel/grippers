@@ -1,31 +1,31 @@
-import copy
 import os
+import copy
+from typing import (
+    Tuple,
+    Optional,
+    List,
+)
 from math import (
-    atan2,
-    cos,
-    pi,
     sin,
+    cos,
+    atan2,
+    pi,
 )
-
-import numpy as np
 import onnxruntime
+import numpy as np
+
 from app.model.utils import (
-    keep_aspect_resize_and_pad,
     normalize_radians,
+    keep_aspect_resize_and_pad,
 )
 
-MODEL_PATH = os.path.join(
-    os.path.join(os.path.split(os.path.realpath(__file__))[0]),
-    "palm_detection_full_inf_post_192x192.onnx",
-)
-
-
-class PalmDetection:
+MODEL_PATH = os.path.join(os.path.join(os.path.split(os.path.realpath(__file__))[0]), 'palm_detection_full_inf_post_192x192.onnx')
+class PalmDetection(object):
     def __init__(
         self,
-        model_path: str | None = MODEL_PATH,
-        score_threshold: float | None = 0.60,
-        providers: list | None = [
+        model_path: Optional[str] = MODEL_PATH,
+        score_threshold: Optional[float] = 0.60,
+        providers: Optional[List] = [
             # (
             #     'TensorrtExecutionProvider', {
             #         'trt_engine_cache_enable': True,
@@ -33,8 +33,8 @@ class PalmDetection:
             #         'trt_fp16_enable': True,
             #     }
             # ),
-            "CUDAExecutionProvider",
-            "CPUExecutionProvider",
+            'CUDAExecutionProvider',
+            'CPUExecutionProvider',
         ],
     ):
         """PalmDetection
@@ -75,11 +75,17 @@ class PalmDetection:
         )
         self.providers = self.onnx_session.get_providers()
 
-        self.input_shapes = [input.shape for input in self.onnx_session.get_inputs()]
-        self.input_names = [input.name for input in self.onnx_session.get_inputs()]
-        self.output_names = [output.name for output in self.onnx_session.get_outputs()]
-
-        black_img = np.zeros([224, 224, 3], np.uint8)
+        self.input_shapes = [
+            input.shape for input in self.onnx_session.get_inputs()
+        ]
+        self.input_names = [
+            input.name for input in self.onnx_session.get_inputs()
+        ]
+        self.output_names = [
+            output.name for output in self.onnx_session.get_outputs()
+        ]
+        
+        black_img = np.zeros([224, 224, 3],np.uint8)
         # PreProcess
         inference_image = self.__preprocess(
             black_img,
@@ -93,10 +99,11 @@ class PalmDetection:
         )
         self.square_standard_size = 0
 
+
     def __call__(
         self,
         image: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """PalmDetection
 
         Parameters
@@ -132,10 +139,11 @@ class PalmDetection:
 
         return hands
 
+
     def __preprocess(
         self,
         image: np.ndarray,
-        swap: tuple[int, int, int] | None = (2, 0, 1),
+        swap: Optional[Tuple[int,int,int]] = (2, 0, 1),
     ) -> np.ndarray:
         """__preprocess
 
@@ -158,7 +166,7 @@ class PalmDetection:
         # Resize + Padding + Normalization + BGR->RGB
         input_h = self.input_shapes[0][2]
         input_w = self.input_shapes[0][3]
-        image_height, image_width = image.shape[:2]
+        image_height , image_width = image.shape[:2]
 
         self.square_standard_size = max(image_height, image_width)
         self.square_padding_half_size = abs(image_height - image_width) // 2
@@ -183,6 +191,7 @@ class PalmDetection:
             dtype=np.float32,
         )
         return padded_image
+
 
     def __postprocess(
         self,
@@ -210,7 +219,7 @@ class PalmDetection:
         image_width = image.shape[1]
 
         hands = []
-        keep = boxes[:, 0] > self.score_threshold  # pd_score > self.score_threshold
+        keep = boxes[:, 0] > self.score_threshold # pd_score > self.score_threshold
         boxes = boxes[keep, :]
 
         for box in boxes:
@@ -221,12 +230,9 @@ class PalmDetection:
                 sqn_rr_size = 2.9 * box_size
                 rotation = 0.5 * pi - atan2(-kp02_y, kp02_x)
                 rotation = normalize_radians(rotation)
-                sqn_rr_center_x = box_x + 0.5 * box_size * sin(rotation)
-                sqn_rr_center_y = box_y - 0.5 * box_size * cos(rotation)
-                sqn_rr_center_y = (
-                    sqn_rr_center_y * self.square_standard_size
-                    - self.square_padding_half_size
-                ) / image_height
+                sqn_rr_center_x = box_x + 0.5*box_size*sin(rotation)
+                sqn_rr_center_y = box_y - 0.5*box_size*cos(rotation)
+                sqn_rr_center_y = (sqn_rr_center_y * self.square_standard_size - self.square_padding_half_size) / image_height
                 hands.append(
                     [
                         sqn_rr_size,

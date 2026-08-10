@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
+# encoding: utf-8
 # @data:2022/11/07
 # @author:aiden
 # 跌倒检测(fall detection)
-import faulthandler
+import cv2
+import time
+import rclpy
 import queue
 import signal
 import threading
-import time
-
-import cv2
-import mediapipe as mp
 import numpy as np
-import rclpy
-from cv_bridge import CvBridge
-from geometry_msgs.msg import Twist
+import faulthandler
+import sdk.fps as fps
+import mediapipe as mp
 from rclpy.node import Node
-from ros_robot_controller_msgs.msg import BuzzerState
-from sdk import fps
-from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
 from std_srvs.srv import Trigger
+from sensor_msgs.msg import Image
+from geometry_msgs.msg import Twist
+from ros_robot_controller_msgs.msg import BuzzerState
 
 faulthandler.enable()
 
@@ -40,7 +40,6 @@ LEFT_ANKLE = mp_pose.PoseLandmark.LEFT_ANKLE
 RIGHT_KNEE = mp_pose.PoseLandmark.RIGHT_KNEE
 RIGHT_ANKLE = mp_pose.PoseLandmark.RIGHT_ANKLE
 
-
 def get_joint_landmarks(img, landmarks):
     """
     将landmarks从medipipe的归一化输出转为像素坐标(Convert landmarks from medipipe's normalized output to pixel coordinates)
@@ -52,34 +51,27 @@ def get_joint_landmarks(img, landmarks):
     landmarks = [(lm.x * w, lm.y * h) for lm in landmarks]
     return np.array(landmarks)
 
-
 def height_cal(landmarks):
     y = []
     for i in landmarks:
         y.append(i[1])
-    height = sum(y) / len(y)
+    height = sum(y)/len(y)
 
     return height
-
 
 class FallDownDetectNode(Node):
     def __init__(self, name):
         rclpy.init()
-        super().__init__(
-            name,
-            allow_undeclared_parameters=True,
-            automatically_declare_parameters_from_overrides=True,
-        )
+        super().__init__(name, allow_undeclared_parameters=True, automatically_declare_parameters_from_overrides=True)
         self.name = name
         self.drawing = mp.solutions.drawing_utils
         self.body_detector = mp_pose.Pose(
             static_image_mode=False,
             min_tracking_confidence=0.7,
-            min_detection_confidence=0.7,
-        )
+            min_detection_confidence=0.7)
         self.running = True
         self.fps = fps.FPS()  # fps计算器(FPS calculator)
-
+        
         self.fall_down_count = []
         self.move_finish = True
         self.stop_flag = False
@@ -87,22 +79,16 @@ class FallDownDetectNode(Node):
         self.bridge = CvBridge()
         self.image_queue = queue.Queue(maxsize=2)
 
-        camera = "depth_cam"
-        self.create_subscription(
-            Image, "/ascamera/camera_publisher/rgb0/image", self.image_callback, 1
-        )
-        self.mecanum_pub = self.create_publisher(
-            Twist, "/controller/cmd_vel", 1
-        )  # 底盘控制(chassis control)
-        self.buzzer_pub = self.create_publisher(
-            BuzzerState, "/ros_robot_controller/set_buzzer", 1
-        )
+        camera = 'depth_cam'
+        self.create_subscription(Image, '/ascamera/camera_publisher/rgb0/image' , self.image_callback, 1)
+        self.mecanum_pub = self.create_publisher(Twist, '/controller/cmd_vel', 1)  # 底盘控制(chassis control)
+        self.buzzer_pub = self.create_publisher(BuzzerState, '/ros_robot_controller/set_buzzer', 1)
 
         self.mecanum_pub.publish(Twist())
 
         threading.Thread(target=self.main, daemon=True).start()
-        self.create_service(Trigger, "~/init_finish", self.get_node_state)
-        self.get_logger().info("\033[1;32m%s\033[0m" % "start")
+        self.create_service(Trigger, '~/init_finish', self.get_node_state)
+        self.get_logger().info('\033[1;32m%s\033[0m' % 'start')
 
     def get_node_state(self, request, response):
         response.success = True
@@ -131,7 +117,7 @@ class FallDownDetectNode(Node):
             self.mecanum_pub.publish(twist)
             time.sleep(0.2)
         self.mecanum_pub.publish(Twist())
-        self.stop_flag = True
+        self.stop_flag =True
         self.move_finish = True
 
     def buzzer_warn(self):
@@ -165,7 +151,7 @@ class FallDownDetectNode(Node):
                     self.fall_down_count.append(0)
                 if len(self.fall_down_count) == 3:
                     count = sum(self.fall_down_count)
-
+                    
                     self.fall_down_count = []
                     if self.stop_flag:
                         if count <= 1:
@@ -179,8 +165,9 @@ class FallDownDetectNode(Node):
 
             result_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             self.drawing.draw_landmarks(
-                result_image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS
-            )
+                result_image,
+                results.pose_landmarks,
+                mp_pose.POSE_CONNECTIONS)
             return cv2.flip(result_image, 1)
         else:
             return image_flip
@@ -197,21 +184,20 @@ class FallDownDetectNode(Node):
             try:
                 result_image = self.image_proc(np.copy(image))
             except BaseException as e:
-                self.get_logger().info("\033[1;32m%s\033[0m" % e)
+                self.get_logger().info('\033[1;32m%s\033[0m' % e)
                 result_image = cv2.flip(cv2.cvtColor(image, cv2.COLOR_RGB2BGR), 1)
             self.fps.update()
             result_image = self.fps.show_fps(result_image)
             cv2.imshow(self.name, result_image)
             key = cv2.waitKey(1)
-            if key == ord("q") or key == 27:  # 按q或者esc退出(press Q or Esc to exit)
+            if key == ord('q') or key == 27:  # 按q或者esc退出(press Q or Esc to exit)
                 self.mecanum_pub.publish(Twist())
                 self.running = False
 
         rclpy.shutdown()
 
-
 def main():
-    node = FallDownDetectNode("fall_down_detect")
+    node = FallDownDetectNode('fall_down_detect')
     rclpy.spin(node)
     node.destroy_node()
 
