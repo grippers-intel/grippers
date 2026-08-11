@@ -15,8 +15,8 @@ class FakePerception(Perception):
             return False, None, None
         return (
             True,
-            SimpleNamespace(x=0.2, y=0.0, z=0.05),
-            SimpleNamespace(x=0.04, y=0.04, z=0.04),
+            Point3(x=0.2, y=0.0, z=0.05),
+            Point3(x=0.04, y=0.04, z=0.04),
         )
 
     def measure_gap(self):
