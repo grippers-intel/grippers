@@ -584,6 +584,9 @@ MentorPi 배터리  ──┬──► Pi 5 / M.2 HAT+ (Hailo-10H) / LiDAR / Rea
 ## 📁 Repository Structure
 
 ```
+## 📁 Repository Structure
+
+```
 grippers/
 ├── README.md
 ├── LICENSE                 # MIT (+ LeRobot Apache 2.0 고지)

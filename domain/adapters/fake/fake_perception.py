@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from domain.ports.perception import Perception
+from domain.values import Point3, Pose2D
 
 
 class FakePerception(Perception):
@@ -19,7 +20,10 @@ class FakePerception(Perception):
         )
 
     def measure_gap(self):
-        return SimpleNamespace(h_gap=self._h_gap, centerline=SimpleNamespace(x=0, y=0, theta=0))
+        return SimpleNamespace(
+            h_gap=self._h_gap,
+            centerline=Pose2D(x=0.0, y=0.0, theta=0.0),
+        )
 
     def set_light_profile(self, profile):
         return True
