@@ -103,7 +103,7 @@ MentorPi 벤더 스택(`app`, `bringup`, `driver`, `peripherals`, `navigation`, 
 | `perception` | 카메라 소유, 조명 프로파일, 검출, 여유 거리 | 모션 결정 | |
 | `arm_driver` | 서보 통신, IK, 그리퍼, 부하 조회 | 무엇을 잡을지 결정 | |
 | `base_driver` | 주행, LiDAR, 회피기동, 정렬 | 미션 순서 판단 | |
-| `vla_inference` | V/L/A 추론 | 상태 관리 | |
+| `vla_inference` | V/L/A 추론 — **실행 기준선은 Pi 5 CPU**. Hailo 오프로드는 연산자 지원 확인 후 (→ §9 #10) | 상태 관리 | |
 | `hud` | 시각화 (`/mission/state` 만 구독) | 제어 명령 발행 | |
 
 > `/cmd_vel` 발행 주체는 `base_driver` **하나뿐**입니다.
@@ -127,7 +127,7 @@ MentorPi 벤더 스택(`app`, `bringup`, `driver`, `peripherals`, `navigation`, 
 | 실행 위치 | 구동 요소 | 상태 |
 |---|---|---|
 | Raspberry Pi 5 (온보드) | 전 노드 | |
-| AI 가속기 (Hailo-10H, M.2) | 추론 — VLA 3분할(V/L/A) 상주 | ✅ 채택 확정 — 온보드 DRAM 활용. 성능 수치는 M1 벤치마크로 검증 |
+| AI 가속기 (Hailo-10H, M.2) | **YOLO 검출·세그멘테이션 추론** (`.hef` 컴파일 필요) | ✅ 채택 확정. **VLA 3분할 상주는 미확정** — 연산자 지원 확인 후 판단 (§9 #10) |
 | 호스트 PC (격벽 밖) | 명령 입력 · HUD | |
 | AI training server | 모델 학습 | 오프라인 |
 
@@ -348,12 +348,14 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 
 ### 8.2 성능 예산
 
-| 구간 | 목표 지연 |
-|---|---|
-| 검출 1프레임 | |
-| VLA 추론 | |
-| `monitor_clearance` 폴링 주기 | |
-| 미션 전체 | |
+| 구간 | 실행 위치 | 목표 지연 |
+|---|---|---|
+| 검출 1프레임 | Hailo-10H (HEF, INT8) | |
+| VLA 추론 | Pi 5 CPU (기준선) | |
+| `monitor_clearance` 폴링 주기 | Pi 5 CPU | |
+| 미션 전체 | — | |
+
+측정치는 [`measurements.md`](measurements.md) §3 에서 올라옵니다. HEF 컴파일 결과(양자화 정확도 손실 포함)가 이 표의 입력이므로, §3 이 비어 있는 동안은 이 예산도 미확정입니다.
 
 ---
 
@@ -370,6 +372,8 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 | 7 | 접촉 감지 수단 | 센서 / 도전성 테이프 / 영상 판독 | | |
 | 8 | `margin` 결정 방식 | 고정 / 오차연동 / 학습 | | |
 | 9 | MentorPi 벤더 스택 유지 범위 | 전체 유지 / 필요 패키지만 | | |
+| 10 | **VLA 실행 위치** — Hailo 오프로드 가능 여부 | Hailo 상주 / CPU 추론 유지 / 경량화 후 재판단 | 8/23 (M2) | 임성혁 · 이승용 |
+| 11 | ONNX→HEF 컴파일 환경·담당 | 로컬 DFC / training server 컨테이너 | 8/18 | 김동혁 |
 
 ---
 
@@ -393,6 +397,7 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 
 | 날짜 | 버전 | 변경 | PR | 승인 |
 |---|---|---|---|---|
+| 2026-08-11 | 0.5 | **Hailo 적용 범위를 YOLO로 한정.** VLA 실행 기준선을 Pi 5 CPU로 명시 (§2.3, §3.2, §8.2), ONNX→HEF 컴파일을 M2 태스크로 신설, 미결 #10·#11 추가 | | |
 | 2026-08-11 | 0.4 | 가속기를 **Hailo-10H** 로 변경 (8L → 10H). VLA-L 상주에 온보드 DRAM 필요. 캐리어도 AI HAT+ → M.2 HAT+ (§3.2) | | |
 | 2026-08-11 | 0.3 | AI 가속기 채택 확정 — 미결 사항에서 해소 (§3.2, §9) | | |
 | 2026-08-10 | 0.2 | 구현(`main`) 기준으로 §2·§4·§6 재작성 | 이승용 | 김동혁, 조현우 |
