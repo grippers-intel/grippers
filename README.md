@@ -385,15 +385,23 @@ H_proj(φ) = L·|sin φ| + w·|cos φ|   ≤   H_gap − margin
 | **학습** | AI training server GPU | 데이터셋 규모·에폭 반복. 온디바이스로는 불가 |
 | **추론** | 온디바이스 | 시연 시 네트워크 의존 제거, 지연 시간 확보 |
 
-온디바이스 추론 가속기 후보는 M1에서 벤치마크 후 결정합니다.
+온디바이스 추론 가속기는 **Hailo-10H 채택을 확정**했습니다. 세부 성능 수치는 M1 벤치마크로 검증합니다.
 
 | 후보 | 성능 | 장점 | 단점 | 판정 |
 |---|---|---|---|---|
-| Raspberry Pi 5 CPU only | — | 추가 부품 없음 | 실시간 추론 불가 | **기준선** |
-| **Hailo-8L (Raspberry Pi AI HAT+)** | 13 TOPS | Pi 5 M.2 슬롯 직결, 저전력, 추가 보드 불필요 | 지원 모델 제한, 전용 컴파일 필요 | **1순위 후보** |
+| Raspberry Pi 5 CPU only | — | 추가 부품 없음 | 실시간 추론 불가 | 기준선 |
+| **Hailo-10H (M.2 모듈)** | 최대 40 TOPS | **온보드 DRAM 탑재 — 트랜스포머·생성형 계열 모델을 가속기에 상주**시킬 수 있어 VLA-L 언어 파트까지 온디바이스로 감당. Pi 5 M.2 HAT+ 직결 | 8L 대비 소비전력·발열 증가, 캐리어 보드 별도 필요, 국내 수급·단가 확인 필요 | **✅ 채택** |
+| Hailo-8L (Raspberry Pi AI HAT+) | 13 TOPS | 저전력, AI HAT+ 원보드 구성, 레퍼런스 풍부 | **온보드 메모리 없음 → 매 추론마다 호스트에서 가중치 스트리밍.** VLA-L 감당 어려움, 지원 모델 제한 | 폴백 (10H 수급 실패 시) |
 | Intel NPU + OpenVINO | 가변 | 성숙한 툴체인, 팀 내 INT8 양자화 경험 | **Pi에 직접 연결 불가 — 별도 x86 보드 필요.** 무게·전력·배선·전원 도메인이 전부 바뀜 | 제외 (비용 과다) |
 
-| 항목 | Hailo-8L | 기준선 (Pi 5 CPU) |
+**Hailo-8L이 아니라 10H인 이유** — 이 프로젝트의 온디바이스 추론은 YOLO 검출 하나가 아니라 **VLA 3분할(V/L/A)을 동시에** 올려야 합니다. 특히 VLA-L(자연어 명령 해석)은 트랜스포머 계열이라 파라미터 상주 메모리가 필요한데, 8L은 온보드 메모리가 없어 매 추론마다 호스트 메모리에서 가중치를 끌어옵니다. 10H의 온보드 DRAM이 이 구간을 없애줍니다.
+
+> [!WARNING]
+> **AI HAT+로는 10H를 못 씁니다.** Raspberry Pi AI HAT+는 Hailo-8L/8이 보드에 실장된 제품이라 모듈 교체가 불가능합니다. 10H를 쓰려면 **Raspberry Pi M.2 HAT+**(범용 M.2 M-key 캐리어) + **Hailo-10H M.2 모듈**의 2개 품목으로 발주해야 합니다. 8/11 발주 전 반드시 반영하세요.
+>
+> ⚠️ **M1에서 확인할 것** — ① 40 TOPS·온보드 DRAM 용량 등 스펙을 벤더 데이터시트로 확정 ② Pi 5용 HailoRT / 드라이버가 10H를 지원하는 버전인지 ③ 8L 대비 늘어난 소비전력이 로직 전원 도메인 예산 안에 들어오는지.
+
+| 항목 | Hailo-10H | 기준선 (Pi 5 CPU) |
 |---|---|---|
 | 추론 지연 (ms) | | |
 | 소비 전력 (W) | | |
@@ -424,7 +432,7 @@ H_proj(φ) = L·|sin φ| + w·|cos φ|   ≤   H_gap − margin
 
 메카넘 휠은 롤러 슬립으로 오도메트리 누적 오차가 큽니다. 진입 마지막 구간은 마커 기준 **폐루프 정렬**로 오차를 리셋합니다. 암실에서는 RGB 마커가 보이지 않으므로 **IR 반사 재질 마커**를 사용합니다.
 
-### 🤏 부하 기반 파지 검증 및 자동 재시도
+### 🦾 부하 기반 파지 검증 및 자동 재시도
 
 엔드이펙터를 닫은 뒤 **서보 부하값으로 물체 유무를 판정**합니다. 별도 힘센서 없이 폐루프를 구성합니다.
 
@@ -525,7 +533,8 @@ H_proj(φ) = L·|sin φ| + w·|cos φ|   ≤   H_gap − margin
 |---|---|---|
 | 이동 베이스 | **MentorPi** (메카넘 휠 카) — 전방향 이동, 게걸음으로 좁은 통로 진입 유리 | ✅ 교육장 보유 |
 | 컴퓨트 | **Raspberry Pi 5** / Ubuntu 24.04 / **ROS 2 Jazzy** | ✅ 교육장 보유 |
-| AI 가속기 | **Hailo-8L** (Raspberry Pi AI HAT+, M.2) — M1 벤치마크 후 확정 | ⚠️ 검토 중 |
+| AI 가속기 | **Hailo-10H** (M.2 모듈, 최대 40 TOPS) — 온보드 DRAM으로 VLA 3분할 상주. 성능 수치는 M1 벤치마크로 검증 | ✅ 채택 확정 |
+| 가속기 캐리어 | **Raspberry Pi M.2 HAT+** — AI HAT+는 8L 실장형이라 10H 장착 불가. **별도 품목으로 발주 필요** | ⚠️ **8/11 발주 반영** |
 | 로봇 암 | **SO-ARM101** 리더 / 팔로워 2대 — 텔레오퍼레이션 데이터 수집 | ✅ 교육장 보유 |
 | 서보 | **Feetech STS3215** 버스 서보 × 6축/암 | ✅ 보유 |
 | 카메라 | **Intel RealSense** — 액티브 IR 깊이 + RGB, 640×480 | ⚠️ 요청 중 (8/7 회신) |
@@ -549,7 +558,7 @@ H_proj(φ) = L·|sin φ| + w·|cos φ|   ≤   H_gap − margin
 ### 전원 도메인
 
 ```
-MentorPi 배터리  ──┬──► Pi 5 / AI HAT+ / LiDAR / RealSense   (로직)
+MentorPi 배터리  ──┬──► Pi 5 / M.2 HAT+ (Hailo-10H) / LiDAR / RealSense   (로직)
                    └──► 메카넘 모터 드라이버           (구동)
 
 3S LiPo (전용)    ─────► 팔 서보 6축                  (매니퓰레이터)
@@ -572,9 +581,6 @@ MentorPi 배터리  ──┬──► Pi 5 / AI HAT+ / LiDAR / RealSense   (로
 
 ---
 
-## 📁 Repository Structure
-
-```
 ## 📁 Repository Structure
 
 ```
@@ -628,9 +634,6 @@ grippers/
 > **설계 초안과의 차이**: 최초 설계에선 `ports/`, `adapters/`가 저장소 최상위였는데, 실제 구현에서는 `domain/ports/`, `domain/adapters/`로 domain 아래 중첩시켰습니다. 두 위치 모두 ROS2 비의존이라는 원칙은 동일하게 지켜지며, `domain` 패키지 하나만 import하면 FSM+포트+Fake어댑터가 다 따라오는 게 실제로 더 편해서 이렇게 정착했습니다.
 
 > **lint 범위**: `pyproject.toml`이 `ros2_ws/src`의 MentorPi 벤더 패키지와 `third_party/`를 ruff·black 대상에서 제외합니다. 검사 대상은 `domain/`, `tests/`, `ros2_ws/src/grippers_*` 입니다. 벤더 코드까지 검사하면 963건이 잡히지만, 우리 코드만 보면 자동수정으로 전부 해소됩니다.
-```
-
-> **설계 초안과의 차이**: 최초 설계에선 `ports/`, `adapters/`가 저장소 최상위였는데, 실제 구현에서는 `domain/ports/`, `domain/adapters/`로 domain 아래 중첩시켰습니다. 두 위치 모두 ROS2 비의존이라는 원칙은 동일하게 지켜지며, `domain` 패키지 하나만 import하면 FSM+포트+Fake어댑터가 다 따라오는 게 실제로 더 편해서 이렇게 정착했습니다.
 
 ---
 
@@ -931,7 +934,8 @@ LeRobot 기반 구성 요소는 **Apache License 2.0** 을 따릅니다. 해당 
 
 - [LeRobot / SO-ARM101](https://github.com/huggingface/lerobot)
 - [ROS 2 Humble Documentation](https://docs.ros.org/en/humble/)
-- [Raspberry Pi AI HAT+ (Hailo-8L)](https://www.raspberrypi.com/products/ai-hat/)
+- [Hailo-10H (M.2 생성형 AI 가속기)](https://hailo.ai/products/ai-accelerators/hailo-10h-m2-generative-ai-acceleration-module/)
+- [Raspberry Pi M.2 HAT+ (가속기 캐리어)](https://www.raspberrypi.com/products/m2-hat-plus/)
 - [Intel RealSense SDK](https://github.com/IntelRealSense/librealsense)
 - [PlantUML Sequence Diagram](https://plantuml.com/sequence-diagram)
 - [PlantUML Class Diagram](https://plantuml.com/class-diagram)
