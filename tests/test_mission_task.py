@@ -1,13 +1,16 @@
 import threading
-from domain.task.mission_task import MissionTask, Ports
-from domain.adapters.fake.fake_base import FakeBase
+
 from domain.adapters.fake.fake_arm import FakeArm
+from domain.adapters.fake.fake_base import FakeBase
 from domain.adapters.fake.fake_perception import FakePerception
+from domain.task.mission_task import MissionTask, Ports
 
 
 def _ports(estop=None):
     return Ports(
-        base=FakeBase(), arm=FakeArm(), perception=FakePerception(),
+        base=FakeBase(),
+        arm=FakeArm(),
+        perception=FakePerception(),
         estop=estop or threading.Event(),
     )
 

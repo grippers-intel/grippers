@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from domain.ports.base_driver import BaseDriver
 
 

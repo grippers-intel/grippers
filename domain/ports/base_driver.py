@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
 """BaseDriver 포트 — ROS2를 전혀 모르는 순수 ABC.
 grippers_base의 Ros2MecanumBase가 이걸 구현한다."""
+
 from abc import ABC, abstractmethod
 
 

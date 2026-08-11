@@ -1,5 +1,5 @@
 @startuml Grippers_Architecture
-title Grippers — Ports & Adapters
+title Grippers — Ports & Adapters (main 브랜치 구현 기준)
 
 skinparam classAttributeIconSize 0
 skinparam shadowing false
@@ -13,153 +13,208 @@ skinparam note {
 }
 
 ' ============================================================
-package "Domain :: Values" #E8F4FD {
-  class Pose2D {
-    - x : Meters
-    - y : Meters
-    - theta : Radians
+package "domain :: values" #E8F4FD {
+  class Pose2D <<dataclass>> {
+    + x : float
+    + y : float
+    + theta : float
   }
-  class PoseInFrame {
-    - frame_id : FrameId
-    - pose : Pose3D
-    + transformed_to(frame, tf) : PoseInFrame
-  }
-  class JointPositions {
-    - angles : tuple<Radians>
-    + within(limits) : bool
-  }
-  class ObjectDims {
-    - length : Meters
-    - width : Meters
-    + projected_height(phi) : Meters
-  }
-  enum GripperState {
-    OPEN
-    CLOSED
+  class Point3 <<dataclass>> {
+    + x : float
+    + y : float
+    + z : float
   }
 }
 
 ' ============================================================
-package "Domain :: Task (FSM)" #FFF4E5 {
-  abstract class TaskState {
-    + {abstract} execute(ctx) : TaskState
-    + {abstract} name() : str
-  }
-  class Idle
-  class TransitOut
-  class LightAdapt
-  class Docking
-  class Identify
-  class Grasp
-  class PosePlan
-  class NarrowExit
-  class Return
-  class Release
-
-  TaskState <|-- Idle
-  TaskState <|-- TransitOut
-  TaskState <|-- LightAdapt
-  TaskState <|-- Docking
-  TaskState <|-- Identify
-  TaskState <|-- Grasp
-  TaskState <|-- PosePlan
-  TaskState <|-- NarrowExit
-  TaskState <|-- Return
-  TaskState <|-- Release
-
-  class MissionOrchestrator {
-    - state : TaskState
-    - ctx : TaskContext
-    + step() : void
-  }
-  class TaskContext
-  class ReorientationPlanner {
-    + solve_phi(dims, gap, margin) : Radians?
-    --
-    해 없으면 None → 통과 불가 판정
+package "domain :: task" #FFF4E5 {
+  class Ports <<dataclass>> {
+    + base : BaseDriver
+    + arm : ArmDriver
+    + perception : Perception
+    + estop : Event
   }
 
-  MissionOrchestrator *-- TaskState
-  MissionOrchestrator *-- TaskContext
-  PosePlan ..> ReorientationPlanner
+  class MissionTask {
+    - ports : Ports
+    + run() : Generator<State>
+  }
+
+  abstract class State {
+    + name : str
+    + {abstract} execute(ports) : State
+  }
+
+  class IdleState
+  class TransitOutState {
+    + MAX_RETRIES = 5
+    - target : Pose2D
+    - retries : int
+  }
+  class LightAdaptState
+  class DockingState
+  class IdentifyState {
+    - retries : int
+  }
+  class GraspState {
+    - target_pose
+  }
+  class PosePlanState {
+    - _solve_phi(h_gap) : float
+  }
+  class NarrowExitState {
+    - phi : float
+    - _phi_to_xyz(phi) : list
+  }
+  class ReturnState
+  class ReleaseState
+
+  class TransitOutFailedState
+  class IdentifyFailedState
+  class GraspFailedState
+  class NarrowExitFailedState
+  class EstopState
+
+  State <|-- IdleState
+  State <|-- TransitOutState
+  State <|-- LightAdaptState
+  State <|-- DockingState
+  State <|-- IdentifyState
+  State <|-- GraspState
+  State <|-- PosePlanState
+  State <|-- NarrowExitState
+  State <|-- ReturnState
+  State <|-- ReleaseState
+  State <|-- TransitOutFailedState
+  State <|-- IdentifyFailedState
+  State <|-- GraspFailedState
+  State <|-- NarrowExitFailedState
+  State <|-- EstopState
+
+  MissionTask *-- Ports
+  MissionTask ..> State : yield
 }
 
-ReorientationPlanner ..> ObjectDims
+TransitOutState ..> Pose2D
 
 ' ============================================================
-package "Ports" #EDE7F6 {
-  interface CommandInterpreter {
-    + parse(text) : MissionSpec
-  }
-  interface Perception {
-    + detect_target() : PoseInFrame
-    + measure_object_dims() : ObjectDims
-    + measure_gap() : Meters
-    + detect_marker(id) : PoseInFrame
-    + set_light_profile(domain)
-    + monitor_clearance() : Meters
-  }
-  interface TransformProvider {
-    + lookup(src, dst) : Transform
-  }
+package "domain :: ports (ABC)" #EDE7F6 {
   interface BaseDriver {
-    + drive(twist)
-    + strafe(dy)
-    + align_to_centerline()
-    + stop()
+    + drive_to(target) : bool
+    + align_to_centerline() : float
+    + stop() : None
   }
   interface ArmDriver {
-    + move_to(jp : JointPositions)
-    + move_to_cartesian(p : PoseInFrame)
-    + reorient(phi : Radians)
-    + set_gripper(g : GripperState)
-    + load() : float
-    + hold_position()
+    + move_to_cartesian(xyz, grip, down) : bool
+    + set_gripper(deg) : None
+    + get_load() : float
+  }
+  interface Perception {
+    + detect_target() : (found, pose, dims)
+    + measure_gap() : object
+    + set_light_profile(profile) : bool
+    + monitor_clearance() : object
   }
 }
 
-TaskContext --> CommandInterpreter
-TaskContext --> Perception
-TaskContext --> TransformProvider
-TaskContext --> BaseDriver
-TaskContext --> ArmDriver
+Ports --> BaseDriver
+Ports --> ArmDriver
+Ports --> Perception
+Perception ..> Point3
 
 ' ============================================================
-package "Adapters :: Real" #E8F5E9 {
-  class VlaLanguageAdapter
-  class LearnedPerception
-  class Ros2TfProvider
-  class Ros2MecanumBase
-  class FeetechArm
+package "domain :: adapters.real" #E8F5E9 {
+  class Ros2MecanumBase {
+    - _node
+    - _drive_client : ActionClient
+    - _align_client
+    - _stop_client
+  }
+  class Ros2ArmDriver {
+    - _node
+    - _move_client : ActionClient
+    - _gripper_client
+    - _load_client
+  }
+  class Ros2Perception {
+    - _node
+    - _detect_client
+    - _gap_client
+    - _light_client
+    - _clearance_client
+  }
 }
 
-package "Adapters :: Fake (CI)" #FCE4EC {
-  class ScriptedInterpreter
-  class ScriptedPerception
-  class StubTfProvider
-  class FakeBase
-  class FakeArm
+package "domain :: adapters.fake" #FCE4EC {
+  class FakeBase {
+    - _arrive : bool
+  }
+  class FakeArm {
+    - _move_ok : bool
+  }
+  class FakePerception {
+    - _found : bool
+    - _contact_risk : bool
+    - _h_gap : float
+  }
 }
 
-CommandInterpreter <|.. VlaLanguageAdapter
-CommandInterpreter <|.. ScriptedInterpreter
-Perception <|.. LearnedPerception
-Perception <|.. ScriptedPerception
-TransformProvider <|.. Ros2TfProvider
-TransformProvider <|.. StubTfProvider
 BaseDriver <|.. Ros2MecanumBase
 BaseDriver <|.. FakeBase
-ArmDriver <|.. FeetechArm
+ArmDriver <|.. Ros2ArmDriver
 ArmDriver <|.. FakeArm
+Perception <|.. Ros2Perception
+Perception <|.. FakePerception
+
+' ============================================================
+package "ros2_ws :: nodes" #ECEFF1 {
+  class MissionOrchestratorNode {
+    - _state_pub
+    - _estop_flag : Event
+    - _fsm_thread : Thread
+    + _run_fsm()
+  }
+  class BaseDriverNode {
+    - _cmd_vel_pub
+    - _drive_action_server
+  }
+  class ArmDriverNode {
+    - _move_action_server
+  }
+  class PerceptionNode {
+    - _latest_frame
+    - _bridge : CvBridge
+  }
+}
+
+MissionOrchestratorNode ..> MissionTask
+MissionOrchestratorNode ..> Ros2MecanumBase
+MissionOrchestratorNode ..> Ros2ArmDriver
+MissionOrchestratorNode ..> Ros2Perception
+
+Ros2MecanumBase ..> BaseDriverNode : action / service
+Ros2ArmDriver ..> ArmDriverNode : action / service
+Ros2Perception ..> PerceptionNode : service
 
 note bottom of FakeBase
   하드웨어 없이 CI에서
   전체 미션 파이프라인 실행
 end note
 
-note right of PoseInFrame
-  프레임 ID를 타입에 담아
-  좌표계 혼동을 차단
+note right of PosePlanState
+  _solve_phi() 는 현재 0.0 고정 (스텁)
+  자세 재조정 수식 미구현 (#47)
+end note
+
+note bottom of PerceptionNode
+  비전 파이프라인 미구현.
+  monitor_clearance 는 안전 원칙에 따라
+  항상 contact_risk=True 반환
+end note
+
+note right of BaseDriverNode
+  /cmd_vel 발행 주체는
+  이 노드 하나뿐
 end note
 
 @enduml

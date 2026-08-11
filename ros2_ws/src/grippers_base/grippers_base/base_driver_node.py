@@ -1,24 +1,25 @@
-# -*- coding: utf-8 -*-
 """base_driver_node — MentorPi mecanum 베이스 제어 노드.
 controller/odom_publisher_node가 이미 만들어둔 /cmd_vel(안전 클램프) →
 /odom(ekf 필터링)을 그대로 재사용. 새 모터 제어는 안 함, 목표 좌표까지의
 proportional 제어 루프 + DriveTo 액션 서버만 얹는다."""
+
 import math
+
 import rclpy
-from rclpy.node import Node
-from rclpy.action import ActionServer
-from rclpy.callback_groups import ReentrantCallbackGroup
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
-from std_srvs.srv import Trigger
 from grippers_interfaces.action import DriveTo
 from grippers_interfaces.srv import AlignToCenterline
+from nav_msgs.msg import Odometry
+from rclpy.action import ActionServer
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.node import Node
+from std_srvs.srv import Trigger
 
-ARRIVE_XY_TOL = 0.03      # m
-ARRIVE_YAW_TOL = 0.05     # rad
+ARRIVE_XY_TOL = 0.03  # m
+ARRIVE_YAW_TOL = 0.05  # rad
 KP_LINEAR = 0.6
 KP_ANGULAR = 1.2
-MAX_LINEAR = 0.2          # app_cmd_vel_callback 클램프와 동일
+MAX_LINEAR = 0.2  # app_cmd_vel_callback 클램프와 동일
 MAX_ANGULAR = 0.5
 
 
@@ -30,28 +31,34 @@ def _yaw_from_quat(q):
 
 class BaseDriverNode(Node):
     def __init__(self):
-        super().__init__('base_driver_node')
+        super().__init__("base_driver_node")
         cb_group = ReentrantCallbackGroup()
 
-        self._cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
+        self._cmd_vel_pub = self.create_publisher(Twist, "cmd_vel", 10)
         self._pose = None  # (x, y, yaw)
 
-        self.create_subscription(Odometry, 'odom', self._on_odom, 10)
+        self.create_subscription(Odometry, "odom", self._on_odom, 10)
 
         self._drive_action_server = ActionServer(
-            self, DriveTo, 'base_driver/drive_to',
+            self,
+            DriveTo,
+            "base_driver/drive_to",
             execute_callback=self._execute_drive_to,
             callback_group=cb_group,
         )
         self.create_service(
-            AlignToCenterline, 'base_driver/align',
-            self._on_align, callback_group=cb_group,
+            AlignToCenterline,
+            "base_driver/align",
+            self._on_align,
+            callback_group=cb_group,
         )
         self.create_service(
-            Trigger, 'base_driver/stop',
-            self._on_stop, callback_group=cb_group,
+            Trigger,
+            "base_driver/stop",
+            self._on_stop,
+            callback_group=cb_group,
         )
-        self.get_logger().info('base_driver_node ready')
+        self.get_logger().info("base_driver_node ready")
 
     def _on_odom(self, msg: Odometry):
         p = msg.pose.pose.position
@@ -115,6 +122,7 @@ def main(args=None):
     rclpy.init(args=args)
     node = BaseDriverNode()
     from rclpy.executors import MultiThreadedExecutor
+
     executor = MultiThreadedExecutor()
     executor.add_node(node)
     try:
@@ -124,5 +132,5 @@ def main(args=None):
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────
+# lint / format 설정
+#
+# ros2_ws/src 아래 MentorPi 벤더 스택과 third_party 서브모듈은
+# 우리가 작성한 코드가 아니므로 검사 대상에서 제외한다.
+# 검사 대상: domain/, tests/, ros2_ws/src/grippers_*
+# ─────────────────────────────────────────────────────────
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+exclude = [
+    ".git",
+    "third_party",
+    # MentorPi 벤더 패키지 (수정하지 않음)
+    "ros2_ws/src/app",
+    "ros2_ws/src/bringup",
+    "ros2_ws/src/calibration",
+    "ros2_ws/src/driver",
+    "ros2_ws/src/example",
+    "ros2_ws/src/interfaces",
+    "ros2_ws/src/multi",
+    "ros2_ws/src/navigation",
+    "ros2_ws/src/peripherals",
+    "ros2_ws/src/simulations",
+    "ros2_ws/src/slam",
+    "ros2_ws/src/yolov5_ros2",
+    # ament 자동 생성 테스트 (copyright/flake8/pep257)
+    "**/test/test_copyright.py",
+    "**/test/test_flake8.py",
+    "**/test/test_pep257.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+# black은 정규식 하나로 받는다 (re.VERBOSE — 공백 무시).
+# ruff의 exclude와 같은 범위를 유지할 것.
+extend-exclude = '''
+/(
+    third_party
+  | ros2_ws/src/(app|bringup|calibration|driver|example|interfaces|multi|navigation|peripherals|simulations|slam|yolov5_ros2)
+)/
+| .*/test/test_(copyright|flake8|pep257)\.py
+'''

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from abc import ABC, abstractmethod
 
 
@@ -12,8 +11,7 @@ class Perception(ABC):
         """-> object(h_gap: float, centerline: Pose2D)"""
 
     @abstractmethod
-    def set_light_profile(self, profile: str) -> bool:
-        ...
+    def set_light_profile(self, profile: str) -> bool: ...
 
     @abstractmethod
     def monitor_clearance(self):

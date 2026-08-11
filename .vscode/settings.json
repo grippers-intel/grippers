@@ -1,0 +1,55 @@
+{
+  // ─────────────────────────────────────────────────────────
+  // 팀 공통 에디터 설정 — 저장 시 자동 포맷
+  //
+  // 저장할 때마다 ruff/black이 pyproject.toml 규칙대로 정리하므로
+  // 커밋 전에 별도로 lint를 실행할 필요가 없습니다.
+  // 열려 있는 파일만 대상이라 벤더 코드는 건드리지 않습니다.
+  // ─────────────────────────────────────────────────────────
+
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
+  },
+
+  // 줄 끝 공백 제거 · 파일 끝 개행 — pre-commit 훅과 동일한 규칙
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "files.trimFinalNewlines": true,
+
+  // Windows/Linux 혼용 팀이라 개행을 LF로 고정 (CRLF 차이로 인한 diff 방지)
+  "files.eol": "\n",
+
+  // pyproject.toml의 line-length = 100 과 맞춤
+  "editor.rulers": [100],
+
+  // domain/ 을 import 경로로 인식 (테스트·자동완성용)
+  "python.analysis.extraPaths": ["."],
+
+  // 벤더 코드는 검색·탐색에서 제외해 작업 시야를 좁힘
+  // (파일이 사라지는 게 아니라 검색 결과에서만 빠집니다)
+  "search.exclude": {
+    "**/third_party": true,
+    "ros2_ws/src/app": true,
+    "ros2_ws/src/bringup": true,
+    "ros2_ws/src/calibration": true,
+    "ros2_ws/src/driver": true,
+    "ros2_ws/src/example": true,
+    "ros2_ws/src/interfaces": true,
+    "ros2_ws/src/multi": true,
+    "ros2_ws/src/navigation": true,
+    "ros2_ws/src/peripherals": true,
+    "ros2_ws/src/simulations": true,
+    "ros2_ws/src/slam": true,
+    "ros2_ws/src/yolov5_ros2": true,
+    "ros2_ws/build": true,
+    "ros2_ws/install": true,
+    "ros2_ws/log": true
+  },
+
+  "yaml.format.enable": true
+}
