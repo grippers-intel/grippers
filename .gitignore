@@ -195,9 +195,9 @@ cython_debug/
 .abstra/
 
 # Visual Studio Code
-#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
+#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore
 #   that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#   and can be added to the global gitignore or merged into this file. However, if you prefer, 
+#   and can be added to the global gitignore or merged into this file. However, if you prefer,
 #   you could uncomment the following to ignore the entire vscode folder
 # .vscode/
 # Temporary file for partial code execution
@@ -221,11 +221,11 @@ __marimo__/
 /notes/
 *.local.md
 *.draft.md
- 
+
 # 환경
 .env
 .env.*
- 
+
 # 학습 산출물 — 저장소에 넣지 않음
 *.pt
 *.pth
@@ -234,7 +234,7 @@ __marimo__/
 /data/
 /runs/
 /datasets/
- 
+
 # ROS2
 /ros2_ws/build/
 /ros2_ws/install/
@@ -244,3 +244,8 @@ __marimo__/
 ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
+
+# 팀 공통 에디터 설정만 공유, 개인 설정은 제외
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
