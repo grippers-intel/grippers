@@ -358,8 +358,8 @@ note bottom of VoiceIoNode
 end note
 
 note bottom of PerceptionNode
-  <b>BLACK 상자는 HSV 탐색 불가.</b>
-  H 무의미 · S~0 -> V 임계값만 남고
+  <b>BLACK 상자는 LAB 탐색 불가.</b>
+  a*~0 · b*~0 -> L* 임계값만 남고
   그림자와 구분되지 않는다.
   밝은 테두리 / ArUco 로 대체할 것.
 

@@ -55,7 +55,7 @@ sequenceDiagram
 
             Note over T,A: ⑤ TRANSPORT
             T->>P: find_box(rule[cls])
-            P-->>T: BoxObservation (색 랜드마크 · HSV)
+            P-->>T: BoxObservation (색 랜드마크 · LAB)
         Note right of P: ⚫ BLACK 상자는 밝은 테두리/ArUco 로 탐색
             T->>B: drive_to(상자 앞) → align_to_box()
             B-->>T: yaw 오차 이내
