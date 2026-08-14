@@ -28,7 +28,6 @@
 
 - **FSM 전이는 [`state_machine.md`](design/state_machine.md) 가 단일 소스** — 다른 문서에 중복 정의 금지
 - **[`hld.md`](design/hld.md) · [`error_budget.md`](design/error_budget.md) 는 주제 변경 이전 기준** — 참조 전 확인
-- **`vla_interface.md` 는 삭제 대상** — 모듈 명칭 변경으로 무효, 명세는 `hld.md` 로 일원화
 
 ---
 

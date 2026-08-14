@@ -212,7 +212,7 @@ float64 elapsed_s     # 현재 미채움
 
 ### 4.6 VLA 텐서 인터페이스
 
-→ 별도 문서(`vla_interface.md`)는 삭제되었습니다. 모듈 명칭을 `perception` / `language` / `action` 으로 바꾸면서 내용이 무효가 되었고, 인터페이스 명세는 본 문서 §4 로 일원화합니다.
+모듈 명칭을 `VLA-V/L/A` 에서 `perception` / `language` / `action` 으로 바꾸면서 기존 V/L/A 텐서 명세는 무효가 되었습니다. 인터페이스 정의는 §4.1–4.5 가 단일 소스입니다.
 
 ---
 

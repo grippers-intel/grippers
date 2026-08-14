@@ -393,10 +393,6 @@ grippers/
 > **탭으로 표시**되고, `CONTRIBUTING.md` 는 이슈·PR 생성 화면에 자동 링크됩니다.
 > 그래서 이 둘만 `docs/` 가 아니라 루트에 둡니다.
 
-> ⚠️ **`docs/vla_interface.md` 는 삭제 대상입니다.** 모듈 명칭을 `VLA-V/L/A` 에서
-> `perception` / `language` / `action` 으로 바꾸면서 내용이 무효가 되었고,
-> 인터페이스 명세는 `hld.md` 로 일원화합니다.
-
 > **lint 범위**: `pyproject.toml` 이 MentorPi 벤더 패키지와 `third_party/` 를 ruff·black 대상에서 제외합니다.
 > 검사 대상은 `domain/`, `tests/`, `ros2_ws/src/grippers_*` 입니다.
 
