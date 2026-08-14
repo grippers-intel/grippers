@@ -1,0 +1,372 @@
+@startuml Grippers_Architecture
+title Grippers — Ports & Adapters (to-be · 8/14 freeze 대상)
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam defaultFontColor #1F2937
+
+skinparam note {
+  BackgroundColor #FFF8DC
+  BorderColor #D6C070
+  FontColor #000000
+}
+
+legend top left
+  <b>이 다이어그램은 to-be 설계입니다.</b>
+  현재 main 브랜치 코드는 아직 이전 주제(암실 반출) 기준입니다.
+  as-is → to-be 마이그레이션은 class_diagram.md §5 참조.
+endlegend
+
+' ============================================================
+package "domain :: values" #E8F4FD {
+  enum ObjectClass {
+    GABE
+    CHESS_PIECE
+  }
+  enum BoxColor {
+    BLACK
+    RED
+    BLUE
+    GREEN
+  }
+  enum MissionMode {
+    TIDY
+    FETCH
+  }
+
+  class Pose2D <<dataclass>> {
+    + x_m : float
+    + y_m : float
+    + theta_rad : float
+  }
+  class Point3 <<dataclass>> {
+    + x_m : float
+    + y_m : float
+    + z_m : float
+  }
+  class Detection <<dataclass>> {
+    + track_id : int
+    + cls : ObjectClass
+    + pose_m : Point3
+    + dims_m : Point3
+    + yaw_rad : float
+    + confidence : float
+  }
+  class BoxObservation <<dataclass>> {
+    + color : BoxColor
+    + pose_m : Pose2D
+    + opening_mm : float
+    + long_axis_rad : float
+  }
+  class Clearance <<dataclass>> {
+    + front_m : float
+    + left_m : float
+    + right_m : float
+    + contact_risk : bool
+  }
+  class MissionSpec <<dataclass>> {
+    + mode : MissionMode
+    + target_cls : ObjectClass
+    + placement_rule : dict
+    + raw_text : str
+  }
+  class MissionContext <<dataclass>> {
+    + spec : MissionSpec
+    + done_ids : frozenset
+    + held_ids : frozenset
+    + grasp_attempts : int
+    + complete(id) : MissionContext
+    + hold(id) : MissionContext
+    + retry() : MissionContext
+  }
+
+  Detection --> ObjectClass
+  Detection --> Point3
+  BoxObservation --> BoxColor
+  BoxObservation --> Pose2D
+  MissionSpec --> MissionMode
+  MissionContext --> MissionSpec
+}
+
+note right of MissionContext
+  <b>불변 객체.</b>
+  complete/hold/retry 는 새 인스턴스를 반환한다.
+  루프에서 재시도 카운터를 가변으로 두면
+  누가 언제 증가시켰는지 추적 불가.
+end note
+
+note bottom of Pose2D
+  <b>단위는 필드명에 박는다.</b>
+  _m (길이) · _rad (각도) · _mm (개구 폭)
+  변환은 어댑터 경계에서 한 번만.
+end note
+
+' ============================================================
+package "domain :: ports (ABC)" #EDE7F6 {
+  interface BaseDriver {
+    + drive_to(target) : bool
+    + align_to_box(box) : float
+    + stop() : None
+  }
+  interface ArmDriver {
+    + move_to_cartesian(xyz_m, down) : bool
+    + set_gripper(width_mm) : None
+    + get_load() : float
+    + reorient(phi_rad) : bool
+    + fold_to_cradle() : bool
+    + hold_position() : None
+  }
+  interface Perception {
+    + scan_floor() : list<Detection>
+    + find_box(color) : BoxObservation
+    + measure_opening(box) : float
+    + monitor_clearance() : Clearance
+  }
+  interface CommandInterpreter {
+    + parse(text) : MissionSpec
+    + confirm_phrase(spec) : str
+  }
+}
+
+Perception ..> Detection
+Perception ..> BoxObservation
+Perception ..> Clearance
+BaseDriver ..> Pose2D
+CommandInterpreter ..> MissionSpec
+
+note right of CommandInterpreter
+  <b>신규 포트 (4번째).</b>
+  자연어가 placement_rule 을 실제로 바꾸므로
+  도메인 로직이며 포트 뒤에 있어야 한다.
+  "체스말은 검은 상자에" -> rule[CHESS_PIECE]=BLACK
+end note
+
+note right of ArmDriver
+  <b>set_gripper 단위 변경.</b>
+  deg -> width_mm (단위 규약 준수)
+  서보 각도 변환은 FeetechArm 내부
+  캘리브레이션 테이블에서 처리.
+end note
+
+' ============================================================
+package "domain :: task" #FFF4E5 {
+  class Ports <<dataclass>> {
+    + base : BaseDriver
+    + arm : ArmDriver
+    + perception : Perception
+    + interpreter : CommandInterpreter
+    + estop : Event
+  }
+
+  class MissionTask {
+    - ports : Ports
+    + run() : Generator<State>
+  }
+
+  abstract class State {
+    + name : str
+    + {abstract} execute(ports) : State
+  }
+
+  class IdleState
+  class ScanState {
+    - MAX_RESCAN = 3
+  }
+  class SelectState {
+    - _pick(detections) : Detection
+  }
+  class ApproachState
+  class GraspState {
+    - MAX_GRASP_RETRY = 3
+    - LOAD_THRESHOLD = 0.15
+  }
+  class TransportState
+  class PosePlanState {
+    - _solve_phi(dims_m, opening_mm) : float
+  }
+  class InsertState {
+    - phi_rad : float
+  }
+  class DeliverState
+  class HandoverState
+  class RejectState {
+    - reason : str
+  }
+  class DoneState
+  class EstopState
+
+  State <|-- IdleState
+  State <|-- ScanState
+  State <|-- SelectState
+  State <|-- ApproachState
+  State <|-- GraspState
+  State <|-- TransportState
+  State <|-- PosePlanState
+  State <|-- InsertState
+  State <|-- DeliverState
+  State <|-- HandoverState
+  State <|-- RejectState
+  State <|-- DoneState
+  State <|-- EstopState
+
+  MissionTask *-- Ports
+  MissionTask ..> State : yield
+}
+
+State ..> MissionContext : ctx 로 보유
+
+Ports --> BaseDriver
+Ports --> ArmDriver
+Ports --> Perception
+Ports --> CommandInterpreter
+
+note right of ScanState
+  <b>루프의 유일한 진입점.</b>
+  INSERT / HANDOVER / REJECT / 각종 실패가
+  모두 여기로 되돌아온다.
+  전이 그래프는 state_machine.md 가 단일 소스.
+end note
+
+note right of PosePlanState
+  H_proj = L*|cos φ| + w*|sin φ| <= W_open - margin
+  -> φ >= 0.83 rad (48°)
+
+  <b>보류 — 대상 클래스 미정.</b>
+  긴 물체가 정리 대상에서 제외되어
+  실행할 물체가 없다. 구조는 유지하며
+  미배정 상자에 배정 시 즉시 부활.
+end note
+
+note bottom of GraspState
+  재시도는 상태 변경이 아니라
+  <b>새 인스턴스 반환</b>으로 표현.
+  소진 시 미션 종료가 아니라
+  held_ids 등록 후 SCAN 복귀.
+end note
+
+' ============================================================
+package "domain :: adapters.real" #E8F5E9 {
+  class Ros2MecanumBase {
+    - _node
+    - _drive_client : ActionClient
+  }
+  class FeetechArm {
+    - _node
+    - _move_client : ActionClient
+  }
+  class LearnedPerception {
+    - _node
+    - _scan_client
+  }
+  class LanguageAdapter {
+    - _node
+    - _parser
+  }
+}
+
+package "domain :: adapters.fake" #FCE4EC {
+  class FakeBase {
+    - _arrive : bool
+  }
+  class FakeArm {
+    - _move_ok : bool
+    - _load : float
+  }
+  class ScriptedPerception {
+    - _script : list<list<Detection>>
+  }
+  class ScriptedInterpreter {
+    - _table : dict<str, MissionSpec>
+  }
+}
+
+BaseDriver <|.. Ros2MecanumBase
+BaseDriver <|.. FakeBase
+ArmDriver <|.. FeetechArm
+ArmDriver <|.. FakeArm
+Perception <|.. LearnedPerception
+Perception <|.. ScriptedPerception
+CommandInterpreter <|.. LanguageAdapter
+CommandInterpreter <|.. ScriptedInterpreter
+
+note bottom of ScriptedPerception
+  <b>_script 는 사이클별 검출 목록.</b>
+  같은 목록을 계속 반환하도록 설정해
+  무한 루프 방지 로직을 CI에서 검증한다.
+  루프 FSM의 최대 리스크는 하드웨어 없이 잡힌다.
+end note
+
+' ============================================================
+package "ros2_ws :: nodes" #ECEFF1 {
+  class MissionOrchestratorNode {
+    - _state_pub
+    - _estop_flag : Event
+    - _fsm_thread : Thread
+  }
+  class PerceptionNode {
+    - _bridge : CvBridge
+  }
+  class InferenceNode {
+    - _device : HailoDevice
+  }
+  class BaseDriverNode {
+    - _cmd_vel_pub
+    - _drive_action_server
+  }
+  class ArmDriverNode {
+    - _move_action_server
+  }
+  class VoiceIoNode {
+    - _stt : SttEngine
+    - _command_pub
+  }
+  class HudNode {
+    - _overlay_pub
+  }
+}
+
+MissionOrchestratorNode ..> MissionTask
+MissionOrchestratorNode ..> Ros2MecanumBase
+MissionOrchestratorNode ..> FeetechArm
+MissionOrchestratorNode ..> LearnedPerception
+MissionOrchestratorNode ..> LanguageAdapter
+
+Ros2MecanumBase ..> BaseDriverNode : action / service
+FeetechArm ..> ArmDriverNode : action / service
+LearnedPerception ..> PerceptionNode : service
+InferenceNode ..> PerceptionNode : /detections
+VoiceIoNode ..> MissionOrchestratorNode : /command (String)
+
+note right of BaseDriverNode
+  <b>/cmd_vel 발행 주체는 이 노드 하나뿐.</b>
+end note
+
+note right of InferenceNode
+  Hailo-10H (AI HAT+ 2) 독점 소유.
+  분할 기준은 기능이 아니라
+  <b>하드웨어 소유</b>.
+  성능 예산은 26 TOPS 급으로 잡을 것
+  (40 TOPS 는 INT4 LLM/VLM 기준).
+end note
+
+note bottom of VoiceIoNode
+  <b>도메인 코드 0줄 변경.</b>
+  기존 명령 토픽에 텍스트를 발행할 뿐.
+  TTS 는 /mission/state 구독.
+  USB 오디오 필수 — Pi 5 에 3.5mm 잭 없음.
+end note
+
+note bottom of PerceptionNode
+  <b>BLACK 상자는 LAB 탐색 불가.</b>
+  a*~0 · b*~0 -> L* 임계값만 남고
+  그림자와 구분되지 않는다.
+  밝은 테두리 / ArUco 로 대체할 것.
+
+  <b>안전 기본값 — 모르면 멈춘다.</b>
+  monitor_clearance 는 실측 전까지
+  항상 contact_risk=True 반환.
+  scan_floor 는 빈 목록 -> DONE.
+end note
+
+@enduml

@@ -212,7 +212,7 @@ float64 elapsed_s     # 현재 미채움
 
 ### 4.6 VLA 텐서 인터페이스
 
-→ [`vla_interface.md`](vla_interface.md). 본 문서는 링크만 유지합니다.
+모듈 명칭을 `VLA-V/L/A` 에서 `perception` / `language` / `action` 으로 바꾸면서 기존 V/L/A 텐서 명세는 무효가 되었습니다. 인터페이스 정의는 §4.1–4.5 가 단일 소스입니다.
 
 ---
 
@@ -358,7 +358,7 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 
 > **10H의 "40 TOPS"를 비전 예산에 그대로 넣지 마십시오.** 40 TOPS는 INT4 LLM/VLM 기준 수치이고, **비전 처리량은 벤더 설명 기준 26 TOPS급(Hailo-8) 수준**입니다. 이 표의 검출 지연은 26 TOPS급을 가정해 세웁니다.
 
-측정치는 [`measurements.md`](measurements.md) §3 에서 올라옵니다. HEF 컴파일 결과(양자화 정확도 손실 포함)가 이 표의 입력이므로, §3 이 비어 있는 동안은 이 예산도 미확정입니다. **HEF 추론 검증이 8/25로 이월**되어(§9 #11) 이 표의 확정 시점도 M3 초반으로 밀립니다.
+측정치는 [`measurements.md`](../ops/measurements.md) §3 에서 올라옵니다. HEF 컴파일 결과(양자화 정확도 손실 포함)가 이 표의 입력이므로, §3 이 비어 있는 동안은 이 예산도 미확정입니다. **HEF 추론 검증이 8/25로 이월**되어(§9 #11) 이 표의 확정 시점도 M3 초반으로 밀립니다.
 
 ---
 
@@ -391,11 +391,10 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 | [`sequences.md`](sequences.md) | 시퀀스 다이어그램 |
 | [`class_diagram.md`](class_diagram.md) | 클래스 다이어그램 — 포트·State·노드 계층 (Mermaid) |
 | [`architecture.puml`](architecture.puml) | 위와 같은 구조의 PlantUML 버전 |
-| [`vla_interface.md`](vla_interface.md) | V/L/A 텐서·좌표계 |
 | [`error_budget.md`](error_budget.md) | 오차 전파 |
-| [`rejected_designs.md`](rejected_designs.md) | 채택하지 않은 설계 |
-| [`measurements.md`](measurements.md) | 실측 데이터 |
-| [`purchase_ledger.md`](purchase_ledger.md) | 구매 장부 |
+| [`rejected_designs.md`](../ops/rejected_designs.md) | 채택하지 않은 설계 |
+| [`measurements.md`](../ops/measurements.md) | 실측 데이터 |
+| [`purchase_ledger.md`](../ops/purchase_ledger.md) | 구매 장부 |
 
 ---
 
