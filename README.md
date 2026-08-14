@@ -15,10 +15,10 @@
 > 하드웨어·아키텍처는 유지, 미션 시나리오와 FSM 구조가 바뀌었습니다.
 >
 > ⚠️ **`domain/` 코드는 아직 이전 주제 기준입니다.** 이 README는 to-be 설계이며
-> 코드 마이그레이션은 [`class_diagram.md` §5](docs/class_diagram.md) 의 PR 10건으로 진행합니다 (M2, 8/22).
+> 코드 마이그레이션은 [`class_diagram.md` §5](docs/design/class_diagram.md) 의 PR 10건으로 진행합니다 (M2, 8/22).
 >
 > 📅 **일정 조정 (8/13)** — M1 재시작으로 **범위 축소**. 파지 정책 학습을 Stretch로 강등하고
-> freeze를 2단으로 분리했습니다. → [`milestones.md`](docs/milestones.md)
+> freeze를 2단으로 분리했습니다. → [`milestones.md`](docs/ops/milestones.md)
 
 ## Table of Contents
 
@@ -98,20 +98,20 @@ README는 개요만 담고, 상세는 아래 문서로 나눠져 있습니다.
 
 | 문서 | 내용 |
 |---|---|
-| [`objects.md`](docs/objects.md) | 물체 구성 · 클래스 체계 · 3D 프린팅 체스말 · 시연 구성 |
-| [`perception.md`](docs/perception.md) | 인식 구성 — **해상도 요구사항 · 호모그래피 · 검정 상자 · 가림** |
-| [`console.md`](docs/console.md) | 노트북 관제 콘솔 — GUI · 음성 · **네트워크 리스크** |
-| [`ai_components.md`](docs/ai_components.md) | 학습 범위 · 데이터 · 가속기 선택 근거 · HEF 파이프라인 |
-| [`setup.md`](docs/setup.md) | 설치 · 실행 · 테스트 · 트러블슈팅 |
-| [`milestones.md`](docs/milestones.md) | 일정 · 미결 사항 · 리스크 · 측정 결과 |
-| [`pose_planning.md`](docs/pose_planning.md) | ⏸ 보류된 자세 재조정 설계 (재도입 절차 포함) |
+| [`objects.md`](docs/subsystems/objects.md) | 물체 구성 · 클래스 체계 · 3D 프린팅 체스말 · 시연 구성 |
+| [`perception.md`](docs/subsystems/perception.md) | 인식 구성 — **해상도 요구사항 · 호모그래피 · 검정 상자 · 가림** |
+| [`console.md`](docs/subsystems/console.md) | 노트북 관제 콘솔 — GUI · 음성 · **네트워크 리스크** |
+| [`ai_components.md`](docs/subsystems/ai_components.md) | 학습 범위 · 데이터 · 가속기 선택 근거 · HEF 파이프라인 |
+| [`setup.md`](docs/ops/setup.md) | 설치 · 실행 · 테스트 · 트러블슈팅 |
+| [`milestones.md`](docs/ops/milestones.md) | 일정 · 미결 사항 · 리스크 · 측정 결과 |
+| [`pose_planning.md`](docs/subsystems/pose_planning.md) | ⏸ 보류된 자세 재조정 설계 (재도입 절차 포함) |
 | **설계 다이어그램** | |
-| [`state_machine.md`](docs/state_machine.md) | **FSM 전이 단일 소스** |
-| [`class_diagram.md`](docs/class_diagram.md) | 값 객체 · 포트 · State · 노드 계층 · 마이그레이션 |
-| [`sequences.md`](docs/sequences.md) | 시퀀스 다이어그램 |
-| [`architecture.puml`](docs/architecture.puml) | PlantUML 버전 |
+| [`state_machine.md`](docs/design/state_machine.md) | **FSM 전이 단일 소스** |
+| [`class_diagram.md`](docs/design/class_diagram.md) | 값 객체 · 포트 · State · 노드 계층 · 마이그레이션 |
+| [`sequences.md`](docs/design/sequences.md) | 시퀀스 다이어그램 |
+| [`architecture.puml`](docs/design/architecture.puml) | PlantUML 버전 |
 
-기여 방법은 [CONTRIBUTING](CONTRIBUTING.md), 행동 규범은 [CODE_OF_CONDUCT](CODE_OF_CONDUCT.md) 참고.
+기여 방법은 [CONTRIBUTING](CONTRIBUTING.md) 참고.
 
 ---
 
@@ -150,7 +150,7 @@ README는 개요만 담고, 상세는 아래 문서로 나눠져 있습니다.
 > 실루엣이 다른데 같은 상자로 갑니다 — 색 매칭이나 대본으로는 만들 수 없는 장면이며,
 > 모델이 **범주를 배웠다는 증거**입니다.
 
-상세 → [`objects.md`](docs/objects.md)
+상세 → [`objects.md`](docs/subsystems/objects.md)
 
 ### FSM — 루프 구조
 
@@ -167,7 +167,7 @@ IDLE → SCAN ─┬─ (미처리 대상 0개) ──────────�
 **루프가 핵심입니다.** 로봇 자신의 행동으로 바뀐 바닥 상태를 매 사이클 재관측하며,
 파지에 실패해도 미션이 끝나지 않고 다음 물체로 진행합니다.
 
-전이 그래프의 단일 소스는 [`docs/state_machine.md`](docs/state_machine.md) 입니다.
+전이 그래프의 단일 소스는 [`docs/design/state_machine.md`](docs/design/state_machine.md) 입니다.
 
 ### 유즈케이스
 
@@ -212,12 +212,12 @@ IDLE → SCAN ─┬─ (미처리 대상 0개) ──────────�
 
 | | 기능 | 상세 |
 |---|---|---|
-| 🎲 | **범주 일반화** — 형상이 달라도 같은 범주면 같은 상자 | [objects](docs/objects.md) |
-| 🔁 | **재관측 루프** — 행동으로 바뀐 바닥을 매 사이클 다시 관측, 실패해도 미션 계속 | [state_machine](docs/state_machine.md) |
-| 🗣️ | **명령이 미션 파라미터를 변경** — "체스말은 검은 상자에" → `placement_rule` 갱신 | [console](docs/console.md) |
-| 🦾 | **부하 기반 파지 검증** — 힘센서 없이 서보 부하로 판정, 실패 시 재스캔 후 재시도 | [sequences](docs/sequences.md) |
-| 🖥️ | **노트북 관제 콘솔** — GUI + 음성. 실행 위치를 옮겨도 도메인 diff 0줄 | [console](docs/console.md) |
-| 📷 | **단안 인식** — 모서리 웹캠 + 바닥면 호모그래피. 깊이 카메라 없음 | [perception](docs/perception.md) |
+| 🎲 | **범주 일반화** — 형상이 달라도 같은 범주면 같은 상자 | [objects](docs/subsystems/objects.md) |
+| 🔁 | **재관측 루프** — 행동으로 바뀐 바닥을 매 사이클 다시 관측, 실패해도 미션 계속 | [state_machine](docs/design/state_machine.md) |
+| 🗣️ | **명령이 미션 파라미터를 변경** — "체스말은 검은 상자에" → `placement_rule` 갱신 | [console](docs/subsystems/console.md) |
+| 🦾 | **부하 기반 파지 검증** — 힘센서 없이 서보 부하로 판정, 실패 시 재스캔 후 재시도 | [sequences](docs/design/sequences.md) |
+| 🖥️ | **노트북 관제 콘솔** — GUI + 음성. 실행 위치를 옮겨도 도메인 diff 0줄 | [console](docs/subsystems/console.md) |
+| 📷 | **단안 인식** — 모서리 웹캠 + 바닥면 호모그래피. 깊이 카메라 없음 | [perception](docs/subsystems/perception.md) |
 | 🔌 | **전원 도메인 분리** — 팔 서보는 3S LiPo 전용, GND만 스타 접지 | — |
 
 ---
@@ -317,11 +317,11 @@ GUI 표시·문서만 도(°) 허용 — 변환은 경계에서 한 번
 
 **발주 전 확인 필수**
 
-- **웹캠 1080p** — 640×480은 먼 모서리에서 9 px로 검출 불가 → [perception](docs/perception.md)
+- **웹캠 1080p** — 640×480은 먼 모서리에서 9 px로 검출 불가 → [perception](docs/subsystems/perception.md)
 - **가베 5 cm 이상** — 기본형 3~5 cm는 검출 하한 미달
 - **바닥 파지 리치 · 그리퍼 개구 폭** — 체스말 STL이 여기 종속. 리더암 텔레오퍼레이션 30분
 
-전원 도메인·실측 항목 → [`milestones.md`](docs/milestones.md)
+전원 도메인·실측 항목 → [`milestones.md`](docs/ops/milestones.md)
 
 ---
 
@@ -331,7 +331,6 @@ GUI 표시·문서만 도(°) 허용 — 변환은 경계에서 한 번
 grippers/
 ├── README.md               # 개요 + 문서 지도
 ├── CONTRIBUTING.md         # 브랜치·PR·품질 기준        ← 이슈/PR 화면에 자동 링크
-├── CODE_OF_CONDUCT.md      # 행동 규범                  ← GitHub 탭 생성
 ├── LICENSE                 # MIT (+ LeRobot Apache 2.0 고지)  ← GitHub 탭 생성
 ├── pyproject.toml          # ruff / black 설정 — 벤더 코드는 lint 대상에서 제외
 ├── .gitignore
@@ -364,35 +363,35 @@ grippers/
 ├── third_party/
 │   └── soarm_provided_d/   # git submodule — soarm_lab (FK/IK/시뮬/실물 백엔드)
 ├── tests/                  # pytest — 하드웨어·ROS2 불필요, domain/ + Fake 어댑터만 사용
-├── docs/                   # snake_case 통일
-│   │  ── 설계 다이어그램 ──
-│   ├── state_machine.md    #   ⭐ FSM 전이 단일 소스
-│   ├── class_diagram.md    #   클래스 다이어그램 (Mermaid) + 마이그레이션 계획
-│   ├── sequences.md        #   시퀀스 다이어그램
-│   ├── architecture.puml   #   같은 구조의 PlantUML 버전
-│   │  ── 서브시스템 ──
-│   ├── objects.md          #   물체 구성 · 클래스 체계 · 3D 프린팅 · 시연 구성
-│   ├── perception.md       #   인식 — 해상도 · 호모그래피 · 검정 상자 · 가림
-│   ├── console.md          #   노트북 관제 콘솔 — GUI · 음성 · 네트워크
-│   ├── ai_components.md    #   학습 범위 · 데이터 · 가속기 근거 · HEF 파이프라인
-│   ├── pose_planning.md    #   ⏸ 보류된 자세 재조정 (재도입 절차 포함)
-│   │  ── 운영 ──
-│   ├── setup.md            #   설치 · 실행 · 테스트 · 트러블슈팅
-│   ├── milestones.md       #   일정 · 미결 사항 · 리스크 · 측정 결과
-│   ├── hld.md              #   High Level Design — 인터페이스 명세 ⚠️ 갱신 대기
-│   ├── error_budget.md     #   오차 전파 분석 ⚠️ 갱신 대기
-│   ├── measurements.md     #   실측 리포트
-│   ├── purchase_ledger.md  #   구매 장부
-│   └── rejected_designs.md #   채택하지 않은 설계와 근거
+├── docs/                   # snake_case 통일 · 각 폴더에 README.md(폴더 안내)
+│   ├── design/             #   ── 설계 ──
+│   │   ├── state_machine.md    #   ⭐ FSM 전이 단일 소스
+│   │   ├── class_diagram.md    #   클래스 다이어그램 (Mermaid) + 마이그레이션 계획
+│   │   ├── sequences.md        #   시퀀스 다이어그램
+│   │   ├── architecture.puml   #   같은 구조의 PlantUML 버전
+│   │   ├── hld.md              #   High Level Design — 인터페이스 명세 ⚠️ 갱신 대기
+│   │   └── error_budget.md     #   오차 전파 분석 ⚠️ 갱신 대기
+│   ├── subsystems/         #   ── 서브시스템 ──
+│   │   ├── objects.md          #   물체 구성 · 클래스 체계 · 3D 프린팅 · 시연 구성
+│   │   ├── perception.md       #   인식 — 해상도 · 호모그래피 · 검정 상자 · 가림
+│   │   ├── console.md          #   노트북 관제 콘솔 — GUI · 음성 · 네트워크
+│   │   ├── ai_components.md    #   학습 범위 · 데이터 · 가속기 근거 · HEF 파이프라인
+│   │   └── pose_planning.md    #   ⏸ 보류된 자세 재조정 (재도입 절차 포함)
+│   └── ops/                #   ── 운영 ──
+│       ├── setup.md            #   설치 · 실행 · 테스트 · 트러블슈팅
+│       ├── milestones.md       #   일정 · 미결 사항 · 리스크 · 측정 결과
+│       ├── measurements.md     #   실측 리포트
+│       ├── purchase_ledger.md  #   구매 장부
+│       └── rejected_designs.md #   채택하지 않은 설계와 근거
 └── hardware/               # 마운트·크래들 도면, BOM, 배선도
 ```
 
 > **`grippers_console` 이 노트북에서 도는 유일한 패키지입니다.** 나머지는 전부 로봇 온보드입니다.
 > 이 경계가 곧 "노트북이 다 하는 것 아니냐"에 대한 답입니다.
 
-> **루트 3개 파일은 GitHub가 특별 취급합니다.** `LICENSE` 와 `CODE_OF_CONDUCT.md` 는 저장소 첫 화면
-> README 위에 **탭으로 표시**되고, `CONTRIBUTING.md` 는 이슈·PR 생성 화면에 자동 링크됩니다.
-> 그래서 이 셋만 `docs/` 가 아니라 루트에 둡니다.
+> **루트 2개 파일은 GitHub가 특별 취급합니다.** `LICENSE` 는 저장소 첫 화면 README 위에
+> **탭으로 표시**되고, `CONTRIBUTING.md` 는 이슈·PR 생성 화면에 자동 링크됩니다.
+> 그래서 이 둘만 `docs/` 가 아니라 루트에 둡니다.
 
 > ⚠️ **`docs/vla_interface.md` 는 삭제 대상입니다.** 모듈 명칭을 `VLA-V/L/A` 에서
 > `perception` / `language` / `action` 으로 바꾸면서 내용이 무효가 되었고,
@@ -414,7 +413,7 @@ python3 -m pytest tests/ -v
 
 `IDLE → SCAN → ... → DONE` 루프가 **유한 스텝 안에 종료되면** 도메인 로직은 정상입니다.
 
-실기 실행·컨테이너 설정·트러블슈팅 → [`setup.md`](docs/setup.md)
+실기 실행·컨테이너 설정·트러블슈팅 → [`setup.md`](docs/ops/setup.md)
 
 ---
 
@@ -430,7 +429,7 @@ python3 -m pytest tests/ -v
 | **M4 · 확장 + 측정** | 8/31–9/4 | **4개 반복 정리** · FETCH · 측정 20회 · 9/4 freeze |
 | **M5 · 발표 준비** | 9/1–9/8 | 9/6 포스터 제출 · **9/8 발표** |
 
-담당별 작업·미결 사항·리스크 → [`milestones.md`](docs/milestones.md)
+담당별 작업·미결 사항·리스크 → [`milestones.md`](docs/ops/milestones.md)
 
 ---
 
