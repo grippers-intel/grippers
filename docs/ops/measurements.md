@@ -43,13 +43,10 @@
 
 ## 3. 가속기 벤치마크 (M1 스펙 / M2 실측)
 
-<<<<<<< HEAD:docs/ops/measurements.md
-=======
 > 대상 하드웨어는 **Raspberry Pi AI HAT+ 2 (Hailo-10H 실장, PCIe 직결)** — 실물 보유분입니다.
 > 벤더 표기 40 TOPS는 **INT4 LLM/VLM 기준**이고 비전 처리량은 26 TOPS급이므로, 아래 실측 전까지 검출 지연을 40 TOPS 기준으로 환산하지 않습니다.
 > 소비 전력·추가 중량은 **HAT 단독이 아니라 Pi 5 + HAT 결합 상태**에서 측정하고, §1의 `vcgencmd get_throttled` 항목과 같은 조건으로 맞춥니다.
 
->>>>>>> origin/main:docs/measurements.md
 | 항목 | Hailo-10H (HEF, INT8) | 기준선 (Pi 5 CPU, FP32) |
 |---|---|---|
 | 추론 지연 (ms) | | |
@@ -63,18 +60,11 @@
 **HEF 컴파일 이력**
 
 `.onnx` · `.hef` 산출물은 `.gitignore` 대상입니다. 재현에 필요한 정보는 전부 이 표에 남깁니다.
-<<<<<<< HEAD:docs/ops/measurements.md
-
-| 모델 | DFC 버전 | 미지원 연산자 | 대체 방법 | 결과 | 일자 |
-|---|---|---|---|---|---|
-| | | | | | |
-=======
 DFC는 **x86_64 Ubuntu에서만** 동작하므로(ARM·Pi 네이티브 불가) 어떤 호스트에서 컴파일했는지도 함께 남깁니다.
 
 | 모델 | DFC 버전 | DFC 호스트 (OS/CPU/RAM/GPU) | 미지원 연산자 | 대체 방법 | 결과 | 일자 |
 |---|---|---|---|---|---|---|
 | | | | | | | |
->>>>>>> origin/main:docs/measurements.md
 
 **양자화 캘리브레이션셋**
 
