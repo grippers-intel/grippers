@@ -1,4 +1,9 @@
-bool closed
+# domain.ports.arm_driver.ArmDriver.set_gripper(width_mm) 대응.
+# ⚠️ 단위 변경: bool closed(이진 개폐) -> float32 width_mm(개구 폭).
+# 서보 각도 변환은 Ros2ArmDriver가 아니라 arm_driver_node 쪽 캘리브레이션
+# 테이블이 담당한다(class_diagram.md §2).
+
+float32 width_mm
 ---
 bool ok
 float32 load_ratio
