@@ -11,12 +11,19 @@ class FakeArm(ArmDriver):
         move_ok: bool = True,
         reorient_ok: bool = True,
         fold_ok: bool = True,
-        load_ratio: float = 1.0,
+        load_ratio: float | list[float] = 1.0,
     ):
         self._move_ok = move_ok
         self._reorient_ok = reorient_ok
         self._fold_ok = fold_ok
-        self._load_ratio = load_ratio  # GRASP의 LOAD_THRESHOLD 판정 대상 — 기본값은 '꽉 쥠'
+        # get_load()는 GRASP(높을수록 성공)과 HANDOVER(낮을수록 성공)가 정반대
+        # 의미로 같이 쓴다 — 상수 하나로는 두 상태를 동시에 성공시킬 수 없어
+        # ScriptedPerception.script처럼 호출 순서대로 값을 반환하고, 소진되면
+        # 마지막 값을 반복한다. 스칼라를 주면 항상 그 값(기존 동작과 동일)이다.
+        self._load_ratios = (
+            [load_ratio] if isinstance(load_ratio, (int, float)) else list(load_ratio)
+        )
+        self._load_call_count = 0
 
     def move_to_cartesian(self, xyz_m: Point3, down: bool = False) -> bool:
         return self._move_ok
@@ -25,7 +32,9 @@ class FakeArm(ArmDriver):
         pass
 
     def get_load(self) -> float:
-        return self._load_ratio
+        idx = min(self._load_call_count, len(self._load_ratios) - 1)
+        self._load_call_count += 1
+        return self._load_ratios[idx]
 
     def reorient(self, phi_rad: float) -> bool:
         return self._reorient_ok
