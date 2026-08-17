@@ -5,7 +5,7 @@
 
 - **Linux** (개발 환경 기준)
 - **ROS 2 Humble** — `IntelPi` Docker 이미지(`ros:humble-export`)로 통일. 호스트 Pi 5의 Jazzy는 사용하지 않음
-  - ⚠️ **기준 배포판 이원화는 미결 사항입니다** — 메시지 스키마 freeze의 선행 조건
+  - ✅ 기준 배포판 확정 (2026-08-17, #96) — Humble 컨테이너 유지. 근거는 [`hld.md`](../design/hld.md) §9 #13, [`rejected_designs.md`](rejected_designs.md#9-ros2-배포판-통일)
 - **Python 3.10** (`IntelPi` 컨테이너 내장). CI는 Ubuntu 24.04 + Python 3.12로 도므로 버전 특이 문법은 피할 것
 - Git (submodule 지원 — `third_party/soarm_provided_d`)
 - `MACHINE_TYPE=MentorPi_Mecanum` 환경변수 — `IntelPi` 이미지에 설정되어 있음
