@@ -1,15 +1,18 @@
 """perception_node — 카메라 기반 인식. 지금은 실제 비전 파이프라인(YOLO/마커) 미구현.
-안전 원칙: monitor_clearance는 모르면 contact_risk=True(정지)로 응답한다.
-detect_target/measure_gap은 모르면 found=False/기본값으로 응답해 재시도를 유도한다."""
+
+⚠️ 안전 원칙 (domain/ports/perception.py의 Perception ABC 계약, 실측 전까지 절대
+어기면 안 됨):
+- monitor_clearance: 모르면 항상 contact_risk=True(정지)로 응답한다. False로 두면
+  실제 장애물을 못 보고 밀고 지나가는 사고로 직결된다.
+- scan_floor: 모르면 빈 목록으로 응답한다 — SCAN이 이걸 '대상 없음'으로 해석해
+  DONE으로 유도한다.
+- find_box: 모르면 found=False로 응답한다 — TRANSPORT가 이걸 받으면 대상을
+  보류 등록하고 SCAN으로 복귀한다.
+"""
 
 import rclpy
-from geometry_msgs.msg import Pose, Pose2D, Vector3
-from grippers_interfaces.srv import (
-    DetectTarget,
-    MeasureGap,
-    MonitorClearance,
-    SetLightProfile,
-)
+from grippers_interfaces.msg import BoxObservation, DetectionArray
+from grippers_interfaces.srv import FindBox, MeasureOpening, MonitorClearance, ScanFloor
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 
@@ -41,21 +44,21 @@ class PerceptionNode(Node):
             self.get_logger().warn("cv_bridge 미설치 — 카메라 구독 비활성화")
 
         self.create_service(
-            DetectTarget,
-            "perception/detect_target",
-            self._on_detect_target,
+            ScanFloor,
+            "perception/scan_floor",
+            self._on_scan_floor,
             callback_group=cb_group,
         )
         self.create_service(
-            MeasureGap,
-            "perception/measure_gap",
-            self._on_measure_gap,
+            FindBox,
+            "perception/find_box",
+            self._on_find_box,
             callback_group=cb_group,
         )
         self.create_service(
-            SetLightProfile,
-            "perception/set_light_profile",
-            self._on_set_light_profile,
+            MeasureOpening,
+            "perception/measure_opening",
+            self._on_measure_opening,
             callback_group=cb_group,
         )
         self.create_service(
@@ -70,26 +73,30 @@ class PerceptionNode(Node):
         self._latest_frame = msg  # TODO: cv_bridge.imgmsg_to_cv2 후 YOLO/마커 파이프라인 연결
 
     # ---- 서비스 콜백 (전부 TODO — 지금은 정직하게 미구현 응답) ----
-    def _on_detect_target(self, request, response):
-        self.get_logger().warn("detect_target: 비전 파이프라인 미구현 — found=False 반환")
+    def _on_scan_floor(self, request, response):
+        self.get_logger().warn("scan_floor: 비전 파이프라인 미구현 — 빈 목록 반환")
+        # TODO: 상자 영역 마스킹 (state_machine.md §4 재진입 방지 방어선) — 실제
+        # 검출 파이프라인이 붙으면, 여기서 상자 ROI와 겹치는 detection을 걸러내야
+        # 한다. 필터링을 빼먹으면 이미 처리된 상자 내부 물체를 계속 재검출해
+        # 무한 루프 방지의 첫 번째 방어선(done_ids/held_ids 필터링)이 무력화된다.
+        response.detections = DetectionArray(detections=[])
+        return response
+
+    def _on_find_box(self, request, response):
+        self.get_logger().warn(
+            f"find_box(color={request.color}): 비전 파이프라인 미구현 — found=False 반환"
+        )
         response.found = False
-        response.pose = Pose()
-        response.dims = Vector3()
+        response.box = BoxObservation()
         return response
 
-    def _on_measure_gap(self, request, response):
-        self.get_logger().warn("measure_gap: 비전 파이프라인 미구현 — 기본값 반환")
-        response.h_gap = 0.0
-        response.centerline = Pose2D()
-        return response
-
-    def _on_set_light_profile(self, request, response):
-        self.get_logger().info(f"set_light_profile({request.profile}): 카메라 노출/AWB 제어 TODO")
-        response.ready = True  # 프로파일 전환 자체는 실패로 볼 이유가 없어 True
+    def _on_measure_opening(self, request, response):
+        self.get_logger().warn("measure_opening: 비전 파이프라인 미구현 — 0.0 반환")
+        response.opening_mm = 0.0
         return response
 
     def _on_monitor_clearance(self, request, response):
-        # 안전 원칙: 실제 측정 전까지는 항상 정지 신호
+        # 안전 원칙: 실제 측정 전까지는 항상 정지 신호. 절대 False로 바꾸지 말 것.
         self.get_logger().warn(
             "monitor_clearance: 비전 파이프라인 미구현 — contact_risk=True(정지) 반환"
         )
