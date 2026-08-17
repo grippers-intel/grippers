@@ -18,7 +18,7 @@
 | 상황 | 순서 |
 |---|---|
 | **처음 합류** | [README](../README.md) → [`state_machine.md`](design/state_machine.md) → [`class_diagram.md`](design/class_diagram.md) |
-| **코드 작업 시작** | [`class_diagram.md`](design/class_diagram.md) §5 → [CONTRIBUTING](../CONTRIBUTING.md) → [`setup.md`](ops/setup.md) |
+| **코드 작업 시작** | [`port_freeze.md`](design/port_freeze.md) → [`class_diagram.md`](design/class_diagram.md) §5 → [CONTRIBUTING](../CONTRIBUTING.md) → [`setup.md`](ops/setup.md) |
 | 인식 담당 | [`perception.md`](subsystems/perception.md) → [`objects.md`](subsystems/objects.md) → [`ai_components.md`](subsystems/ai_components.md) |
 | 콘솔·음성 담당 | [`console.md`](subsystems/console.md) → [`sequences.md`](design/sequences.md) §5 |
 | 하드웨어·발주 | [`objects.md`](subsystems/objects.md) → [`perception.md`](subsystems/perception.md) (해상도 요구사항) |
@@ -27,6 +27,7 @@
 ## 지금 주의할 것
 
 - **FSM 전이는 [`state_machine.md`](design/state_machine.md) 가 단일 소스** — 다른 문서에 중복 정의 금지
+- **포트 시그니처는 [`port_freeze.md`](design/port_freeze.md) + `domain/ports/` 가 짝** — 바꾸려면 문서 이력 추가 → 3인 합의 (§6)
 - **[`hld.md`](design/hld.md) · [`error_budget.md`](design/error_budget.md) 는 주제 변경 이전 기준** — 참조 전 확인
 
 ---

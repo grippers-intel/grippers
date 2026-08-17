@@ -107,6 +107,7 @@ README는 개요만 담고, 상세는 아래 문서로 나눠져 있습니다.
 | [`pose_planning.md`](docs/subsystems/pose_planning.md) | ⏸ 보류된 자세 재조정 설계 (재도입 절차 포함) |
 | **설계 다이어그램** | |
 | [`state_machine.md`](docs/design/state_machine.md) | **FSM 전이 단일 소스** |
+| [`port_freeze.md`](docs/design/port_freeze.md) | **포트 시그니처 freeze** — Tier-1 범위 · 결정 근거 · 변경 절차 |
 | [`class_diagram.md`](docs/design/class_diagram.md) | 값 객체 · 포트 · State · 노드 계층 · 마이그레이션 |
 | [`sequences.md`](docs/design/sequences.md) | 시퀀스 다이어그램 |
 | [`architecture.puml`](docs/design/architecture.puml) | PlantUML 버전 |
@@ -354,7 +355,11 @@ grippers/
 ├── domain/                 # 순수 Python. 하드웨어 의존성 없음 (ROS2 import 금지)
 │   ├── task/               #   State 제너레이터 기반 루프 FSM
 │   ├── values.py           #   Detection, BoxObservation, MissionSpec, MissionContext 등
-│   ├── ports/              #   인터페이스 정의 (ABC) — 포트 4종
+│   ├── ports/              #   ⭐ 인터페이스 정의 (ABC) — 포트 4종 · Tier-1 freeze 대상
+│   │   ├── base_driver.py          #     drive_to / align_to_box / stop
+│   │   ├── arm_driver.py           #     move_to_cartesian / set_gripper(width_mm) / get_load …
+│   │   ├── perception.py           #     scan_floor / find_box / measure_opening / monitor_clearance
+│   │   └── command_interpreter.py  #     parse / confirm_phrase — 자연어가 placement_rule 을 바꿈
 │   └── adapters/
 │       ├── real/           #   ROS2 액션/서비스 클라이언트
 │       └── fake/           #   테스트용 구현 (CI에서 사용)
@@ -373,9 +378,11 @@ grippers/
 ├── third_party/
 │   └── soarm_provided_d/   # git submodule — soarm_lab (FK/IK/시뮬/실물 백엔드)
 ├── tests/                  # pytest — 하드웨어·ROS2 불필요, domain/ + Fake 어댑터만 사용
+│   └── test_port_contract.py   #   ⭐ freeze 계약 테스트 — 이 파일을 고치는 diff = freeze 를 깨는 diff
 ├── docs/                   # snake_case 통일 · 각 폴더에 README.md(폴더 안내)
 │   ├── design/             #   ── 설계 ──
 │   │   ├── state_machine.md    #   ⭐ FSM 전이 단일 소스
+│   │   ├── port_freeze.md      #   ⭐ 포트 시그니처 freeze — Tier-1 범위 · 변경 절차 · 승인
 │   │   ├── class_diagram.md    #   클래스 다이어그램 (Mermaid) + 마이그레이션 계획
 │   │   ├── sequences.md        #   시퀀스 다이어그램
 │   │   ├── architecture.puml   #   같은 구조의 PlantUML 버전
