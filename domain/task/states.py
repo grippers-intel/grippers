@@ -12,6 +12,8 @@ docs/design/sequences.md 가 상태 내부 포트 호출 순서의 단일 소스
 E-STOP은 이 전이 그래프에 없다 — `MissionTask.run()` 이 다음 `execute()` 호출 전에
 `EstopState` 로 갈아치우는 인터럽트이지 정상 전이가 아니다 (state_machine.md §2)."""
 
+from dataclasses import replace
+
 from domain.task.state import State
 from domain.values import MissionContext, MissionMode, Point3, Pose2D
 
@@ -56,28 +58,32 @@ class ScanState(State):
     2. **SCAN 무변화 감지** — 연속 2회 스캔 결과(비어있지 않은)가 동일하면
        진전이 없다고 보고 `DONE`. `done_ids`/`held_ids` 필터링이 이미
        `SELECT` 에서 무한 루프를 막지만, 이건 그 필터링 자체가 깨졌을 때의
-       2차 방어선이다."""
+       2차 방어선이다.
+
+    비교 대상은 `ctx.last_scan` 이다 (`self` 의 인스턴스 필드가 아니다) —
+    `APPROACH`/`GRASP`/... 를 거쳐 `SCAN` 으로 돌아오는 경로는 전부
+    `ScanState(ctx)` 1인자 생성자를 쓰므로, 인스턴스 필드에 두면 그 경로들을
+    거칠 때마다 초기화돼 사이클을 건너는 비교가 성립하지 않는다."""
 
     name = "SCAN"
     MAX_RESCAN = 3
 
-    def __init__(self, ctx, rescans=0, last_scan=None):
+    def __init__(self, ctx, rescans=0):
         self.ctx = ctx
         self.rescans = rescans
-        self.last_scan = last_scan
 
     def execute(self, ports):
         detections = ports.perception.scan_floor()
 
         if not detections:
             if self.rescans < self.MAX_RESCAN:
-                return ScanState(self.ctx, self.rescans + 1, detections)
+                return ScanState(self.ctx, self.rescans + 1)
             return DoneState(self.ctx)
 
-        if detections == self.last_scan:
+        if tuple(detections) == self.ctx.last_scan:
             return DoneState(self.ctx)
 
-        return SelectState(self.ctx, detections)
+        return SelectState(replace(self.ctx, last_scan=tuple(detections)), detections)
 
 
 class SelectState(State):
@@ -178,9 +184,7 @@ class GraspState(State):
         # 실패한 파지가 물체를 밀었을 수 있다 — 이전 pose 재사용은 같은 실패를
         # 반복하므로 재스캔해서 같은 track_id의 갱신된 pose로 재시도한다.
         refreshed = ports.perception.scan_floor()
-        updated = next(
-            (d for d in refreshed if d.track_id == self.target.track_id), self.target
-        )
+        updated = next((d for d in refreshed if d.track_id == self.target.track_id), self.target)
         return GraspState(self.ctx.retry(), updated)
 
 
@@ -270,9 +274,7 @@ class InsertState(State):
 
         # TODO: 실측 — 실제 삽입 지점은 box.pose_m + 낙차 오프셋을 IK로 풀어야
         # 한다. 실측 전까지는 상자 위치 + 고정 낙차 높이를 그대로 쓴다.
-        insert_point = Point3(
-            x=self.box.pose_m.x, y=self.box.pose_m.y, z=INSERT_DROP_HEIGHT_M
-        )
+        insert_point = Point3(x=self.box.pose_m.x, y=self.box.pose_m.y, z=INSERT_DROP_HEIGHT_M)
         ports.arm.move_to_cartesian(insert_point, down=True)
         ports.arm.set_gripper(OPEN_MM)
         ports.arm.fold_to_cradle()

@@ -80,12 +80,20 @@ class MissionSpec:
 class MissionContext:
     """루프 사이클을 건너 전달되는 불변 상태. `complete()`/`hold()`/`retry()`는
     새 인스턴스를 반환한다 — 재시도 카운터를 가변 필드로 두면 루프 안에서
-    누가 언제 증가시켰는지 추적할 수 없다 (docs/design/class_diagram.md §1)."""
+    누가 언제 증가시켰는지 추적할 수 없다 (docs/design/class_diagram.md §1).
+
+    `last_scan` 은 직전 SCAN의 (비어있지 않은) `scan_floor()` 결과다. SCAN
+    무변화 감지(docs/design/state_machine.md §4)가 사이클을 건너 비교하려면
+    여기 있어야 한다 — `ScanState` 자신에 두면 다른 State를 거쳐 SCAN으로
+    복귀할 때마다 초기화돼 버려 비교가 성립하지 않는다. `complete()`/
+    `hold()`/`retry()` 는 이 필드를 건드리지 않고 그대로 넘긴다
+    (`dataclasses.replace` 기본 동작)."""
 
     spec: MissionSpec
     done_ids: frozenset = field(default_factory=frozenset)
     held_ids: frozenset = field(default_factory=frozenset)
     grasp_attempts: int = 0
+    last_scan: tuple = ()
 
     def complete(self, track_id: int) -> "MissionContext":
         return replace(self, done_ids=self.done_ids | {track_id})
