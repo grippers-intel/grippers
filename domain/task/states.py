@@ -32,10 +32,8 @@ class IdleState(State):
     """`ctx.spec.raw_text` 를 `interpreter.parse()` 로 (재)해석해 `SCAN` 으로 넘어간다.
     `ctx` 가 없거나 `raw_text` 가 비어 있으면 대기(자기 자신 반환)한다.
 
-    TODO(#7): `Ports` 에 아직 `interpreter` 필드가 없다 — 마이그레이션 순서
-    (class_diagram.md §5: 1→2·3·4·5→8→6→7→9→10)상 `mission_task.py` 의
-    `Ports` 갱신(#7)이 이 재작성(#6) 다음이라, `raw_text` 가 있는 `ctx` 로
-    진입하면 `#7` 이 끝나기 전까지 `ports.interpreter` 에서 AttributeError가 난다."""
+    `Ports.interpreter` 는 mission_task.py 마이그레이션(#7)에서 추가됐다 —
+    `MissionTask.run(raw_text)` 가 이 State에 넘길 초기 `MissionContext` 를 만든다."""
 
     name = "IDLE"
 
