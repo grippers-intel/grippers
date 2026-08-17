@@ -18,7 +18,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Empty
 
 # TODO: Ros2Perception 어댑터 (perception 노드 만든 뒤 추가)
-from domain.adapters.fake.fake_perception import FakePerception
+from domain.adapters.fake.scripted_perception import ScriptedPerception
 from domain.adapters.real.ros2_arm_driver import Ros2ArmDriver
 from domain.adapters.real.ros2_mecanum_base import Ros2MecanumBase
 from domain.adapters.real.ros2_perception import Ros2Perception
@@ -74,8 +74,8 @@ class MissionOrchestratorNode(Node):
     def _make_perception(self):
         use_fake = self.get_parameter("use_fake_perception").value
         if use_fake:
-            self.get_logger().warn("use_fake_perception=True — FakePerception 사용 중")
-            return FakePerception()
+            self.get_logger().warn("use_fake_perception=True — ScriptedPerception 사용 중")
+            return ScriptedPerception()
         return Ros2Perception(self)
 
 
