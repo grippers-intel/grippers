@@ -1,0 +1,4 @@
+# domain.ports.command_interpreter.CommandInterpreter.parse(text) 대응.
+string text
+---
+MissionSpec spec

@@ -1,5 +1,8 @@
+# domain.ports.arm_driver.ArmDriver.move_to_cartesian(xyz_m, down) 대응.
+# grip 필드는 제거했다 — GRASP는 이제 move_to_cartesian()과 set_gripper()를
+# 분리 호출한다(state_machine.md §3), 그리퍼 개폐를 여기서 겸하지 않는다.
+
 geometry_msgs/Point target
-float32 grip
 bool down
 ---
 bool reached
