@@ -5,24 +5,42 @@
 domain/adapters/fake/* 만 쓴다."""
 
 import threading
+from collections import Counter
 
 from domain.adapters.fake.fake_arm import FakeArm
 from domain.adapters.fake.fake_base import FakeBase
+from domain.adapters.fake.scripted_interpreter import ScriptedInterpreter
 from domain.adapters.fake.scripted_perception import ScriptedPerception
+from domain.task import states as states_module
 from domain.task.mission_task import MissionTask
-from domain.task.states import PosePlanState
-from domain.values import Detection, ObjectClass, Point3
+from domain.task.states import SCAN_NO_CHANGE_LIMIT, PosePlanState
+from domain.values import (
+    BoxColor,
+    Detection,
+    MissionContext,
+    MissionMode,
+    MissionSpec,
+    ObjectClass,
+    Point3,
+)
 
 
-def _detection(track_id, cls=ObjectClass.GABE, x=0.2):
+def _detection(track_id, cls=ObjectClass.GABE, x=0.2, confidence=0.9):
     return Detection(
         track_id=track_id,
         cls=cls,
         pose_m=Point3(x=x, y=0.0, z=0.0),
         dims_m=Point3(x=0.05, y=0.05, z=0.05),
         yaw_rad=0.0,
-        confidence=0.9,
+        confidence=confidence,
     )
+
+
+def _attempts_by_target(states, state_name):
+    """상태 시퀀스에서 **대상별 시도 횟수**를 센다. state_machine.md §4:
+    "'끝났다'만 보면 부족하다 — 몇 개가 실제로 시도됐는지까지 세야 한다."
+    조기 종료 결함은 미션을 정상 종료시키므로 종료 여부만 보는 검증은 전부 통과한다."""
+    return Counter(s.target.track_id for s in states if s.name == state_name)
 
 
 # ── 1. 정상 완주 ──────────────────────────────────────────────────────────
@@ -32,10 +50,12 @@ def test_full_mission_completes_multiple_objects(make_ports, run_to_completion):
     """물체 N(=2)개를 순회해서 전부 처리하고 DONE으로 끝난다.
 
     상자에 넣은 물체는 바닥에서 사라지는 게 실제 하드웨어 거동이므로,
-    ScriptedPerception.script로 사이클마다 바닥이 바뀌는 걸 흉내낸다 —
-    상수 목록 하나(detections=)를 계속 반환하면 det_a가 처리된 뒤에도
-    스캔에 여전히 잡혀 SCAN 무변화 감지가 det_b를 처리하기 전에 먼저
-    발동해 버린다 (§4 재진입 방지의 두 메커니즘이 상호작용하는 지점)."""
+    ScriptedPerception.script로 사이클마다 바닥이 바뀌는 걸 흉내낸다.
+
+    정적 장면(detections=)에서도 통과해야 한다 — 그건 아래 §3의
+    test_static_scene_first_grasp_failure_does_not_block_the_rest 가 맡는다.
+    이슈 #131 이전에는 정적 장면이면 SCAN 무변화 감지가 det_b를 처리하기 전에
+    먼저 발동해 버려서, 이 테스트가 script= 를 쓰는 것 말고는 방법이 없었다."""
     det_a = _detection(track_id=1, cls=ObjectClass.GABE, x=0.2)
     det_b = _detection(track_id=2, cls=ObjectClass.CHESS_PIECE, x=0.4)
     ports = make_ports(perception=ScriptedPerception(script=[[det_a, det_b], [det_b]]))
@@ -72,26 +92,151 @@ def test_repeated_scan_results_terminate_in_finite_steps(make_ports, run_to_comp
     assert len(states) < 20, "무한 루프 방지가 걸리긴 했지만 예상보다 훨씬 오래 걸렸다"
 
 
-# ── 3. SCAN 무변화 감지 ──────────────────────────────────────────────────
+# ── 3. SCAN 무변화 감지 (이슈 #131) ★ ───────────────────────────────────
 
 
-def test_scan_no_change_detection_ends_mission(make_ports, run_to_completion):
-    """연속 2회 스캔 결과(비어있지 않은)가 동일하면 DONE. done_ids/held_ids
-    필터링과는 별도의 2차 방어선이므로, 그 메커니즘 자체가 즉시(SCAN을 딱
-    2번만 방문하고) 발동하는지를 정확히 짚는다."""
+def test_static_scene_first_grasp_failure_does_not_block_the_rest(make_ports, run_to_completion):
+    """이슈 #131 완료 조건 1 — 물체 3개 중 첫 물체 파지가 실패해도 나머지 2개가
+    각각 선택·시도된다. **정적 장면(detections=) 그대로** 검증한다.
+
+    script= 로 사이클마다 바닥을 바꿔 주면 SCAN 무변화 감지를 우회하게 되어
+    버그가 남은 채로도 초록불이 난다. 보류된 물체는 실기에서도 바닥에 그대로
+    남아 있으므로 scan_floor() 결과가 사이클마다 동일한 게 정상이고, 진전은
+    '관측 목록이 줄었는가'가 아니라 'SELECT 후보가 줄었는가'로 봐야 한다.
+
+    수정 전 거동: IDLE SCAN SELECT APPROACH GRASP×4 SCAN DONE — 사이클 2의
+    scan_floor() 결과가 사이클 1과 같아 물체 2·3이 한 번도 선택되지 않았다."""
+    detections = [
+        _detection(track_id=1, x=0.2),
+        _detection(track_id=2, x=0.4),
+        _detection(track_id=3, x=0.6),
+    ]
     ports = make_ports(
-        base=FakeBase(arrive=False),
-        perception=ScriptedPerception(detections=[_detection(track_id=1)]),
+        # 1번 물체의 GRASP만 4번(최초 + 재시도 3회) 전부 실패하고, 그 뒤로는 성공.
+        arm=FakeArm(load_ratio=[0.0, 0.0, 0.0, 0.0, 1.0]),
+        perception=ScriptedPerception(detections=detections),
     )
 
     states = run_to_completion(ports)
     names = [s.name for s in states]
 
-    assert names.count("SCAN") == 2, (
-        "1회차 SCAN은 대상을 발견해 SELECT로, APPROACH 실패 후 되돌아온 "
-        "2회차 SCAN은 동일한 스캔 결과를 보고 즉시 DONE으로 가야 한다"
+    assert _attempts_by_target(states, "APPROACH") == {1: 1, 2: 1, 3: 1}, (
+        "물체 3개가 각각 한 번씩 선정·접근돼야 한다 — 1번이 보류된 뒤 후보 집합이 "
+        "줄어드는 것이 '진전'이다"
     )
+    assert _attempts_by_target(states, "GRASP") == {1: 4, 2: 1, 3: 1}
+    assert names.count("INSERT") == 2
+    assert states[-1].ctx.held_ids == {1}
+    assert states[-1].ctx.done_ids == {2, 3}
     assert names[-1] == "DONE"
+
+
+def test_static_scene_all_grasps_failing_still_tries_every_object(make_ports, run_to_completion):
+    """이슈 #131 재현 시나리오 그대로 — 물체 3개, 파지는 항상 실패. 수정 전에는
+    대상별 GRASP 시도가 {1: 4} 였다(2·3번은 선택조차 되지 않음).
+
+    대상별 시도 '횟수'는 검증하지 않는다 — 재시도 예산이 대상별이 아니라 미션
+    누적이라 2·3번은 1회씩만 시도되는데, 그건 별개 원인의 이슈 #132 몫이다.
+    여기서 고정할 계약은 '세 물체가 모두 시도된다'까지다."""
+    detections = [_detection(track_id=i, x=0.2 * i) for i in (1, 2, 3)]
+    ports = make_ports(
+        arm=FakeArm(load_ratio=0.0),
+        perception=ScriptedPerception(detections=detections),
+    )
+
+    states = run_to_completion(ports)
+    grasps = _attempts_by_target(states, "GRASP")
+
+    assert set(grasps) == {1, 2, 3}, f"시도되지 않은 물체가 있다 — 대상별 GRASP: {dict(grasps)}"
+    assert all(count >= 1 for count in grasps.values())
+    assert states[-1].ctx.held_ids == {1, 2, 3}
+    assert states[-1].name == "DONE"
+
+
+def test_same_candidate_set_for_k_cycles_ends_mission(make_ports, run_to_completion, monkeypatch):
+    """이슈 #131 완료 조건 3 — 후보 집합이 계속 동일한 진짜 무한 루프는 여전히
+    유한 스텝 안에 DONE.
+
+    무변화 감지는 done_ids/held_ids 필터링(1차 방어선)이 깨졌을 때의 2차 방어선이므로,
+    그 상황을 직접 만든다 — hold()를 무력화하면 APPROACH 실패가 후보를 줄이지 못해
+    SCAN → SELECT → APPROACH → SCAN 이 영원히 돌 수 있다."""
+    monkeypatch.setattr(MissionContext, "hold", lambda self, track_id: self)
+
+    ports = make_ports(
+        base=FakeBase(arrive=False),
+        perception=ScriptedPerception(detections=[_detection(1), _detection(2, x=0.4)]),
+    )
+
+    states = run_to_completion(ports)
+    names = [s.name for s in states]
+
+    assert (
+        names.count("SCAN") == SCAN_NO_CHANGE_LIMIT
+    ), "후보 집합이 SCAN_NO_CHANGE_LIMIT 사이클 연속 동일하면 그 사이클에서 바로 DONE"
+    assert names[-1] == "DONE"
+
+
+def test_no_change_limit_is_configurable(make_ports, run_to_completion, monkeypatch):
+    """K가 상수로 분리돼 실제로 발동 시점을 정한다 — 하드코딩된 2가 아니다."""
+    monkeypatch.setattr(MissionContext, "hold", lambda self, track_id: self)
+    monkeypatch.setattr(states_module, "SCAN_NO_CHANGE_LIMIT", 3)
+
+    ports = make_ports(
+        base=FakeBase(arrive=False),
+        perception=ScriptedPerception(detections=[_detection(1)]),
+    )
+
+    states = run_to_completion(ports)
+    names = [s.name for s in states]
+
+    assert names.count("SCAN") == 3
+    assert names[-1] == "DONE"
+
+
+def test_no_change_detection_survives_float_jitter(make_ports, run_to_completion, monkeypatch):
+    """이슈 #131 완료 조건 2 — 무변화 감지가 float 값 비교에 의존하지 않는다.
+
+    실기에서는 같은 물체라도 pose_m·confidence가 프레임마다 미세하게 흔들린다.
+    Detection을 값 비교하던 수정 전 구현은 두 프레임이 완전히 일치할 수 없어
+    2차 방어선이 사실상 존재하지 않았다. 여기서 script=는 사이클마다 바닥이
+    '바뀌는' 걸 흉내내는 게 아니라 **같은 물체에 카메라 노이즈만 얹는다** —
+    track_id는 그대로다."""
+    monkeypatch.setattr(MissionContext, "hold", lambda self, track_id: self)
+    jittered = [
+        [_detection(track_id=1, x=0.2 + i * 1e-6, confidence=0.9 - i * 1e-6)] for i in range(10)
+    ]
+
+    ports = make_ports(base=FakeBase(arrive=False), perception=ScriptedPerception(script=jittered))
+
+    states = run_to_completion(ports)
+    names = [s.name for s in states]
+
+    assert names.count("SCAN") == SCAN_NO_CHANGE_LIMIT
+    assert names[-1] == "DONE"
+
+
+def test_zero_candidates_ends_at_select(make_ports, run_to_completion):
+    """1차 방어선이 여전히 동작한다 — 후보가 0개인 경우는 SCAN이 아니라 SELECT가
+    DONE으로 보낸다 (state_machine.md §3 SELECT 실패 시 전이).
+
+    검출은 있지만 배치 규칙에 목적지가 없는 클래스뿐인 장면을 만든다 — SCAN은
+    첫 사이클이라 무변화 감지가 발동할 수 없고, 판정은 SELECT가 한다."""
+    spec = MissionSpec(
+        mode=MissionMode.TIDY,
+        target_cls=None,
+        placement_rule={ObjectClass.CHESS_PIECE: BoxColor.BLUE},
+        raw_text="장난감 정리해줘",
+    )
+    ports = make_ports(
+        interpreter=ScriptedInterpreter(table={"장난감 정리해줘": spec}),
+        perception=ScriptedPerception(detections=[_detection(track_id=1, cls=ObjectClass.GABE)]),
+    )
+
+    states = run_to_completion(ports)
+
+    assert [s.name for s in states] == ["IDLE", "SCAN", "SELECT", "DONE"]
+    assert states[-1].ctx.done_ids == frozenset()
+    assert states[-1].ctx.held_ids == frozenset()
 
 
 # ── 4. done_ids 재선택 방지 ──────────────────────────────────────────────
