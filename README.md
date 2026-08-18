@@ -104,6 +104,7 @@ README는 개요만 담고, 상세는 아래 문서로 나눠져 있습니다.
 | [`ai_components.md`](docs/subsystems/ai_components.md) | 학습 범위 · 데이터 · 가속기 선택 근거 · HEF 파이프라인 |
 | [`setup.md`](docs/ops/setup.md) | 설치 · 실행 · 테스트 · 트러블슈팅 |
 | [`milestones.md`](docs/ops/milestones.md) | 일정 · 미결 사항 · 리스크 · 측정 결과 |
+| [`failure_definition.md`](docs/ops/failure_definition.md) | **무엇을 실패로 셀 것인가** — 지표 계수 규칙 |
 | [`pose_planning.md`](docs/subsystems/pose_planning.md) | ⏸ 보류된 자세 재조정 설계 (재도입 절차 포함) |
 | **설계 다이어그램** | |
 | [`state_machine.md`](docs/design/state_machine.md) | **FSM 전이 단일 소스** |
@@ -392,6 +393,7 @@ grippers/
 │       ├── setup.md            #   설치 · 실행 · 테스트 · 트러블슈팅
 │       ├── milestones.md       #   일정 · 미결 사항 · 리스크 · 측정 결과
 │       ├── measurements.md     #   실측 리포트
+│       ├── failure_definition.md # 무엇을 실패로 셀 것인가 — 계수 규칙
 │       ├── purchase_ledger.md  #   구매 장부
 │       └── rejected_designs.md #   채택하지 않은 설계와 근거
 └── hardware/               # 마운트·크래들 도면, BOM, 배선도

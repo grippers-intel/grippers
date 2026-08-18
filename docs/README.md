@@ -23,6 +23,7 @@
 | 콘솔·음성 담당 | [`console.md`](subsystems/console.md) → [`sequences.md`](design/sequences.md) §5 |
 | 하드웨어·발주 | [`objects.md`](subsystems/objects.md) → [`perception.md`](subsystems/perception.md) (해상도 요구사항) |
 | 일정 확인 | [`milestones.md`](ops/milestones.md) |
+| 측정·시연 집계 | [`failure_definition.md`](ops/failure_definition.md) → [`measurements.md`](ops/measurements.md) |
 
 ## 지금 주의할 것
 

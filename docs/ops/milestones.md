@@ -180,6 +180,7 @@ M1에서 완료하지 못하는 것을 명시적으로 M2로 넘깁니다. 암�
 
 # 📊 Results
 
+> **무엇을 실패로 셀 것인가는 [`failure_definition.md`](failure_definition.md) 가 단일 소스입니다.**
 > 상세 데이터는 [`measurements.md`](measurements.md). 성공률은 시행 횟수와 함께 이항분포 95% 신뢰구간을 병기합니다.
 
 | 지표 | 목표 | M2 | M3 | M4 |
