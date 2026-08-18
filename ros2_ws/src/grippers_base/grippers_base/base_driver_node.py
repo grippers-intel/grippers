@@ -8,7 +8,7 @@ import math
 import rclpy
 from geometry_msgs.msg import Twist
 from grippers_interfaces.action import DriveTo
-from grippers_interfaces.srv import AlignToCenterline
+from grippers_interfaces.srv import AlignToBox
 from nav_msgs.msg import Odometry
 from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -47,8 +47,8 @@ class BaseDriverNode(Node):
             callback_group=cb_group,
         )
         self.create_service(
-            AlignToCenterline,
-            "base_driver/align",
+            AlignToBox,
+            "base_driver/align_to_box",
             self._on_align,
             callback_group=cb_group,
         )
@@ -107,7 +107,14 @@ class BaseDriverNode(Node):
         return result
 
     def _on_align(self, request, response):
-        # TODO: perception의 centerline 추정과 연동 (지금은 자리만 잡아둠)
+        # TODO: request.box(BoxObservation: color/pose/opening_mm/long_axis_rad)를
+        # 기준으로 마커·박스 검출 기반 정렬 로직을 붙인다 (지금은 자리만 잡아둠).
+        # perception이 실제로 box pose를 재관측해 넘겨주기 전까지는 여기서
+        # 할 수 있는 게 없어 항상 성공으로 스텁 응답한다.
+        self.get_logger().warn(
+            f"align_to_box(color={request.box.color}): 마커/박스 정렬 미구현 — "
+            "aligned=True로 스텁 응답"
+        )
         response.aligned = True
         response.yaw_error = 0.0
         return response
