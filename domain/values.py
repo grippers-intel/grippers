@@ -82,11 +82,19 @@ class MissionContext:
     새 인스턴스를 반환한다 — 재시도 카운터를 가변 필드로 두면 루프 안에서
     누가 언제 증가시켰는지 추적할 수 없다 (docs/design/class_diagram.md §1).
 
-    `last_scan` 은 직전 SCAN의 (비어있지 않은) `scan_floor()` 결과다. SCAN
-    무변화 감지(docs/design/state_machine.md §4)가 사이클을 건너 비교하려면
-    여기 있어야 한다 — `ScanState` 자신에 두면 다른 State를 거쳐 SCAN으로
-    복귀할 때마다 초기화돼 버려 비교가 성립하지 않는다. `complete()`/
-    `hold()`/`retry()` 는 이 필드를 건드리지 않고 그대로 넘긴다
+    `last_scan` 은 **연속으로 같게 관측된 `SELECT` 후보 `track_id` 집합의 이력**이다 —
+    원소는 `frozenset[int]` 이고, 후보 집합이 바뀌면 길이 1로 되돌아간다. 길이가
+    `states.SCAN_NO_CHANGE_LIMIT` 에 닿으면 SCAN 무변화 감지가 발동한다
+    (docs/design/state_machine.md §4). 사이클을 건너 비교해야 하므로 여기 있어야
+    한다 — `ScanState` 자신에 두면 다른 State를 거쳐 SCAN으로 복귀할 때마다
+    초기화돼 버려 비교가 성립하지 않는다.
+
+    필드명은 `scan_floor()` 결과 전체를 담던 시절의 것이고 이름은 freeze 대상이라
+    그대로 둔다 — 담는 값의 의미만 바뀌었다(이슈 #131). 검출 목록 전체를 비교하면
+    보류된 물체가 바닥에 남아 Fake에서 과잉 발동하고, 실기에서는 `pose_m`·
+    `confidence` 가 float이라 아예 발동하지 않았다.
+
+    `complete()`/`hold()`/`retry()` 는 이 필드를 건드리지 않고 그대로 넘긴다
     (`dataclasses.replace` 기본 동작)."""
 
     spec: MissionSpec
