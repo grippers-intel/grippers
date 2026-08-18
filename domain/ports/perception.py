@@ -11,19 +11,32 @@ class Perception(ABC):
     def scan_floor(self) -> list[Detection]:
         """바닥을 전역 관측해 검출 목록을 반환한다.
         더 처리할 대상이 없으면(상자 영역 마스킹 포함) **빈 리스트**를 반환해야 한다 —
-        `SCAN` 은 빈 리스트를 '남은 대상 없음'으로 해석해 `DONE` 으로 전이한다."""
+        `SCAN` 은 빈 리스트를 '남은 대상 없음'으로 해석해 `DONE` 으로 전이한다.
+
+        **실패(서비스 부재 · 응답 없음)도 빈 리스트.** 관측이 안 되는데 계속 도는
+        것보다 미션을 끝내고 이유를 로그로 남기는 편이 낫다."""
 
     @abstractmethod
     def find_box(self, color: BoxColor) -> BoxObservation | None:
         """지정한 색의 상자를 관측한다. 찾지 못하면 **`None`** 을 반환해야 한다 —
-        `TRANSPORT` 는 `None` 을 받으면 대상을 보류 등록하고 `SCAN` 으로 복귀한다."""
+        `TRANSPORT` 는 `None` 을 받으면 대상을 보류 등록하고 `SCAN` 으로 복귀한다.
+        서비스 부재 · 응답 없음도 같은 `None` 이다."""
 
     @abstractmethod
     def measure_opening(self, box: BoxObservation) -> float:
         """`box` 앞에 정렬한 상태에서 입구 폭(mm)을 정밀 실측한다.
-        `POSE_PLAN` 이 이 값으로 φ 해 구간을 계산한다."""
+        `POSE_PLAN` 이 이 값으로 φ 해 구간을 계산한다.
+
+        **실측하지 못하면(서비스 부재 · 응답 없음) `None`** — '해 없음' 취급이라
+        `POSE_PLAN` 이 `REJECT` 로 보낸다. 입구 폭을 모르는 채로 투입을 시도하면
+        상자 테두리에 물체를 찍는다. (반환 타입 선언은 아직 `float` 이다 —
+        `parse()` 와 같은 과도기로, 후속 PR에서 포트·Fake와 함께 맞춘다.)"""
 
     @abstractmethod
     def monitor_clearance(self) -> Clearance:
         """실제 측정이 되기 전까지는 **항상 `contact_risk=True` (정지)** 를 반환해야 한다 —
-        '모르면 멈춘다'가 기본값이다."""
+        '모르면 멈춘다'가 기본값이다.
+
+        **실패(서비스 부재 · 응답 없음)도 `contact_risk=True`.** 타임아웃을 통과
+        신호로 두면 실제 장애물을 못 보고 밀고 지나가는 사고로 직결된다 — 이
+        메서드만은 실패값이 안전 쪽으로 치우쳐 있어야 한다."""
