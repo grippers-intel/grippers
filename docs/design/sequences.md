@@ -102,7 +102,7 @@ sequenceDiagram
 
     Note over T,A: 부하 기반 파지 검증 — 힘 센서 없음
 
-    loop attempt ≤ MAX_GRASP_RETRY (3)
+    loop 대상 1개 기준 · attempt ≤ MAX_GRASP_RETRY (3)
         T->>A: move_to_cartesian(접근 지점)
         T->>A: move_to_cartesian(파지 지점, down=True)
         T->>A: set_gripper(CLOSED_MM)
@@ -127,7 +127,7 @@ sequenceDiagram
 |---|---|
 | 감지 방식 | 그리퍼 서보(id6) 부하 비율 `load_ratio` |
 | 임계값 | **미실측** — M2에서 파지 그룹 3종 × 10회 부하 분포 측정 후 확정 |
-| 재시도 상한 | `MAX_GRASP_RETRY = 3` |
+| 재시도 상한 | `MAX_GRASP_RETRY = 3` — **대상 1개당**. `SELECT` 가 새 대상을 고를 때 예산을 되돌립니다 (`state_machine.md` §3) |
 | 실패 시 동작 | 개방 → **재스캔** → 보정된 pose로 재시도 |
 | 소진 시 | `held_ids` 등록 → `SCAN` 복귀 (**미션 계속**) |
 
