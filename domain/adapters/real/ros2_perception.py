@@ -8,12 +8,21 @@ perception_node에 서비스로 말을 건다.
 넘기면 런타임에 AssertionError가 난다. 필드 하나하나를 명시적으로
 꺼내 옮긴다."""
 
-import rclpy
 from grippers_interfaces.srv import FindBox, MeasureOpening, MonitorClearance, ScanFloor
 
+from domain.adapters.real._ros_call import SAFETY_TIMEOUT_SEC, call_service
 from domain.adapters.real._ros_convert import box_observation_from_msg, box_observation_to_msg
 from domain.ports.perception import Perception
 from domain.values import BoxColor, BoxObservation, Clearance, Detection, ObjectClass, Point3
+
+
+def _blind_clearance() -> Clearance:
+    """관측하지 못했을 때 돌려줄 여유 공간. "모르면 멈춘다"가 monitor_clearance의
+    계약이므로 거리는 0(= 장애물이 바로 앞), contact_risk는 True다.
+
+    `Clearance` 는 frozen이 아니라 모듈 상수로 공유하면 호출자가 실수로 바꿀 수
+    있으므로 매번 새로 만든다."""
+    return Clearance(front_m=0.0, left_m=0.0, right_m=0.0, contact_risk=True)
 
 
 def _detection_from_msg(msg) -> Detection:
@@ -40,34 +49,55 @@ class Ros2Perception(Perception):
         )
 
     def scan_floor(self) -> list[Detection]:
-        self._scan_client.wait_for_service()
-        future = self._scan_client.call_async(ScanFloor.Request())
-        rclpy.spin_until_future_complete(self._node, future)
-        res = future.result()
+        """검출 목록. 서비스가 없거나 응답이 없으면 **빈 목록** — `SELECT` 가
+        고를 후보가 없어 `DONE` 으로 간다. 관측이 안 되는데 계속 도는 것보다
+        미션을 끝내고 이유를 로그로 남기는 편이 낫다."""
+        res = call_service(self._node, self._scan_client, ScanFloor.Request(), label="scan_floor")
+        if res is None:
+            return []
         return [_detection_from_msg(d) for d in res.detections.detections]
 
     def find_box(self, color: BoxColor) -> BoxObservation | None:
-        self._find_box_client.wait_for_service()
+        """찾지 못했거나 서비스가 응답하지 않으면 **None** — `TRANSPORT` 가
+        대상을 보류 등록하고 `SCAN` 으로 복귀한다."""
         req = FindBox.Request(color=color.name)
-        future = self._find_box_client.call_async(req)
-        rclpy.spin_until_future_complete(self._node, future)
-        res = future.result()
-        if not res.found:
+        res = call_service(self._node, self._find_box_client, req, label="find_box")
+        if res is None or not res.found:
             return None
         return box_observation_from_msg(res.box)
 
-    def measure_opening(self, box: BoxObservation) -> float:
-        self._measure_opening_client.wait_for_service()
+    def measure_opening(self, box: BoxObservation) -> float | None:
+        """입구 폭(mm). 서비스가 없거나 응답이 없으면 **None**(해 없음 취급) —
+        `POSE_PLAN` 이 `REJECT` 로 보낸다. 입구 폭을 모르는 채로 투입을 시도하면
+        상자 테두리에 물체를 찍는다.
+
+        반환 타입이 포트 ABC의 선언(-> float)보다 넓은데, `parse()` 와 같은
+        과도기다 — 포트 시그니처와 Fake의 실패 표현을 함께 맞추는 후속 PR에서
+        정리한다."""
         req = MeasureOpening.Request(box=box_observation_to_msg(box))
-        future = self._measure_opening_client.call_async(req)
-        rclpy.spin_until_future_complete(self._node, future)
-        return future.result().opening_mm
+        res = call_service(self._node, self._measure_opening_client, req, label="measure_opening")
+        if res is None:
+            return None
+        return res.opening_mm
 
     def monitor_clearance(self) -> Clearance:
-        self._clearance_client.wait_for_service()
-        future = self._clearance_client.call_async(MonitorClearance.Request())
-        rclpy.spin_until_future_complete(self._node, future)
-        res = future.result()
+        """여유 공간. 서비스가 없거나 응답이 없으면 **`contact_risk=True`** —
+        "모르면 멈춘다"가 이 포트의 계약이다.
+        타임아웃을 통과 신호로 두면 실제 장애물을 못 보고 밀고 지나가는 사고로
+        직결된다.
+
+        상한도 여기만 `SAFETY_TIMEOUT_SEC`(0.5초)로 짧다 — `INSERT` 중 반복
+        호출되는 안전 판정이라, 일반 서비스와 같은 3초를 기다리면 베이스가
+        움직이는 도중 3초간 판단이 멈춘다. 안전 장치가 오히려 위험 요인이 된다."""
+        res = call_service(
+            self._node,
+            self._clearance_client,
+            MonitorClearance.Request(),
+            label="monitor_clearance",
+            timeout_sec=SAFETY_TIMEOUT_SEC,
+        )
+        if res is None:
+            return _blind_clearance()
         # MonitorClearance.srv에는 top 필드도 있지만 domain.values.Clearance에는
         # 없다 — 서버 쪽(perception_node, #9 범위 밖) 인터페이스는 그대로 두고
         # 여기서만 조용히 버린다.

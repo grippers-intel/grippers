@@ -29,6 +29,31 @@ HANDOVER_LOAD_THRESHOLD = 0.05  # TODO: 실측 — '사람이 받아감' 판정 
 PUT_DOWN_POINT_M = Point3(x=0.30, y=0.0, z=0.0)  # TODO: 실측 — REJECT 시 안전한 내려놓기 위치
 DELIVERY_POINT_M = Pose2D(x=0.0, y=0.0, theta=0.0)  # TODO: 실측 — FETCH 인계 접근 위치
 
+# ── SCAN 무변화 감지 ─────────────────────────────────────────────────────
+# 같은 후보 집합이 연속 몇 사이클 관측되면 "진전이 없다"고 볼 것인가
+# (state_machine.md §4). 2 = 직전 사이클과 같으면 즉시 발동. 실기 관측이
+# 흔들려 후보 집합이 한 사이클씩 깜빡이면 늘리는 쪽으로 조정한다.
+SCAN_NO_CHANGE_LIMIT = 2
+
+
+def select_candidates(ctx, detections):
+    """`SELECT` 가 실제로 고를 수 있는 검출만 남긴다 — 선정 기준(state_machine.md §3)의
+    1~3번(보류/완료 목록에 없을 것 · 목적지가 정의돼 있을 것 · FETCH 모드는 클래스 일치)이다.
+    4번(최단 거리)은 후보 중 하나를 고르는 단계라 `SelectState` 쪽에 남는다.
+
+    `SCAN` 무변화 감지가 "`SELECT` 가 고를 수 있는 것이 줄었는가"를 판단 기준으로 쓰므로
+    두 상태가 반드시 같은 필터를 봐야 한다 — 복사본이 갈라지면 `SCAN` 이 `SELECT` 와 다른
+    세계를 보게 되고, 그게 이슈 #131 이 재발하는 경로다."""
+    spec = ctx.spec
+    return [
+        d
+        for d in detections
+        if d.track_id not in ctx.done_ids
+        and d.track_id not in ctx.held_ids
+        and d.cls in spec.placement_rule
+        and (spec.mode is not MissionMode.FETCH or d.cls == spec.target_cls)
+    ]
+
 
 class IdleState(State):
     """`ctx.spec.raw_text` 를 `interpreter.parse()` 로 (재)해석해 `SCAN` 으로 넘어간다.
@@ -55,12 +80,22 @@ class ScanState(State):
 
     1. `MAX_RESCAN` — 빈 관측이면 바로 `DONE` 이 아니라 재스캔을 먼저 시도한다
        (일시적 오검출 대비). 재시도가 소진되면 `DONE`.
-    2. **SCAN 무변화 감지** — 연속 2회 스캔 결과(비어있지 않은)가 동일하면
-       진전이 없다고 보고 `DONE`. `done_ids`/`held_ids` 필터링이 이미
-       `SELECT` 에서 무한 루프를 막지만, 이건 그 필터링 자체가 깨졌을 때의
-       2차 방어선이다.
+    2. **SCAN 무변화 감지** — `SELECT` 후보의 `track_id` 집합이
+       `SCAN_NO_CHANGE_LIMIT` 사이클 연속 동일하면 진전이 없다고 보고 `DONE`.
+       `done_ids`/`held_ids` 필터링이 이미 `SELECT` 에서 무한 루프를 막지만,
+       이건 그 필터링 자체가 깨졌을 때의 2차 방어선이다.
 
-    비교 대상은 `ctx.last_scan` 이다 (`self` 의 인스턴스 필드가 아니다) —
+    비교 대상이 `scan_floor()` 결과 전체가 아니라 **후보의 `track_id` 집합**인 것이
+    핵심이다 (이슈 #131). 관측 목록 전체를 비교하면 두 방향으로 어긋난다 — 보류된
+    물체도 바닥에는 그대로 남아 있으므로 Fake 에서는 진전이 가능한데도 목록이 같아
+    **과잉 발동**하고, 실기에서는 `pose_m`·`confidence` 가 float 이라 카메라 노이즈만
+    있어도 두 프레임이 완전히 일치할 수 없어 **절대 발동하지 않는다**. 후보 집합은
+    물체가 보류·완료될 때마다 줄어들고, 정수 집합 비교라 노이즈에 흔들리지 않는다.
+
+    후보가 0개인 경우는 여기서 처리하지 않는다 — `SELECT` 가 `DONE` 으로 보내는 1차
+    방어선이 이미 담당하고, 2차 방어선이 잡아야 하는 건 "후보는 있는데 진전이 없다"다.
+
+    비교 기준은 `ctx.last_scan` 에 둔다 (`self` 의 인스턴스 필드가 아니다) —
     `APPROACH`/`GRASP`/... 를 거쳐 `SCAN` 으로 돌아오는 경로는 전부
     `ScanState(ctx)` 1인자 생성자를 쓰므로, 인스턴스 필드에 두면 그 경로들을
     거칠 때마다 초기화돼 사이클을 건너는 비교가 성립하지 않는다."""
@@ -80,10 +115,20 @@ class ScanState(State):
                 return ScanState(self.ctx, self.rescans + 1)
             return DoneState(self.ctx)
 
-        if tuple(detections) == self.ctx.last_scan:
-            return DoneState(self.ctx)
+        # last_scan 은 "연속으로 같게 관측된 후보 집합"의 이력이다 — 집합이 바뀌면
+        # 길이 1로 되돌아가고, SCAN_NO_CHANGE_LIMIT 에 닿으면 진전 없음으로 본다.
+        candidate_ids = frozenset(d.track_id for d in select_candidates(self.ctx, detections))
+        previous = self.ctx.last_scan
+        if previous and previous[-1] == candidate_ids:
+            streak = previous + (candidate_ids,)
+        else:
+            streak = (candidate_ids,)
 
-        return SelectState(replace(self.ctx, last_scan=tuple(detections)), detections)
+        ctx = replace(self.ctx, last_scan=streak)
+        if len(streak) >= SCAN_NO_CHANGE_LIMIT:
+            return DoneState(ctx)
+
+        return SelectState(ctx, detections)
 
 
 class SelectState(State):
@@ -110,15 +155,9 @@ class SelectState(State):
         return ApproachState(self.ctx, target)
 
     def _pick(self, detections):
-        spec = self.ctx.spec
-        candidates = [
-            d
-            for d in detections
-            if d.track_id not in self.ctx.done_ids
-            and d.track_id not in self.ctx.held_ids
-            and d.cls in spec.placement_rule
-            and (spec.mode is not MissionMode.FETCH or d.cls == spec.target_cls)
-        ]
+        # 1~3번 조건은 select_candidates() 한 곳에 있다 — SCAN 무변화 감지가 같은
+        # 필터를 봐야 하므로 여기서 복제하지 않는다. 여기 남는 건 4번(최단 거리)뿐이다.
+        candidates = select_candidates(self.ctx, detections)
         if not candidates:
             return None
         return min(candidates, key=lambda d: (d.pose_m.x**2 + d.pose_m.y**2) ** 0.5)
