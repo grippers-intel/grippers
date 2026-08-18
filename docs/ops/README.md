@@ -7,6 +7,7 @@
 | [`setup.md`](setup.md) | 설치 · 실행 · 테스트 · 트러블슈팅 |
 | [`milestones.md`](milestones.md) | 일정 · 미결 사항 · 리스크 · 측정 결과 |
 | [`measurements.md`](measurements.md) | 실측 리포트 |
+| [`failure_definition.md`](failure_definition.md) | **무엇을 실패로 셀 것인가** — 계수 규칙 |
 | [`purchase_ledger.md`](purchase_ledger.md) | 구매 장부 |
 | [`rejected_designs.md`](rejected_designs.md) | 채택하지 않은 설계와 근거 |
 
