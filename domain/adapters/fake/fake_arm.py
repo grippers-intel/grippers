@@ -4,6 +4,13 @@
 from domain.ports.arm_driver import ArmDriver
 from domain.values import Point3
 
+# 실측 기반 기본값 (2026-08-18, n=25, 정착 후 · 원시값 절대값 / 1023).
+# get_load()는 포트 계약상 0~1 정규화 비율이다(domain/ports/arm_driver.py).
+# 테스트가 1.0 같은 도달 불가능한 값을 쓰면 임계값이 실기와 어긋나 있어도
+# 초록불이 나므로, Fake도 실측 분포 안의 값을 쓴다.
+LOAD_EMPTY = 0.03  # 빈 채 / 파지 실패(놓침) 0.027~0.031
+LOAD_HOLDING = 0.14  # 가베(정육면체) 0.137 — 5/5 일관
+
 
 class FakeArm(ArmDriver):
     def __init__(
@@ -11,7 +18,7 @@ class FakeArm(ArmDriver):
         move_ok: bool = True,
         reorient_ok: bool = True,
         fold_ok: bool = True,
-        load_ratio: float | list[float] = 1.0,
+        load_ratio: float | list[float] = LOAD_HOLDING,
     ):
         self._move_ok = move_ok
         self._reorient_ok = reorient_ok

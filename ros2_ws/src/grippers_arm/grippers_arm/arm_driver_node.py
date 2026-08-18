@@ -52,6 +52,19 @@ ALL_SERVO_IDS = range(1, 7)
 GRIPPER_CLOSED_MM = 0.0
 GRIPPER_OPEN_MM = 90.0
 
+# STS3215 PRESENT_LOAD 는 하위 10비트가 크기(0~1023), 0x400 비트가 방향이다
+# (third_party/soarm_provided_d/soarm_lab/driver_sdk.py get_load).
+# 도메인 계층은 0~1 비율만 안다 — 서보 각도 변환과 같은 이유로 원시값 →
+# 비율 변환은 이 노드가 담당한다 (class_diagram.md §2).
+GRIPPER_LOAD_MAX_RAW = 1023.0
+
+# 그리퍼 닫힘 명령 후 부하가 정착할 때까지의 대기 시간.
+# 실측(2026-08-18): 0.26~0.51s 는 이동 중 포화(±500)라 빈 채와 물체가 구분되지
+# 않고, 0.77s 에 거의 안정, 1.03s 이후로는 10초까지 한 틱도 변하지 않았다.
+# 1.0s 안정 + 여유로 1.5s. 정착 타이밍은 서보 물리 지식이므로 도메인이 아니라
+# 여기 둔다 — GraspState 에 sleep 을 넣지 않는다.
+GRASP_SETTLE_SEC = 1.5
+
 CRADLE_XYZ_M = [0.15, 0.0, 0.20]  # TODO: 실측 — 이동용 거치 자세 손끝 좌표
 
 # MentorPi 베이스 보드가 잡는 장치. arm_port가 이걸 가리키면 팔 드라이버가
@@ -197,6 +210,20 @@ class ArmDriverNode(Node):
             # (모듈 docstring 참고). 실물 백엔드의 드라이버에 직접 명령한다.
             backend = soarm._backend(real=True)
             backend.drv.set_position(GRIPPER_SERVO_ID, raw_position)
+            # 정착 전에 읽으면 빈 채와 물체가 구분되지 않는다 — 이동 중에는
+            # 양쪽 다 포화값(±500)이 나온다. set_position()은 즉시 반환하므로
+            # 여기서 기다린다.
+            #
+            # 이 대기는 응답의 load_ratio 뿐 아니라 **그 다음 get_load() 를 위한
+            # 것이기도 하다.** GraspState 는 set_gripper() 응답을 쓰지 않고
+            # get_load() 를 따로 부르는데(ArmDriver.set_gripper 는 None 반환),
+            # 그 호출이 정착 후에 도착하려면 set_gripper 가 정착까지 붙들고
+            # 있어야 한다.
+            #
+            # 개방(OPEN_MM) 명령에도 똑같이 걸린다 — 개폐 판정이 필요 없는
+            # 경로에서는 순수 지연이지만, 분기해서 "어떤 호출은 안 기다린다"를
+            # 만드는 것보다 한 가지 계약(반환 시점 = 정착 완료)이 낫다.
+            time.sleep(GRASP_SETTLE_SEC)
             response.ok = True
             response.load_ratio = self._read_load()
         except Exception as e:
@@ -236,9 +263,21 @@ class ArmDriverNode(Node):
         return response
 
     def _read_load(self, servo_id: int = GRIPPER_SERVO_ID) -> float:
+        """서보 원시 부하값을 0~1 비율로 정규화해 돌려준다.
+
+        ⚠️ 부호를 버리고 **절대값**을 쓴다. PRESENT_LOAD 의 0x400 비트는 부하의
+        방향인데, 실측에서 같은 '빈 채로 닫음' 조건이 음수(-88)로도 양수로도
+        나와 방향이 일관되지 않았다. 파지 판정에 필요한 건 '얼마나 버티고
+        있나'(크기)이지 어느 쪽으로 밀리나(방향)가 아니므로 크기만 본다.
+
+        읽기에 실패하면(None) 0.0 — 즉 '빈 채'로 본다. 부하를 못 읽는 상태에서
+        파지 성공으로 판정해 물체를 든 줄 알고 이송하는 것보다, 실패로 보고
+        재시도하는 쪽이 안전하다."""
         backend = soarm._backend(real=True)
-        load = backend.drv.get_load(servo_id)
-        return float(load) if load is not None else 0.0
+        raw = backend.drv.get_load(servo_id)
+        if raw is None:
+            return 0.0
+        return abs(raw) / GRIPPER_LOAD_MAX_RAW
 
 
 def main(args=None):

@@ -332,7 +332,12 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 
 ### 7.3 파지 검증
 
-`get_load()` 임계값 — *M2 실측 후 기입*. `SetGripper` 응답에도 `load_ratio` 가 있어 별도 호출 없이 검증 가능합니다.
+`get_load()` 임계값 — **`LOAD_THRESHOLD = 0.04`** (2026-08-18 실측, n=25). 빈 채 0.027~0.031 과
+파지 성공 최소 0.047 사이입니다. 분포와 정착 시간은 [`sequences.md` §2](sequences.md#2-파지-검증-및-자동-재시도).
+
+`load_ratio` 는 **0~1 정규화 비율**입니다. 서보 원시값(0~1023)을 비율로 바꾸는 것은
+`arm_driver_node` 의 몫이고 도메인은 서보 레지스터 범위를 알지 못합니다.
+`SetGripper` 응답에도 `load_ratio` 가 있어 별도 호출 없이 검증 가능합니다.
 
 ---
 

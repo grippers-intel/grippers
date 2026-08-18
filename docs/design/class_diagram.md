@@ -287,7 +287,7 @@ classDiagram
         -ctx : MissionContext
         -target : Detection
         -MAX_GRASP_RETRY = 3
-        -LOAD_THRESHOLD = 0.15
+        -LOAD_THRESHOLD = 0.04
     }
     class TransportState {
         -ctx : MissionContext

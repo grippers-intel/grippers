@@ -20,7 +20,12 @@ class ArmDriver(ABC):
 
     @abstractmethod
     def get_load(self) -> float:
-        """그리퍼(id6) 부하 비율."""
+        """그리퍼(id6) 부하 비율 — **0.0~1.0 으로 정규화된 값**이다.
+
+        ⚠️ 서보 원시값(STS3215 PRESENT_LOAD 는 0~1023)을 그대로 돌려주면 안 된다.
+        정규화는 어댑터 뒤편(arm_driver_node)의 몫이다 — 도메인은 서보 레지스터
+        범위를 알지 못한다. Fake 는 정규화된 값을, real 은 원시값을 주는 식으로
+        계약이 갈라지면 CI는 통과하는데 실기에서만 파지 판정이 항상 실패한다."""
 
     @abstractmethod
     def reorient(self, phi_rad: float) -> bool:
