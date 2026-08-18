@@ -44,22 +44,42 @@ def launch_setup(context):
         ),
     )
 
+    use_fake_arm = LaunchConfiguration("use_fake_arm")
     use_fake_perception = LaunchConfiguration("use_fake_perception")
+    use_fake_interpreter = LaunchConfiguration("use_fake_interpreter")
+    arm_port = LaunchConfiguration("arm_port")
 
+    # use_fake_* 는 세 지점이 모두 맞아야 실제로 동작한다: 여기서 선언
+    # (generate_launch_description)하고, 하드웨어 노드를 UnlessCondition으로 끄고,
+    # mission_orchestrator에 파라미터로 넘겨 어댑터 분기를 시킨다. 하나라도 빠지면
+    # ROS2가 선언되지 않은 launch 인자를 조용히 버리기 때문에 "껐다고 믿었는데
+    # 실물이 돌아가는" 상태가 된다.
     perception_node = Node(
         package="grippers_perception",
         executable="perception_node",
         output="screen",
         condition=UnlessCondition(use_fake_perception),
     )
+    arm_driver_node = Node(
+        package="grippers_arm",
+        executable="arm_driver",
+        output="screen",
+        condition=UnlessCondition(use_fake_arm),
+        parameters=[{"arm_port": arm_port}],
+    )
     grippers_nodes = [
         Node(package="grippers_base", executable="base_driver", output="screen"),
-        Node(package="grippers_arm", executable="arm_driver", output="screen"),
         Node(
             package="grippers_mission",
             executable="mission_orchestrator",
             output="screen",
-            parameters=[{"use_fake_perception": use_fake_perception}],
+            parameters=[
+                {
+                    "use_fake_arm": use_fake_arm,
+                    "use_fake_perception": use_fake_perception,
+                    "use_fake_interpreter": use_fake_interpreter,
+                }
+            ],
         ),
     ]
 
@@ -68,6 +88,7 @@ def launch_setup(context):
         depth_camera_launch,
         lidar_launch,
         perception_node,
+        arm_driver_node,
         *grippers_nodes,
     ]
 
@@ -76,9 +97,28 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument(
+                "use_fake_arm",
+                default_value="true",
+                description="true면 SO-ARM101 하드웨어 없이 FakeArm 사용",
+            ),
+            DeclareLaunchArgument(
                 "use_fake_perception",
                 default_value="true",
                 description="true면 카메라 하드웨어 없이 FakePerception 사용",
+            ),
+            DeclareLaunchArgument(
+                "use_fake_interpreter",
+                default_value="true",
+                description="true면 language 노드 없이 ScriptedInterpreter 사용",
+            ),
+            DeclareLaunchArgument(
+                "arm_port",
+                # ⚠️ ttyACM0 이 아니다 — MentorPi 베이스 보드(/dev/rrc)가 보통
+                # ttyACM0 을 잡으므로, 기본값을 ttyACM0 으로 두면 팔 드라이버가
+                # 베이스 보드 시리얼을 열어 통신을 깨뜨린다. arm_driver_node 가
+                # 기동 시 이 충돌을 한 번 더 검사한다.
+                default_value="/dev/ttyACM1",
+                description="SO-ARM101 시리얼 포트 (베이스 보드 /dev/rrc 와 달라야 함)",
             ),
             OpaqueFunction(function=launch_setup),
         ]

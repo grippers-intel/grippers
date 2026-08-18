@@ -15,12 +15,14 @@ soarm_lab.arm을 그대로 감싼다. 새 IK/서보 로직은 없음.
    채워 둬야 한다 — __init__ 에서 그렇게 한다.
 """
 
+import os
 import sys
 import time
 
 sys.path.insert(0, "/third_party/soarm_provided_d")  # PYTHONPATH 미설정 환경 대비 안전장치
 
 import rclpy  # noqa: I001
+import rclpy.logging  # main()이 노드 생성 실패 시 노드 없이 로그를 남긴다
 from grippers_interfaces.action import MoveToCartesian, ReorientArm
 from grippers_interfaces.srv import GetLoad, SetGripper
 from rclpy.action import ActionServer
@@ -52,6 +54,15 @@ GRIPPER_OPEN_MM = 90.0
 
 CRADLE_XYZ_M = [0.15, 0.0, 0.20]  # TODO: 실측 — 이동용 거치 자세 손끝 좌표
 
+# MentorPi 베이스 보드가 잡는 장치. arm_port가 이걸 가리키면 팔 드라이버가
+# 베이스 보드의 시리얼을 열어 버려 주행 명령이 통째로 깨진다.
+BASE_BOARD_DEVICE = "/dev/rrc"
+
+
+class ArmPortConflictError(RuntimeError):
+    """arm_port가 베이스 보드 장치를 가리킬 때 __init__에서 올린다.
+    main()이 잡아서 노드를 띄우지 않고 종료한다."""
+
 
 class ArmDriverNode(Node):
     def __init__(self):
@@ -60,6 +71,9 @@ class ArmDriverNode(Node):
 
         self.declare_parameter("arm_port", "/dev/ttyACM0")
         arm_port = self.get_parameter("arm_port").value
+        # RealBackend(port=...) 는 생성 즉시 시리얼 포트를 연다 — 검사는 반드시
+        # 그 앞에 와야 한다. 뒤에 두면 이미 베이스 보드를 열어 버린 뒤가 된다.
+        self._reject_base_board_port(arm_port)
         soarm._real = RealBackend(port=arm_port)
         self.get_logger().info(f"arm_port={arm_port}")
 
@@ -102,6 +116,25 @@ class ArmDriverNode(Node):
             callback_group=cb_group,
         )
         self.get_logger().info("arm_driver_node ready")
+
+    def _reject_base_board_port(self, arm_port: str) -> None:
+        """arm_port가 MentorPi 베이스 보드와 같은 장치를 가리키면 노드를 띄우지 않는다.
+
+        udev 규칙에 따라 /dev/rrc 는 /dev/ttyACM0 같은 실제 장치를 가리키는 심볼릭
+        링크라, 경로 문자열만 비교하면 충돌을 놓친다 — realpath로 양쪽을 풀어서
+        같은 장치인지 본다.
+
+        /dev/rrc 가 없는 환경(개발 머신, CI, 시뮬레이션)에서는 비교할 대상이 없으니
+        검사를 건너뛴다 — 베이스 보드가 없다면 충돌할 것도 없다."""
+        if not os.path.exists(BASE_BOARD_DEVICE):
+            return
+        if os.path.realpath(arm_port) != os.path.realpath(BASE_BOARD_DEVICE):
+            return
+        raise ArmPortConflictError(
+            f"arm_port({arm_port})가 {BASE_BOARD_DEVICE}(MentorPi 베이스 보드)와 같은 "
+            f"장치입니다. SO-ARM101 포트를 확인하세요 — 이 상태로 진행하면 베이스 보드 "
+            f"시리얼 통신이 깨집니다."
+        )
 
     def _execute_move(self, goal_handle):
         req = goal_handle.request
@@ -210,7 +243,14 @@ class ArmDriverNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = ArmDriverNode()
+    try:
+        node = ArmDriverNode()
+    except ArmPortConflictError as e:
+        # 노드를 띄우면 안 되는 설정 오류다 — 잘못된 포트로 계속 돌면서 베이스 보드를
+        # 망가뜨리는 것보다, 이유를 남기고 즉시 죽는 편이 낫다.
+        rclpy.logging.get_logger("arm_driver_node").fatal(str(e))
+        rclpy.shutdown()
+        return 1
     from rclpy.executors import MultiThreadedExecutor
 
     executor = MultiThreadedExecutor()
