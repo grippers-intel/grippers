@@ -7,13 +7,13 @@ domain/adapters/fake/* 만 쓴다."""
 import threading
 from collections import Counter
 
-from domain.adapters.fake.fake_arm import FakeArm
+from domain.adapters.fake.fake_arm import LOAD_EMPTY, LOAD_HOLDING, FakeArm
 from domain.adapters.fake.fake_base import FakeBase
 from domain.adapters.fake.scripted_interpreter import ScriptedInterpreter
 from domain.adapters.fake.scripted_perception import ScriptedPerception
 from domain.task import states as states_module
 from domain.task.mission_task import MissionTask
-from domain.task.states import SCAN_NO_CHANGE_LIMIT, PosePlanState
+from domain.task.states import SCAN_NO_CHANGE_LIMIT, GraspState, PosePlanState
 from domain.values import (
     BoxColor,
     Detection,
@@ -262,7 +262,7 @@ def test_held_object_is_never_reselected(make_ports, run_to_completion):
     """GRASP에 실패해 보류된 물체는 held_ids에 등록되고, 그 뒤로는 같은 스캔
     결과에 계속 나타나도 다시 APPROACH되지 않는다."""
     ports = make_ports(
-        arm=FakeArm(load_ratio=0.0),  # 항상 파지 실패
+        arm=FakeArm(load_ratio=LOAD_EMPTY),  # 항상 파지 실패(빈 채 실측값)
         perception=ScriptedPerception(detections=[_detection(track_id=1)]),
     )
 
@@ -281,7 +281,7 @@ def test_grasp_retry_exhaustion_holds_and_returns_to_scan(make_ports, run_to_com
     """부하 미달이 MAX_GRASP_RETRY(3)회 반복되면 재시도를 그만두고 SCAN으로
     복귀 + 보류 등록한다 — 미션은 끝나지 않고 계속된다."""
     ports = make_ports(
-        arm=FakeArm(load_ratio=0.0),
+        arm=FakeArm(load_ratio=LOAD_EMPTY),
         perception=ScriptedPerception(detections=[_detection(track_id=7)]),
     )
 
@@ -291,6 +291,75 @@ def test_grasp_retry_exhaustion_holds_and_returns_to_scan(make_ports, run_to_com
     assert names.count("GRASP") == 4  # 최초 시도 + 재시도 3회 (grasp_attempts 0,1,2,3)
     assert 7 in states[-1].ctx.held_ids
     assert names[-1] == "DONE"
+
+
+# ── 6-1. 부하 임계값 — 실측 경계 ★ ───────────────────────────────────────
+#
+# 실측 (2026-08-18, n=25, 정착 2초 후, 절대값 / 1023):
+#   빈 채 / 파지 실패(놓침)  raw 28~32    → 0.027 ~ 0.031
+#   체스말(나이트·룩)        raw 48~124   → 0.047 ~ 0.121
+#   가베(정육면체)           raw 140      → 0.137 (5/5 일관)
+# 임계값은 이 두 분포 사이(0.031 < LOAD_THRESHOLD < 0.047)에 있어야 한다.
+
+
+def test_empty_gripper_load_fails_grasp(make_ports, run_to_completion):
+    """빈 채 실측 최대값(0.031)은 파지 실패로 판정돼야 한다.
+
+    이전 임계값 0.15는 이 경계를 '통과시키지 못한' 게 아니라 아예 모든 값을
+    막았다 — 가베(0.137)조차 미달이라 실기에서는 파지가 성공할 수 없었다."""
+    ports = make_ports(
+        arm=FakeArm(load_ratio=0.031),
+        perception=ScriptedPerception(detections=[_detection(track_id=1)]),
+    )
+
+    states = run_to_completion(ports)
+    names = [s.name for s in states]
+
+    assert names.count("GRASP") == 4, "부하 미달이므로 최초 시도 + 재시도 3회를 다 쓴다"
+    assert "TRANSPORT" not in names
+    assert "INSERT" not in names
+    assert states[-1].ctx.held_ids == {1}
+    assert names[-1] == "DONE"
+
+
+def test_minimum_holding_load_passes_grasp(make_ports, run_to_completion):
+    """파지 성공 실측 최소값(0.047 — 체스말 나이트)은 통과해야 한다.
+    ⚠️ 빈 채 최대 0.031과의 여유가 raw 기준 16틱뿐이다."""
+    ports = make_ports(
+        arm=FakeArm(load_ratio=0.047),
+        perception=ScriptedPerception(detections=[_detection(track_id=1)]),
+    )
+
+    states = run_to_completion(ports)
+    names = [s.name for s in states]
+
+    assert names.count("GRASP") == 1, "첫 시도에서 부하 임계를 넘어야 한다"
+    assert "TRANSPORT" in names
+    assert names.count("INSERT") == 1
+    assert states[-1].ctx.done_ids == {1}
+
+
+def test_load_threshold_sits_between_measured_distributions():
+    """임계값이 상수로 분리돼 있고, 실측 두 분포 사이에 있다.
+    물체 종류가 추가돼 재측정할 때 이 테스트가 경계를 다시 확인해 준다."""
+    assert 0.031 < GraspState.LOAD_THRESHOLD < 0.047
+
+
+def test_load_threshold_is_tunable(make_ports, run_to_completion, monkeypatch):
+    """판정이 하드코딩이 아니라 LOAD_THRESHOLD 상수를 실제로 참조한다 —
+    임계값을 올리면 같은 부하가 실패로 뒤집힌다."""
+    monkeypatch.setattr(GraspState, "LOAD_THRESHOLD", 0.2)
+
+    ports = make_ports(
+        arm=FakeArm(load_ratio=LOAD_HOLDING),
+        perception=ScriptedPerception(detections=[_detection(track_id=1)]),
+    )
+
+    states = run_to_completion(ports)
+    names = [s.name for s in states]
+
+    assert "INSERT" not in names
+    assert states[-1].ctx.held_ids == {1}
 
 
 # ── 7. POSE_PLAN 해 없음 → REJECT ───────────────────────────────────────
@@ -357,7 +426,7 @@ def test_fetch_mode_routes_through_deliver_and_handover(make_ports, run_to_compl
     ports = make_ports(
         # get_load()는 GRASP(1회차, 높아야 성공)과 HANDOVER(2회차, 낮아야
         # '사람이 받아감')가 반대 의미로 같이 쓴다 — 순서대로 반환.
-        arm=FakeArm(load_ratio=[1.0, 0.0]),
+        arm=FakeArm(load_ratio=[LOAD_HOLDING, LOAD_EMPTY]),
         perception=ScriptedPerception(detections=[target]),
     )
 
@@ -379,7 +448,7 @@ def test_fetch_mode_select_ignores_non_target_class(make_ports, run_to_completio
     (state_machine.md §3 SELECT 3번 조건) — GABE만 있으면 CHESS_PIECE를
     요청해도 고를 게 없어 곧바로 DONE이다."""
     ports = make_ports(
-        arm=FakeArm(load_ratio=[1.0, 0.0]),
+        arm=FakeArm(load_ratio=[LOAD_HOLDING, LOAD_EMPTY]),
         perception=ScriptedPerception(detections=[_detection(track_id=9, cls=ObjectClass.GABE)]),
     )
 
