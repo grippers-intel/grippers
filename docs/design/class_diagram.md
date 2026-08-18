@@ -93,9 +93,11 @@ classDiagram
         +done_ids : frozenset
         +held_ids : frozenset
         +grasp_attempts : int
+        +last_scan : tuple
         +complete(id) MissionContext
         +hold(id) MissionContext
         +retry() MissionContext
+        +reset_attempts() MissionContext
     }
 
     Detection --> ObjectClass
@@ -125,9 +127,13 @@ classDiagram
 경계에서 변환 사고가 납니다. `opening_mm` 만 mm인 이유는 상자 입구를 mm로 실측하기 때문이고,
 `_mm` 접미사는 **길이**에만 쓰며 각도에는 절대 쓰지 않습니다.
 
-`MissionContext` 는 **불변**입니다. `complete()` · `hold()` · `retry()` 는 새 인스턴스를 반환하고,
-State가 이걸 다음 State 생성자에 넘깁니다. 재시도 카운터를 가변 필드로 두면 루프 안에서
-누가 언제 증가시켰는지 추적이 안 됩니다.
+`MissionContext` 는 **불변**입니다. `complete()` · `hold()` · `retry()` · `reset_attempts()` 는
+새 인스턴스를 반환하고, State가 이걸 다음 State 생성자에 넘깁니다. 재시도 카운터를 가변 필드로
+두면 루프 안에서 누가 언제 증가시켰는지 추적이 안 됩니다.
+
+`grasp_attempts` 만 스코프가 **대상 1개**입니다 — `SELECT` 가 새 대상을 고를 때
+`reset_attempts()` 로 되돌립니다. 나머지 필드는 미션 전체 스코프입니다
+([`state_machine.md` §4](state_machine.md#4-재진입-방지--처리-완료-목록)).
 
 > **미결** — `placement_rule` 의 타입. `dict[ObjectClass, BoxColor]` 가 자연스럽지만
 > ROS2 메시지로 넘길 때 dict가 없으므로 `MissionSpec.msg` 에서는 병렬 배열 2개로 평탄화해야 합니다.
