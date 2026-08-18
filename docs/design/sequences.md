@@ -38,7 +38,7 @@ sequenceDiagram
         Note over T,A: ① SCAN — 정지 상태에서만 관측
         T->>P: scan_floor()
         P-->>T: list[Detection] (3범주 · pose · dims · yaw)
-        Note right of P: 모서리 고정 웹캠 1프레임 (1080p)<br/>호모그래피 입력은 박스 아래 모서리<br/>상자 영역 마스킹 · 로봇 차폐 시 이월
+        Note right of P: 모서리 고정 웹캠 2대 1프레임씩 (C270 720p)<br/>두 시야 병합 · track_id 재부여<br/>호모그래피 입력은 박스 아래 모서리<br/>상자 영역 마스킹 · 로봇 차폐 시 이월
 
         alt 미처리 대상 0개
             T-->>OP: DONE — 결과 보고
