@@ -132,7 +132,7 @@ MentorPi 벤더 스택(`app`, `bringup`, `driver`, `peripherals`, `navigation`, 
 | 호스트 PC (격벽 밖) | 명령 입력 · HUD | |
 | AI training server | 모델 학습 | 오프라인 |
 
-**미결** — 컨테이너 배포 전제인지 확인 필요. `mission_orchestrator_node` 가 `sys.path.insert(0, '/grippers')` 를 하드코딩하고 있고, CI에 `docker/Dockerfile` 을 참조하는 잡이 있으나 **해당 파일이 없습니다**. → §9
+**해소 (8/18)** — `docker/Dockerfile` 신설로 컨테이너 정의를 명시했습니다. 컨테이너 배포(레지스트리 push)는 전제하지 않으며, 이 파일은 Pi 로컬 재현용입니다. `mission_orchestrator_node` 의 `sys.path.insert(0, '/grippers')` 는 Dockerfile 의 `PYTHONPATH` 설정으로 대체 가능하나, 컨테이너 밖 실행 대비 안전장치로 유지합니다. → §9
 
 | 항목 | 값 |
 |---|---|
@@ -366,7 +366,7 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 
 | # | 항목 | 선택지 | 기한 | 담당 |
 |---|---|---|---|---|
-| 1 | 컨테이너 배포 전제 여부 | `docker/Dockerfile` 신설 / CI `docker-build` 잡 제거 | 8/14 | |
+| ~~1~~ | ~~컨테이너 배포 전제 여부~~ | **✅ 해소 (8/18)** — 컨테이너 배포 미전제로 확정. `docker/Dockerfile` 신설(PR #133), CI `docker-build` 잡은 두지 않음. 베이스 `ros:humble-export` 가 공개 레지스트리에 없고 Hiwonder 벤더 드라이버 소스를 보유하지 않아 CI 재현이 불가능하기 때문. | — | — |
 | 2 | `move_to_cartesian` 기준 프레임 | `base_link` / `arm_base` | 8/14 | |
 | 3 | 각도 단위 통일 | rad 통일 / 경계에서만 deg | 8/14 | |
 | 4 | `ReorientArm` 액션 채택 여부 | 채택 / `move_to_cartesian` 유지 | 8/14 | |
@@ -379,7 +379,7 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 | 11 | **ONNX→HEF 컴파일 환경·담당** — DFC는 **x86_64 Ubuntu 전용**(ARM 미지원, Pi에서 실행 불가. RAM 16GB↑, 일부 최적화는 NVIDIA GPU 필요) | AI training server 겸용 / 팀원 x86 랩탑(WSL2 포함) / 클라우드 x86 인스턴스 / **없으면 Hailo 가속 포기 후 CPU 추론** | **8/18 (호스트 유무 판정)** → 환경 구성 8/21 · 추론 검증 8/25 | 호스트 확인 김동혁 · **DFC 담당 미확정(8/14 결정)** |
 | ~~12~~ | ~~**가속기 모델 확정** — 교수님 공수분이 8L인지 10H인지~~ | **✅ 해소 (2026-08-12)** — AI HAT+ 2(Hailo-10H, 40 TOPS INT4 / 8GB) 실물 보유. PCIe 직결로 확정, 캐리어·모듈 분리 불필요 | — | — |
 | ~~13~~ | ~~**기준 ROS 2 배포판** — 호스트는 Jazzy, 실제 빌드·실행은 Humble 컨테이너로 이원화~~ | **✅ 해소 (2026-08-17)** — **Humble 컨테이너 유지(현행)** 로 확정. `IntelPi` 컨테이너(`ros:humble-export`)가 이미 실질 표준이었고(`setup.md`), Jazzy 네이티브 전환은 MentorPi 벤더 스택 전체 재검증 + Python 3.10→3.12 전환 비용을 남은 일정(9/8 발표)에서 감당할 수 없어 기각. 양쪽 병기는 Humble/Jazzy 타입 해시 불일치로 노드 간 직접 통신이 안 돼 실익 없이 이중 빌드 부담만 남아 기각. 근거 → [`rejected_designs.md`](../ops/rejected_designs.md#9-ros2-배포판-통일) | — | 조현우 · 이승용 |
-| 14 | **HailoRT 설치 경로 · 컨테이너 디바이스 접근** — 공식 `hailo-all`은 Raspberry Pi OS 기준인데 호스트는 Ubuntu 24.04이고, 추론 노드는 `IntelPi` 컨테이너 안에서 돈다. *(하드웨어는 8/11 PCIe 장착 완료 — 남은 건 드라이버·런타임뿐)* | 호스트에 드라이버+HailoRT 설치 후 `/dev/hailo0` 패스스루 / 컨테이너 이미지에 런타임 포함 / 추론만 호스트 프로세스로 분리 | **8/14** — 기성 `.hef`로 검증 가능해 DFC(#11)와 독립 | 조현우 *(제안, 8/14 확정)* |
+| 14 | **HailoRT 설치 경로 · 컨테이너 디바이스 접근** — ⚠️ 기존 서술의 "호스트는 Ubuntu 24.04" 는 오류로, 실제 호스트는 **Debian 13 (trixie)** 이고 Hailo 패키지는 `archive.raspberrypi.com/debian trixie` 에서 옵니다. 컨테이너는 Ubuntu 22.04 jammy. **8/18 검증**: `libhailort.so`·`hailortcli` 는 trixie 용 `.deb` 를 그대로 풀어도 컨테이너에서 정상 동작(HAILO10H 인식, 의존성이 libc/libstdc++ 뿐이라 glibc 차이 무관). **Python 바인딩만 `cpython-313` 전용 빌드라 컨테이너 Python 3.10 에서 import 불가**, PyPI 에도 없음 | Developer Zone 에서 HailoRT **5.1.1 + cp310 + aarch64** 휠 확보(드라이버 5.1.1 과 버전 일치 필수) / 추론만 호스트 프로세스로 분리 / 컨테이너 Python 을 3.13 으로 올림 | **미해결** — 계정 필요 | 조현우 |
 
 ---
 
