@@ -1,0 +1,12 @@
+# domain.ports.command_interpreter.CommandInterpreter.parse(text) 대응.
+# 해석에 실패하면 understood=false — srv/FindBox.srv 의 found 와 같은 규약이다.
+#
+# ROS2 메시지에는 null이 없어 모든 필드가 항상 기본값으로 채워진다. understood 없이
+# "빈 spec"으로 실패를 표현하면 어댑터가 정상 응답과 구분하지 못하고, mode="" 를
+# MissionMode[""] 로 조회하다 KeyError 가 변환 함수 한복판에서 터진다.
+# 실패는 값이 아니라 별도 플래그로 실어야 한다.
+
+string text
+---
+bool understood          # false면 아래 spec은 의미 없음 (기본 초기화된 빈 값)
+MissionSpec spec

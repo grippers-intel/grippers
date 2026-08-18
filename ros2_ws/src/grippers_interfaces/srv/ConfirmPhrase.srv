@@ -1,0 +1,4 @@
+# domain.ports.command_interpreter.CommandInterpreter.confirm_phrase(spec) 대응.
+MissionSpec spec
+---
+string phrase

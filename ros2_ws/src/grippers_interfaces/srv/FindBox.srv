@@ -1,0 +1,7 @@
+# domain.ports.perception.Perception.find_box(color) 대응. 못 찾으면
+# found=false — 포트 계약(찾지 못하면 None)을 여기서 그대로 반영한다.
+
+string color             # BoxColor 이름: "BLACK" | "RED" | "BLUE" | "GREEN"
+---
+bool found
+BoxObservation box
