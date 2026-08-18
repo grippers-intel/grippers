@@ -28,6 +28,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Empty, String
 
 # TODO: Ros2Perception 어댑터 (perception 노드 만든 뒤 추가)
+from domain.adapters.fake.fake_arm import FakeArm
 from domain.adapters.fake.scripted_interpreter import ScriptedInterpreter
 from domain.adapters.fake.scripted_perception import ScriptedPerception
 from domain.adapters.real.ros2_arm_driver import Ros2ArmDriver
@@ -67,6 +68,7 @@ class MissionOrchestratorNode(Node):
             callback_group=cb_group,
         )
         self._estop_flag = threading.Event()
+        self.declare_parameter("use_fake_arm", True)
         self.declare_parameter("use_fake_perception", True)
         self.declare_parameter("use_fake_interpreter", True)
 
@@ -85,7 +87,7 @@ class MissionOrchestratorNode(Node):
     def _run_fsm(self):
         ports = Ports(
             base=Ros2MecanumBase(self),
-            arm=Ros2ArmDriver(self),
+            arm=self._make_arm(),
             perception=self._make_perception(),
             interpreter=self._make_interpreter(),
             estop=self._estop_flag,
@@ -142,6 +144,13 @@ class MissionOrchestratorNode(Node):
         msg = MissionState()
         msg.state = "IDLE"
         self._state_pub.publish(msg)
+
+    def _make_arm(self):
+        use_fake = self.get_parameter("use_fake_arm").value
+        if use_fake:
+            self.get_logger().warn("use_fake_arm=True — FakeArm 사용 중")
+            return FakeArm()
+        return Ros2ArmDriver(self)
 
     def _make_perception(self):
         use_fake = self.get_parameter("use_fake_perception").value
