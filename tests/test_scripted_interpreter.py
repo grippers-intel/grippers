@@ -1,8 +1,6 @@
 """명령 문형 회귀 테스트. docs/design/class_diagram.md §2: 'ScriptedInterpreter로
 Fake 대체가 되어야 CI에서 명령 문형 회귀 테스트가 돌아간다.'"""
 
-import pytest
-
 from domain.adapters.fake.fake_base import FakeBase
 from domain.adapters.fake.scripted_interpreter import ScriptedInterpreter
 from domain.adapters.fake.scripted_perception import ScriptedPerception
@@ -43,9 +41,14 @@ def test_fetch_phrase_sets_mode_and_target_cls():
     assert spec.target_cls is ObjectClass.CHESS_PIECE
 
 
-def test_unknown_phrase_raises():
-    with pytest.raises(ValueError):
-        ScriptedInterpreter().parse("알 수 없는 명령")
+def test_unknown_phrase_returns_none():
+    """등록되지 않은 문형은 **None** — 예전에는 ValueError였다.
+
+    real 구현(Ros2CommandInterpreter)이 understood=False 일 때 None을 돌려주므로,
+    Fake가 예외를 던지면 같은 상황을 두 구현이 다르게 표현하게 된다 —
+    Fake로 도는 도메인 테스트가 real의 실패 경로를 한 번도 밟지 않는다
+    (PR #9 리뷰 B항, domain/ports/command_interpreter.py 계약)."""
+    assert ScriptedInterpreter().parse("알 수 없는 명령") is None
 
 
 def test_parse_does_not_leak_mutations_into_table():

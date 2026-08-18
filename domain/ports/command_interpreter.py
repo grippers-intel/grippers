@@ -21,12 +21,11 @@ class CommandInterpreter(ABC):
     def parse(self, text: str) -> MissionSpec:
         """자연어 명령 text를 MissionSpec으로 해석한다.
 
-        **해석하지 못했거나 서비스가 응답하지 않으면 `None`** — `IDLE` 이 대기를
-        유지한다. 명령을 못 알아들은 채 미션을 시작하는 것보다 낫다.
-
-        ⚠️ `ScriptedInterpreter` 는 아직 미등록 문형에 `ValueError` 를 올린다 —
-        real 구현과 표현이 갈라져 있는 상태이고, 포트 시그니처(`-> MissionSpec`)와
-        함께 후속 PR에서 원자적으로 맞춘다."""
+        **해석하지 못했거나 서비스가 응답하지 않으면 `None`** — 예외를 올리지
+        않는다. 실패를 예외로 표현하면 루프 FSM이 흡수할 수 없고 미션 스레드가
+        그대로 죽는다. `IDLE` 이 대기를 유지하는 편이 명령을 못 알아들은 채로
+        미션을 시작하는 것보다 낫다. (반환 타입 선언은 아직 `MissionSpec` 이다 —
+        시그니처는 후속 PR에서 한꺼번에 맞춘다.)"""
 
     @abstractmethod
     def confirm_phrase(self, spec: MissionSpec) -> str:
