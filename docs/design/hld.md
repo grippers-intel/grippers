@@ -127,7 +127,7 @@ MentorPi 벤더 스택(`app`, `bringup`, `driver`, `peripherals`, `navigation`, 
 | 실행 위치 | 구동 요소 | 상태 |
 |---|---|---|
 | Raspberry Pi 5 (온보드) | 전 노드 | |
-| AI 가속기 (**Raspberry Pi AI HAT+ 2** — Hailo-10H·8GB LPDDR4X 기판 실장, 16핀 PCIe FFC로 Pi 5 직결) | **YOLO 검출·세그멘테이션 추론** (`.hef` 컴파일 필요) | ✅ **채택 확정 · 실물 보유 · PCIe 물리 장착 완료(8/11)**. 캐리어 불필요. ⚠️ 드라이버/HailoRT 인식은 미확인 (§9 #14, 8/14). **VLA 3분할 상주는 미확정** (§9 #10) |
+| AI 가속기 (**Raspberry Pi AI HAT+ 2** — Hailo-10H·8GB LPDDR4X 기판 실장, 16핀 PCIe FFC로 Pi 5 직결) | **YOLO 검출·세그멘테이션 추론** (`.hef` 컴파일 필요) | ✅ **채택 확정 · 실물 보유 · PCIe 물리 장착 완료(8/11)**. 캐리어 불필요. ✅ 드라이버/HailoRT 인식 및 컨테이너 Python 3.10 연동 완료(8/19, HailoRT 5.1.1, HAILO10H PCIe 장치 인식 확인). **VLA 3분할 상주는 미확정** (§9 #10) |
 | **x86_64 Ubuntu 호스트** | **Hailo DFC — ONNX→HEF 컴파일** (ARM 미지원, Pi에서 실행 불가) | ⚠️ **환경 확보 미확인** — 8/18 판정 (§9 #11) |
 | 호스트 PC (격벽 밖) | 명령 입력 · HUD | |
 | AI training server | 모델 학습 | 오프라인 |
@@ -384,7 +384,7 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 | 11 | **ONNX→HEF 컴파일 환경·담당** — DFC는 **x86_64 Ubuntu 전용**(ARM 미지원, Pi에서 실행 불가. RAM 16GB↑, 일부 최적화는 NVIDIA GPU 필요) | AI training server 겸용 / 팀원 x86 랩탑(WSL2 포함) / 클라우드 x86 인스턴스 / **없으면 Hailo 가속 포기 후 CPU 추론** | **8/18 (호스트 유무 판정)** → 환경 구성 8/21 · 추론 검증 8/25 | 호스트 확인 김동혁 · **DFC 담당 미확정(8/14 결정)** |
 | ~~12~~ | ~~**가속기 모델 확정** — 교수님 공수분이 8L인지 10H인지~~ | **✅ 해소 (2026-08-12)** — AI HAT+ 2(Hailo-10H, 40 TOPS INT4 / 8GB) 실물 보유. PCIe 직결로 확정, 캐리어·모듈 분리 불필요 | — | — |
 | ~~13~~ | ~~**기준 ROS 2 배포판** — 호스트는 Jazzy, 실제 빌드·실행은 Humble 컨테이너로 이원화~~ | **✅ 해소 (2026-08-17)** — **Humble 컨테이너 유지(현행)** 로 확정. `IntelPi` 컨테이너(`ros:humble-export`)가 이미 실질 표준이었고(`setup.md`), Jazzy 네이티브 전환은 MentorPi 벤더 스택 전체 재검증 + Python 3.10→3.12 전환 비용을 남은 일정(9/8 발표)에서 감당할 수 없어 기각. 양쪽 병기는 Humble/Jazzy 타입 해시 불일치로 노드 간 직접 통신이 안 돼 실익 없이 이중 빌드 부담만 남아 기각. 근거 → [`rejected_designs.md`](../ops/rejected_designs.md#9-ros2-배포판-통일) | — | 조현우 · 이승용 |
-| 14 | **HailoRT 설치 경로 · 컨테이너 디바이스 접근** — ⚠️ 기존 서술의 "호스트는 Ubuntu 24.04" 는 오류로, 실제 호스트는 **Debian 13 (trixie)** 이고 Hailo 패키지는 `archive.raspberrypi.com/debian trixie` 에서 옵니다. 컨테이너는 Ubuntu 22.04 jammy. **8/18 검증**: `libhailort.so`·`hailortcli` 는 trixie 용 `.deb` 를 그대로 풀어도 컨테이너에서 정상 동작(HAILO10H 인식, 의존성이 libc/libstdc++ 뿐이라 glibc 차이 무관). **Python 바인딩만 `cpython-313` 전용 빌드라 컨테이너 Python 3.10 에서 import 불가**, PyPI 에도 없음 | Developer Zone 에서 HailoRT **5.1.1 + cp310 + aarch64** 휠 확보(드라이버 5.1.1 과 버전 일치 필수) / 추론만 호스트 프로세스로 분리 / 컨테이너 Python 을 3.13 으로 올림 | **미해결** — 계정 필요 | 조현우 |
+| 14 | **HailoRT 설치 경로 · 컨테이너 디바이스 접근** — 실제 호스트는 **Debian 13 (trixie)**, 컨테이너는 Ubuntu 22.04 jammy. **8/19 해결**: 호스트의 `h10-hailort-pcie-driver 5.1.1`을 사용하고 `/dev`를 컨테이너에 bind mount. 컨테이너에는 `h10-hailort_5.1.1_arm64.deb`에서 `libhailort.so.5.1.1`·`hailortcli`를 추출하고, Developer Zone의 `hailort-5.1.1-cp310-cp310-linux_aarch64.whl`을 설치. Python 3.10.12에서 `import hailo_platform` 성공, `hailortcli scan` 및 `Device.scan()`으로 PCIe 장치 `0001:01:00.0` 인식 확인. **HEF inference 검증은 별도 단계** | `docker/vendor/`에 `.deb`·`.whl` 배치 후 `docker/Dockerfile` 빌드 | **해결 (2026-08-19)** | 조현우 |
 
 ---
 
@@ -407,6 +407,7 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 
 | 날짜 | 버전 | 변경 | PR | 승인 |
 |---|---|---|---|---|
+| 2026-08-19 | 0.9 | **HailoRT 컨테이너 연동 완료** — 호스트 `h10-hailort-pcie-driver 5.1.1` + 컨테이너 `libhailort.so.5.1.1`/`hailortcli 5.1.1` + Python 3.10용 `hailort-5.1.1-cp310-cp310-linux_aarch64.whl` 조합 검증. `import hailo_platform`, `hailortcli scan`, `Device.scan()` 성공, PCIe 장치 `0001:01:00.0` 인식 확인. 미결 #14 해소. 실제 HEF inference는 별도 검증 항목으로 유지. | | |
 | 2026-08-19 | 0.8 | **§6.4 #10 해소** — `TransportState` 가 `align_to_box()` 의 yaw 오차를 `ALIGN_TOLERANCE_RAD` 와 비교해 정렬 실패를 보류로 흡수. 같은 PR에서 `IDLE` 의 `parse()` 실패 처리(해석 불가 시 IDLE 유지)와 `grasp_attempts` 의 대상별 리셋(이슈 #139)도 함께 반영했고, 전이 계약은 `state_machine.md` §3·§4 갱신 | | |
 | 2026-08-17 | 0.7 | **기준 ROS 2 배포판 확정 (#96)** — 미결 #13 해소: Humble 컨테이너 유지로 확정, Jazzy 네이티브 전환·양쪽 병기 기각. 근거는 `rejected_designs.md` §9 | | |
 | 2026-08-12 | 0.6 | **가속기 확보 확정 + 캐리어 기재 정정** — 0.4의 "AI HAT+로는 10H 불가 → M.2 HAT+ 별도 발주"는 **오기**. **Raspberry Pi AI HAT+ 2**(2026-01-15 출시, Hailo-10H·8GB LPDDR4X 기판 실장, 16핀 PCIe FFC 직결) **실물을 교수님 공수로 보유 · 8/11 PCIe 물리 장착 완료** — 2품목 발주 전제 폐기, 모듈 분리 불가·불필요 (§3.2). 드라이버/런타임 확인은 미결 #14로 분리(8/14). 미결 #12(모델 확정) 즉시 해소. **DFC의 x86_64 Ubuntu 전용 제약** 명시 및 미결 #11 확장, HEF 일정 8/21·8/25로 조정. 비전 처리량은 26 TOPS급 가정 (§8.2). ROS 2 배포판 이원화 미결 #13 신설 | | |
