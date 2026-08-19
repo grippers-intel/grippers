@@ -57,13 +57,14 @@ import numpy as np
 # docs/subsystems/perception.md 를 단일 기준으로 삼는다.
 # 값이 바뀌면 이 블록만 고치면 report 표까지 따라온다.
 
-WORKSPACE_MM = 2000.0  # 작업 공간 2 x 2 m (8/17 확정)
-CAM_HEIGHT_MM = 1600.0  # 모서리 웹캠 환경 고정 높이 (8/17 확정)
-CAM_SETBACK_MM = 1900.0  # 대각선 바깥으로 후퇴 (C270 x2, 8/18)
+WORKSPACE_MM = 1800.0  # 가벽 35 x 45 cm x 16장으로 두른 내부 (8/19 실측)
+CAM_HEIGHT_MM = 2050.0  # 보유 스탠드 최대 2.1 m 에서 흔들림 여유를 뺀 값 (#149 D3)
+CAM_SETBACK_MM = 1400.0  # 대각선 바깥으로 후퇴 (C270 x2, #149 D3)
 FOCAL_PX = 1411.0  # f = (1280/2)/tan(24.4°) — C270 720p
-WORST_SLANT_MM = 3940.0  # 최악점(옆 모서리) 슬랜트 (검산값 3.9426 m)
-WORST_ELEV_DEG = 23.9  # 최악점 고도각
-GEOMETRY_NOTE = "C270 x2 · 720p · HFOV 48.8° · 마주보는 두 모서리 · 대각 후퇴 1.90 m"
+WORST_SLANT_MM = 3601.0  # 최악점(옆 모서리) 슬랜트
+WORST_ELEV_DEG = 34.7  # 최악점 고도각
+MIN_OBJECT_MM = 51.0  # 최악점에서 20 px 을 보장하는 최소 물체 폭 (#149 D1)
+GEOMETRY_NOTE = "C270 x2 · 720p · HFOV 48.8° · 마주보는 두 모서리 · 높이 2.05 m · 대각 후퇴 1.40 m"
 
 PASS_MM = 20.0  # issue #91 DoD
 CAM_IDS = ("A", "B")
@@ -822,6 +823,7 @@ def cmd_report(_: argparse.Namespace) -> None:
     add(f"| 대각 후퇴 | {CAM_SETBACK_MM / 1000:.2f} m |")
     add(f"| 핀홀 초점거리 | {FOCAL_PX:.0f} px |")
     add(f"| 최악점 | 슬랜트 {WORST_SLANT_MM / 1000:.2f} m · 고도각 {WORST_ELEV_DEG}° |")
+    add(f"| 최소 물체 폭 | {MIN_OBJECT_MM:.0f} mm (최악점 20 px 보장) |")
     add("| 지시점 규약 | 바운딩박스 아래쪽 모서리(바닥 접지선) |")
     add("")
 
