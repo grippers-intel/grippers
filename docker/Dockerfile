@@ -83,28 +83,24 @@ ENV MACHINE_TYPE=MentorPi_Mecanum \
     PYTHONPATH=/grippers:/third_party/soarm_provided_d
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Hailo-10H 런타임 — 보류 (미결 #14)
-#
-#    2026-08-18 검증 결과:
-#      ✅ libhailort.so / hailortcli — 호스트(Debian trixie)용 .deb 를 그대로 풀어도
-#         이 컨테이너(Ubuntu 22.04 jammy)에서 정상 동작. HAILO10H 인식 확인.
-#         의존성이 libstdc++/libm/libgcc_s/libc 뿐이라 glibc 차이를 타지 않습니다.
-#      ❌ Python 바인딩 — _pyhailort.cpython-**313**-aarch64-linux-gnu.so 로
-#         Python 3.13 전용 빌드. 이 컨테이너는 Python 3.10 이라 import 불가.
-#         PyPI 에도 hailort 패키지가 없습니다 (No matching distribution found).
-#
-#    필요한 것: Hailo Developer Zone 에서 HailoRT **5.1.1** + **cp310** + **aarch64**
-#              Python 휠. 드라이버(h10-hailort-pcie-driver 5.1.1)와 런타임 버전이
-#              정확히 일치해야 하므로 버전을 임의로 올리면 안 됩니다.
-#
-#    휠 확보 후 추가할 블록:
-#      COPY docker/vendor/hailort-5.1.1-cp310-cp310-linux_aarch64.whl /tmp/
-#      RUN pip3 install --no-cache-dir /tmp/hailort-*.whl && rm /tmp/hailort-*.whl
-#
-#    커널 드라이버는 호스트 것을 그대로 사용합니다 — 컨테이너에는 유저스페이스
-#    라이브러리와 Python 바인딩만 필요하고, 장치 접근은 ros_start.sh 의
-#    `-v /dev:/dev` 로 이미 확보되어 있습니다.
+# 5. Hailo-10H 런타임
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Native HailoRT 5.1.1 userspace runtime.
+# Kernel driver는 호스트의 h10-hailort-pcie-driver 5.1.1 사용.
+COPY docker/vendor/h10-hailort_5.1.1_arm64.deb /tmp/h10-hailort.deb
+RUN mkdir -p /tmp/hailort-root \
+    && dpkg-deb -x /tmp/h10-hailort.deb /tmp/hailort-root \
+    && cp /tmp/hailort-root/usr/lib/libhailort.so.5.1.1 /usr/lib/ \
+    && ln -sf /usr/lib/libhailort.so.5.1.1 /usr/lib/libhailort.so \
+    && cp /tmp/hailort-root/usr/bin/hailortcli /usr/bin/ \
+    && ldconfig \
+    && rm -rf /tmp/hailort-root /tmp/h10-hailort.deb
+
+# Python 3.10 / aarch64 binding.
+COPY docker/vendor/hailort-5.1.1-cp310-cp310-linux_aarch64.whl /tmp/
+RUN pip3 install --no-cache-dir /tmp/hailort-*.whl \
+    && rm /tmp/hailort-*.whl
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. 사용자

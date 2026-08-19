@@ -249,3 +249,7 @@ ros2_ws/log/
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+
+# HailoRT vendor binaries
+docker/vendor/*.whl
+docker/vendor/*.deb
