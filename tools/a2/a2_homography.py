@@ -59,12 +59,16 @@ import numpy as np
 
 WORKSPACE_MM = 1800.0  # 가벽 35 x 45 cm x 16장으로 두른 내부 (8/19 실측)
 CAM_HEIGHT_MM = 2050.0  # 보유 스탠드 최대 2.1 m 에서 흔들림 여유를 뺀 값 (#149 D3)
-CAM_SETBACK_MM = 1400.0  # 대각선 바깥으로 후퇴 (C270 x2, #149 D3)
+CAM_SETBACK_MM = 600.0  # 마주보는 두 "변 중앙" 에서 바깥으로 후퇴 (#149 D3 정정 8/19)
 FOCAL_PX = 1411.0  # f = (1280/2)/tan(24.4°) — C270 720p
-WORST_SLANT_MM = 3601.0  # 최악점(옆 모서리) 슬랜트
-WORST_ELEV_DEG = 34.7  # 최악점 고도각
-MIN_OBJECT_MM = 51.0  # 최악점에서 20 px 을 보장하는 최소 물체 폭 (#149 D1)
-GEOMETRY_NOTE = "C270 x2 · 720p · HFOV 48.8° · 마주보는 두 모서리 · 높이 2.05 m · 대각 후퇴 1.40 m"
+CAM_PITCH_DEG = 63.8  # 아래로 내려다보는 각. 스탠드 헤드가 이만큼 꺾이는지 먼저 확인할 것
+WORST_SLANT_MM = 2695.0  # 최악점(담당 절반의 경계 모서리) 슬랜트
+WORST_ELEV_DEG = 49.5  # 최악점 고도각
+MIN_OBJECT_MM = 40.0  # 최악점에서 20 px 을 보장하는 최소 물체 폭 (#149 D1)
+GEOMETRY_NOTE = "C270 x2 · 720p · HFOV 48.8° · 마주보는 두 변 중앙 · 높이 2.05 m · 후퇴 0.60 m"
+
+# 담당 구역: A 는 y in [0, 900], B 는 y in [900, 1800]. 경계는 두 대가 함께 본다.
+HALF_MM = WORKSPACE_MM / 2
 
 PASS_MM = 20.0  # issue #91 DoD
 CAM_IDS = ("A", "B")
@@ -510,16 +514,19 @@ def cmd_calib(a: argparse.Namespace) -> None:
     image = a.image or f"frame_base_{a.cam_id}.png"
 
     if a.make_template:
-        # 작업 공간 네 모서리. 두 카메라 모두 네 모서리를 볼 수 있으므로
-        # 같은 기지점을 쓴다 — 그래야 A·B 가 같은 월드 프레임을 공유한다.
+        # 기지점은 "자기 담당 절반의 네 귀퉁이" 다 — 가까운 변 두 점 + 경계 두 점.
+        # 네 모서리를 다 쓰려고 하지 마라. 변 중앙 배치에서 반대편 절반은 프레임 밖이다.
+        # 두 시야를 묶는 것은 점을 공유하는 게 아니라 같은 줄자 원점·같은 X 축을 쓰는 것이다.
+        near_y = 0 if a.cam_id == "A" else WORKSPACE_MM
         with open(points, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["name", "world_x", "world_y"])
-            w.writerow(["corner_00", 0, 0])
-            w.writerow(["corner_x0", WORKSPACE_MM, 0])
-            w.writerow(["corner_xy", WORKSPACE_MM, WORKSPACE_MM])
-            w.writerow(["corner_0y", 0, WORKSPACE_MM])
+            w.writerow(["near_x0", 0, near_y])
+            w.writerow(["near_x1", WORKSPACE_MM, near_y])
+            w.writerow(["boundary_x1", WORKSPACE_MM, HALF_MM])
+            w.writerow(["boundary_x0", 0, HALF_MM])
         print(f"[+] {points} 템플릿 생성. 실측값(mm)으로 고쳐서 다시 실행하세요.")
+        print(f"    {a.cam_id} 담당 절반의 네 귀퉁이입니다 (가까운 변 2점 + 경계 2점).")
         print("    A · B 카메라가 같은 원점·같은 축을 써야 병합이 됩니다.")
         return
 
@@ -581,31 +588,33 @@ def cmd_calib(a: argparse.Namespace) -> None:
 
 # ---------------------------------------------------------------- 명령: verify
 
-# 카메라별 담당 절반 + 경계. 최악점은 자기 쪽 옆 모서리다.
+# 카메라별 담당 절반 + 경계. 최악점은 담당 절반의 경계 모서리다.
+# 검증점은 담당 절반 안에서 고르되 경계 모서리를 반드시 포함한다 — 거기가 최악점이다.
+# A 는 y in [0, 900], B 는 y in [900, 1800]. B 는 A 를 y 축으로 뒤집은 것이다.
 VERIFY_TEMPLATE = {
     "A": [
-        ("near_corner", 0, 0),
-        ("side_x0", 2000, 0),
-        ("side_0y", 0, 2000),
-        ("boundary_mid", 1000, 1000),
-        ("near_q", 400, 400),
-        ("mid_x", 1200, 400),
-        ("mid_y", 400, 1200),
-        ("edge_x", 1700, 200),
-        ("edge_y", 200, 1700),
-        ("center_near", 800, 800),
+        ("boundary_x0", 0, 900),  # 최악점
+        ("boundary_x1", 1800, 900),  # 최악점
+        ("boundary_mid", 900, 900),
+        ("near_x0", 0, 0),
+        ("near_x1", 1800, 0),
+        ("near_mid", 900, 0),
+        ("q_left", 300, 450),
+        ("q_right", 1500, 450),
+        ("center", 900, 450),
+        ("off_axis", 1500, 750),
     ],
     "B": [
-        ("far_corner", 2000, 2000),
-        ("side_x0", 2000, 0),
-        ("side_0y", 0, 2000),
-        ("boundary_mid", 1000, 1000),
-        ("far_q", 1600, 1600),
-        ("mid_x", 800, 1600),
-        ("mid_y", 1600, 800),
-        ("edge_x", 300, 1800),
-        ("edge_y", 1800, 300),
-        ("center_far", 1200, 1200),
+        ("boundary_x0", 0, 900),  # 최악점
+        ("boundary_x1", 1800, 900),  # 최악점
+        ("boundary_mid", 900, 900),
+        ("near_x0", 0, 1800),
+        ("near_x1", 1800, 1800),
+        ("near_mid", 900, 1800),
+        ("q_left", 300, 1350),
+        ("q_right", 1500, 1350),
+        ("center", 900, 1350),
+        ("off_axis", 1500, 1050),
     ],
 }
 
@@ -622,7 +631,7 @@ def cmd_verify(a: argparse.Namespace) -> None:
                 w.writerow([n, x, y])
         print(f"[+] {points} 템플릿 생성 ({len(VERIFY_TEMPLATE[a.cam_id])}점).")
         print(f"    {a.cam_id} 담당 절반 + 경계입니다. 실제 배치 좌표(mm)로 고치세요.")
-        print(f"    옆 모서리를 반드시 포함하세요 — 고도각 {WORST_ELEV_DEG}° 로 최악 조건입니다.")
+        print(f"    경계 모서리를 반드시 포함하세요 — 고도각 {WORST_ELEV_DEG}° 로 최악 조건입니다.")
         return
 
     calib = _load_json(calib_json(a.cam_id))
@@ -820,7 +829,7 @@ def cmd_report(_: argparse.Namespace) -> None:
     add(f"| 작업 공간 | {WORKSPACE_MM / 1000:.1f} × {WORKSPACE_MM / 1000:.1f} m |")
     add(f"| 카메라 | 환경 고정 · 높이 {CAM_HEIGHT_MM / 1000:.2f} m |")
     add(f"| 배치 | {GEOMETRY_NOTE} |")
-    add(f"| 대각 후퇴 | {CAM_SETBACK_MM / 1000:.2f} m |")
+    add(f"| 변 중앙 후퇴 | {CAM_SETBACK_MM / 1000:.2f} m · 하향 {CAM_PITCH_DEG}° |")
     add(f"| 핀홀 초점거리 | {FOCAL_PX:.0f} px |")
     add(f"| 최악점 | 슬랜트 {WORST_SLANT_MM / 1000:.2f} m · 고도각 {WORST_ELEV_DEG}° |")
     add(f"| 최소 물체 폭 | {MIN_OBJECT_MM:.0f} mm (최악점 20 px 보장) |")
@@ -843,7 +852,7 @@ def cmd_report(_: argparse.Namespace) -> None:
             )
         add("")
         add(
-            f"> 최악점 고도각 {WORST_ELEV_DEG}° 로 옆 모서리 가림이 최악 조건입니다. "
+            f"> 최악점 고도각 {WORST_ELEV_DEG}° 로 경계 모서리가 최악 조건입니다. "
             "두 카메라가 마주 보므로 한쪽이 가려도 반대쪽이 잡는 것이 이 배치의 이점입니다."
         )
         add("")
