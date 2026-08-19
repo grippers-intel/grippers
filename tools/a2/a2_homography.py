@@ -58,14 +58,14 @@ import numpy as np
 # 값이 바뀌면 이 블록만 고치면 report 표까지 따라온다.
 
 WORKSPACE_MM = 1800.0  # 가벽 35 x 45 cm x 16장으로 두른 내부 (8/19 실측)
-CAM_HEIGHT_MM = 2050.0  # 보유 스탠드 최대 2.1 m 에서 흔들림 여유를 뺀 값 (#149 D3)
-CAM_SETBACK_MM = 600.0  # 마주보는 두 "변 중앙" 에서 바깥으로 후퇴 (#149 D3 정정 8/19)
+CAM_HEIGHT_MM = 1650.0  # 삼각대 최대 높이 (#130 확정 8/19). 고정값이다
+CAM_SETBACK_MM = 1400.0  # 마주보는 두 "변 중앙" 에서 바깥으로 후퇴 (#149 D3)
 FOCAL_PX = 1411.0  # f = (1280/2)/tan(24.4°) — C270 720p
-CAM_PITCH_DEG = 63.8  # 아래로 내려다보는 각. 스탠드 헤드가 이만큼 꺾이는지 먼저 확인할 것
-WORST_SLANT_MM = 2695.0  # 최악점(담당 절반의 경계 모서리) 슬랜트
-WORST_ELEV_DEG = 49.5  # 최악점 고도각
-MIN_OBJECT_MM = 40.0  # 최악점에서 20 px 을 보장하는 최소 물체 폭 (#149 D1)
-GEOMETRY_NOTE = "C270 x2 · 720p · HFOV 48.8° · 마주보는 두 변 중앙 · 높이 2.05 m · 후퇴 0.60 m"
+CAM_PITCH_DEG = 42.8  # 아래로 내려다보는 각
+WORST_SLANT_MM = 2970.0  # 최악점(담당 절반의 경계 모서리) 슬랜트
+WORST_ELEV_DEG = 33.7  # 최악점 고도각
+MIN_OBJECT_MM = 42.0  # 최악점에서 20 px 을 보장하는 최소 물체 폭 (#149 D1). 권고 50 mm
+GEOMETRY_NOTE = "C270 x2 · 720p · HFOV 48.8° · 마주보는 두 변 중앙 · 높이 1.65 m · 후퇴 1.40 m"
 
 # 담당 구역: A 는 y in [0, 900], B 는 y in [900, 1800]. 경계는 두 대가 함께 본다.
 HALF_MM = WORKSPACE_MM / 2

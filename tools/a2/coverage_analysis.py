@@ -8,7 +8,8 @@ issue #149 의 D1·D3 근거 자료다. 실행하면 `docs/assets/vision/` 아�
 전제
 - Logitech C270 · 720p · f = 1411 px (HFOV 48.8° 로부터 (1280/2)/tan(24.4°))
 - 작업 공간 1.8 × 1.8 m
-- **마주보는 두 "변 중앙" 바깥에 한 대씩** (2026-08-19 정정. 모서리 배치가 아니다)
+- **마주보는 두 "변 중앙" 바깥에 한 대씩** — #130 확정 (모서리 배치가 아니다)
+- 높이 1,650 mm 는 삼각대 최대치라 고정값이다. 후퇴만 조절 가능하다
 - 각 카메라는 자기 쪽 절반(깊이 900 mm × 폭 1800 mm)만 담당한다
 
 `edge` 와 `corner` 를 모두 계산할 수 있게 해 둔 이유는, 왜 변 중앙이 나은지를
@@ -37,8 +38,9 @@ U_LIMIT, V_LIMIT = 640.0, 360.0
 DETECT_PX = 20.0  # YOLO 가 안정적으로 무는 최소 물체 폭
 OBJ_MM = 30.0  # 현재 출력된 원기둥 지름
 BLIND_CAP_MM = 204.0  # 가벽이 만드는 사각지대 허용치
-PICK = (2050.0, 600.0)  # 권고 배치 (높이, 변 중앙에서의 후퇴)
-CORNER_OLD = (2050.0, 1400.0)  # 8/19 오전에 확정했다가 폐기한 모서리 배치
+PICK = (1650.0, 1400.0)  # #130 확정 (높이, 변 중앙에서의 후퇴)
+CORNER_OLD = (2050.0, 1400.0)  # 8/19 오전에 검토했다가 폐기한 모서리 배치
+TALLER = (1900.0, 900.0)  # 더 높은 거치가 가능할 때의 대안 (#149 D3)
 OUT = Path(__file__).resolve().parents[2] / "docs" / "assets" / "vision"
 
 
@@ -261,7 +263,7 @@ def fig_object_size() -> float:
         arrowprops=dict(arrowstyle="->", lw=1.6, color="#ff3b30"),
         bbox=dict(fc="#fff3f2", ec="#ff3b30", lw=1.3, pad=5),
     )
-    for x, lab, col in [(30, "현재 원기둥\n30 mm", "#8e8e93"), (45, "권고\n45 mm", "#34c759")]:
+    for x, lab, col in [(30, "현재 원기둥\n30 mm", "#8e8e93"), (50, "권고\n50 mm", "#34c759")]:
         ax.axvline(x, color=col, lw=1.2, alpha=0.8)
         ax.text(x, 1.5, lab, ha="center", va="bottom", fontsize=10, color="#3a3a3c")
         ax.plot([x], [x * FOCAL_PX / worst], "s", ms=8, mec="k", mfc="w", zorder=5)
@@ -305,7 +307,7 @@ def fig_layout_compare():
     rows = []
     for layout, title, col in [
         ("corner", "모서리 배치 (8/19 오전 · 폐기)", "#ff3b30"),
-        ("edge", "변 중앙 배치 (실제 계획)", "#34c759"),
+        ("edge", "변 중앙 배치 (#130 확정)", "#34c759"),
     ]:
         h, s = PICK if layout == "edge" else CORNER_OLD
         wx, wy = worst_point(layout)
@@ -414,7 +416,7 @@ def sensitivity_table() -> None:
         approx = slant / (FOCAL_PX * math.sin(math.radians(elev)))
         print(
             f"{name:<24}{slant / 1000:8.2f}{elev:8.1f}{sig:9.2f}{approx:9.2f}"
-            f"{3 * sig:8.1f}{OBJ_MM * FOCAL_PX / slant:8.1f}{45 * FOCAL_PX / slant:8.1f}"
+            f"{3 * sig:8.1f}{OBJ_MM * FOCAL_PX / slant:8.1f}{50 * FOCAL_PX / slant:8.1f}"
         )
 
 
