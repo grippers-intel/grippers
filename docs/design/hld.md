@@ -407,10 +407,10 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 
 | 날짜 | 버전 | 변경 | PR | 승인 |
 |---|---|---|---|---|
+| 2026-08-19 | 0.9 | **HailoRT 컨테이너 연동 완료** — 호스트 `h10-hailort-pcie-driver 5.1.1` + 컨테이너 `libhailort.so.5.1.1`/`hailortcli 5.1.1` + Python 3.10용 `hailort-5.1.1-cp310-cp310-linux_aarch64.whl` 조합 검증. `import hailo_platform`, `hailortcli scan`, `Device.scan()` 성공, PCIe 장치 `0001:01:00.0` 인식 확인. 미결 #14 해소. 실제 HEF inference는 별도 검증 항목으로 유지. | | |
 | 2026-08-19 | 0.8 | **§6.4 #10 해소** — `TransportState` 가 `align_to_box()` 의 yaw 오차를 `ALIGN_TOLERANCE_RAD` 와 비교해 정렬 실패를 보류로 흡수. 같은 PR에서 `IDLE` 의 `parse()` 실패 처리(해석 불가 시 IDLE 유지)와 `grasp_attempts` 의 대상별 리셋(이슈 #139)도 함께 반영했고, 전이 계약은 `state_machine.md` §3·§4 갱신 | | |
 | 2026-08-17 | 0.7 | **기준 ROS 2 배포판 확정 (#96)** — 미결 #13 해소: Humble 컨테이너 유지로 확정, Jazzy 네이티브 전환·양쪽 병기 기각. 근거는 `rejected_designs.md` §9 | | |
 | 2026-08-12 | 0.6 | **가속기 확보 확정 + 캐리어 기재 정정** — 0.4의 "AI HAT+로는 10H 불가 → M.2 HAT+ 별도 발주"는 **오기**. **Raspberry Pi AI HAT+ 2**(2026-01-15 출시, Hailo-10H·8GB LPDDR4X 기판 실장, 16핀 PCIe FFC 직결) **실물을 교수님 공수로 보유 · 8/11 PCIe 물리 장착 완료** — 2품목 발주 전제 폐기, 모듈 분리 불가·불필요 (§3.2). 드라이버/런타임 확인은 미결 #14로 분리(8/14). 미결 #12(모델 확정) 즉시 해소. **DFC의 x86_64 Ubuntu 전용 제약** 명시 및 미결 #11 확장, HEF 일정 8/21·8/25로 조정. 비전 처리량은 26 TOPS급 가정 (§8.2). ROS 2 배포판 이원화 미결 #13 신설 | | |
-| 2026-08-19 | 0.7 | **HailoRT 컨테이너 연동 완료** — 호스트 `h10-hailort-pcie-driver 5.1.1` + 컨테이너 `libhailort.so.5.1.1`/`hailortcli 5.1.1` + Python 3.10용 `hailort-5.1.1-cp310-cp310-linux_aarch64.whl` 조합 검증. `import hailo_platform`, `hailortcli scan`, `Device.scan()` 성공, PCIe 장치 `0001:01:00.0` 인식 확인. 미결 #14 해소. 실제 HEF inference는 별도 검증 항목으로 유지. | | |
 | 2026-08-11 | 0.5 | **Hailo 적용 범위를 YOLO로 한정.** VLA 실행 기준선을 Pi 5 CPU로 명시 (§2.3, §3.2, §8.2), ONNX→HEF 컴파일을 M2 태스크로 신설, 미결 #10·#11 추가 | | |
 | 2026-08-11 | 0.4 | 가속기를 **Hailo-10H** 로 변경 (8L → 10H). VLA-L 상주에 온보드 DRAM 필요. 캐리어도 AI HAT+ → M.2 HAT+ (§3.2) | | |
 | 2026-08-11 | 0.3 | AI 가속기 채택 확정 — 미결 사항에서 해소 (§3.2, §9) | | |

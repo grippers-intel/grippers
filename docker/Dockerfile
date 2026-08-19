@@ -86,6 +86,8 @@ ENV MACHINE_TYPE=MentorPi_Mecanum \
 # 5. Hailo-10H 런타임
 # ─────────────────────────────────────────────────────────────────────────────
 
+# 아래 두 파일은 재배포 불가라 Git 에 없습니다 — 빌드 전에 docker/vendor/ 에
+# 직접 배치해야 합니다. 출처·파일명·버전 일치 요구는 docker/vendor/README.md.
 # Native HailoRT 5.1.1 userspace runtime.
 # Kernel driver는 호스트의 h10-hailort-pcie-driver 5.1.1 사용.
 COPY docker/vendor/h10-hailort_5.1.1_arm64.deb /tmp/h10-hailort.deb
