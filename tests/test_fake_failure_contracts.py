@@ -222,21 +222,27 @@ def test_align_failure_holds_the_target(make_ports, run_to_completion):
     assert states[-1].ctx.held_ids == {1}
 
 
-def test_measure_opening_failure_is_injectable_though_the_path_is_still_closed(
-    make_ports, run_to_completion
-):
-    """실측 실패(None) 주입 수단이 생겼다 — 유즈케이스 2(투입 불가 판정 후 거부)를
-    CI에서 검증하기 위한 전제 조건이다.
+def test_measure_opening_failure_rejects_before_insert(make_ports, run_to_completion):
+    """입구 폭 실측 실패(None)는 투입을 시도하지 않고 REJECT로 전이한다."""
+    perception = ScriptedPerception(
+        opening_mm=None,
+        detections=[_detection(track_id=1)],
+    )
 
-    다만 경로는 아직 닫혀 있다. `PosePlanState._solve_phi` 가 ⏸ 보류 스텁이라
-    `opening_mm` 을 보지 않고 항상 0.0(해 있음)을 돌려주므로, None을 줘도 REJECT가
-    아니라 INSERT로 간다. 아래 두 번째 단언이 그 현재 상태를 고정한다 —
-    **POSE_PLAN이 재도입되면 여기가 깨지고, 그때 REJECT를 기대하도록 고치면 된다.**"""
-    perception = ScriptedPerception(opening_mm=None, detections=[_detection(track_id=1)])
+    states = run_to_completion(make_ports(perception=perception))
+    names = [state.name for state in states]
 
-    assert perception.measure_opening(_BOX) is None
+    assert "REJECT" in names
+    assert "INSERT" not in names
 
-    names = [s.name for s in run_to_completion(make_ports(perception=perception))]
-    assert (
-        "REJECT" not in names and "INSERT" in names
-    ), "POSE_PLAN이 재도입돼 이 단언이 깨졌다면, 실측 실패는 이제 REJECT로 가야 한다"
+
+def test_measure_opening_failure_does_not_corrupt_box_observation():
+    """정밀 실측 실패(None)가 BoxObservation의 float 계약까지 오염시키지 않는다."""
+    perception = ScriptedPerception(opening_mm=None)
+
+    box = perception.find_box(BoxColor.GREEN)
+
+    assert box is not None
+    assert isinstance(box.opening_mm, float)
+    assert box.opening_mm == 400.0
+    assert perception.measure_opening(box) is None

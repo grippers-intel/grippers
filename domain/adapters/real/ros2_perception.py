@@ -69,11 +69,7 @@ class Ros2Perception(Perception):
     def measure_opening(self, box: BoxObservation) -> float | None:
         """입구 폭(mm). 서비스가 없거나 응답이 없으면 **None**(해 없음 취급) —
         `POSE_PLAN` 이 `REJECT` 로 보낸다. 입구 폭을 모르는 채로 투입을 시도하면
-        상자 테두리에 물체를 찍는다.
-
-        반환 타입이 포트 ABC의 선언(-> float)보다 넓은데, `parse()` 와 같은
-        과도기다 — 포트 시그니처와 Fake의 실패 표현을 함께 맞추는 후속 PR에서
-        정리한다."""
+        상자 테두리에 물체를 찍는다."""
         req = MeasureOpening.Request(box=box_observation_to_msg(box))
         res = call_service(self._node, self._measure_opening_client, req, label="measure_opening")
         if res is None:

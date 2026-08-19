@@ -36,6 +36,7 @@ class ScriptedPerception(Perception):
         script: list[list[Detection]] | None = None,
         box_found: bool = True,
         opening_mm: float | None = 400.0,
+        box_opening_mm: float = 400.0,
         contact_risk: bool = False,
     ):
         if script is not None:
@@ -49,6 +50,7 @@ class ScriptedPerception(Perception):
         self._call_count = 0
         self._box_found = box_found
         self._opening_mm = opening_mm
+        self._box_opening_mm = box_opening_mm
         self._contact_risk = contact_risk
 
     def scan_floor(self) -> list[Detection]:
@@ -63,7 +65,7 @@ class ScriptedPerception(Perception):
         return BoxObservation(
             color=color,
             pose_m=Pose2D(x=0.5, y=0.0, theta=0.0),
-            opening_mm=self._opening_mm,
+            opening_mm=self._box_opening_mm,
             long_axis_rad=0.0,
         )
 
@@ -76,9 +78,9 @@ class ScriptedPerception(Perception):
         때문이다. **POSE_PLAN이 재도입되면 이 주입만으로 REJECT 경로가 열린다** —
         유즈케이스 2(투입 불가 판정 후 거부)를 CI에서 검증할 수 있게 된다.
 
-        같은 값이 `find_box()` 가 만드는 `BoxObservation.opening_mm` 에도 실린다.
-        상자 입구를 못 재는 상황이면 관측값도 없는 게 일관되고, 도메인은 정밀
-        실측값(이 메서드의 반환값)만 판정에 쓴다."""
+        `opening_mm` 은 `measure_opening()` 의 정밀 실측 결과만 제어한다.
+        `find_box()` 가 반환하는 `BoxObservation.opening_mm` 은 도메인 계약상
+        `float` 이므로 별도의 `box_opening_mm` 값을 사용한다."""
         return self._opening_mm
 
     def monitor_clearance(self) -> Clearance:
