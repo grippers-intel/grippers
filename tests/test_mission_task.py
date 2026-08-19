@@ -141,7 +141,7 @@ def test_static_scene_all_grasps_failing_still_tries_every_object(make_ports, ru
     대상별 GRASP 시도가 {1: 4} 였다(2·3번은 선택조차 되지 않음).
 
     여기서 고정할 계약은 '세 물체가 모두 시도된다'까지다 — 대상별 시도 '횟수'는
-    재시도 예산의 스코프 문제(이슈 #132)라 원인이 다르고, 아래 §6-2가 맡는다.
+    재시도 예산의 스코프 문제(이슈 #139)라 원인이 다르고, 아래 §6-2가 맡는다.
     두 결함은 증상이 겹쳐 보이지만 갈라 두는 편이 회귀 시 원인을 가려낸다."""
     detections = [_detection(track_id=i, x=0.2 * i) for i in (1, 2, 3)]
     ports = make_ports(
@@ -298,11 +298,11 @@ def test_grasp_retry_exhaustion_holds_and_returns_to_scan(make_ports, run_to_com
     assert names[-1] == "DONE"
 
 
-# ── 6-2. 재시도 예산의 스코프 — 대상 1개 (이슈 #132) ★ ──────────────────
+# ── 6-2. 재시도 예산의 스코프 — 대상 1개 (이슈 #139) ★ ──────────────────
 
 
 def test_grasp_budget_is_per_target_not_cumulative(make_ports, run_to_completion):
-    """이슈 #132 — `grasp_attempts` 의 스코프는 **대상 1개**다. 첫 물체가 예산을
+    """이슈 #139 — `grasp_attempts` 의 스코프는 **대상 1개**다. 첫 물체가 예산을
     전부 쓰고 보류돼도, 다음 물체는 다시 최초 시도 + MAX_GRASP_RETRY 회를 받는다.
 
     **정적 장면(detections=)으로 검증한다.** script= 로 사이클마다 바닥을 바꿔

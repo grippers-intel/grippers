@@ -291,7 +291,7 @@ IDLE → TRANSIT_OUT → LIGHT_ADAPT → DOCKING → IDENTIFY
 | 7 | **`NARROW_EXIT` 무한 루프** | `while True` 에 타임아웃 없음 | 전 상태 타임아웃 | P1 |
 | 8 | **조명 프로파일 문자열** | `"default"` 하드코딩 | `NORMAL` / `DARKROOM` 열거 | P1 |
 | 9 | **`RETURN` 이 빈 상태** | 복귀 주행이 `NARROW_EXIT` 내부 | 상태 분리 | P1 |
-| ~~10~~ | ~~**`align_to_centerline()` 반환 무시**~~ | **✅ 해소 (2026-08-19)** — 포트는 `align_to_box(box)` 로 개명됐지만 반환값(정렬 후 yaw 오차, rad)은 그대로이고, `TransportState` 가 이를 `ALIGN_TOLERANCE_RAD` 와 비교해 **초과 시 대상 보류 + `SCAN` 복귀**로 흡수합니다 (이슈 #132 PR). 판정을 `math.isinf()` 로 좁히지 않는 이유를 포함한 계약은 [`state_machine.md` §3](state_machine.md#transport-의-정렬-판정). ⚠️ 임계값 자체는 아직 **미실측 자리 표시자**(0.05 rad)이며 미결 #4·#7 실측과 함께 확정합니다 | — | — |
+| ~~10~~ | ~~**`align_to_centerline()` 반환 무시**~~ | **✅ 해소 (2026-08-19)** — 포트는 `align_to_box(box)` 로 개명됐지만 반환값(정렬 후 yaw 오차, rad)은 그대로이고, `TransportState` 가 이를 `ALIGN_TOLERANCE_RAD` 와 비교해 **초과 시 대상 보류 + `SCAN` 복귀**로 흡수합니다 (이슈 #139). 판정을 `math.isinf()` 로 좁히지 않는 이유를 포함한 계약은 [`state_machine.md` §3](state_machine.md#transport-의-정렬-판정). ⚠️ 임계값 자체는 아직 **미실측 자리 표시자**(0.05 rad)이며 미결 #4·#7 실측과 함께 확정합니다 | — | — |
 | 11 | **하드코딩 좌표** | `Pose2D(1.0, 0, 0)`, `[0.2, 0, 0.15]` | launch 파라미터화 | P1 |
 | 12 | **`sys.path.insert('/grippers')`** | 노드에 하드코딩 | 패키징 또는 환경변수 | P2 |
 | 13 | **`grippers_vla` 빈 패키지** | 노드 없음 | VLA 추론 노드 | P1 |
@@ -407,7 +407,7 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 
 | 날짜 | 버전 | 변경 | PR | 승인 |
 |---|---|---|---|---|
-| 2026-08-19 | 0.8 | **§6.4 #10 해소** — `TransportState` 가 `align_to_box()` 의 yaw 오차를 `ALIGN_TOLERANCE_RAD` 와 비교해 정렬 실패를 보류로 흡수. 같은 PR에서 `IDLE` 의 `parse()` 실패 처리(해석 불가 시 IDLE 유지)와 `grasp_attempts` 의 대상별 리셋(이슈 #132)도 함께 반영했고, 전이 계약은 `state_machine.md` §3·§4 갱신 | | |
+| 2026-08-19 | 0.8 | **§6.4 #10 해소** — `TransportState` 가 `align_to_box()` 의 yaw 오차를 `ALIGN_TOLERANCE_RAD` 와 비교해 정렬 실패를 보류로 흡수. 같은 PR에서 `IDLE` 의 `parse()` 실패 처리(해석 불가 시 IDLE 유지)와 `grasp_attempts` 의 대상별 리셋(이슈 #139)도 함께 반영했고, 전이 계약은 `state_machine.md` §3·§4 갱신 | | |
 | 2026-08-17 | 0.7 | **기준 ROS 2 배포판 확정 (#96)** — 미결 #13 해소: Humble 컨테이너 유지로 확정, Jazzy 네이티브 전환·양쪽 병기 기각. 근거는 `rejected_designs.md` §9 | | |
 | 2026-08-12 | 0.6 | **가속기 확보 확정 + 캐리어 기재 정정** — 0.4의 "AI HAT+로는 10H 불가 → M.2 HAT+ 별도 발주"는 **오기**. **Raspberry Pi AI HAT+ 2**(2026-01-15 출시, Hailo-10H·8GB LPDDR4X 기판 실장, 16핀 PCIe FFC 직결) **실물을 교수님 공수로 보유 · 8/11 PCIe 물리 장착 완료** — 2품목 발주 전제 폐기, 모듈 분리 불가·불필요 (§3.2). 드라이버/런타임 확인은 미결 #14로 분리(8/14). 미결 #12(모델 확정) 즉시 해소. **DFC의 x86_64 Ubuntu 전용 제약** 명시 및 미결 #11 확장, HEF 일정 8/21·8/25로 조정. 비전 처리량은 26 TOPS급 가정 (§8.2). ROS 2 배포판 이원화 미결 #13 신설 | | |
 | 2026-08-11 | 0.5 | **Hailo 적용 범위를 YOLO로 한정.** VLA 실행 기준선을 Pi 5 CPU로 명시 (§2.3, §3.2, §8.2), ONNX→HEF 컴파일을 M2 태스크로 신설, 미결 #10·#11 추가 | | |
