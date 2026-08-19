@@ -23,6 +23,7 @@ Raspberry Pi 호스트에서:
 ```bash
 cd docker/vendor
 apt download h10-hailort
+```
 
 현재 요구 파일명:
 
