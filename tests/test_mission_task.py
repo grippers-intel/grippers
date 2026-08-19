@@ -13,7 +13,12 @@ from domain.adapters.fake.scripted_interpreter import ScriptedInterpreter
 from domain.adapters.fake.scripted_perception import ScriptedPerception
 from domain.task import states as states_module
 from domain.task.mission_task import MissionTask
-from domain.task.states import SCAN_NO_CHANGE_LIMIT, GraspState, PosePlanState
+from domain.task.states import (
+    ALIGN_TOLERANCE_RAD,
+    SCAN_NO_CHANGE_LIMIT,
+    GraspState,
+    PosePlanState,
+)
 from domain.values import (
     BoxColor,
     Detection,
@@ -135,9 +140,9 @@ def test_static_scene_all_grasps_failing_still_tries_every_object(make_ports, ru
     """이슈 #131 재현 시나리오 그대로 — 물체 3개, 파지는 항상 실패. 수정 전에는
     대상별 GRASP 시도가 {1: 4} 였다(2·3번은 선택조차 되지 않음).
 
-    대상별 시도 '횟수'는 검증하지 않는다 — 재시도 예산이 대상별이 아니라 미션
-    누적이라 2·3번은 1회씩만 시도되는데, 그건 별개 원인의 이슈 #132 몫이다.
-    여기서 고정할 계약은 '세 물체가 모두 시도된다'까지다."""
+    여기서 고정할 계약은 '세 물체가 모두 시도된다'까지다 — 대상별 시도 '횟수'는
+    재시도 예산의 스코프 문제(이슈 #132)라 원인이 다르고, 아래 §6-2가 맡는다.
+    두 결함은 증상이 겹쳐 보이지만 갈라 두는 편이 회귀 시 원인을 가려낸다."""
     detections = [_detection(track_id=i, x=0.2 * i) for i in (1, 2, 3)]
     ports = make_ports(
         arm=FakeArm(load_ratio=0.0),
@@ -291,6 +296,94 @@ def test_grasp_retry_exhaustion_holds_and_returns_to_scan(make_ports, run_to_com
     assert names.count("GRASP") == 4  # 최초 시도 + 재시도 3회 (grasp_attempts 0,1,2,3)
     assert 7 in states[-1].ctx.held_ids
     assert names[-1] == "DONE"
+
+
+# ── 6-2. 재시도 예산의 스코프 — 대상 1개 (이슈 #132) ★ ──────────────────
+
+
+def test_grasp_budget_is_per_target_not_cumulative(make_ports, run_to_completion):
+    """이슈 #132 — `grasp_attempts` 의 스코프는 **대상 1개**다. 첫 물체가 예산을
+    전부 쓰고 보류돼도, 다음 물체는 다시 최초 시도 + MAX_GRASP_RETRY 회를 받는다.
+
+    **정적 장면(detections=)으로 검증한다.** script= 로 사이클마다 바닥을 바꿔
+    주면 보류된 물체가 관측에서 사라져 버려, 미션 누적 예산이 남아 있는 상태와
+    구분이 안 된다 — 예산이 되돌아왔는지를 보려면 첫 물체가 예산을 실제로
+    소진하고 바닥에 그대로 남아 있어야 한다 (state_machine.md §4).
+
+    수정 전 거동: 대상별 GRASP가 {1: 4, 2: 1} — 1번이 미션 전체 예산을 소진해
+    2번은 첫 시도 실패가 곧바로 영구 보류였다.
+
+    리셋 자리가 SELECT가 아니라 GRASP로 잘못 들어가면 카운터가 0에 머물러 무한
+    재시도가 되는데, 그건 위 §6 test_grasp_retry_exhaustion_holds_and_returns_to_scan
+    이 대상 1개의 GRASP 횟수를 4로 고정해 잡는다."""
+    detections = [_detection(track_id=1, x=0.2), _detection(track_id=2, x=0.4)]
+    ports = make_ports(
+        arm=FakeArm(load_ratio=LOAD_EMPTY),  # 두 물체 모두 파지 실패
+        perception=ScriptedPerception(detections=detections),
+    )
+
+    states = run_to_completion(ports)
+    names = [s.name for s in states]
+
+    per_target = 1 + GraspState.MAX_GRASP_RETRY
+    assert _attempts_by_target(states, "GRASP") == {1: per_target, 2: per_target}, (
+        "두 물체가 각각 최초 시도 + MAX_GRASP_RETRY 회를 받아야 한다 — "
+        "예산이 미션 누적이면 2번은 1회로 끝난다"
+    )
+    assert _attempts_by_target(states, "APPROACH") == {1: 1, 2: 1}
+    assert states[-1].ctx.held_ids == {1, 2}
+    assert names[-1] == "DONE"
+
+
+def test_second_target_can_still_succeed_after_the_first_exhausts_the_budget(
+    make_ports, run_to_completion
+):
+    """예산이 되돌아왔다는 것의 실제 의미 — 첫 물체가 예산을 소진한 뒤에도 두 번째
+    물체는 재시도 끝에 **성공**할 수 있다.
+
+    부하 시퀀스: 1번의 4회(최초+재시도 3회)가 전부 미달 → 보류. 2번은 3회 미달 뒤
+    4회차에 파지 성공한다 — 미션 누적 예산이었다면 2번의 첫 실패에서 이미 보류돼
+    이 성공에 도달하지 못한다. `failure_definition.md` §3의 "재시도 후 성공은
+    실패가 아니다"가 두 번째 물체부터도 성립해야 M4 측정이 유효하다."""
+    loads = [LOAD_EMPTY] * 4 + [LOAD_EMPTY] * 3 + [LOAD_HOLDING]
+    ports = make_ports(
+        arm=FakeArm(load_ratio=loads),
+        perception=ScriptedPerception(
+            detections=[_detection(track_id=1, x=0.2), _detection(track_id=2, x=0.4)]
+        ),
+    )
+
+    states = run_to_completion(ports)
+    names = [s.name for s in states]
+
+    assert _attempts_by_target(states, "GRASP") == {1: 4, 2: 4}
+    assert names.count("INSERT") == 1
+    assert states[-1].ctx.held_ids == {1}
+    assert states[-1].ctx.done_ids == {2}
+    assert names[-1] == "DONE"
+
+
+def test_reset_attempts_returns_a_new_context():
+    """`MissionContext` 는 불변이다 — `reset_attempts()` 도 제자리 변경이 아니라
+    새 인스턴스를 반환하고, 다른 필드는 건드리지 않는다
+    (docs/design/class_diagram.md §1)."""
+    spec = MissionSpec(
+        mode=MissionMode.TIDY, target_cls=None, placement_rule={}, raw_text="정리해줘"
+    )
+    ctx = MissionContext(spec=spec, done_ids=frozenset({1}), held_ids=frozenset({2}), last_scan=())
+    spent = ctx.retry().retry()
+
+    reset = spent.reset_attempts()
+
+    assert spent.grasp_attempts == 2, "원본이 제자리에서 바뀌면 안 된다"
+    assert reset is not spent
+    assert reset.grasp_attempts == 0
+    assert (reset.spec, reset.done_ids, reset.held_ids, reset.last_scan) == (
+        spec,
+        frozenset({1}),
+        frozenset({2}),
+        (),
+    )
 
 
 # ── 6-1. 부하 임계값 — 실측 경계 ★ ───────────────────────────────────────
@@ -458,3 +551,58 @@ def test_fetch_mode_select_ignores_non_target_class(make_ports, run_to_completio
     assert "APPROACH" not in names
     assert names[-1] == "DONE"
     assert states[-1].ctx.done_ids == frozenset()
+
+
+# ── 10. TRANSPORT 정렬 오차 판정 (hld.md §6.4 #10) ★ ─────────────────────
+#
+# align_to_box()의 실패값(무한대)을 흡수하는지는 tests/test_fake_failure_contracts.py
+# 가 본다. 여기서 고정하는 건 그 위의 계약 — 판정이 '무한대인가'가 아니라
+# **허용 오차와의 비교**라는 것이다. inf만 검사하면 '정렬은 됐지만 오차가 큰'
+# 경우가 그대로 INSERT로 흘러가는데, 그건 포트가 두 상황을 굳이 다른 값으로
+# 구분해 돌려주는 이유(domain/ports/base_driver.py)를 버리는 셈이다.
+
+
+def test_align_error_within_tolerance_proceeds_to_insert(make_ports, run_to_completion):
+    """허용 오차 안의 정렬 오차는 성공이다 — 0.0(완벽 정렬)만 통과시키면 실기에서
+    어떤 물체도 상자에 들어가지 못한다."""
+    ports = make_ports(
+        base=FakeBase(align_error_rad=ALIGN_TOLERANCE_RAD * 0.5),
+        perception=ScriptedPerception(detections=[_detection(track_id=1)]),
+    )
+
+    states = run_to_completion(ports)
+    names = [s.name for s in states]
+
+    assert names.count("INSERT") == 1
+    assert states[-1].ctx.done_ids == {1}
+
+
+def test_align_error_beyond_tolerance_holds_the_target(make_ports, run_to_completion):
+    """허용 오차를 넘으면 정렬 실패로 보고 보류 등록 + SCAN 복귀한다. 값은 유한한데
+    임계를 넘는 경우 — 판정이 `math.isinf()` 가 아니라 임계값 비교여야 잡힌다."""
+    ports = make_ports(
+        base=FakeBase(align_error_rad=ALIGN_TOLERANCE_RAD * 2),
+        perception=ScriptedPerception(detections=[_detection(track_id=1)]),
+    )
+
+    states = run_to_completion(ports)
+    names = [s.name for s in states]
+
+    assert "POSE_PLAN" not in names
+    assert "INSERT" not in names
+    assert states[-1].ctx.held_ids == {1}
+    assert names[-1] == "DONE"
+
+
+def test_align_error_sign_does_not_change_the_verdict(make_ports, run_to_completion):
+    """yaw 오차의 부호는 정렬해야 할 **방향**일 뿐이라 판정은 크기만 본다 —
+    부호를 그대로 비교하면 왼쪽으로 틀어진 경우가 전부 통과해 버린다."""
+    ports = make_ports(
+        base=FakeBase(align_error_rad=-ALIGN_TOLERANCE_RAD * 2),
+        perception=ScriptedPerception(detections=[_detection(track_id=1)]),
+    )
+
+    states = run_to_completion(ports)
+
+    assert "INSERT" not in [s.name for s in states]
+    assert states[-1].ctx.held_ids == {1}

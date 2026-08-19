@@ -28,6 +28,12 @@ HANDOVER_POINT_M = Point3(x=0.30, y=0.0, z=0.35)  # TODO: 실측 — 사용자 �
 HANDOVER_LOAD_THRESHOLD = 0.05  # TODO: 실측 — '사람이 받아감' 판정 부하 임계값
 PUT_DOWN_POINT_M = Point3(x=0.30, y=0.0, z=0.0)  # TODO: 실측 — REJECT 시 안전한 내려놓기 위치
 DELIVERY_POINT_M = Pose2D(x=0.0, y=0.0, theta=0.0)  # TODO: 실측 — FETCH 인계 접근 위치
+# TODO: 실측 — 상자 앞 정렬을 '성공'으로 볼 yaw 오차 상한(rad). 0.05 rad ≈ 2.9°는
+# 자리 표시자이며 검증되지 않았다. 실제 값은 상자 입구 여유폭과 투입 지점 IK 오차로
+# 결정되므로, 미결 #4(엔드이펙터 개구 폭)·#7(margin) 실측과 함께 다시 잡아야 한다.
+# 임계를 넘으면 실패로 보고 대상을 보류한다 — 실패 표현은 포트가 정한
+# ALIGN_FAILED_YAW_ERROR_RAD(math.inf)이라 어떤 상한과 비교해도 실패로 남는다.
+ALIGN_TOLERANCE_RAD = 0.05
 
 # ── SCAN 무변화 감지 ─────────────────────────────────────────────────────
 # 같은 후보 집합이 연속 몇 사이클 관측되면 "진전이 없다"고 볼 것인가
@@ -59,6 +65,15 @@ class IdleState(State):
     """`ctx.spec.raw_text` 를 `interpreter.parse()` 로 (재)해석해 `SCAN` 으로 넘어간다.
     `ctx` 가 없거나 `raw_text` 가 비어 있으면 대기(자기 자신 반환)한다.
 
+    **해석하지 못한 명령도 대기다.** `parse()` 는 등록되지 않은 문형에 `None` 을
+    돌려주는 것이 포트 계약이고(domain/ports/command_interpreter.py), real
+    구현(`Ros2CommandInterpreter`)도 `understood=False` 면 `None` 이다. 이때
+    `MissionContext(spec=None)` 을 만들어 `SCAN` 으로 넘기면 `SELECT` 가
+    `spec.placement_rule` 을 읽는 순간 `AttributeError` 로 FSM 스레드가 죽는다.
+    "미션이 시작되지 않았다"는 상태를 따로 만들지 않고 **IDLE 유지**로 표현한다 —
+    state_machine.md §3의 `IDLE` 계약이 실패 시 전이를 "대기 유지"로 정의한다.
+    `raw_text` 가 비어 있을 때와 같은 자리로 수렴하므로 분기도 하나로 남는다.
+
     `Ports.interpreter` 는 mission_task.py 마이그레이션(#7)에서 추가됐다 —
     `MissionTask.run(raw_text)` 가 이 State에 넘길 초기 `MissionContext` 를 만든다."""
 
@@ -71,6 +86,8 @@ class IdleState(State):
         if self.ctx is None or not self.ctx.spec.raw_text:
             return self
         spec = ports.interpreter.parse(self.ctx.spec.raw_text)
+        if spec is None:
+            return self
         return ScanState(MissionContext(spec=spec))
 
 
@@ -140,7 +157,12 @@ class SelectState(State):
     4. 위 조건을 만족하는 것 중 base_link 로부터 최단 거리
 
     사전 필터(치수만으로 φ 해 없음을 미리 거르는 것)는 의도적으로 넣지 않는다 —
-    그러면 유즈케이스 2(투입 불가 판정)가 축소된다."""
+    그러면 유즈케이스 2(투입 불가 판정)가 축소된다.
+
+    **선정과 동시에 `grasp_attempts` 를 0으로 되돌린다** (state_machine.md §3·§4,
+    이슈 #132). 재시도 예산의 스코프는 대상 1개이고, 대상이 바뀌는 지점은 이곳
+    하나뿐이라 리셋 자리도 여기 하나다. 후보가 없어 `DONE` 으로 가는 경로는 잡을
+    대상이 없으므로 되돌리지 않는다."""
 
     name = "SELECT"
 
@@ -152,7 +174,7 @@ class SelectState(State):
         target = self._pick(self.detections)
         if target is None:
             return DoneState(self.ctx)
-        return ApproachState(self.ctx, target)
+        return ApproachState(self.ctx.reset_attempts(), target)
 
     def _pick(self, detections):
         # 1~3번 조건은 select_candidates() 한 곳에 있다 — SCAN 무변화 감지가 같은
@@ -185,12 +207,10 @@ class GraspState(State):
     (sequences.md §2). 재시도는 상태 변경이 아니라 새 인스턴스 반환으로
     표현한다 (기존 코드 관례 유지).
 
-    NOTE: `grasp_attempts` 는 state_machine.md §3 예시 코드를 그대로 따라
-    여기서 리셋하지 않는다 — 즉 미션 전체 누적 실패 횟수다. 대상별 재시도
-    예산이 의도라면(sequences.md §2 "loop attempt ≤ MAX_GRASP_RETRY"는
-    대상 1개 기준으로 읽힌다) `MissionContext` 에 리셋 메서드가 필요한데,
-    현재 `complete()`/`hold()`/`retry()` 3개뿐이라 이 PR 범위에서는 임의로
-    추가하지 않았다 — 사용자 확인 필요 (커밋 메시지 참고)."""
+    `grasp_attempts` 는 **대상 1개 기준**의 남은 예산이고, 되돌리는 자리는
+    `SelectState` 다 (이슈 #132). 여기서 `reset_attempts()` 를 부르면 안 된다 —
+    `GRASP` 는 재시도마다 자기 자신을 새로 만들므로 카운터가 영원히 0에 머물러
+    무한 재시도가 된다."""
 
     name = "GRASP"
     MAX_GRASP_RETRY = 3
@@ -239,6 +259,16 @@ class GraspState(State):
 
 
 class TransportState(State):
+    """상자 앞까지 이송하고 정렬한다. 정렬 결과는 **판정 대상**이다 —
+    `align_to_box()` 가 돌려주는 yaw 오차(rad)가 `ALIGN_TOLERANCE_RAD` 를 넘으면
+    상자 앞에 서지 못한 것이므로 투입으로 진행하지 않고 대상을 보류한 뒤 `SCAN`
+    으로 복귀한다 (hld.md §6.4 #10, state_machine.md §3 `TRANSPORT` 실패 시 전이).
+
+    반환값을 버리면 정렬 실패가 성공으로 흘러간다 — 포트가 실패를
+    `ALIGN_FAILED_YAW_ERROR_RAD`(무한대)로 표현하는 것도 임계값과 비교되는 것을
+    전제로 한 설계다. 실패를 `0.0`(완벽 정렬)으로 표현하면 안 되는 이유와 같다
+    (domain/ports/base_driver.py)."""
+
     name = "TRANSPORT"
 
     def __init__(self, ctx, target):
@@ -257,7 +287,12 @@ class TransportState(State):
         if not arrived:
             return ScanState(self.ctx.hold(self.target.track_id))
 
-        ports.base.align_to_box(box)
+        # 부호는 정렬 방향일 뿐이라 크기만 본다. 무한대(정렬 실패)는 어떤 상한과
+        # 비교해도 여기서 걸린다.
+        yaw_error_rad = ports.base.align_to_box(box)
+        if abs(yaw_error_rad) > ALIGN_TOLERANCE_RAD:
+            return ScanState(self.ctx.hold(self.target.track_id))
+
         return PosePlanState(self.ctx, self.target, box)
 
 
