@@ -313,6 +313,9 @@ class PosePlanState(State):
 
     def execute(self, ports):
         opening_mm = ports.perception.measure_opening(self.box)
+        if opening_mm is None:
+            return RejectState(self.ctx, self.target, "입구 폭 실측 실패")
+
         phi_rad = self._solve_phi(self.target.dims_m, opening_mm)
         if phi_rad is None:
             return RejectState(self.ctx, self.target, "φ 해 구간 없음")
