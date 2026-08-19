@@ -77,18 +77,34 @@ class ArmPortConflictError(RuntimeError):
     main()이 잡아서 노드를 띄우지 않고 종료한다."""
 
 
+class ArmHardwareUnavailableError(RuntimeError):
+    """SO-ARM101 또는 서보 버스가 응답하지 않거나 동작 불가 상태일 때 발생한다."""
+
+
 class ArmDriverNode(Node):
     def __init__(self):
         super().__init__("arm_driver_node")
         cb_group = ReentrantCallbackGroup()
 
         self.declare_parameter("arm_port", "/dev/soarm")
+        self.declare_parameter("enable_torque_on_start", False)
+
         arm_port = self.get_parameter("arm_port").value
+        enable_torque_on_start = bool(self.get_parameter("enable_torque_on_start").value)
+
         # RealBackend(port=...) 는 생성 즉시 시리얼 포트를 연다 — 검사는 반드시
         # 그 앞에 와야 한다. 뒤에 두면 이미 베이스 보드를 열어 버린 뒤가 된다.
         self._reject_base_board_port(arm_port)
         soarm._real = RealBackend(port=arm_port)
+        if not soarm._real.drv.is_connected():
+            raise ArmHardwareUnavailableError(f"SO-ARM101 serial connection failed: {arm_port}")
+
         self.get_logger().info(f"arm_port={arm_port}")
+
+        self._check_startup_torque(
+            soarm._real,
+            enable_torque_on_start=enable_torque_on_start,
+        )
 
         self._move_action_server = ActionServer(
             self,
@@ -130,6 +146,79 @@ class ArmDriverNode(Node):
         )
         self.get_logger().info("arm_driver_node ready")
 
+    def _check_startup_torque(
+        self,
+        backend,
+        *,
+        enable_torque_on_start: bool,
+    ) -> None:
+        """기동 시 6개 서보의 통신·torque 상태를 확인한다."""
+        states = {servo_id: backend.drv.get_torque(servo_id) for servo_id in ALL_SERVO_IDS}
+
+        unreadable = [servo_id for servo_id, enabled in states.items() if enabled is None]
+        if unreadable:
+            raise ArmHardwareUnavailableError(
+                "SO-ARM101 torque 상태를 읽지 못했습니다 — " f"servo IDs: {unreadable}"
+            )
+
+        disabled = [servo_id for servo_id, enabled in states.items() if not enabled]
+        if not disabled:
+            self.get_logger().info("SO-ARM101 torque 상태 정상 — all enabled")
+            return
+
+        self.get_logger().warn(f"torque OFF servo IDs: {disabled}")
+
+        if not enable_torque_on_start:
+            self.get_logger().warn(
+                "enable_torque_on_start=False — 자동 torque enable을 수행하지 않습니다"
+            )
+            return
+
+        self.get_logger().warn(
+            "enable_torque_on_start=True — 1초 후 전체 servo torque를 활성화합니다"
+        )
+        time.sleep(1.0)
+
+        enable_failed = [
+            servo_id for servo_id in ALL_SERVO_IDS if not backend.drv.set_torque(servo_id, True)
+        ]
+        if enable_failed:
+            raise ArmHardwareUnavailableError(
+                "SO-ARM101 torque enable 명령 실패 — " f"servo IDs: {enable_failed}"
+            )
+
+        still_disabled = [
+            servo_id for servo_id in ALL_SERVO_IDS if backend.drv.get_torque(servo_id) is not True
+        ]
+        if still_disabled:
+            raise ArmHardwareUnavailableError(
+                "torque enable 후 상태 확인 실패 — " f"servo IDs: {still_disabled}"
+            )
+
+        self.get_logger().info("SO-ARM101 torque enable 완료")
+
+    def _require_operational_servos(self, servo_ids=ALL_SERVO_IDS) -> None:
+        """모션 전후 대상 서보가 통신 가능하고 torque ON인지 확인한다."""
+        backend = soarm._backend(real=True)
+
+        unavailable = []
+        torque_off = []
+
+        for servo_id in servo_ids:
+            enabled = backend.drv.get_torque(servo_id)
+            if enabled is None:
+                unavailable.append(servo_id)
+            elif not enabled:
+                torque_off.append(servo_id)
+
+        if unavailable:
+            raise ArmHardwareUnavailableError(
+                "SO-ARM101 servo 통신 실패 — " f"servo IDs: {unavailable}"
+            )
+
+        if torque_off:
+            raise ArmHardwareUnavailableError("SO-ARM101 torque OFF — " f"servo IDs: {torque_off}")
+
     def _reject_base_board_port(self, arm_port: str) -> None:
         """arm_port가 MentorPi 베이스 보드와 같은 장치를 가리키면 노드를 띄우지 않는다.
 
@@ -154,6 +243,8 @@ class ArmDriverNode(Node):
         xyz = [req.target.x, req.target.y, req.target.z]
         result = MoveToCartesian.Result()
         try:
+            self._require_operational_servos(range(1, 6))
+
             # grip=None — 그리퍼는 이 액션이 건드리지 않는다. GRASP는
             # move_to_cartesian()과 set_gripper()를 분리 호출한다
             # (state_machine.md §3 GRASP 계약).
@@ -165,6 +256,12 @@ class ArmDriverNode(Node):
                 secs=1.2,
             )
             time.sleep(1.2)  # RealBackend.move는 즉시 반환하므로 정착 시간만큼 대기
+
+            # 명령 직후 USB가 빠지거나 torque가 꺼진 경우도 성공으로 보고하지 않는다.
+            # vendored RealBackend.move()는 servo write 결과를 반환하지 않으므로
+            # ROS2 경계에서 통신 상태를 다시 확인한다.
+            self._require_operational_servos(range(1, 6))
+
             # ⚠️ MoveToCartesian.action의 Result에는 distance_remaining이 없다
             # (Feedback에만 있음) — IK 잔차는 로그로만 남긴다.
             self.get_logger().info(f"move_to_cartesian 완료 — IK 잔차 {err * 1000:.1f}mm")
@@ -206,10 +303,17 @@ class ArmDriverNode(Node):
         fraction = (width_mm - GRIPPER_CLOSED_MM) / (GRIPPER_OPEN_MM - GRIPPER_CLOSED_MM)
         raw_position = position_from_fraction(fraction, JOINT_LIMITS[GRIPPER_SERVO_ID])
         try:
+            self._require_operational_servos((GRIPPER_SERVO_ID,))
+
             # soarm.grip()을 쓰지 않는다 — 항상 SimBackend를 움직이는 함정이 있다
             # (모듈 docstring 참고). 실물 백엔드의 드라이버에 직접 명령한다.
             backend = soarm._backend(real=True)
-            backend.drv.set_position(GRIPPER_SERVO_ID, raw_position)
+            if not backend.drv.set_position(GRIPPER_SERVO_ID, raw_position):
+                self.get_logger().error("set_gripper 실패: servo 6 position write 실패")
+                response.ok = False
+                response.load_ratio = 0.0
+                return response
+
             # 정착 전에 읽으면 빈 채와 물체가 구분되지 않는다 — 이동 중에는
             # 양쪽 다 포화값(±500)이 나온다. set_position()은 즉시 반환하므로
             # 여기서 기다린다.
@@ -238,8 +342,12 @@ class ArmDriverNode(Node):
 
     def _on_fold_to_cradle(self, request, response):
         try:
+            self._require_operational_servos(range(1, 6))
+
             soarm.go(CRADLE_XYZ_M, grip=None, real=True, down=False, secs=1.2)
             time.sleep(1.2)
+
+            self._require_operational_servos(range(1, 6))
             response.success = True
         except Exception as e:
             self.get_logger().error(f"fold_to_cradle 실패: {e}")
@@ -253,8 +361,15 @@ class ArmDriverNode(Node):
         # 토크를 켜 두는 것만으로 STS3215가 지금 위치를 유지한다.
         try:
             backend = soarm._backend(real=True)
-            for servo_id in ALL_SERVO_IDS:
-                backend.drv.set_torque(servo_id, True)
+            failed_ids = [
+                servo_id for servo_id in ALL_SERVO_IDS if not backend.drv.set_torque(servo_id, True)
+            ]
+            if failed_ids:
+                response.success = False
+                response.message = "torque enable 실패 — " f"servo IDs: {failed_ids}"
+                self.get_logger().error(response.message)
+                return response
+
             response.success = True
         except Exception as e:
             self.get_logger().error(f"hold_position 실패: {e}")
@@ -276,6 +391,7 @@ class ArmDriverNode(Node):
         backend = soarm._backend(real=True)
         raw = backend.drv.get_load(servo_id)
         if raw is None:
+            self.get_logger().warn(f"servo {servo_id} load read 실패 — 안전값 0.0으로 처리")
             return 0.0
         return abs(raw) / GRIPPER_LOAD_MAX_RAW
 
@@ -284,9 +400,9 @@ def main(args=None):
     rclpy.init(args=args)
     try:
         node = ArmDriverNode()
-    except ArmPortConflictError as e:
-        # 노드를 띄우면 안 되는 설정 오류다 — 잘못된 포트로 계속 돌면서 베이스 보드를
-        # 망가뜨리는 것보다, 이유를 남기고 즉시 죽는 편이 낫다.
+    except (ArmPortConflictError, ArmHardwareUnavailableError) as e:
+        # 노드를 띄우면 안 되는 설정/하드웨어 오류다. 장치가 없거나 서보 버스가
+        # 응답하지 않는데 계속 실행하면 이후 명령이 성공처럼 보일 수 있다.
         rclpy.logging.get_logger("arm_driver_node").fatal(str(e))
         rclpy.shutdown()
         return 1
