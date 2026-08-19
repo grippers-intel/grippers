@@ -78,9 +78,9 @@ class MissionSpec:
 
 @dataclass(frozen=True)
 class MissionContext:
-    """루프 사이클을 건너 전달되는 불변 상태. `complete()`/`hold()`/`retry()`는
-    새 인스턴스를 반환한다 — 재시도 카운터를 가변 필드로 두면 루프 안에서
-    누가 언제 증가시켰는지 추적할 수 없다 (docs/design/class_diagram.md §1).
+    """루프 사이클을 건너 전달되는 불변 상태. `complete()`/`hold()`/`retry()`/
+    `reset_attempts()` 는 새 인스턴스를 반환한다 — 재시도 카운터를 가변 필드로 두면
+    루프 안에서 누가 언제 증가시켰는지 추적할 수 없다 (docs/design/class_diagram.md §1).
 
     `last_scan` 은 **연속으로 같게 관측된 `SELECT` 후보 `track_id` 집합의 이력**이다 —
     원소는 `frozenset[int]` 이고, 후보 집합이 바뀌면 길이 1로 되돌아간다. 길이가
@@ -94,8 +94,8 @@ class MissionContext:
     보류된 물체가 바닥에 남아 Fake에서 과잉 발동하고, 실기에서는 `pose_m`·
     `confidence` 가 float이라 아예 발동하지 않았다.
 
-    `complete()`/`hold()`/`retry()` 는 이 필드를 건드리지 않고 그대로 넘긴다
-    (`dataclasses.replace` 기본 동작)."""
+    `complete()`/`hold()`/`retry()`/`reset_attempts()` 는 이 필드를 건드리지 않고
+    그대로 넘긴다 (`dataclasses.replace` 기본 동작)."""
 
     spec: MissionSpec
     done_ids: frozenset = field(default_factory=frozenset)
@@ -111,3 +111,15 @@ class MissionContext:
 
     def retry(self) -> "MissionContext":
         return replace(self, grasp_attempts=self.grasp_attempts + 1)
+
+    def reset_attempts(self) -> "MissionContext":
+        """재시도 예산을 되돌린다 — `SELECT` 가 새 대상을 고를 때만 호출한다.
+
+        `grasp_attempts` 만 스코프가 **대상 1개**다 (state_machine.md §4). 미션
+        누적으로 두면 첫 물체가 예산을 소진한 뒤 나머지 물체가 전부 첫 시도에서
+        영구 보류된다 (이슈 #139).
+
+        ⚠️ `GraspState` 에서 부르면 안 된다. `GRASP` 는 재시도할 때마다 자기 자신을
+        새로 만들므로 거기서 되돌리면 카운터가 영원히 0에 머물러 무한 재시도가
+        된다. 되돌리는 자리는 대상이 바뀌는 유일한 지점인 `SELECT` 하나다."""
+        return replace(self, grasp_attempts=0)

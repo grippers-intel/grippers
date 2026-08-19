@@ -64,11 +64,17 @@ class ScriptedInterpreter(CommandInterpreter):
     def __init__(self, table: dict[str, MissionSpec] | None = None):
         self._table = dict(DEFAULT_TABLE if table is None else table)
 
-    def parse(self, text: str) -> MissionSpec:
-        try:
-            spec = self._table[text]
-        except KeyError:
-            raise ValueError(f"ScriptedInterpreter: 등록되지 않은 문형 — {text!r}") from None
+    def parse(self, text: str) -> MissionSpec | None:
+        """등록되지 않은 문형이면 **None** — 포트 계약 그대로다
+        (domain/ports/command_interpreter.py).
+
+        예전에는 ValueError를 올렸다. real 구현(Ros2CommandInterpreter)은
+        understood=False 일 때 None을 돌려주므로 **같은 상황을 Fake는 예외로,
+        real은 값으로 표현**하고 있었다 — Fake로 도는 도메인 테스트가 real의
+        실패 경로를 한 번도 밟지 않는다는 뜻이다 (PR #9 리뷰 B항)."""
+        spec = self._table.get(text)
+        if spec is None:
+            return None
         # placement_rule은 dict라 얕은 참조를 그대로 넘기면 한 테스트의 변경이
         # _table의 다음 조회에 새어 들어간다 — 매 호출마다 복사본을 반환한다.
         return replace(spec, placement_rule=dict(spec.placement_rule))
