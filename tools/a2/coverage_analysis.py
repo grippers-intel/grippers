@@ -19,6 +19,7 @@ issue #149 의 D1·D3 근거 자료다. 실행하면 `docs/assets/vision/` 아�
 from __future__ import annotations
 
 import math
+import sys
 from pathlib import Path
 
 import matplotlib
@@ -30,6 +31,23 @@ import numpy as np  # noqa: E402
 plt.rcParams["font.family"] = "NanumGothic"
 plt.rcParams["axes.unicode_minus"] = False
 
+
+def _warn_if_font_missing() -> None:
+    """한글 폰트가 없으면 그림의 글자가 깨지고 PNG 바이트도 달라진다.
+
+    수치(표준출력 표)는 폰트와 무관하게 같다 — **근거로 삼을 것은 그쪽**이고,
+    PNG 는 같은 툴체인에서만 바이트가 재현된다.
+    """
+    from matplotlib import font_manager
+
+    if not any(f.name == "NanumGothic" for f in font_manager.fontManager.ttflist):
+        print(
+            "[!] NanumGothic 이 없어 그림의 한글이 깨집니다 "
+            "(sudo apt install fonts-nanum). 표준출력 수치는 영향받지 않습니다.\n",
+            file=sys.stderr,
+        )
+
+
 FOCAL_PX = 1411.0
 WORKSPACE_MM = 1800.0
 HALF_MM = WORKSPACE_MM / 2
@@ -37,7 +55,13 @@ WALL_H_MM = 350.0
 U_LIMIT, V_LIMIT = 640.0, 360.0
 DETECT_PX = 20.0  # YOLO 가 안정적으로 무는 최소 물체 폭
 OBJ_MM = 30.0  # 현재 출력된 원기둥 지름
-BLIND_CAP_MM = 204.0  # 가벽이 만드는 사각지대 허용치
+# 가벽이 만드는 사각지대는 **비용이지 제약이 아니다.**
+# 예전에 204 mm 를 feasibility 필터로 썼는데, 그 값은 폐기된 모서리 배치
+# (2050/1400)에서 우연히 나온 수치였을 뿐 독립적인 설계 요구가 아니었다.
+# 확정 배치(1650/1400)는 377 mm 라 그 필터로는 제외돼 버린다 — 같은 그림 안에서
+# "탐색 결과"와 "권고안"이 다른 조건 위에 서게 된다. 그래서 필터를 걷고
+# 등고선으로 같이 그린다. 유일한 하드 제약은 FOV 다.
+BLIND_CONTOURS_MM = (150.0, 250.0, 350.0, 450.0)
 PICK = (1650.0, 1400.0)  # #130 확정 (높이, 변 중앙에서의 후퇴)
 CORNER_OLD = (2050.0, 1400.0)  # 8/19 오전에 검토했다가 폐기한 모서리 배치
 TALLER = (1900.0, 900.0)  # 더 높은 거치가 가능할 때의 대안 (#149 D3)
@@ -76,7 +100,13 @@ def worst_point(layout: str) -> tuple[float, float]:
 
 def best_pitch(h: float, s: float, layout: str) -> tuple[float, float, float] | None:
     """담당 구역이 다 들어오는 피치 중 수직 여유가 가장 큰 것. (pitch, max|u|, max|v|)."""
-    pts = duty_points(layout)
+    return _best_pitch_for(h, s, duty_points(layout), layout)
+
+
+def _best_pitch_for(
+    h: float, s: float, pts: list[tuple[float, float]], layout: str = "edge"
+) -> tuple[float, float, float] | None:
+    """임의의 담당 점 집합에 대한 최적 피치."""
     best = None
     for pitch in np.arange(1.0, 88.0, 0.25):
         center, right, down, fwd = _rig(h, s, float(pitch), layout)
@@ -148,8 +178,12 @@ def sigma_max(h: float, s: float, layout: str, x: float, y: float) -> float:
     return float(np.linalg.svd(jac, compute_uv=False)[0])
 
 
-def sweep(layout: str, hs, ss, blind_cap: float | None = BLIND_CAP_MM):
-    """(높이, 후퇴) 격자에서 최악점의 30 mm 픽셀 폭. 불가한 조합은 nan."""
+def sweep(layout: str, hs, ss, blind_cap: float | None = None):
+    """(높이, 후퇴) 격자에서 최악점의 30 mm 픽셀 폭. 불가한 조합은 nan.
+
+    하드 제약은 FOV 뿐이다. `blind_cap` 은 기본으로 걸지 않는다 — 가림은
+    비용이라 등고선으로 따로 보여준다.
+    """
     z = np.full((len(hs), len(ss)), np.nan)
     wx, wy = worst_point(layout)
     for i, h in enumerate(hs):
@@ -164,12 +198,17 @@ def sweep(layout: str, hs, ss, blind_cap: float | None = BLIND_CAP_MM):
 
 
 def fig_placement_sweep() -> tuple[float, float, float]:
-    """변 중앙 배치의 전수 탐색. 30 mm 는 어디서도 검출선을 못 넘는다."""
+    """변 중앙 배치의 전수 탐색. 30 mm 는 어디서도 검출선을 못 넘는다.
+
+    회색은 FOV 초과뿐이다. 가벽 가림은 필터가 아니라 **점선 등고선**으로 겹쳐
+    그린다 — 낮게 달수록 픽셀은 좋아지고 가림은 나빠지는 맞바꿈이 한 장에 보인다.
+    """
     hs = np.arange(900, 2601, 25)
     ss = np.arange(100, 1601, 25)
     z = sweep("edge", hs, ss)
+    blind = np.array([[blind_band(float(h), float(s)) for s in ss] for h in hs])
 
-    fig, ax = plt.subplots(figsize=(9, 6.2))
+    fig, ax = plt.subplots(figsize=(9.4, 6.2))
     im = ax.pcolormesh(ss, hs, z, cmap="viridis", shading="auto", vmin=11, vmax=DETECT_PX)
     fig.colorbar(im, ax=ax).set_label(
         f"최악점에서 {OBJ_MM:.0f} mm 물체의 픽셀 폭 [px]", fontsize=11
@@ -179,6 +218,17 @@ def fig_placement_sweep() -> tuple[float, float, float]:
         fmt="%d px",
         fontsize=9,
     )
+    cb = ax.contour(
+        ss,
+        hs,
+        np.where(np.isnan(z), np.nan, blind),
+        levels=list(BLIND_CONTOURS_MM),
+        colors="#ff9f0a",
+        linewidths=1.3,
+        linestyles=":",
+    )
+    ax.clabel(cb, fmt="가림 %d mm", fontsize=8.5)
+
     ph, ps = PICK
     cur = z[int(np.argmin(abs(hs - ph))), int(np.argmin(abs(ss - ps)))]
     top = np.unravel_index(np.nanargmax(z), z.shape)
@@ -190,7 +240,7 @@ def fig_placement_sweep() -> tuple[float, float, float]:
         mec="k",
         mfc="#ff3b30",
         mew=1.4,
-        label=f"권고 {ph:.0f}/{ps:.0f} — {cur:.1f} px",
+        label=f"확정 {ph:.0f}/{ps:.0f} — {cur:.1f} px · 가림 {blind_band(ph, ps):.0f} mm",
     )
     ax.plot(
         [ss[top[1]]],
@@ -205,17 +255,18 @@ def fig_placement_sweep() -> tuple[float, float, float]:
     ax.set_xlabel("변 중앙에서의 후퇴 s [mm]", fontsize=12)
     ax.set_ylabel("카메라 높이 h [mm]", fontsize=12)
     ax.set_title(
-        f"변 중앙 배치 — {OBJ_MM:.0f} mm 는 여전히 {DETECT_PX:.0f} px 에 닿지 않는다\n"
-        "회색 = FOV 초과 또는 가림 띠 204 mm 초과 (C270 720p · 1.8×1.8 m · 2대 마주보기)",
+        f"변 중앙 배치 — {OBJ_MM:.0f} mm 는 어느 배치에서도 {DETECT_PX:.0f} px 에 닿지 않는다\n"
+        "회색 = FOV 초과 · 점선 = 가벽이 만드는 사각지대 "
+        "(C270 720p · 1.8×1.8 m · 2대 마주보기)",
         fontsize=12.5,
         pad=12,
     )
     ax.set_facecolor("#d9d9d9")
-    ax.legend(loc="lower right", fontsize=10, framealpha=0.95)
+    ax.legend(loc="lower right", fontsize=9.5, framealpha=0.95)
     ax.text(
         0.03,
         0.05,
-        f"탐색 {int(np.sum(~np.isnan(z)))} 조합 중 최대 {np.nanmax(z):.1f} px\n"
+        f"FOV 를 만족하는 {int(np.sum(~np.isnan(z)))} 조합 중 최대 {np.nanmax(z):.1f} px\n"
         f"{DETECT_PX:.0f} px 에 도달하는 조합 = 0",
         transform=ax.transAxes,
         fontsize=10.5,
@@ -291,15 +342,6 @@ def fig_object_size() -> float:
     fig.savefig(OUT / "fig2_object_size.png", dpi=150)
     plt.close(fig)
     return need
-
-
-def best_of(layout: str):
-    """가림 띠 조건을 지키면서 최악점 픽셀 폭이 가장 큰 배치."""
-    hs = np.arange(900, 2601, 25)
-    ss = np.arange(100, 1801, 25)
-    z = sweep(layout, hs, ss)
-    top = np.unravel_index(np.nanargmax(z), z.shape)
-    return float(np.nanmax(z)), float(hs[top[0]]), float(ss[top[1]])
 
 
 def fig_layout_compare():
@@ -391,6 +433,29 @@ def fig_layout_compare():
     return rows
 
 
+def four_edge_best(strip_mm: float = 450.0) -> tuple[float, float, float, float]:
+    """네 변에 한 대씩 두고 각자 `strip_mm` 깊이 띠만 담당할 때의 최선.
+
+    D6(4대 안) 철회 근거다. 대수를 늘려도 **각 카메라가 여전히 폭 1800 mm 를
+    통째로 담아야** 하므로 가로 해상도가 거의 안 는다.
+
+    반환 (30 mm 픽셀 폭, 높이, 후퇴, 고도각).
+    """
+    pts = [(0.0, 0.0), (WORKSPACE_MM, 0.0), (0.0, strip_mm), (WORKSPACE_MM, strip_mm)]
+    best = None
+    for h in np.arange(900, 2601, 25):
+        for s in np.arange(100, 1601, 25):
+            r = _best_pitch_for(float(h), float(s), pts)
+            if r is None or r[1] > U_LIMIT or r[2] > V_LIMIT:
+                continue
+            center, _, _, _ = _rig(float(h), float(s), 45.0, "edge")
+            slant = float(np.linalg.norm(np.array([0.0, strip_mm, 0.0]) - center))
+            px = OBJ_MM * FOCAL_PX / slant
+            if best is None or px > best[0]:
+                best = (px, float(h), float(s), math.degrees(math.asin(h / slant)))
+    return best
+
+
 def sensitivity_table() -> None:
     h, s = PICK
     pitch, umax, vmax = best_pitch(h, s, "edge")
@@ -421,6 +486,7 @@ def sensitivity_table() -> None:
 
 
 def main() -> None:
+    _warn_if_font_missing()
     OUT.mkdir(parents=True, exist_ok=True)
     sensitivity_table()
     px_max, h_max, s_max = fig_placement_sweep()
@@ -433,6 +499,11 @@ def main() -> None:
             f"[fig3] {r['layout']:<7} h={r['h']:.0f} s={r['s']:.0f} → "
             f"30 mm {r['px']:.1f} px · 최소 물체 {r['need']:.0f} mm · σmax {r['sig']:.2f}"
         )
+    px4, h4, s4, el4 = four_edge_best()
+    print(
+        f"[D6] 네 변에 4대(각자 450 mm 띠) 최선 — 30 mm {px4:.1f} px "
+        f"(h={h4:.0f}, s={s4:.0f}, 고도각 {el4:.1f}°) → 여전히 {DETECT_PX:.0f} px 미달"
+    )
     print(f"\n그림 3장 → {OUT}")
 
 
