@@ -171,10 +171,11 @@ def test_every_port_method_with_a_failure_value_is_covered():
 
 # ── 새로 열린 실패 경로 ───────────────────────────────────────────────────
 #
-# 아래 두 개는 **의도적으로 xfail(strict)** 이다. Fake가 이제 계약대로 실패를
-# 표현할 수 있게 됐지만, 그 실패를 FSM이 흡수하는 쪽은 domain/task/states.py 이고
-# 이번 PR의 범위 밖이다. 계약을 테스트로 먼저 적어 두고, 흡수 코드가 들어오면
-# strict xfail이 xpass로 뒤집히면서 "이제 마커를 떼라"고 알려 준다.
+# 아래 두 개는 PR #138 시점에 **의도적으로 xfail(strict)** 이었다. Fake가 계약대로
+# 실패를 표현하게 되면서 결함이 드러났지만, 그 실패를 흡수하는 쪽은
+# domain/task/states.py 라 그 PR의 범위 밖이었다. 계약을 테스트로 먼저 적어 두고
+# strict xfail이 xpass로 뒤집히면 "이제 마커를 떼라"고 알려 주는 방식이었고,
+# 실제로 그렇게 됐다 — 흡수 코드가 들어왔으므로 마커를 떼고 정상 테스트로 둔다.
 
 
 def _detection(track_id=1):
@@ -190,18 +191,14 @@ def _detection(track_id=1):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="IdleState가 parse() 결과를 검사하지 않고 MissionContext(spec=None)을 만든다 "
-    "— SELECT에서 AttributeError. real 구현도 None을 돌려주므로 실기에도 있는 결함이다. "
-    "수정 자리는 states.py라 이번 PR 범위 밖",
-)
 def test_unparsed_command_keeps_the_mission_in_idle(make_ports):
     """해석하지 못한 명령으로는 미션이 시작되지 않아야 한다 — IDLE 유지.
 
     Fake가 ValueError를 던지던 동안에는 이 결함이 보이지 않았다. 예외가 IDLE에서
     즉시 터져 나가 SCAN까지 갈 일이 없었기 때문이다. 계약대로 None을 돌려주자
-    비로소 real과 같은 경로를 밟게 됐고, 그 경로가 깨져 있다는 게 드러났다."""
+    비로소 real과 같은 경로를 밟게 됐고, 그 경로가 깨져 있다는 게 드러났다 —
+    `MissionContext(spec=None)` 이 SCAN까지 흘러가 SELECT에서 AttributeError로
+    FSM 스레드가 죽었다."""
     from domain.task.mission_task import MissionTask
 
     gen = MissionTask(make_ports()).run("알 수 없는 명령")
@@ -209,14 +206,11 @@ def test_unparsed_command_keeps_the_mission_in_idle(make_ports):
     assert [next(gen).name for _ in range(5)] == ["IDLE"] * 5
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="TransportState가 align_to_box() 반환값을 쓰지 않는다 (hld.md §6.4 #10 "
-    "'align_to_centerline() 반환 무시'). 정렬 오차 임계 판정은 states.py 몫이라 범위 밖",
-)
 def test_align_failure_holds_the_target(make_ports, run_to_completion):
-    """정렬에 실패하면 상자에 넣을 수 없다 — 대상을 보류 등록하고 SCAN으로 복귀해야
-    한다. 지금은 무한대 오차를 돌려줘도 그대로 INSERT까지 진행한다."""
+    """정렬에 실패하면 상자에 넣을 수 없다 — 대상을 보류 등록하고 SCAN으로 복귀한다.
+
+    수정 전에는 `TransportState` 가 `align_to_box()` 반환값을 아예 읽지 않아
+    무한대 오차를 돌려줘도 그대로 INSERT까지 진행했다 (hld.md §6.4 #10)."""
     ports = make_ports(
         base=FakeBase(align_ok=False),
         perception=ScriptedPerception(detections=[_detection(track_id=1)]),

@@ -103,18 +103,31 @@ stateDiagram-v2
 
 | 상태 | 호출하는 포트 | 성공 시 다음 | 실패 시 다음 |
 |---|---|---|---|
-| `IDLE` | `interpreter.parse()` | `SCAN` | 대기 유지 |
+| `IDLE` | `interpreter.parse()` | `SCAN` | 대기 유지 — `raw_text` 없음 · **해석 실패(`None`)** |
 | `SCAN` | `perception.scan_floor()` | 대상 有 → `SELECT` / 無 → `DONE` | 재스캔 (n < 3) |
 | `SELECT` | — (순수 판단) | `APPROACH` | `DONE` |
 | `APPROACH` | `base.drive_to()` | `GRASP` | `SCAN` (보류) |
 | `GRASP` | `arm.move_to_cartesian()` · `set_gripper()` · `get_load()` | `TRANSPORT` / `DELIVER` | 자기 자신 → `SCAN` |
-| `TRANSPORT` | `perception.find_box()` · `base.drive_to()` · `base.align_to_box()` | `POSE_PLAN` | `SCAN` (보류) |
+| `TRANSPORT` | `perception.find_box()` · `base.drive_to()` · `base.align_to_box()` | `POSE_PLAN` | `SCAN` (보류) — 상자 미발견 · 주행 실패 · **정렬 오차 초과** |
 | `POSE_PLAN` | `perception.measure_opening()` | `INSERT` | `REJECT` |
 | `INSERT` | `arm.reorient()` · `move_to_cartesian()` · `set_gripper()` | `SCAN` (완료) | `SCAN` (보류) |
 | `DELIVER` | `base.drive_to()` | `HANDOVER` | `SCAN` (보류) |
 | `HANDOVER` | `arm.set_gripper()` · `get_load()` | `SCAN` (완료) | 대기 |
 | `REJECT` | `arm.move_to_cartesian()` · `set_gripper()` | `SCAN` (보류) | `SCAN` |
 | `DONE` | — | `None` (종료) | — |
+
+### `IDLE` 의 대기 조건
+
+`parse()` 는 등록되지 않은 문형에 **`None`** 을 돌려줍니다 (`command_interpreter.py` 포트 계약,
+real 구현도 `understood=False` 면 같습니다). 이때 **미션은 시작되지 않고 `IDLE` 을 유지**합니다 —
+`raw_text` 가 비어 있을 때와 같은 자리입니다. "해석 실패" 상태를 따로 만들지 않는 이유는
+로봇이 할 일이 양쪽 모두 동일하기 때문입니다: 다음 명령을 기다립니다.
+
+> **`MissionContext(spec=None)` 을 만들어 넘기면 안 됩니다.** `SCAN` 은 `spec` 을 읽지 않아
+> 그대로 통과하고, `SELECT` 가 `spec.placement_rule` 을 읽는 순간 `AttributeError` 로
+> **FSM 스레드가 죽습니다.** Fake가 `ValueError` 를 던지던 동안에는 예외가 `IDLE` 에서 즉시
+> 터져 나가 이 경로가 보이지 않았습니다 — Fake를 계약(`None`)에 맞춘 PR #138 이 드러냈고,
+> real 구현도 같은 값을 돌려주므로 **실기에도 있던 결함**입니다.
 
 ### `SELECT` 의 선정 기준
 
@@ -168,6 +181,30 @@ def execute(self, ports):
 > as-is(암실 반출)는 물체 1개 · 선형 FSM이라 "미션 누적"과 "대상별"이 같은 값이었지만,
 > 루프 FSM에서는 갈라집니다. `failure_definition.md` §3의 "재시도 후 성공은 실패가 아니다"가
 > 두 번째 물체부터 성립하지 않게 되므로, **측정(M4 · 20 인스턴스)이 통째로 무효가 됩니다.**
+
+### `TRANSPORT` 의 정렬 판정
+
+`align_to_box()` 는 정렬 후 **yaw 오차(rad)** 를 반환합니다. 이 값은 **판정 대상**이며,
+`ALIGN_TOLERANCE_RAD` 를 넘으면 상자 앞에 서지 못한 것이므로 `POSE_PLAN` 으로 진행하지 않고
+대상을 보류 등록한 뒤 `SCAN` 으로 복귀합니다 ([`hld.md` §6.4 #10](hld.md#64-구현과-설계의-차이--해소-필요)).
+
+```python
+# TransportState — 부호는 정렬 방향일 뿐이라 크기만 본다
+yaw_error_rad = ports.base.align_to_box(box)
+if abs(yaw_error_rad) > ALIGN_TOLERANCE_RAD:
+    return ScanState(self.ctx.hold(self.target.track_id))
+return PosePlanState(self.ctx, self.target, box)
+```
+
+> **`math.isinf()` 로 좁히면 안 됩니다.** 포트가 정렬 실패를
+> `ALIGN_FAILED_YAW_ERROR_RAD`(무한대)로 표현하는 것은 **어떤 임계값과 비교해도 실패로
+> 남기 위해서**이지, 무한대만 검사하라는 뜻이 아닙니다. 그렇게 좁히면 '정렬은 됐지만 오차가
+> 큰' 경우가 그대로 투입까지 흘러가, 포트가 두 상황을 다른 값으로 구분해 돌려주는 이유가
+> 사라집니다.
+
+`ALIGN_TOLERANCE_RAD` 는 **미실측 상수**입니다 (`states.py` 미실측 상수 블록, 현재 0.05 rad ≈ 2.9°
+자리 표시자). 실제 값은 상자 입구 여유폭과 투입 지점 IK 오차로 결정되므로 미결 #4·#7 실측과
+함께 잡아야 합니다.
 
 ---
 
