@@ -86,23 +86,28 @@ ENV MACHINE_TYPE=MentorPi_Mecanum \
 # 5. Hailo-10H 런타임
 # ─────────────────────────────────────────────────────────────────────────────
 
-# 아래 두 파일은 재배포 불가라 Git 에 없습니다 — 빌드 전에 docker/vendor/ 에
-# 직접 배치해야 합니다. 출처·파일명·버전 일치 요구는 docker/vendor/README.md.
-# Native HailoRT 5.1.1 userspace runtime.
-# Kernel driver는 호스트의 h10-hailort-pcie-driver 5.1.1 사용.
-COPY docker/vendor/h10-hailort_5.1.1_arm64.deb /tmp/h10-hailort.deb
-RUN mkdir -p /tmp/hailort-root \
-    && dpkg-deb -x /tmp/h10-hailort.deb /tmp/hailort-root \
-    && cp /tmp/hailort-root/usr/lib/libhailort.so.5.1.1 /usr/lib/ \
-    && ln -sf /usr/lib/libhailort.so.5.1.1 /usr/lib/libhailort.so \
-    && cp /tmp/hailort-root/usr/bin/hailortcli /usr/bin/ \
-    && ldconfig \
-    && rm -rf /tmp/hailort-root /tmp/h10-hailort.deb
-
-# Python 3.10 / aarch64 binding.
-COPY docker/vendor/hailort-5.1.1-cp310-cp310-linux_aarch64.whl /tmp/
-RUN pip3 install --no-cache-dir /tmp/hailort-*.whl \
-    && rm /tmp/hailort-*.whl
+# Vendor binaries are not tracked by Git.
+# If both HailoRT 5.1.1 files exist in docker/vendor/, install Hailo support.
+# Otherwise the image remains buildable without HailoRT.
+#
+# BuildKit bind mount keeps the .deb/.whl out of the final image layers.
+# Exact filenames and download instructions: docker/vendor/README.md
+RUN --mount=type=bind,source=docker/vendor,target=/vendor \
+    if [ -f /vendor/h10-hailort_5.1.1_arm64.deb ] \
+       && [ -f /vendor/hailort-5.1.1-cp310-cp310-linux_aarch64.whl ]; then \
+        mkdir -p /tmp/hailort-root \
+        && dpkg-deb -x /vendor/h10-hailort_5.1.1_arm64.deb /tmp/hailort-root \
+        && cp /tmp/hailort-root/usr/lib/libhailort.so.5.1.1 /usr/lib/ \
+        && ln -sf /usr/lib/libhailort.so.5.1.1 /usr/lib/libhailort.so \
+        && cp /tmp/hailort-root/usr/bin/hailortcli /usr/bin/ \
+        && ldconfig \
+        && pip3 install --no-cache-dir \
+            /vendor/hailort-5.1.1-cp310-cp310-linux_aarch64.whl \
+        && rm -rf /tmp/hailort-root \
+        && echo "[hailo] HailoRT 5.1.1 installed"; \
+    else \
+        echo "[hailo] vendor .deb/.whl not found; building without HailoRT"; \
+    fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. 사용자
