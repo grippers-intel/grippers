@@ -23,15 +23,13 @@ class Perception(ABC):
         서비스 부재 · 응답 없음도 같은 `None` 이다."""
 
     @abstractmethod
-    def measure_opening(self, box: BoxObservation) -> float:
+    def measure_opening(self, box: BoxObservation) -> float | None:
         """`box` 앞에 정렬한 상태에서 입구 폭(mm)을 정밀 실측한다.
         `POSE_PLAN` 이 이 값으로 φ 해 구간을 계산한다.
 
         **실측하지 못하면(서비스 부재 · 응답 없음) `None`** — '해 없음' 취급이라
         `POSE_PLAN` 이 `REJECT` 로 보낸다. 입구 폭을 모르는 채로 투입을 시도하면
-        상자 테두리에 물체를 찍는다. (반환 타입 선언은 아직 `float` 이다 —
-        `parse()` 와 같은 과도기로, 포트 시그니처를 한꺼번에 맞추는 후속 PR에서
-        정리한다.)"""
+        상자 테두리에 물체를 찍는다."""
 
     @abstractmethod
     def monitor_clearance(self) -> Clearance:

@@ -240,3 +240,15 @@ def test_measure_opening_failure_is_injectable_though_the_path_is_still_closed(
     assert (
         "REJECT" not in names and "INSERT" in names
     ), "POSE_PLAN이 재도입돼 이 단언이 깨졌다면, 실측 실패는 이제 REJECT로 가야 한다"
+
+
+def test_measure_opening_failure_does_not_corrupt_box_observation():
+    """정밀 실측 실패(None)가 BoxObservation의 float 계약까지 오염시키지 않는다."""
+    perception = ScriptedPerception(opening_mm=None)
+
+    box = perception.find_box(BoxColor.GREEN)
+
+    assert box is not None
+    assert isinstance(box.opening_mm, float)
+    assert box.opening_mm == 400.0
+    assert perception.measure_opening(box) is None
