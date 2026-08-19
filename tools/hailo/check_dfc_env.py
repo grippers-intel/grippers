@@ -50,14 +50,20 @@ def _ram_gb() -> float | None:
         return None
 
 
-def _dfc_version() -> str | None:
-    """설치돼 있으면 DFC 버전. 없으면 None."""
+def _dfc_probe() -> tuple[str, str]:
+    """DFC 상태. ("ok"|"absent"|"broken", 상세).
+
+    설치돼 있는데 의존성 충돌로 import 가 깨진 상태를 "미설치" 로 뭉뚱그리면
+    진단 도구로서 쓸모가 없다 — 그 둘은 대응이 완전히 다르다.
+    """
     try:
         from hailo_sdk_client import __version__  # type: ignore[import-not-found]
 
-        return str(__version__)
-    except Exception:
-        return None
+        return "ok", str(__version__)
+    except ModuleNotFoundError:
+        return "absent", ""
+    except Exception as exc:  # 설치는 됐는데 import 가 깨진 경우
+        return "broken", f"{type(exc).__name__}: {exc}"
 
 
 def _checks() -> list[tuple[str, str, str]]:
@@ -75,12 +81,19 @@ def _checks() -> list[tuple[str, str, str]]:
 
     ver = _ubuntu_version()
     if ver is None:
-        out.append(("OS", WARN, "Ubuntu 가 아니다 — WSL2 나 Docker 로 우회해야 한다"))
+        out.append(
+            (
+                "OS",
+                FAIL,
+                "Ubuntu 가 아니다 — 이 호스트로는 직접 못 돌린다 "
+                f"(지원 {' · '.join(SUPPORTED_UBUNTU)}). WSL2 · Docker 로 우회는 가능",
+            )
+        )
     else:
         out.append(
             (
                 "OS",
-                OK if ver in SUPPORTED_UBUNTU else WARN,
+                OK if ver in SUPPORTED_UBUNTU else FAIL,
                 f"Ubuntu {ver} (지원 {' · '.join(SUPPORTED_UBUNTU)})",
             )
         )
@@ -121,22 +134,33 @@ def _checks() -> list[tuple[str, str, str]]:
                 "비어 있음"
                 if not leak
                 else f"{leak} — venv 안으로 새어 들어온다. DFC 는 numpy 등을 고정 버전으로 "
-                "요구하므로 ROS 패키지와 충돌한다. **DFC 셸에서는 `unset PYTHONPATH`**"
+                "요구해 충돌한다(ROS 를 source 한 셸이 가장 흔한 원인). "
+                "**DFC 셸에서는 외부 PYTHONPATH 를 허용하지 않는다 — `unset PYTHONPATH`**"
             ),
         )
     )
 
-    dfc = _dfc_version()
-    if dfc is None:
+    state, detail = _dfc_probe()
+    if state == "absent":
         out.append(("DFC", WARN, "미설치 — PyPI 에 없다. Developer Zone 휠을 이 venv 에 설치할 것"))
-    else:
-        out.append(("DFC", OK, f"{dfc} 설치됨"))
+    elif state == "broken":
         out.append(
             (
-                "버전 짝",
+                "DFC",
+                FAIL,
+                f"설치는 됐으나 import 가 깨졌다 — {detail}. "
+                "의존성 충돌일 가능성이 높다. 위 PYTHONPATH 항목을 먼저 볼 것",
+            )
+        )
+    else:
+        out.append(("DFC", OK, f"{detail} 설치됨"))
+        out.append(
+            (
+                "호환 조합",
                 WARN,
-                f"DFC {dfc} 가 HailoRT {TARGET_HAILORT} / {TARGET_DEVICE} 와 짝인지 "
-                "릴리스 노트로 확인할 것 — 어긋나면 HEF 가 런타임에서 로드되지 않는다",
+                f"DFC {detail} 가 HailoRT {TARGET_HAILORT} / {TARGET_DEVICE} 와 호환되는 "
+                "조합인지 릴리스 노트로 확인할 것 — 이 스크립트는 판정하지 않는다. "
+                "어긋나면 컴파일은 성공하고 런타임에서만 실패한다",
             )
         )
 

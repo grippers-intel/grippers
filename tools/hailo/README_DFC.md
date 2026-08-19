@@ -1,7 +1,8 @@
 # ONNX → HEF 컴파일 (DFC) 런북
 
 `#104` (M2-H1) 의 선행 조건인 **컴파일 호스트**를 정리한 문서다.
-`hld.md` 미결 #11 이 여기서 닫힌다.
+`hld.md` 미결 #11 의 "컴파일 호스트 확보" 조건을 만족시키기 위한 런북이며,
+**hld 본문 갱신은 #151 머지 후 별도로 반영한다.**
 
 ```bash
 python tools/hailo/check_dfc_env.py
@@ -35,9 +36,12 @@ ONNX ──DFC──► HEF   ──── scp ────►  HailoRT 5.1.1 �
 > 후보가 될 PC 에서 위 스크립트를 돌려 적격 여부를 보고하는 것이 이 문서의 용도다.
 > 결정은 별도 이슈에서 한다.
 
-## 2. ⚠️ 흔한 함정 — PYTHONPATH
+## 2. ⚠️ PYTHONPATH — DFC 셸에서는 비운다
 
-셸이 `source /opt/ros/<distro>/setup.bash` 를 실행하면
+**정책: DFC 작업 셸에서는 외부 `PYTHONPATH` 를 일절 허용하지 않는다.**
+무엇이 들어 있든 venv 격리를 깨기 때문이고, `check_dfc_env.py` 도 값이 있으면 FAIL 로 잡는다.
+
+가장 흔한 원인은 ROS 다. 셸이 `source /opt/ros/<distro>/setup.bash` 를 실행하면
 **`PYTHONPATH` 가 새로 만든 venv 안까지 샌다.** ROS 를 쓰는 개발 PC 라면 대개 그렇다.
 
 venv 를 새로 만들어도 ROS 패키지가 보인다. DFC 는 numpy 등을 고정 버전으로 요구해서
@@ -75,14 +79,18 @@ python tools/hailo/check_dfc_env.py     # DFC 줄이 PASS 로 바뀌는지 확�
 └── logs/      컴파일 로그
 ```
 
-## 4. ⚠️ 버전 짝을 먼저 확인한다
+## 4. ⚠️ 호환 조합을 먼저 확인한다
 
-**DFC 버전과 런타임 HailoRT 버전이 어긋나면 HEF 가 Pi 에서 로드되지 않는다.**
+**DFC 와 런타임 HailoRT 버전이 어긋나면 HEF 가 Pi 에서 로드되지 않는다.**
 컴파일은 성공하고 런타임에서만 실패해서, 모르면 엉뚱한 곳을 판다.
 
 현재 런타임은 **HailoRT 5.1.1 · HAILO10H** 로 고정돼 있다(PR #151, `docker/vendor/README.md`).
-Developer Zone 릴리스 노트에서 **5.1.1 과 짝인 DFC 버전**을 확인하고 그것을 받는다.
-컴파일 타깃도 `HAILO10H` 로 지정해야 한다.
+Developer Zone 릴리스 노트에서 **HailoRT 5.1.1 / HAILO10H 와 호환되는 DFC 조합**을
+확인하고 그것을 받는다. 컴파일 타깃도 `HAILO10H` 로 지정해야 한다.
+
+> [!NOTE]
+> `check_dfc_env.py` 는 **호환 여부를 판정하지 않는다.** 설치된 DFC 버전을 표시하고
+> 확인하라고 요구할 뿐이다 — 공식 조합표를 아직 확보하지 못했다. 확보하면 판정으로 올린다.
 
 ## 5. 남은 선행 조건
 
