@@ -30,16 +30,15 @@ ONNX ──DFC──► HEF   ──── scp ────►  HailoRT 5.1.1 �
 | 디스크 | 40 GB↑ | DFC + 의존성 + 중간 산출물 |
 | GPU | 선택 | 일부 최적화에만 쓰인다. 없어도 컴파일된다 |
 
-**확정 호스트 — 김동혁 PC** (2026-08-19 실측)
+> [!IMPORTANT]
+> **호스트는 아직 정해지지 않았다** (hld 미결 #11).
+> 후보가 될 PC 에서 위 스크립트를 돌려 적격 여부를 보고하는 것이 이 문서의 용도다.
+> 결정은 별도 이슈에서 한다.
 
-```
-x86_64 · Ubuntu 24.04.4 LTS · Python 3.12.3 · RAM 31 GB · 여유 154 GB · GPU 없음
-```
+## 2. ⚠️ 흔한 함정 — PYTHONPATH
 
-## 2. ⚠️ 이 환경의 함정 — PYTHONPATH
-
-`~/.bashrc` 가 `source /opt/ros/jazzy/setup.bash` 를 실행하므로
-**`PYTHONPATH=/opt/ros/jazzy/lib/python3.12/site-packages` 가 모든 venv 안까지 샌다.**
+셸이 `source /opt/ros/<distro>/setup.bash` 를 실행하면
+**`PYTHONPATH` 가 새로 만든 venv 안까지 샌다.** ROS 를 쓰는 개발 PC 라면 대개 그렇다.
 
 venv 를 새로 만들어도 ROS 패키지가 보인다. DFC 는 numpy 등을 고정 버전으로 요구해서
 ROS Jazzy 가 깔아둔 것과 충돌한다. **DFC 를 쓰는 셸에서는 반드시 끊는다.**
@@ -65,7 +64,7 @@ pip install vendor/hailo_dataflow_compiler-<버전>-py3-none-linux_x86_64.whl
 python tools/hailo/check_dfc_env.py     # DFC 줄이 PASS 로 바뀌는지 확인
 ```
 
-작업 트리는 저장소 밖에 둔다 — 휠과 중간 산출물이 크고 재배포 불가다.
+작업 트리는 저장소 밖에 둔다 — 휠과 중간 산출물이 크고 재배포 불가다. 예:
 
 ```
 ~/hailo-dfc/
@@ -89,7 +88,7 @@ Developer Zone 릴리스 노트에서 **5.1.1 과 짝인 DFC 버전**을 확인�
 
 | | 상태 |
 |---|---|
-| 컴파일 호스트 | ✅ 확보 (위) |
+| 컴파일 호스트 | ⛔ **미정** — 후보 PC 에서 위 스크립트로 자가진단 후 결정 (미결 #11) |
 | DFC 휠 | ⛔ Developer Zone 계정 필요 |
 | 컴파일할 ONNX | ⛔ #102 (M2-D2) YOLO 학습 결과 대기 |
 

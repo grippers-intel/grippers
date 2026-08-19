@@ -1,7 +1,9 @@
 """ONNX → HEF 컴파일 호스트가 Hailo Dataflow Compiler 요구사항을 만족하는지 본다.
 
-hld.md 미결 #11 을 판정하는 도구다. DFC 는 **x86_64 Ubuntu 전용**이라
+hld.md 미결 #11 을 판정하기 위한 도구다. DFC 는 **x86_64 Ubuntu 전용**이라
 Pi 에서 돌릴 수 없고, 어느 PC 에서 컴파일할지가 M2-H1(#104) 의 선행 조건이다.
+
+**후보가 될 PC 에서 각자 돌려 결과를 이슈에 붙이면 된다** — 호스트는 그 결과를 보고 정한다.
 
     python tools/hailo/check_dfc_env.py
 
@@ -109,7 +111,7 @@ def _checks() -> list[tuple[str, str, str]]:
         )
     )
 
-    # 이 저장소 환경 특유의 함정: ROS 를 source 하면 PYTHONPATH 가 venv 로 샌다.
+    # 흔한 함정: ROS 를 source 한 셸이면 PYTHONPATH 가 venv 안까지 샌다.
     leak = os.environ.get("PYTHONPATH", "")
     out.append(
         (
