@@ -10,7 +10,7 @@ soarm_lab.arm을 그대로 감싼다. 새 IK/서보 로직은 없음.
 
 2. 실물 포트는 `arm_port` 노드 파라미터로 받는다 — 심볼릭 링크로 포트를
    고정하던 방식은 폐기했다. `Arm._backend(real=True)` 는 `self._real` 이
-   비어 있을 때만 기본 포트(`/dev/ttyACM0`)로 `RealBackend()` 를 새로
+   비어 있을 때만 기본 포트(`/dev/soarm`)로 `RealBackend()` 를 새로
    만들므로, 커스텀 포트를 쓰려면 첫 호출 전에 `soarm._real` 을 미리
    채워 둬야 한다 — __init__ 에서 그렇게 한다.
 """
@@ -82,7 +82,7 @@ class ArmDriverNode(Node):
         super().__init__("arm_driver_node")
         cb_group = ReentrantCallbackGroup()
 
-        self.declare_parameter("arm_port", "/dev/ttyACM0")
+        self.declare_parameter("arm_port", "/dev/soarm")
         arm_port = self.get_parameter("arm_port").value
         # RealBackend(port=...) 는 생성 즉시 시리얼 포트를 연다 — 검사는 반드시
         # 그 앞에 와야 한다. 뒤에 두면 이미 베이스 보드를 열어 버린 뒤가 된다.

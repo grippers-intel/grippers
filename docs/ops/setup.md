@@ -66,7 +66,36 @@ echo 'export PYTHONPATH="/grippers:/third_party/soarm_provided_d:${PYTHONPATH}"'
 source ~/.zshrc
 ```
 
-**6. [IntelPi 컨테이너] 빌드**
+**6. [Pi 5 호스트] 시리얼 장치 udev 규칙 등록**
+
+MentorPi 베이스 보드와 SO-ARM101은 `/dev/ttyACM*` 번호가 USB 연결 순서에
+따라 바뀔 수 있으므로 고정 심볼릭 링크를 사용합니다.
+
+```bash
+sudo tee /etc/udev/rules.d/99-grippers-serial.rules >/dev/null <<EOF
+KERNEL=="ttyACM*", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", SYMLINK+="soarm", MODE="0666", GROUP="dialout"
+KERNEL=="ttyACM*", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", SYMLINK+="rrc", MODE="0666", GROUP="dialout"
+EOF
+
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+장치를 다시 연결한 뒤 확인합니다.
+
+```bash
+ls -l /dev/soarm /dev/rrc
+```
+
+기준:
+
+- SO-ARM101 (`1a86:55d3`) → `/dev/soarm`
+- MentorPi 베이스 보드 (`1a86:55d4`) → `/dev/rrc`
+
+`arm_driver_node`와 `bringup.launch.py`의 기본 `arm_port`는 `/dev/soarm`입니다.
+`/dev/rrc`와 같은 실제 장치를 가리키면 arm driver는 기동을 거부합니다.
+
+**7. [IntelPi 컨테이너] 빌드**
 
 ```bash
 cd /ros2_ws

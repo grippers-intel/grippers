@@ -113,12 +113,12 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "arm_port",
-                # ⚠️ ttyACM0 이 아니다 — MentorPi 베이스 보드(/dev/rrc)가 보통
-                # ttyACM0 을 잡으므로, 기본값을 ttyACM0 으로 두면 팔 드라이버가
-                # 베이스 보드 시리얼을 열어 통신을 깨뜨린다. arm_driver_node 가
-                # 기동 시 이 충돌을 한 번 더 검사한다.
-                default_value="/dev/ttyACM1",
-                description="SO-ARM101 시리얼 포트 (베이스 보드 /dev/rrc 와 달라야 함)",
+                # ttyACM 번호는 USB 연결 순서에 따라 바뀔 수 있으므로 udev가 만드는
+                # 안정적인 심볼릭 링크를 기본값으로 사용한다. MentorPi 베이스 보드는
+                # /dev/rrc, SO-ARM101은 /dev/soarm 으로 구분한다.
+                # arm_driver_node도 기동 시 베이스 보드 포트 충돌을 검사한다.
+                default_value="/dev/soarm",
+                description="SO-ARM101 시리얼 포트 (udev 기본값: /dev/soarm)",
             ),
             OpaqueFunction(function=launch_setup),
         ]
