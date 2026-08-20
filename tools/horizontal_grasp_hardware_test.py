@@ -22,6 +22,7 @@ LOAD_MAX_RAW = 1023.0
 MIN_HOLD_LOAD_RATIO = 0.04
 SAFE_START_TOLERANCE_RAW = 120
 RETRY_TIGHTEN_MM = 5.0
+MAX_START_SERVO2_TEMP_C = 40
 
 
 def confirm(message):
@@ -101,6 +102,13 @@ def main():
 
     driver = STS3215Driver(args.port)
     driver.connect()
+
+    servo2_temp = driver.get_temperature(2)
+    if servo2_temp > MAX_START_SERVO2_TEMP_C:
+        raise RuntimeError(
+            f"servo 2 온도 {servo2_temp}°C가 시작 상한 "
+            f"{MAX_START_SERVO2_TEMP_C}°C를 초과했습니다. 냉각 후 재시도하세요"
+        )
 
     actual = read_arm(driver)
     safe_raw = raw_goals(driver, safe_pose)
