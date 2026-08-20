@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Grippers 작업 공간 배치도 — 울타리 1.80 m · 탑뷰 H 1.65 / 후퇴 0.95 · 상자 양쪽 모서리 (팀 확정 2026-08-20)">
+<meta name="description" content="Grippers 작업 공간 배치도 Rev.II — 울타리 1.80 m · 탑뷰 H 1.65 / 후퇴 0.95 · 상자 0.29×0.35 실물 · toy 3형상 개정 (2026-08-20)">
 <style>
   html,body{margin:0;padding:0}
   *,*::before,*::after{box-sizing:border-box}
@@ -126,17 +126,28 @@
   <header style="display:flex;flex-direction:column;gap:18px">
     <div style="display:flex;flex-direction:column;gap:8px">
       <h1>Grippers 작업 공간 배치도</h1>
-      <p class="sub"><strong>팀 확정 — 울타리 1.80 m 정사각형 · 탑뷰 2대 높이 1.65 m · 후퇴 0.95 m.</strong><br>상자 2개는 먼 쪽 <strong>양쪽 모서리</strong>. 기하는 실측 <code>f = 1410 px</code>(C270 1280×720)로 계산했습니다.</p>
+      <p class="sub"><strong>팀 확정 — 울타리 1.80 m 정사각형 · 탑뷰 2대 높이 1.65 m · 후퇴 0.95 m.</strong><br>상자 2개(<strong>0.29 × 0.35 · 높이 0.22 m 실물</strong>)는 먼 쪽 <strong>양쪽 모서리</strong>. 기하는 실측 <code>f = 1410 px</code>(C270 1280×720)로 계산했습니다.</p>
     </div>
     <div class="titleblock">
       <div class="tb-cell"><span class="tb-k">도면명</span><span class="tb-v">작업 공간 배치도 (확정)</span></div>
       <div class="tb-cell"><span class="tb-k">울타리</span><span class="tb-v">1.80 × 1.80 m</span></div>
       <div class="tb-cell"><span class="tb-k">탑뷰</span><span class="tb-v">H 1.65 · 후퇴 0.95</span></div>
-      <div class="tb-cell"><span class="tb-k">개정</span><span class="tb-v">Rev.I — 팀 확정</span></div>
+      <div class="tb-cell"><span class="tb-k">개정</span><span class="tb-v">Rev.II — 실측 반영</span></div>
     </div>
   </header>
 
   <!-- ============ 개정 ============ -->
+  <section>
+    <h2>Rev.II — 실물 실측 반영 (8/20)</h2>
+    <div class="changelist">
+      <div><b>상자</b><span>가정 0.40 × 0.40 → <strong>실물 0.29 × 0.35 m · 높이 0.22 m</strong> (구매 완료) · 간격 0.90 → <strong>약 1.00 m</strong></span></div>
+      <div><b>상자 가림</b><span>높이 가정 0.30 → <strong>실물 0.22 m</strong> · 웹캠 1 0.48 → <strong>0.35 m</strong>, 웹캠 2 0.24 → <strong>0.18 m</strong></span></div>
+      <div><b>toy 3형상</b><span>원기둥 · 정육면체 · 육각기둥 → <strong>정육면체 · 축구공형 다면체 · 오각별기둥</strong></span></div>
+      <div><b>물체 폭</b><span>40 하한 / 55 권장 → <strong>40 mm 확정</strong> · 상한은 그리퍼 실측 <strong>45 mm</strong>(TPU 파지 상한 50)</span></div>
+      <div><b>A2 기지점</b><span>네 모서리 ArUco <strong>⏸ 미채택</strong> — 카메라별 기지점으로 후퇴 0.95 유지</span></div>
+    </div>
+  </section>
+
   <section>
     <h2>Rev.I — 팀 확정값 반영</h2>
     <div class="changelist">
@@ -156,7 +167,7 @@
         <span class="tag">전반적으로 좋습니다</span>
         <ul style="font-size:13.5px">
           <li><strong>실효 커버 시작 0.21 m</strong> (울타리 0.25 기준) · <strong>2대 이중 관측 76%</strong> — 물체 대역이 통째로 들어갑니다</li>
-          <li><strong>최악점 1.87 mm/px</strong> — 55 mm 물체가 <strong>29.4 px</strong>, 40 mm 가 <strong>21.4 px</strong></li>
+          <li><strong>최악점 1.87 mm/px</strong>(물체 폭 환산) — <strong>40 mm 물체가 21.4 px</strong>, 45 mm 가 24.1 px</li>
           <li><strong>바닥 3.70 m</strong> — 팀 초안(4.88)보다 1.2 m 작습니다</li>
           <li><strong>고도각 29.7 ~ 51.6°</strong> · 종횡비 간격 <strong>0.45~0.63</strong> — <strong>탑뷰가 폴백 분류기 자격을 유지</strong>합니다</li>
         </ul>
@@ -210,14 +221,14 @@
 
           <polygon class="occl" points="192,381 231,381 217,349 178,349"/>
 
-          <rect x="182" y="202" width="52" height="52" fill="var(--box-green)" stroke="var(--ink)" stroke-width="1.2"/>
+          <rect x="182" y="202" width="46" height="38" fill="var(--box-green)" stroke="var(--ink)" stroke-width="1.2"/>
           <text class="t-lab" x="208" y="196" text-anchor="middle">🟢 toy</text>
-          <rect x="350" y="202" width="52" height="52" fill="var(--box-blue)" stroke="var(--ink)" stroke-width="1.2"/>
-          <text class="t-lab" x="376" y="196" text-anchor="middle">🔵 chess</text>
-          <g class="d-dim"><line x1="234" y1="228" x2="350" y2="228" marker-start="url(#ar2)" marker-end="url(#ar)"/></g>
-          <text class="t-dim" x="292" y="224" text-anchor="middle">0.90</text>
-          <text class="t-dim" x="208" y="248" text-anchor="middle">0.40 × 0.40</text>
-          <text class="t-dim" x="292" y="180" text-anchor="middle">↑ 웹캠 1 기준 상자 가림 0.48 m — 울타리 밖</text>
+          <rect x="356" y="202" width="46" height="38" fill="var(--box-blue)" stroke="var(--ink)" stroke-width="1.2"/>
+          <text class="t-lab" x="379" y="196" text-anchor="middle">🔵 chess</text>
+          <g class="d-dim"><line x1="228" y1="224" x2="356" y2="224" marker-start="url(#ar2)" marker-end="url(#ar)"/></g>
+          <text class="t-dim" x="292" y="220" text-anchor="middle">1.00</text>
+          <text class="t-dim" x="205" y="252" text-anchor="middle">0.29 × 0.35</text>
+          <text class="t-dim" x="292" y="180" text-anchor="middle">↑ 웹캠 1 기준 상자 가림 0.35 m — 울타리 밖</text>
 
           <g>
             <circle class="clr" cx="211" cy="348" r="20"/>
@@ -306,14 +317,14 @@
         <h3>지점별 기하 — 가까운 카메라 담당</h3>
         <div class="tablewrap">
           <table>
-            <thead><tr><th>지점</th><th class="num">슬랜트</th><th class="num">고도각</th><th class="num">55 mm</th><th class="num">40 mm</th><th class="num">중심점</th></tr></thead>
+            <thead><tr><th>지점</th><th class="num">슬랜트</th><th class="num">고도각</th><th class="num">45 mm</th><th class="num">40 mm</th><th class="num">중심점</th></tr></thead>
             <tbody>
-              <tr><td>근거리 변 중앙</td><td class="num">1.90</td><td class="num">60.1°</td><td class="num">40.7</td><td class="num">29.6</td><td class="num">58 mm</td></tr>
-              <tr><td>근거리 모서리</td><td class="num">2.11</td><td class="num">51.6°</td><td class="num">36.8</td><td class="num">26.8</td><td class="num">79 mm</td></tr>
-              <tr><td>먼 변 중앙 <span style="color:var(--ink-3)">(웹캠 2)</span></td><td class="num">1.90</td><td class="num">60.1°</td><td class="num">40.7</td><td class="num">29.6</td><td class="num">58 mm</td></tr>
-              <tr><td>먼 모서리 <span style="color:var(--ink-3)">(웹캠 2)</span></td><td class="num">2.11</td><td class="num">51.6°</td><td class="num">36.8</td><td class="num">26.8</td><td class="num">79 mm</td></tr>
-              <tr><td>작업 공간 중앙</td><td class="num">2.48</td><td class="num">41.7°</td><td class="num">31.3</td><td class="num">22.8</td><td class="num">112 mm</td></tr>
-              <tr class="hi"><td><strong>중앙선 측면 (최악)</strong></td><td class="num">2.64</td><td class="num">38.7°</td><td class="num"><strong>29.4</strong></td><td class="num"><strong>21.4</strong></td><td class="num">125 mm</td></tr>
+              <tr><td>근거리 변 중앙</td><td class="num">1.90</td><td class="num">60.1°</td><td class="num">33.4</td><td class="num">29.6</td><td class="num">58 mm</td></tr>
+              <tr><td>근거리 모서리</td><td class="num">2.11</td><td class="num">51.6°</td><td class="num">30.1</td><td class="num">26.8</td><td class="num">79 mm</td></tr>
+              <tr><td>먼 변 중앙 <span style="color:var(--ink-3)">(웹캠 2)</span></td><td class="num">1.90</td><td class="num">60.1°</td><td class="num">33.4</td><td class="num">29.6</td><td class="num">58 mm</td></tr>
+              <tr><td>먼 모서리 <span style="color:var(--ink-3)">(웹캠 2)</span></td><td class="num">2.11</td><td class="num">51.6°</td><td class="num">30.1</td><td class="num">26.8</td><td class="num">79 mm</td></tr>
+              <tr><td>작업 공간 중앙</td><td class="num">2.48</td><td class="num">41.7°</td><td class="num">25.6</td><td class="num">22.8</td><td class="num">112 mm</td></tr>
+              <tr class="hi"><td><strong>중앙선 측면 (최악)</strong></td><td class="num">2.64</td><td class="num">38.7°</td><td class="num"><strong>24.1</strong></td><td class="num"><strong>21.4</strong></td><td class="num">125 mm</td></tr>
             </tbody>
           </table>
         </div>
@@ -347,15 +358,16 @@
           <table>
             <thead><tr><th>항목</th><th class="num">값</th></tr></thead>
             <tbody>
-              <tr><td>상자 바닥</td><td class="num">0.40 × 0.40 m</td></tr>
+              <tr><td>상자 바닥</td><td class="num">0.29 × 0.35 m</td></tr>
+              <tr><td>상자 높이</td><td class="num">0.22 m</td></tr>
               <tr><td>측벽 이격</td><td class="num">0.05 m</td></tr>
               <tr><td>뒷벽</td><td class="num">울타리에 밀착</td></tr>
-              <tr class="hi"><td><strong>상자 간 간격</strong></td><td class="num"><strong>0.90 m</strong></td></tr>
+              <tr class="hi"><td><strong>상자 간 간격</strong></td><td class="num"><strong>약 1.00 m</strong></td></tr>
               <tr><td>정렬 통로</td><td class="num">앞 0.50 m</td></tr>
             </tbody>
           </table>
         </div>
-        <p style="font-size:13.5px"><strong>모서리로 밀어 넣으면서 간격이 0.48 → 0.90 m 로 늘었습니다.</strong> 투입 정렬 오차가 이웃 상자로 넘어갈 여지가 사실상 사라집니다 — 오배치(F2)의 물리적 원인 하나가 제거됩니다.</p>
+        <p style="font-size:13.5px"><strong>모서리로 밀어 넣으면서 간격이 0.48 → 약 1.00 m 로 늘었습니다.</strong> 투입 정렬 오차가 이웃 상자로 넘어갈 여지가 사실상 사라집니다 — 오배치(F2)의 물리적 원인 하나가 제거됩니다. <br><span style="color:var(--ink-3)">간격은 0.35 변이 벽과 나란한 기준입니다 — 실제 배치 방향은 A2 때 실측해 확정합니다.</span></p>
       </div>
       <div class="card">
         <h3>가림은 비대칭입니다</h3>
@@ -363,14 +375,14 @@
           <table>
             <thead><tr><th></th><th class="num">수평거리</th><th class="num">고도각</th><th class="num">가림</th></tr></thead>
             <tbody>
-              <tr><td><span class="pill c1">웹캠 1</span> (먼 쪽)</td><td class="num">2.63 m</td><td class="num">32.1°</td><td class="num">0.48 m → 밖</td></tr>
-              <tr><td><span class="pill c2">웹캠 2</span> (가까운 쪽)</td><td class="num">1.32 m</td><td class="num">51.3°</td><td class="num">0.24 m → 안</td></tr>
+              <tr><td><span class="pill c1">웹캠 1</span> (먼 쪽)</td><td class="num">2.63 m</td><td class="num">32.1°</td><td class="num">0.35 m → 밖</td></tr>
+              <tr><td><span class="pill c2">웹캠 2</span> (가까운 쪽)</td><td class="num">1.32 m</td><td class="num">51.3°</td><td class="num">0.18 m → 안</td></tr>
             </tbody>
           </table>
         </div>
         <ul style="font-size:13.5px">
           <li><strong>웹캠 1 기준 가림은 울타리 밖으로 나갑니다</strong> — 뒷벽을 밀착시킨 결과입니다</li>
-          <li><strong>웹캠 2 기준 0.24 m 는 안으로 들어오지만</strong> 정렬 통로와 겹치고 웹캠 1 이 그대로 봅니다</li>
+          <li><strong>웹캠 2 기준 0.18 m 는 안으로 들어오지만</strong> 정렬 통로와 겹치고 웹캠 1 이 그대로 봅니다</li>
           <li>측벽 0.05 m 이격은 <strong>LiDAR 가 상자를 울타리와 분리해 보게</strong> 하는 최소값입니다. 여유를 원하면 0.10 m</li>
           <li><strong>회전 모호성 없음</strong> — 두 상자를 90°·180° 어느 쪽으로 돌려도 원래 위치 집합과 겹치지 않습니다</li>
         </ul>
@@ -387,7 +399,7 @@
         <ul style="font-size:13.5px">
           <li><strong>최소 이격 0.30 m</strong> — 최악 고도각 38.7°에서 0.10 m 물체의 가림이 0.125 m, 여기에 그리퍼 여유</li>
           <li><strong>y 축 방향 일렬만 피하면 됩니다</strong> — 한 카메라 시선으로 겹쳐도 반대편이 봅니다</li>
-          <li><strong>원기둥은 눕혀서</strong> — 검출 폭이 길이가 되고 파지 폭은 지름으로 남습니다</li>
+          <li><strong>오각별기둥은 눕혀서</strong> — 검출 폭이 길이가 되고 파지 폭은 단면으로 남습니다. 정육면체 · 축구공형은 등방이라 해당 없음</li>
           <li>정렬 통로(상자 앞 0.50 m)는 시작 배치 시 비우기 권장</li>
         </ul>
       </div>
@@ -395,9 +407,10 @@
         <h3>물체 크기</h3>
         <ul style="font-size:13.5px">
           <li><strong>40 mm 가 하한</strong> — 최악점 21.4 px. 현재 실물 30~37 mm 는 <strong>16~20 px 로 미달</strong></li>
-          <li><strong>55 mm 면 29.4 px</strong> 로 종횡비까지 안정적입니다 (1 px 오차 = 3.4%)</li>
+          <li><strong>40 mm 로 확정</strong> — 그리퍼 설계 상한 45 mm(TPU 파지 실측 50) 아래이면서 하한 위입니다. 45 mm 면 24.1 px</li>
           <li>체스말 베이스는 파지(넥)와 무관해 자유롭게 키울 수 있습니다</li>
-          <li>정육면체·육각기둥은 <strong>지름 = 파지 폭</strong> 이라 그리퍼 개구 폭 실측에 묶여 있습니다</li>
+          <li><strong>정육면체 · 축구공형은 등방</strong>이라 검출 폭 = 파지 폭 입니다 — 40~45 mm 창을 벗어날 수 없습니다</li>
+          <li>⚠️ <strong>오각별기둥은 5회 대칭이라 마주보는 평행면이 0쌍</strong> — 평행 조 파지 검증 필요 (M2-P1)</li>
         </ul>
       </div>
       <div class="card">
@@ -429,13 +442,13 @@
       <table>
         <thead><tr><th>항목</th><th>내용</th></tr></thead>
         <tbody>
-          <tr><td>🔴 <strong>A2 기지점</strong></td><td>네 모서리 ArUco 로 잡으면 <strong>후퇴 1.20 m 필요</strong>(바닥 4.20). 카메라별로 기지점을 따로 두면 0.95 유지. <strong>세팅 확인 절차("네 모서리가 화면 안에")를 그대로 쓰면 0.95 는 불합격 판정이 납니다</strong></td></tr>
+          <tr><td>⏸ <strong>A2 기지점</strong></td><td><strong>네 모서리 ArUco 방식은 미채택 (8/20).</strong> 카메라별로 기지점을 따로 두어 <strong>후퇴 0.95 유지</strong>. 세팅 확인은 네 모서리가 아니라 <strong>카메라별 담당 구역</strong> 기준으로 판정합니다. 재도입하려면 후퇴 1.20 m(바닥 4.20) 필요</td></tr>
           <tr><td>🔴 <strong>추론 입력 해상도</strong></td><td><code>imgsz=640</code> 이면 물체가 <strong>절반으로 줄어</strong> 11~15 px 이 됩니다. <strong>네이티브 1280 으로 넣어야</strong> 하고, 학습도 같은 해상도로. 사이클당 1~4회라 연산은 감당됩니다</td></tr>
-          <tr><td>🟠 <strong>물체 규격</strong></td><td>현재 30~37 mm 는 하한 미달. <strong>40 mm 이상, 여유를 보면 55 mm</strong></td></tr>
+          <tr><td>✅ <strong>물체 규격</strong></td><td><strong>40 mm 확정 (8/20)</strong> — 검출 하한 37.4 mm 와 그리퍼 설계 상한 45 mm 사이. 현재 실물 30~37 mm 는 재출력 대상</td></tr>
           <tr><td>🟠 울타리 높이</td><td>실측 0.35 m → <strong>0.25 m 로 낮추면</strong> 실효 커버가 0.26 → 0.21 m</td></tr>
           <tr><td>🟡 한 변 치수</td><td>팀 확정은 <strong>1.80</strong>, 프레임 역산은 <strong>1.88</strong> 이었습니다. 실제 가벽 조립 후 재확인 필요 — 80 mm 차이는 근거리 모서리 <code>u</code> 를 30 px 움직입니다</td></tr>
           <tr><td>🟡 HFOV</td><td>역산 5회가 47.5~50.1° 로 흩어집니다. <strong>A4 를 화면 좌우 끝에 놓고 1장</strong>이면 닫힙니다</td></tr>
-          <tr><td>🟡 마룻바닥</td><td>촬영은 타일에서 했습니다. 호모그래피·LAB 재캘리브레이션 대상이고, <strong>목재 가베는 나무 위 나무</strong>라 바운딩박스 검출이 가장 어려운 조합입니다</td></tr>
+          <tr><td>🟡 마룻바닥</td><td>촬영은 타일에서 했습니다. 호모그래피·LAB 재캘리브레이션 대상이고, <strong>필라멘트 색이 마룻바닥과 가까우면</strong> 바운딩박스 검출이 가장 어려운 조합이 됩니다 — 진한 무광으로 대비를 확보할 것</td></tr>
         </tbody>
       </table>
     </div>
