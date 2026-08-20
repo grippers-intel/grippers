@@ -8,11 +8,14 @@ candidate DROP_195 pose and returns to SAFE_145.  Keep the base stationary.
 import time
 
 from driver_sdk import STS3215Driver
-from grippers_arm.floor_grasp_profiles import HORIZONTAL_SAFE_145_RAW, IDLE_CRADLE_RAW
+from grippers_arm.floor_grasp_profiles import (
+    BASKET_DROP_195_RAW,
+    HORIZONTAL_SAFE_145_RAW,
+    IDLE_CRADLE_RAW,
+)
 from grippers_arm.gripper_calibration import position_from_width
 
 SERVO_IDS = range(1, 6)
-DROP_195_CANDIDATE_RAW = (2029, 2192, 2601, 1345, 3007)
 START_TOLERANCE_RAW = 120
 MAX_START_SERVO2_TEMP_C = 40
 
@@ -88,14 +91,14 @@ def main():
     confirm("SAFE_145로 이동")
     glide_raw(driver, "safe-145", HORIZONTAL_SAFE_145_RAW)
 
-    confirm("바구니 테두리와 간섭을 지켜보며 DROP_195 후보로 이동")
-    glide_raw(driver, "drop-195-candidate", DROP_195_CANDIDATE_RAW)
-    report(driver, "drop-195-candidate")
+    confirm("바구니 테두리와 간섭을 지켜보며 실측 DROP_195로 이동")
+    glide_raw(driver, "drop-195", BASKET_DROP_195_RAW)
+    report(driver, "drop-195")
 
     confirm("중심 높이·전방거리·좌우편향과 바구니 간섭을 측정했습니다. " "SAFE_145로 복귀")
     glide_raw(driver, "return-safe-145", HORIZONTAL_SAFE_145_RAW)
     report(driver, "complete")
-    print("\n빈손 DROP_195 후보 왕복 완료")
+    print("\n빈손 DROP_195 왕복 완료")
 
 
 if __name__ == "__main__":

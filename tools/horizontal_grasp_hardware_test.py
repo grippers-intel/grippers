@@ -11,6 +11,7 @@ import time
 
 from driver_sdk import STS3215Driver
 from grippers_arm.floor_grasp_profiles import (
+    BASKET_DROP_195_RAW,
     FLOOR_GRASP_PROFILES,
     HORIZONTAL_GRASP_POSES_DEG,
     HORIZONTAL_SAFE_145_DEG,
@@ -120,6 +121,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("profile", choices=sorted(HORIZONTAL_GRASP_POSES_DEG))
     parser.add_argument("--port", default="/dev/soarm")
+    parser.add_argument(
+        "--drop-to-basket",
+        action="store_true",
+        help="CARRY_IDLE 검증 후 DROP_195에서 투하하고 IDLE로 복귀",
+    )
     args = parser.parse_args()
 
     profile = FLOOR_GRASP_PROFILES[args.profile]
@@ -197,6 +203,29 @@ def main():
     glide_raw(driver, "carry-idle", IDLE_CRADLE_RAW)
     report(driver, "carry-idle")
     require_hold_load(driver, "carry-idle")
+
+    if args.drop_to_basket:
+        confirm(
+            "바구니 중심을 그리퍼 중심에 ±5mm 이내로 맞추고 이동 경로에서 "
+            "손을 뺐습니다. SAFE_145로 전개"
+        )
+        glide_raw(driver, "basket-safe-145", HORIZONTAL_SAFE_145_RAW)
+        require_hold_load(driver, "basket-safe-145")
+
+        confirm("바구니 테두리 간섭을 지켜보며 DROP_195로 이동")
+        glide_raw(driver, "basket-drop-195", BASKET_DROP_195_RAW)
+        report(driver, "basket-drop-195")
+        require_hold_load(driver, "basket-drop-195")
+
+        confirm("물체가 바구니 입구 중앙 위에 있습니다. 그리퍼를 80mm로 열어 투하")
+        set_width(driver, profile.preopen_width_mm)
+
+        confirm("투하를 확인했습니다. 빈손 SAFE_145를 거쳐 IDLE로 복귀")
+        glide_raw(driver, "basket-return-safe", HORIZONTAL_SAFE_145_RAW)
+        glide_raw(driver, "basket-return-idle", IDLE_CRADLE_RAW)
+        report(driver, "basket-complete")
+        print("\n수평 파지 및 바구니 투하 시험 완료")
+        return
 
     confirm("CARRY_IDLE 파지가 유지됐습니다. 145mm 안전 자세로 다시 전개")
     glide_raw(driver, "carry-return-safe", HORIZONTAL_SAFE_145_RAW)

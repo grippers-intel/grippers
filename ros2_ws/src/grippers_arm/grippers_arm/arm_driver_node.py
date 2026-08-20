@@ -45,6 +45,7 @@ from .gripper_calibration import (
     position_from_width,
 )
 from .floor_grasp_profiles import (
+    BASKET_DROP_195_RAW,
     HORIZONTAL_GRASP_POSES_DEG,
     HORIZONTAL_SAFE_145_RAW,
     IDLE_CRADLE_RAW,
@@ -318,7 +319,7 @@ class ArmDriverNode(Node):
         try:
             if req.profile not in HORIZONTAL_GRASP_POSES_DEG:
                 raise ValueError(f"알 수 없는 수평 파지 profile: {req.profile}")
-            if req.stage not in {"idle", "safe", "grasp", "midpoint"}:
+            if req.stage not in {"idle", "safe", "grasp", "midpoint", "drop"}:
                 raise ValueError(f"알 수 없는 수평 파지 stage: {req.stage}")
 
             self._require_operational_servos(range(1, 6))
@@ -398,6 +399,7 @@ class ArmDriverNode(Node):
 
         idle = self._tuple_goals(IDLE_CRADLE_RAW)
         safe = self._tuple_goals(HORIZONTAL_SAFE_145_RAW)
+        drop = self._tuple_goals(BASKET_DROP_195_RAW)
         grasp = self._raw_goals(backend, HORIZONTAL_GRASP_POSES_DEG[profile])
         midpoint = {
             servo_id: round((grasp[servo_id] + safe[servo_id]) / 2.0) for servo_id in range(1, 6)
@@ -424,7 +426,16 @@ class ArmDriverNode(Node):
                 return
             if self._near_pose(actual, safe):
                 return
-            raise ValueError("safe 이동 시작 자세가 등록된 idle/grasp/midpoint가 아닙니다")
+            if self._near_pose(actual, drop):
+                self._glide_to_raw_positions(backend, safe)
+                return
+            raise ValueError("safe 이동 시작 자세가 등록된 idle/grasp/midpoint/drop이 아닙니다")
+
+        if stage == "drop":
+            if not self._near_pose(actual, safe):
+                raise ValueError("drop 이동은 145 mm safe 자세에서만 시작할 수 있습니다")
+            self._glide_to_raw_positions(backend, drop)
+            return
 
         expected_start = safe if stage == "grasp" else grasp
         if not self._near_pose(actual, expected_start):

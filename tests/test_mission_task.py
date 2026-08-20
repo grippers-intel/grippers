@@ -698,7 +698,7 @@ def test_align_error_within_tolerance_proceeds_to_insert(make_ports, run_to_comp
     assert states[-1].ctx.done_ids == {1}
 
 
-def test_basket_insert_opens_at_safe_145_without_lowering_to_floor(make_ports, run_to_completion):
+def test_basket_insert_opens_at_drop_195_without_lowering_to_floor(make_ports, run_to_completion):
     arm = FakeArm()
     ports = make_ports(
         arm=arm,
@@ -708,7 +708,9 @@ def test_basket_insert_opens_at_safe_145_without_lowering_to_floor(make_ports, r
     states = run_to_completion(ports)
 
     assert "INSERT" in [state.name for state in states]
-    assert arm.floor_pose_calls[-2:] == [
+    assert arm.floor_pose_calls[-4:] == [
+        ("soccer_polyhedron", "safe"),
+        ("soccer_polyhedron", "drop"),
         ("soccer_polyhedron", "safe"),
         ("soccer_polyhedron", "idle"),
     ]
