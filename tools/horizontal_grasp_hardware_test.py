@@ -144,6 +144,13 @@ def main():
     confirm("파지가 안정적입니다. 중간 높이까지 시험 상승")
     glide(driver, "mid-lift", midpoint, steps=20, delay=0.12)
     report(driver, "mid-lift")
+    mid_load_raw = driver.get_load(6)
+    mid_load_ratio = abs(mid_load_raw) / LOAD_MAX_RAW
+    if mid_load_ratio < MIN_HOLD_LOAD_RATIO:
+        raise RuntimeError(
+            f"중간 상승 후 파지 부하 {mid_load_ratio:.4f}가 임계값 "
+            f"{MIN_HOLD_LOAD_RATIO:.2f} 미만입니다. 140mm 상승하지 않습니다"
+        )
 
     confirm("미끄러짐이 없습니다. 140mm 운반 자세까지 상승")
     glide(driver, "safe-lift", safe_pose, steps=20, delay=0.12)

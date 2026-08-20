@@ -55,3 +55,11 @@ def test_retry_width_is_clamped_to_calibrated_closed_limit():
     names = _called_names(main)
 
     assert "max" in names
+
+
+def test_load_is_checked_again_after_mid_lift():
+    main = _function("main")
+    names = _called_names(main)
+
+    assert names.count("get_load") >= 2
+    assert names.count("RuntimeError") >= 3
