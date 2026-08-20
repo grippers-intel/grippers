@@ -63,3 +63,11 @@ def test_load_is_checked_again_after_mid_lift():
 
     assert names.count("get_load") >= 2
     assert names.count("RuntimeError") >= 3
+
+
+def test_hot_servo2_is_rejected_before_motion():
+    main = _function("main")
+    names = _called_names(main)
+
+    assert "get_temperature" in names
+    assert names.index("get_temperature") < names.index("glide")
