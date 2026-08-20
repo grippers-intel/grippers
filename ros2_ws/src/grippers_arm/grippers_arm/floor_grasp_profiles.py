@@ -30,7 +30,6 @@ FLOOR_GRASP_PROFILES = {
 # 0.0704.  Keep the existing domain threshold lower than that value; load alone
 # is not sufficient validation, so hardware tests also require lift and hold.
 MEASURED_CUBE_HOLD_LOAD_RATIO = 0.0704
-HARDWARE_HOLD_SECONDS = 5.0
 MIN_GRIPPER_CLEARANCE_MM = 140.0
 
 # Servo 1..5 angles in degrees.  These poses are specific to the measured arm

@@ -62,7 +62,8 @@ def test_load_is_checked_again_after_mid_lift():
     main = _function("main")
     names = _called_names(main)
 
-    assert names.count("get_load") >= 2
+    assert names.count("get_load") >= 1
+    assert names.count("require_hold_load") == 3
     assert names.count("RuntimeError") >= 3
 
 
