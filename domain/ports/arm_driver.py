@@ -10,7 +10,8 @@ class ArmDriver(ABC):
     def move_to_floor_pose(self, profile: str, stage: str) -> bool:
         """실측된 수평 바닥 파지 자세로 단계 이동한다.
 
-        ``stage`` 는 ``safe``(140 mm), ``grasp`` 또는 ``midpoint``다.
+        ``stage`` 는 ``idle``, ``safe``(145 mm), ``grasp``, ``midpoint`` 또는
+        바구니 투하용 ``drop``(195 mm)이다.
         프로필/단계를 지원하지 않거나 하드웨어 이동에 실패하면 ``False``다.
         """
 

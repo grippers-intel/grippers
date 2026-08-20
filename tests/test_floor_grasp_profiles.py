@@ -70,6 +70,7 @@ def test_horizontal_arm_poses_keep_gabe_and_chess_heights_separate():
 
     assert module.HORIZONTAL_SAFE_145_DEG == (-1.67, 39.02, 40.87, -80.42, 84.29)
     assert module.HORIZONTAL_SAFE_145_RAW == (2029, 2492, 2513, 1133, 3007)
+    assert module.BASKET_DROP_195_RAW == (2029, 2192, 2601, 1345, 3007)
     assert module.HORIZONTAL_CHESS_MID_40_DEG == (-1.67, 96.57, -9.79, -87.29, 84.30)
     assert module.HORIZONTAL_GABE_LOW_20_DEG == (-1.39, 95.70, -18.16, -68.88, 84.18)
     assert module.HORIZONTAL_CHESS_MID_40_DEG != module.HORIZONTAL_GABE_LOW_20_DEG

@@ -1,6 +1,6 @@
 # 실기 검증된 수평 바닥 파지 자세로 단계 이동한다.
 string profile  # cube | star_column | soccer_polyhedron | chess_rook | chess_queen | chess_knight
-string stage    # idle | safe | grasp | midpoint
+string stage    # idle | safe | grasp | midpoint | drop
 ---
 bool reached
 ---
