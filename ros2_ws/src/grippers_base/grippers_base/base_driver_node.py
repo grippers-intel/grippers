@@ -1,9 +1,10 @@
 """base_driver_node — MentorPi mecanum 베이스 제어 노드.
 controller/odom_publisher_node가 이미 만들어둔 /cmd_vel(안전 클램프) →
-/odom(ekf 필터링)을 그대로 재사용. 새 모터 제어는 안 함, 목표 좌표까지의
-proportional 제어 루프 + DriveTo 액션 서버만 얹는다."""
+/odom(cmd_vel 적분 dead reckoning)을 그대로 재사용. 새 모터 제어는 안 함,
+목표 좌표까지의 proportional 제어 루프 + DriveTo 액션 서버만 얹는다."""
 
 import math
+import time
 
 import rclpy
 from geometry_msgs.msg import Twist
@@ -15,12 +16,10 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 from std_srvs.srv import Trigger
 
-ARRIVE_XY_TOL = 0.03  # m
+from .drive_control import compute_drive_command
+
 ARRIVE_YAW_TOL = 0.05  # rad
-KP_LINEAR = 0.6
-KP_ANGULAR = 1.2
-MAX_LINEAR = 0.2  # app_cmd_vel_callback 클램프와 동일
-MAX_ANGULAR = 0.5
+DRIVE_TIMEOUT_SEC = 55.0  # client의 60초 결과 timeout 전에 반드시 정지·응답
 
 
 def _yaw_from_quat(q):
@@ -69,14 +68,21 @@ class BaseDriverNode(Node):
         target = goal_handle.request.target  # Pose2D(x, y, theta)
         rate = self.create_rate(20)
         result = DriveTo.Result()
+        started_at = time.monotonic()
 
         while rclpy.ok():
+            if time.monotonic() - started_at >= DRIVE_TIMEOUT_SEC:
+                self._cmd_vel_pub.publish(Twist())
+                goal_handle.abort()
+                result.arrived = False
+                return result
+
             if self._pose is None:
                 rate.sleep()
                 continue
             x, y, yaw = self._pose
             dx, dy = target.x - x, target.y - y
-            dist = math.hypot(dx, dy)
+            command = compute_drive_command(dx, dy, yaw)
 
             if goal_handle.is_cancel_requested:
                 self._cmd_vel_pub.publish(Twist())
@@ -84,25 +90,23 @@ class BaseDriverNode(Node):
                 result.arrived = False
                 return result
 
-            if dist < ARRIVE_XY_TOL:
+            if command.arrived:
                 self._cmd_vel_pub.publish(Twist())
                 goal_handle.succeed()
                 result.arrived = True
                 return result
 
-            target_yaw = math.atan2(dy, dx)
-            yaw_err = math.atan2(math.sin(target_yaw - yaw), math.cos(target_yaw - yaw))
-
             twist = Twist()
-            twist.linear.x = max(-MAX_LINEAR, min(MAX_LINEAR, KP_LINEAR * dist))
-            twist.angular.z = max(-MAX_ANGULAR, min(MAX_ANGULAR, KP_ANGULAR * yaw_err))
+            twist.linear.x = command.linear_x
+            twist.angular.z = command.angular_z
             self._cmd_vel_pub.publish(twist)
 
             fb = DriveTo.Feedback()
-            fb.distance_remaining = dist
+            fb.distance_remaining = command.distance
             goal_handle.publish_feedback(fb)
             rate.sleep()
 
+        self._cmd_vel_pub.publish(Twist())
         result.arrived = False
         return result
 
