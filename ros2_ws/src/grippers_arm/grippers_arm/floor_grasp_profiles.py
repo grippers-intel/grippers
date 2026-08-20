@@ -35,7 +35,11 @@ MIN_GRIPPER_CLEARANCE_MM = 140.0
 
 # Servo 1..5 angles in degrees.  These poses are specific to the measured arm
 # mounting and floor.  Revalidate them after changing the arm or base mounting.
-HORIZONTAL_SAFE_140_DEG = (-1.67, 45.87, 37.34, -83.70, 84.30)
+# 2026-08-20 재실측: raw (2029, 2492, 2513, 1133, 3007)에서 실제 파지
+# 중심 높이 145 mm, 차체 전면 기준 전방 185 mm, 중심선 기준 좌측 20 mm.
+# 최소 140 mm 계약에 측정 여유 5 mm를 둔다.
+HORIZONTAL_SAFE_145_DEG = (-1.67, 39.02, 40.87, -80.42, 84.29)
+HORIZONTAL_SAFE_145_RAW = (2029, 2492, 2513, 1133, 3007)
 HORIZONTAL_CHESS_MID_40_DEG = (-1.67, 96.57, -9.79, -87.29, 84.30)
 HORIZONTAL_GABE_LOW_20_DEG = (-1.39, 95.70, -18.16, -68.88, 84.18)
 HORIZONTAL_CHESS_ROOK_45_DEG = (-1.67, 93.87, -6.32, -88.06, 84.30)

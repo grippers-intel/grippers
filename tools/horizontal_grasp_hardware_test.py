@@ -13,7 +13,7 @@ from driver_sdk import STS3215Driver
 from grippers_arm.floor_grasp_profiles import (
     FLOOR_GRASP_PROFILES,
     HORIZONTAL_GRASP_POSES_DEG,
-    HORIZONTAL_SAFE_140_DEG,
+    HORIZONTAL_SAFE_145_DEG,
 )
 from grippers_arm.gripper_calibration import GRIPPER_CLOSED_MM, position_from_width
 
@@ -98,7 +98,7 @@ def main():
 
     profile = FLOOR_GRASP_PROFILES[args.profile]
     grasp_pose = HORIZONTAL_GRASP_POSES_DEG[args.profile]
-    safe_pose = HORIZONTAL_SAFE_140_DEG
+    safe_pose = HORIZONTAL_SAFE_145_DEG
 
     driver = STS3215Driver(args.port)
     driver.connect()

@@ -47,7 +47,7 @@ from .gripper_calibration import (
 from .floor_grasp_profiles import (
     HORIZONTAL_GRASP_POSES_DEG,
     HORIZONTAL_OVERHEAD_RAW,
-    HORIZONTAL_SAFE_140_DEG,
+    HORIZONTAL_SAFE_145_RAW,
     IDLE_CRADLE_RAW,
     VERTICAL_SAFE_OVERHEAD_DEG,
 )
@@ -401,7 +401,7 @@ class ArmDriverNode(Node):
         idle = self._tuple_goals(IDLE_CRADLE_RAW)
         vertical = self._raw_goals(backend, VERTICAL_SAFE_OVERHEAD_DEG)
         horizontal = self._tuple_goals(HORIZONTAL_OVERHEAD_RAW)
-        safe = self._raw_goals(backend, HORIZONTAL_SAFE_140_DEG)
+        safe = self._tuple_goals(HORIZONTAL_SAFE_145_RAW)
         grasp = self._raw_goals(backend, HORIZONTAL_GRASP_POSES_DEG[profile])
         midpoint = {
             servo_id: round((grasp[servo_id] + safe[servo_id]) / 2.0) for servo_id in range(1, 6)

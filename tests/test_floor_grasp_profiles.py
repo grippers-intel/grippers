@@ -69,7 +69,8 @@ def test_hardware_acceptance_contract_records_verified_cube_load():
 def test_horizontal_arm_poses_keep_gabe_and_chess_heights_separate():
     module = _load_profiles()
 
-    assert module.HORIZONTAL_SAFE_140_DEG == (-1.67, 45.87, 37.34, -83.70, 84.30)
+    assert module.HORIZONTAL_SAFE_145_DEG == (-1.67, 39.02, 40.87, -80.42, 84.29)
+    assert module.HORIZONTAL_SAFE_145_RAW == (2029, 2492, 2513, 1133, 3007)
     assert module.HORIZONTAL_CHESS_MID_40_DEG == (-1.67, 96.57, -9.79, -87.29, 84.30)
     assert module.HORIZONTAL_GABE_LOW_20_DEG == (-1.39, 95.70, -18.16, -68.88, 84.18)
     assert module.HORIZONTAL_CHESS_MID_40_DEG != module.HORIZONTAL_GABE_LOW_20_DEG
@@ -96,3 +97,12 @@ def test_idle_cradle_and_transition_waypoints_match_measured_contract():
     assert module.IDLE_CRADLE_RAW == (2045, 823, 3099, 2272, 3088)
     assert module.VERTICAL_SAFE_OVERHEAD_DEG == (0.0, 9.2, 20.8, 55.3, 0.4)
     assert module.HORIZONTAL_OVERHEAD_RAW == (2044, 2712, 2380, 1000, 3006)
+
+
+def test_safe_145_degree_and_raw_records_describe_the_same_pose():
+    module = _load_profiles()
+    converted = tuple(
+        round(2048 + degrees * 4096 / 360) for degrees in module.HORIZONTAL_SAFE_145_DEG
+    )
+
+    assert converted == module.HORIZONTAL_SAFE_145_RAW
