@@ -207,12 +207,8 @@ def main():
     if args.drop_to_basket:
         confirm(
             "바구니 중심을 그리퍼 중심에 ±5mm 이내로 맞추고 이동 경로에서 "
-            "손을 뺐습니다. SAFE_145로 전개"
+            "손을 뺐습니다. CARRY_IDLE에서 DROP_195로 직접 전개"
         )
-        glide_raw(driver, "basket-safe-145", HORIZONTAL_SAFE_145_RAW)
-        require_hold_load(driver, "basket-safe-145")
-
-        confirm("바구니 테두리 간섭을 지켜보며 DROP_195로 이동")
         glide_raw(driver, "basket-drop-195", BASKET_DROP_195_RAW)
         report(driver, "basket-drop-195")
         require_hold_load(driver, "basket-drop-195")
@@ -220,8 +216,7 @@ def main():
         confirm("물체가 바구니 입구 중앙 위에 있습니다. 그리퍼를 80mm로 열어 투하")
         set_width(driver, profile.preopen_width_mm)
 
-        confirm("투하를 확인했습니다. 빈손 SAFE_145를 거쳐 IDLE로 복귀")
-        glide_raw(driver, "basket-return-safe", HORIZONTAL_SAFE_145_RAW)
+        confirm("투하를 확인했습니다. 빈손 DROP_195에서 IDLE로 직접 복귀")
         glide_raw(driver, "basket-return-idle", IDLE_CRADLE_RAW)
         report(driver, "basket-complete")
         print("\n수평 파지 및 바구니 투하 시험 완료")
