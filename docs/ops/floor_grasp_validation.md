@@ -49,6 +49,28 @@
 | `horizontal_chess_mid_40` | `[-1.67, 96.57, -9.79, -87.29, 84.30]` | 약 40 mm | 차체 비접촉 확인, 체스말 자세 산출 기준 |
 | `horizontal_gabe_low_20` | `[-1.39, 95.70, -18.16, -68.88, 84.18]` | 약 20 mm | 40 mm 높이 가베류의 중심 파지 후보 |
 
+### 빈손 이동용 IDLE 자세와 전환 경로
+
+냉각 후 팔을 완전히 접고 현재 위치를 goal로 latch한 상태에서 다음 servo 1..5 raw를
+`IDLE_CRADLE_RAW`로 확정했다.
+
+```text
+(2045, 823, 3099, 2272, 3088)
+```
+
+이 자세에서 관절 1~5 load는 모두 0, servo 2 온도는 33 °C였다. IDLE에서 수평 safe로
+직선 보간하지 않는다. 차체 비접촉을 실측한 `vertical_safe_overhead`와
+`horizontal_overhead`를 순서대로 거치며, 복귀 시에는 역순으로 이동한다.
+
+```text
+IDLE_CRADLE
+→ VERTICAL_SAFE_OVERHEAD
+→ HORIZONTAL_OVERHEAD
+→ HORIZONTAL_SAFE_140
+```
+
+등록된 idle/safe/grasp/midpoint 부근이 아닌 임의 자세에서는 자동 전환을 거부한다.
+
 첫 40 mm 자세에서 정육면체를 35 mm 닫힘 명령으로 실제 파지했을 때
 `position=1301`, `load_raw=104`, `load_ratio=0.1017`로 물체는 잡혔지만 접촉점이
 큐브 상단에 치우쳤다. 따라서 정육면체·오각별 기둥·축구공은 20 mm 자세를 사용하고,

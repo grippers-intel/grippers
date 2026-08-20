@@ -116,13 +116,17 @@ def test_move_checks_servos_before_and_after_motion():
 
 def test_horizontal_floor_pose_uses_checked_interpolated_joint_writes():
     execute = _function("_execute_floor_pose")
-    glide = _function("_glide_to_joint_angles")
+    move_stage = _function("_move_floor_stage")
+    glide = _function("_glide_to_raw_positions")
     execute_names = [_called_name(call) for call in _calls(execute)]
+    move_stage_names = [_called_name(call) for call in _calls(move_stage)]
     glide_names = [_called_name(call) for call in _calls(glide)]
 
     assert execute_names.count("_require_operational_servos") >= 2
-    assert "_glide_to_joint_angles" in execute_names
+    assert "_move_floor_stage" in execute_names
     assert "get_temperature" in execute_names
+    assert "_near_pose" in move_stage_names
+    assert "_glide_to_raw_positions" in move_stage_names
     assert "get_position" in glide_names
     assert "set_position" in glide_names
 
