@@ -18,12 +18,12 @@ class FloorGraspProfile:
 
 
 FLOOR_GRASP_PROFILES = {
-    "cube": FloorGraspProfile(40.0, 20.0, 60.0, 30.0),
-    "star_column": FloorGraspProfile(45.0, 20.0, 60.0, 35.0),
-    "soccer_polyhedron": FloorGraspProfile(46.0, 20.0, 65.0, 40.0),
-    "chess_knight": FloorGraspProfile(22.0, 60.0, 35.0, 18.0),
-    "chess_rook": FloorGraspProfile(24.5, 45.0, 38.0, 20.0),
-    "chess_queen": FloorGraspProfile(17.0, 50.0, 30.0, 13.0),
+    "cube": FloorGraspProfile(40.0, 20.0, 80.0, 30.0),
+    "star_column": FloorGraspProfile(45.0, 20.0, 80.0, 35.0),
+    "soccer_polyhedron": FloorGraspProfile(46.0, 20.0, 80.0, 40.0),
+    "chess_knight": FloorGraspProfile(22.0, 60.0, 80.0, 18.0),
+    "chess_rook": FloorGraspProfile(24.5, 45.0, 80.0, 15.0),
+    "chess_queen": FloorGraspProfile(17.0, 50.0, 80.0, 13.0),
 }
 
 # The smallest successful settled load measured while holding an object was

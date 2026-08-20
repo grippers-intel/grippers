@@ -15,7 +15,7 @@ from grippers_arm.floor_grasp_profiles import (
     HORIZONTAL_GRASP_POSES_DEG,
     HORIZONTAL_SAFE_140_DEG,
 )
-from grippers_arm.gripper_calibration import position_from_width
+from grippers_arm.gripper_calibration import GRIPPER_CLOSED_MM, position_from_width
 
 SERVO_IDS = range(1, 6)
 LOAD_MAX_RAW = 1023.0
@@ -126,7 +126,7 @@ def main():
     confirm("물체를 두 손가락 중앙에 놓고 손을 완전히 뺐습니다. 그리퍼 닫기")
     ratio = set_width(driver, profile.close_width_mm)
     if ratio < MIN_HOLD_LOAD_RATIO:
-        retry_width_mm = profile.close_width_mm - RETRY_TIGHTEN_MM
+        retry_width_mm = max(GRIPPER_CLOSED_MM, profile.close_width_mm - RETRY_TIGHTEN_MM)
         confirm(
             f"파지 부하 {ratio:.4f}가 임계값 {MIN_HOLD_LOAD_RATIO:.2f} 미만입니다. "
             f"물체가 중앙에 있고 손을 뺀 상태라면 {retry_width_mm:.1f}mm로 한 번 더 조이기"
