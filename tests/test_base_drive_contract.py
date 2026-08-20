@@ -5,6 +5,7 @@
 """
 
 import ast
+import math
 import pathlib
 
 BASE_NODE = (
@@ -29,6 +30,23 @@ def _drive_to():
     )
 
 
+def _phase_branch(fn):
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare):
+            continue
+        if not isinstance(test.left, ast.Name) or test.left.id != "phase":
+            continue
+        if len(test.comparators) != 1:
+            continue
+        comp = test.comparators[0]
+        if isinstance(comp, ast.Constant) and comp.value == "ALIGN":
+            return node.body, node.orelse
+    raise AssertionError("phase == ALIGN 분기를 찾지 못했다")
+
+
 def _module_constants():
     out = {}
     for node in _parse().body:
@@ -51,6 +69,10 @@ def test_two_phase_thresholds_have_hysteresis():
 
     assert constants["YAW_ALIGN_TOL_RAD"] < constants["YAW_REALIGN_TRIG_RAD"]
     assert constants["REALIGN_MIN_DIST_M"] > constants["ARRIVE_XY_TOL"]
+    assert (
+        constants["REALIGN_MIN_DIST_M"] * math.sin(constants["YAW_REALIGN_TRIG_RAD"])
+        < constants["ARRIVE_XY_TOL"]
+    )
 
 
 def test_server_timeout_precedes_client_timeout():
@@ -67,18 +89,21 @@ def test_drive_timeout_uses_monotonic_clock():
 
 
 def test_align_phase_commands_rotation_without_translation():
-    source = _source(_drive_to())
+    align_body, _ = _phase_branch(_drive_to())
+    source = "\n".join(_source(node) or "" for node in align_body)
 
-    assert 'if phase == "ALIGN":' in source
     assert "twist.linear.x = 0.0" in source
     assert "KP_ANGULAR * yaw_err" in source
+    assert "KP_LINEAR * dist" not in source
 
 
 def test_drive_phase_commands_translation_without_rotation():
-    source = _source(_drive_to())
+    _, drive_body = _phase_branch(_drive_to())
+    source = "\n".join(_source(node) or "" for node in drive_body)
 
     assert "KP_LINEAR * dist" in source
     assert "twist.angular.z = 0.0" in source
+    assert "KP_ANGULAR * yaw_err" not in source
 
 
 def test_realign_requires_distance_and_larger_yaw_error():
