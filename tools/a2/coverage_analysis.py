@@ -48,21 +48,23 @@ def _warn_if_font_missing() -> None:
         )
 
 
-FOCAL_PX = 1411.0
+FOCAL_PX = 1410.0  # 배치도 Rev.I 실측 (HFOV 48.8° 환산 1411 과 반올림 차이)
 WORKSPACE_MM = 1800.0
 HALF_MM = WORKSPACE_MM / 2
-WALL_H_MM = 350.0
+WALL_H_MM = 350.0  # 보수적인 쪽. 배치도 Rev.I 는 탑뷰1 쪽 0.25 m / 탑뷰2 쪽 0.35 m
 U_LIMIT, V_LIMIT = 640.0, 360.0
 DETECT_PX = 20.0  # YOLO 가 안정적으로 무는 최소 물체 폭
-OBJ_MM = 30.0  # 현재 출력된 원기둥 지름
+OBJ_MM = 30.0  # 폐기된 옛 규격. 왜 50 mm 로 올렸는지의 근거라 그대로 둔다
 # 가벽이 만드는 사각지대는 **비용이지 제약이 아니다.**
 # 예전에 204 mm 를 feasibility 필터로 썼는데, 그 값은 폐기된 모서리 배치
 # (2050/1400)에서 우연히 나온 수치였을 뿐 독립적인 설계 요구가 아니었다.
-# 확정 배치(1650/1400)는 377 mm 라 그 필터로는 제외돼 버린다 — 같은 그림 안에서
+# 확정 배치(1650/950)는 256 mm 라 그 필터로는 제외돼 버린다 — 같은 그림 안에서
 # "탐색 결과"와 "권고안"이 다른 조건 위에 서게 된다. 그래서 필터를 걷고
 # 등고선으로 같이 그린다. 유일한 하드 제약은 FOV 다.
 BLIND_CONTOURS_MM = (150.0, 250.0, 350.0, 450.0)
-PICK = (1650.0, 1400.0)  # #130 확정 (높이, 변 중앙에서의 후퇴)
+PICK = (1650.0, 950.0)  # 배치도 Rev.I · 8/20 팀 확정 (높이, 변 중앙에서의 후퇴)
+PITCH_DEG = 44.1  # 확정 하향각 — 프레임 상단을 먼 울타리에 맞춘 값
+COVER_START_MM = 212.0  # 화각 전폭이 시작되는 지점. 그 앞은 마주보는 카메라가 덮는다
 CORNER_OLD = (2050.0, 1400.0)  # 8/19 오전에 검토했다가 폐기한 모서리 배치
 TALLER = (1900.0, 900.0)  # 더 높은 거치가 가능할 때의 대안 (#149 D3)
 OUT = Path(__file__).resolve().parents[2] / "docs" / "assets" / "vision"
@@ -87,9 +89,16 @@ def _rig(h: float, s: float, pitch_deg: float, layout: str):
 
 
 def duty_points(layout: str) -> list[tuple[float, float]]:
-    """프레임 안에 반드시 들어와야 하는 담당 구역의 귀퉁이."""
+    """프레임 안에 반드시 들어와야 하는 담당 구역의 귀퉁이.
+
+    변 중앙 배치는 **가까운 벽에 딱 붙은 귀퉁이를 요구하지 않는다.** 배치도 Rev.I
+    가 후퇴를 권고 1100 에서 950 mm 로 줄이면서 앞쪽 COVER_START_MM 를 포기하기로
+    확정했고, 그 안쪽은 마주보는 반대편 카메라가 덮는다. 이 전제를 빼면 확정 배치가
+    FOV 초과(max|u| 675/640)로 판정된다 — 예전 duty 정의가 그랬다.
+    """
     if layout == "edge":
-        return [(0.0, 0.0), (WORKSPACE_MM, 0.0), (0.0, HALF_MM), (WORKSPACE_MM, HALF_MM)]
+        y0 = COVER_START_MM
+        return [(0.0, y0), (WORKSPACE_MM, y0), (0.0, HALF_MM), (WORKSPACE_MM, HALF_MM)]
     return [(0.0, 0.0), (WORKSPACE_MM, 0.0), (0.0, WORKSPACE_MM)]
 
 
@@ -151,13 +160,15 @@ def blind_band(h: float, s: float, layout: str = "edge") -> float:
     return WALL_H_MM * d / (h - WALL_H_MM)
 
 
-def sigma_max(h: float, s: float, layout: str, x: float, y: float) -> float:
+def sigma_max(
+    h: float, s: float, layout: str, x: float, y: float, pitch_deg: float | None = None
+) -> float:
     """이미지→지면 사상 야코비안의 최대 특이값 [mm/px].
 
     클릭이 1 px 어긋났을 때 최악 방향으로 생기는 월드 오차다.
     흔히 쓰는 근사 slant/(f·sinθ) 보다 약 8% 작다.
     """
-    pitch = best_pitch(h, s, layout)[0]
+    pitch = best_pitch(h, s, layout)[0] if pitch_deg is None else pitch_deg
     center, right, down, fwd = _rig(h, s, pitch, layout)
     rot = np.vstack([right, down, fwd])
 
@@ -460,12 +471,19 @@ def sensitivity_table() -> None:
     h, s = PICK
     pitch, umax, vmax = best_pitch(h, s, "edge")
     print(
-        f"# 변 중앙 배치 h={h:.0f} s={s:.0f} · 하향 {pitch:.1f}° · "
-        f"max|u|={umax:.0f}/640 max|v|={vmax:.0f}/360 · 가림 띠 {blind_band(h, s):.0f} mm\n"
+        f"# 변 중앙 배치 h={h:.0f} s={s:.0f} · 하향 {pitch:.1f}° (확정 {PITCH_DEG}°) · "
+        f"max|u|={umax:.0f}/{U_LIMIT:.0f} max|v|={vmax:.0f}/{V_LIMIT:.0f} · "
+        f"가림 띠 {blind_band(h, s):.0f} mm"
     )
+    if not fits(h, s, "edge"):
+        print(
+            f"[!] 이 배치는 FOV 를 초과합니다 (max|u|={umax:.0f}/{U_LIMIT:.0f}). "
+            "아래 값은 참고용입니다 — duty_points 전제와 배치도를 대조하세요."
+        )
+    print()
     head = (
         f"{'지점':<24}{'슬랜트':>8}{'고도각':>8}{'σmax':>9}"
-        f"{'근사식':>9}{'3px':>8}{'30mm':>8}{'45mm':>8}"
+        f"{'근사식':>9}{'3px':>8}{'30mm':>8}{'50mm':>8}"
     )
     print(head)
     rows = [
@@ -477,7 +495,7 @@ def sensitivity_table() -> None:
     ]
     for name, x, y in rows:
         slant, elev = slant_elev(h, s, "edge", x, y)
-        sig = sigma_max(h, s, "edge", x, y)
+        sig = sigma_max(h, s, "edge", x, y, PITCH_DEG)
         approx = slant / (FOCAL_PX * math.sin(math.radians(elev)))
         print(
             f"{name:<24}{slant / 1000:8.2f}{elev:8.1f}{sig:9.2f}{approx:9.2f}"
