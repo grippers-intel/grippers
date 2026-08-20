@@ -375,10 +375,10 @@ def fig_layout_compare():
                 slant=slant,
                 elev=elev,
                 px=OBJ_MM * FOCAL_PX / slant,
-                sig=sigma_max(h, s, layout, wx, wy),
+                sig=sigma_max(h, s, layout, wx, wy, PITCH_DEG if layout == "edge" else None),
                 blind=blind_band(h, s, layout),
                 need=DETECT_PX * slant / FOCAL_PX,
-                pitch=best_pitch(h, s, layout)[0],
+                pitch=PITCH_DEG if layout == "edge" else best_pitch(h, s, layout)[0],
             )
         )
 
