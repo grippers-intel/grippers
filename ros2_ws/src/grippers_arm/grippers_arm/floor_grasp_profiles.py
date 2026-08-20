@@ -1,8 +1,7 @@
 """Measured floor-grasp targets for the current SO-ARM101 end effector.
 
-These profiles describe object geometry and gripper widths only.  They do not
-select an arm orientation: the vertical cube grasp is verified, while the
-horizontal side-grasp orientation still needs staged hardware validation.
+Object geometry is kept separate from the named, hardware-tested arm poses so
+that a low GABE pose is not accidentally reused for taller chess pieces.
 """
 
 from dataclasses import dataclass
@@ -33,3 +32,9 @@ FLOOR_GRASP_PROFILES = {
 MEASURED_CUBE_HOLD_LOAD_RATIO = 0.0704
 HARDWARE_HOLD_SECONDS = 5.0
 MIN_GRIPPER_CLEARANCE_MM = 140.0
+
+# Servo 1..5 angles in degrees.  These poses are specific to the measured arm
+# mounting and floor.  Revalidate them after changing the arm or base mounting.
+HORIZONTAL_SAFE_140_DEG = (-1.67, 45.87, 37.34, -83.70, 84.30)
+HORIZONTAL_CHESS_MID_40_DEG = (-1.67, 96.57, -9.79, -87.29, 84.30)
+HORIZONTAL_GABE_LOW_20_DEG = (-1.39, 95.70, -18.16, -68.88, 84.18)
