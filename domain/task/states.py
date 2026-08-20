@@ -14,6 +14,7 @@ E-STOP은 이 전이 그래프에 없다 — `MissionTask.run()` 이 다음 `exe
 
 from dataclasses import replace
 
+from domain.task.floor_grasp_policy import select_horizontal_grasp_plan
 from domain.task.state import State
 from domain.values import MissionContext, MissionMode, Point3, Pose2D
 
@@ -227,12 +228,47 @@ class GraspState(State):
     # 이전 값 0.15 는 어떤 물체도 넘지 못했다(가베조차 0.137) — 실기에서
     # 파지 판정이 항상 실패했다.
     LOAD_THRESHOLD = 0.04
+    RETRY_ELIGIBLE_LOAD = 0.031
+    RETRY_TIGHTEN_MM = 5.0
 
     def __init__(self, ctx, target):
         self.ctx = ctx
         self.target = target
 
     def execute(self, ports):
+        plan = select_horizontal_grasp_plan(self.target)
+
+        # 기본 경로는 실기 검증된 수평 파지다. 80 mm로 충분히 벌린 뒤 내려가
+        # 체스말의 돌출된 머리에 손가락이 걸리지 않게 한다.
+        if not ports.arm.move_to_floor_pose(plan.profile, "safe"):
+            return self._execute_vertical_fallback(ports)
+        ports.arm.set_gripper(plan.preopen_width_mm)
+        if not ports.arm.move_to_floor_pose(plan.profile, "grasp"):
+            return self._retry_after_release(ports)
+
+        ports.arm.set_gripper(plan.close_width_mm)
+        load = ports.arm.get_load()
+        if self.RETRY_ELIGIBLE_LOAD < load < self.LOAD_THRESHOLD:
+            retry_width = max(CLOSED_MM, plan.close_width_mm - self.RETRY_TIGHTEN_MM)
+            ports.arm.set_gripper(retry_width)
+            load = ports.arm.get_load()
+
+        # 바닥에서 곧장 140 mm로 들지 않는다. 실측처럼 중간 높이에서 미끄러짐을
+        # 다시 확인한 뒤에만 베이스가 움직일 수 있는 안전 자세로 간다.
+        lifted = load >= self.LOAD_THRESHOLD and ports.arm.move_to_floor_pose(
+            plan.profile, "midpoint"
+        )
+        held = lifted and ports.arm.get_load() >= self.LOAD_THRESHOLD
+        cleared = held and ports.arm.move_to_floor_pose(plan.profile, "safe")
+        if cleared:
+            if self.ctx.spec.mode is MissionMode.TIDY:
+                return TransportState(self.ctx, self.target)
+            return DeliverState(self.ctx, self.target)
+
+        return self._retry_after_release(ports)
+
+    def _execute_vertical_fallback(self, ports):
+        """수평 전용 자세를 쓸 수 없을 때만 기존 수직 IK를 한 번 시도한다."""
         floor_z = self.target.pose_m.z - self.target.dims_m.z / 2.0
         safe_z = max(
             self.target.pose_m.z + GRASP_APPROACH_HEIGHT_M,
@@ -243,8 +279,11 @@ class GraspState(State):
             y=self.target.pose_m.y,
             z=safe_z,
         )
-        ports.arm.move_to_cartesian(approach_point)
-        ports.arm.move_to_cartesian(self.target.pose_m, down=True)
+        if not ports.arm.move_to_cartesian(approach_point):
+            return self._retry_after_release(ports)
+        ports.arm.set_gripper(OPEN_MM)
+        if not ports.arm.move_to_cartesian(self.target.pose_m, down=True):
+            return self._retry_after_release(ports)
         ports.arm.set_gripper(CLOSED_MM)
 
         if ports.arm.get_load() >= self.LOAD_THRESHOLD and ports.arm.move_to_cartesian(
@@ -257,6 +296,9 @@ class GraspState(State):
         # 빈손이거나 안전 운반 높이까지 들지 못했다. 낮은 위치에서 물체를 놓고
         # 이전 pose를 재사용하지 않는다. 들어 올리지 못한 상태로 베이스가 움직이는
         # 것보다 대상을 보류하고 재스캔하는 편이 안전하다.
+        return self._retry_after_release(ports)
+
+    def _retry_after_release(self, ports):
         ports.arm.set_gripper(OPEN_MM)
         if self.ctx.grasp_attempts >= self.MAX_GRASP_RETRY:
             return ScanState(self.ctx.hold(self.target.track_id))

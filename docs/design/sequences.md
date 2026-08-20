@@ -103,15 +103,18 @@ sequenceDiagram
     Note over T,A: 부하 기반 파지 검증 — 힘 센서 없음
 
     loop 대상 1개 기준 · attempt ≤ MAX_GRASP_RETRY (3)
-        T->>A: move_to_cartesian(접근 지점)
-        T->>A: move_to_cartesian(파지 지점, down=True)
-        T->>A: 파지 성공 후 move_to_cartesian(바닥 + 140 mm 이상)
-        T->>A: set_gripper(CLOSED_MM)
+        T->>A: move_to_floor_pose(profile, safe=140 mm)
+        T->>A: set_gripper(80 mm)
+        T->>A: move_to_floor_pose(profile, grasp)
+        T->>A: set_gripper(profile.close_width_mm)
         T->>A: get_load()
         A-->>T: load_ratio (0.0~1.0)
 
         alt load_ratio ≥ LOAD_THRESHOLD
-            Note right of A: 파지 성공 → TRANSPORT / DELIVER
+            T->>A: move_to_floor_pose(profile, midpoint)
+            T->>A: get_load()
+            T->>A: move_to_floor_pose(profile, safe=140 mm)
+            Note right of A: 중간 부하 유지 + 140 mm 도달 → TRANSPORT / DELIVER
         else load_ratio < LOAD_THRESHOLD
             Note right of A: 빈손 — 그리퍼가 끝까지 닫힘
             T->>A: set_gripper(OPEN_MM)
@@ -120,6 +123,8 @@ sequenceDiagram
             Note right of P: 실패한 파지가 물체를 밀었을 수 있음<br/>이전 pose 재사용은 같은 실패를 반복
         end
     end
+
+    Note over T,A: 첫 safe 액션을 사용할 수 없을 때만 기존 down=True 수직 파지를 1회 fallback
 
     Note over T,A: 재시도 소진 → held_ids 등록 후 SCAN 복귀<br/>미션은 끝나지 않는다
 ```
