@@ -172,6 +172,14 @@ CARRY_IDLE`이다. 큐브 실측에서 SAFE_145→IDLE 직선 전환 전체 구�
 load_ratio가 0.1056으로 유지됐고 servo 2 load는 196에서 64로 감소했다. 수평 기본
 경로는 수직 상공 waypoint를 거치지 않으며 수직 자세는 수직 fallback에만 쓴다.
 
+`tools/horizontal_grasp_hardware_test.py`는 각 물체를 원래 바닥에 돌려놓는 실기
+왕복 시험을 수행한다. `safe → grasp → midpoint → SAFE_145 → CARRY_IDLE →
+SAFE_145 → grasp → open → SAFE_145`의 모든 물리 전환은 운영자 Enter 승인을
+요구하며, midpoint·첫 SAFE_145·CARRY_IDLE·복귀 SAFE_145에서 파지 부하를 다시
+확인한다. 큐브 외 운반 자세 검증 순서는 `star_column → soccer_polyhedron →
+chess_rook → chess_queen → chess_knight`로 한다. 이 시험에는 바구니 투하를 포함하지
+않는다.
+
 YOLO subtype이 들어오기 전에는 검출 바닥면 폭으로 프로필을 고른다. 가베 40 mm는
 cube, 그보다 넓으면 별기둥과 같은 자세/닫힘값을 쓰는 soccer_polyhedron을 선택한다.
 체스말은 17/22/24.5 mm 실측 폭과 가장 가까운 queen/knight/rook를 선택한다. 이 휴리스틱은

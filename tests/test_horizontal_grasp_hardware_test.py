@@ -29,8 +29,9 @@ def test_every_motion_stage_is_operator_gated():
     main = _function("main")
     names = _called_names(main)
 
-    assert names.count("confirm") == 10
+    assert names.count("confirm") == 12
     assert names.count("glide") == 6
+    assert names.count("glide_raw") == 2
     assert names.count("set_width") == 4
 
 
@@ -63,6 +64,14 @@ def test_load_is_checked_again_after_mid_lift():
 
     assert names.count("get_load") >= 2
     assert names.count("RuntimeError") >= 3
+
+
+def test_carry_idle_roundtrip_rechecks_gripper_load():
+    main = _function("main")
+    names = _called_names(main)
+
+    assert names.count("glide_raw") == 2
+    assert names.count("require_hold_load") == 3
 
 
 def test_hot_servo2_is_rejected_before_motion():
