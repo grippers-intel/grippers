@@ -46,10 +46,8 @@ from .gripper_calibration import (
 )
 from .floor_grasp_profiles import (
     HORIZONTAL_GRASP_POSES_DEG,
-    HORIZONTAL_OVERHEAD_RAW,
     HORIZONTAL_SAFE_145_RAW,
     IDLE_CRADLE_RAW,
-    VERTICAL_SAFE_OVERHEAD_DEG,
 )
 
 WRIST_SERVO_ID = 4
@@ -393,14 +391,12 @@ class ArmDriverNode(Node):
         )
 
     def _move_floor_stage(self, backend, profile, stage) -> None:
-        """검증된 자세 사이에서만 움직이고 IDLE 전환은 중간 waypoint를 거친다."""
+        """검증된 자세 사이에서만 움직인다. 수평 IDLE↔SAFE는 직접 전환한다."""
         actual = {servo_id: backend.drv.get_position(servo_id) for servo_id in range(1, 6)}
         if any(position is None for position in actual.values()):
             raise ArmHardwareUnavailableError(f"현재 관절 위치 읽기 실패: {actual}")
 
         idle = self._tuple_goals(IDLE_CRADLE_RAW)
-        vertical = self._raw_goals(backend, VERTICAL_SAFE_OVERHEAD_DEG)
-        horizontal = self._tuple_goals(HORIZONTAL_OVERHEAD_RAW)
         safe = self._tuple_goals(HORIZONTAL_SAFE_145_RAW)
         grasp = self._raw_goals(backend, HORIZONTAL_GRASP_POSES_DEG[profile])
         midpoint = {
@@ -411,15 +407,13 @@ class ArmDriverNode(Node):
             if self._near_pose(actual, idle):
                 return
             if not self._near_pose(actual, safe):
-                raise ValueError("idle 복귀는 140 mm safe 자세에서만 시작할 수 있습니다")
-            for waypoint in (horizontal, vertical, idle):
-                self._glide_to_raw_positions(backend, waypoint)
+                raise ValueError("idle 복귀는 145 mm safe 자세에서만 시작할 수 있습니다")
+            self._glide_to_raw_positions(backend, idle)
             return
 
         if stage == "safe":
             if self._near_pose(actual, idle):
-                for waypoint in (vertical, horizontal, safe):
-                    self._glide_to_raw_positions(backend, waypoint)
+                self._glide_to_raw_positions(backend, safe)
                 return
             if self._near_pose(actual, grasp):
                 self._glide_to_raw_positions(backend, midpoint)

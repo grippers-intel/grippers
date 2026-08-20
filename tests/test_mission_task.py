@@ -432,8 +432,8 @@ def test_minimum_holding_load_passes_grasp(make_ports, run_to_completion):
     assert states[-1].ctx.done_ids == {1}
 
 
-def test_grasp_lifts_to_140mm_clearance_before_transport(make_ports):
-    """수평 기본 파지는 중간 재검증 뒤 140 mm 안전 자세에 도달한다."""
+def test_grasp_rechecks_at_145mm_then_folds_to_carry_idle_before_transport(make_ports):
+    """수평 파지는 145 mm 재검증과 CARRY_IDLE을 마쳐야 운반으로 넘어간다."""
     target = _detection(track_id=1)
     arm = FakeArm(load_ratio=0.047)
     ports = make_ports(arm=arm)
@@ -453,6 +453,7 @@ def test_grasp_lifts_to_140mm_clearance_before_transport(make_ports):
         ("soccer_polyhedron", "grasp"),
         ("soccer_polyhedron", "midpoint"),
         ("soccer_polyhedron", "safe"),
+        ("soccer_polyhedron", "idle"),
     ]
     assert arm.gripper_widths == [80.0, 35.0]
     assert next_state.name == "TRANSPORT"
@@ -506,6 +507,25 @@ def test_horizontal_mid_lift_load_drop_blocks_safe_lift(make_ports):
     assert arm.floor_pose_calls[-1] == ("soccer_polyhedron", "midpoint")
     assert arm.floor_pose_calls.count(("soccer_polyhedron", "safe")) == 1
     assert arm.gripper_widths[-1] == states_module.OPEN_MM
+
+
+def test_carry_idle_load_drop_hard_stops_before_base_transport(make_ports):
+    target = _detection(track_id=1)
+    arm = FakeArm(load_ratio=[0.07, 0.07, 0.03])
+    ports = make_ports(arm=arm)
+    ctx = MissionContext(
+        spec=MissionSpec(
+            mode=MissionMode.TIDY,
+            target_cls=ObjectClass.GABE,
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            raw_text="",
+        )
+    )
+
+    next_state = GraspState(ctx, target).execute(ports)
+
+    assert next_state.name == "ESTOP"
+    assert arm.floor_pose_calls[-1] == ("soccer_polyhedron", "idle")
 
 
 def test_vertical_fallback_is_used_only_when_horizontal_safe_pose_is_unavailable(make_ports):
@@ -620,7 +640,7 @@ def test_fetch_mode_routes_through_deliver_and_handover(make_ports, run_to_compl
     ports = make_ports(
         # get_load()는 GRASP(1회차, 높아야 성공)과 HANDOVER(2회차, 낮아야
         # '사람이 받아감')가 반대 의미로 같이 쓴다 — 순서대로 반환.
-        arm=FakeArm(load_ratio=[LOAD_HOLDING, LOAD_HOLDING, LOAD_EMPTY]),
+        arm=FakeArm(load_ratio=[LOAD_HOLDING, LOAD_HOLDING, LOAD_HOLDING, LOAD_EMPTY]),
         perception=ScriptedPerception(detections=[target]),
     )
 
@@ -676,6 +696,24 @@ def test_align_error_within_tolerance_proceeds_to_insert(make_ports, run_to_comp
 
     assert names.count("INSERT") == 1
     assert states[-1].ctx.done_ids == {1}
+
+
+def test_basket_insert_opens_at_safe_145_without_lowering_to_floor(make_ports, run_to_completion):
+    arm = FakeArm()
+    ports = make_ports(
+        arm=arm,
+        perception=ScriptedPerception(detections=[_detection(track_id=1)]),
+    )
+
+    states = run_to_completion(ports)
+
+    assert "INSERT" in [state.name for state in states]
+    assert arm.floor_pose_calls[-2:] == [
+        ("soccer_polyhedron", "safe"),
+        ("soccer_polyhedron", "idle"),
+    ]
+    assert arm.gripper_widths[-1] == states_module.OPEN_MM
+    assert all(not down for _, down in arm.move_calls)
 
 
 def test_align_error_beyond_tolerance_holds_the_target(make_ports, run_to_completion):

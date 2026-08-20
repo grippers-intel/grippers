@@ -122,7 +122,7 @@ def main():
     print(f"profile={args.profile} geometry={profile}")
     report(driver, "start")
 
-    confirm("작업 공간과 베이스가 안전한지 확인했습니다. 140mm 안전 자세로 이동")
+    confirm("작업 공간과 베이스가 안전한지 확인했습니다. 145mm 안전 자세로 이동")
     glide(driver, "safe", safe_pose)
 
     confirm(f"그리퍼를 {profile.preopen_width_mm:.1f}mm로 열기")
@@ -157,12 +157,12 @@ def main():
     if mid_load_ratio < MIN_HOLD_LOAD_RATIO:
         raise RuntimeError(
             f"중간 상승 후 파지 부하 {mid_load_ratio:.4f}가 임계값 "
-            f"{MIN_HOLD_LOAD_RATIO:.2f} 미만입니다. 140mm 상승하지 않습니다"
+            f"{MIN_HOLD_LOAD_RATIO:.2f} 미만입니다. 145mm 상승하지 않습니다"
         )
 
-    confirm("미끄러짐이 없습니다. 140mm 운반 자세까지 상승")
+    confirm("미끄러짐이 없습니다. 145mm 운반 전 안전 자세까지 상승")
     glide(driver, "safe-lift", safe_pose, steps=20, delay=0.12)
-    print("140mm에서 5초 유지")
+    print("145mm에서 5초 유지")
     for second in range(1, 6):
         time.sleep(1.0)
         load_raw = driver.get_load(6)
@@ -177,7 +177,7 @@ def main():
     confirm("물체가 바닥에 안정적으로 닿았습니다. 그리퍼 열기")
     set_width(driver, profile.preopen_width_mm)
 
-    confirm("물체와 손을 이동 경로에서 치웠습니다. 140mm 안전 자세로 복귀")
+    confirm("물체와 손을 이동 경로에서 치웠습니다. 145mm 안전 자세로 복귀")
     glide(driver, "finish-safe", safe_pose)
     report(driver, "complete")
     print("\n수평 파지 시험 완료")

@@ -131,6 +131,15 @@ def test_horizontal_floor_pose_uses_checked_interpolated_joint_writes():
     assert "set_position" in glide_names
 
 
+def test_horizontal_idle_safe_transition_does_not_use_vertical_waypoints():
+    source = ast.unparse(_function("_move_floor_stage"))
+
+    assert "VERTICAL_SAFE_OVERHEAD" not in source
+    assert "HORIZONTAL_OVERHEAD" not in source
+    assert "self._glide_to_raw_positions(backend, idle)" in source
+    assert "self._glide_to_raw_positions(backend, safe)" in source
+
+
 def test_fold_to_cradle_checks_servos_before_and_after_motion():
     fn = _function("_on_fold_to_cradle")
     names = [_called_name(call) for call in _calls(fn)]
