@@ -191,16 +191,7 @@ def main():
 
     confirm("미끄러짐이 없습니다. 145mm 운반 전 안전 자세까지 상승")
     glide(driver, "safe-lift", safe_pose, steps=20, delay=0.12)
-    print("145mm에서 5초 유지")
-    for second in range(1, 6):
-        time.sleep(1.0)
-        load_raw = driver.get_load(6)
-        print(
-            f"hold={second}/5 gripper={driver.get_position(6)} "
-            f"load_raw={load_raw} load_ratio={abs(load_raw) / LOAD_MAX_RAW:.4f}"
-        )
-
-    require_hold_load(driver, "safe-145-hold")
+    require_hold_load(driver, "safe-145")
 
     confirm("파지가 유지됐습니다. 그리퍼는 닫은 채 CARRY_IDLE로 접기")
     glide_raw(driver, "carry-idle", IDLE_CRADLE_RAW)

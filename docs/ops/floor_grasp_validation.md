@@ -100,7 +100,8 @@ python3 tools/horizontal_grasp_hardware_test.py cube
 
 지원 프로파일은 `cube`, `star_column`, `soccer_polyhedron`, `chess_rook`,
 `chess_queen`, `chess_knight`다. 순서는 안전 자세, 개방, 파지 자세, 닫힘, 중간 상승,
-140 mm 상승 및 5초 유지, 하강, 놓기, 안전 자세 복귀다. 물체 배치와 제거는 스크립트가
+145 mm 상승 및 즉시 부하 재검증, CARRY_IDLE 왕복, 하강, 놓기, 안전 자세 복귀다.
+물체 배치와 제거는 스크립트가
 명시적으로 안내하며 운영자가 Enter를 눌러야 다음 단계로 진행한다.
 
 오각별 기둥 실측(2026-08-20): 40 mm 닫힘에서 `position=1310`, `load_raw=40`,
@@ -185,8 +186,9 @@ cube, 그보다 넓으면 별기둥과 같은 자세/닫힘값을 쓰는 soccer_
 체스말은 17/22/24.5 mm 실측 폭과 가장 가까운 queen/knight/rook를 선택한다. 이 휴리스틱은
 명시 subtype이 제공되면 교체한다.
 
-성공 판정은 `load_ratio >= 0.04` 하나만으로 끝내지 않고, 상승·5초 유지·미끄러짐 없음까지
-포함한다. 수직 정육면체 파지는 검증된 fallback으로 남기며, 수평 safe 액션 자체를
+성공 판정은 `load_ratio >= 0.04` 하나만으로 끝내지 않고, 중간 상승·SAFE_145·
+CARRY_IDLE·복귀 SAFE_145의 동작 경계마다 부하와 미끄러짐을 다시 확인한다. 고정된
+5초 대기는 두지 않는다. 수직 정육면체 파지는 검증된 fallback으로 남기며, 수평 safe 액션 자체를
 사용할 수 없을 때만 기존 `down=True` 경로를 한 번 시도한다. 수평 하강이 시작된 뒤의
 실패는 수직으로 전환하지 않고 물체를 놓고 재스캔한다.
 
