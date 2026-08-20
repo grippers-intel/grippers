@@ -1,9 +1,13 @@
 """base_driver_node — MentorPi mecanum 베이스 제어 노드.
-controller/odom_publisher_node가 이미 만들어둔 /cmd_vel(안전 클램프) →
-/odom(ekf 필터링)을 그대로 재사용. 새 모터 제어는 안 함, 목표 좌표까지의
-proportional 제어 루프 + DriveTo 액션 서버만 얹는다."""
+
+controller/odom_publisher_node가 이미 만들어둔 /cmd_vel(안전 클램프)과
+/odom을 재사용한다. 현재 /odom은 휠 엔코더/EKF가 아니라 cmd_vel 명령값을
+적분한 오픈루프 dead reckoning이다. 새 모터 제어는 추가하지 않고,
+목표 좌표까지의 DriveTo 액션 서버를 얹는다.
+"""
 
 import math
+import time
 
 import rclpy
 from geometry_msgs.msg import Twist
@@ -16,11 +20,21 @@ from rclpy.node import Node
 from std_srvs.srv import Trigger
 
 ARRIVE_XY_TOL = 0.03  # m
-ARRIVE_YAW_TOL = 0.05  # rad
 KP_LINEAR = 0.6
 KP_ANGULAR = 1.2
 MAX_LINEAR = 0.2  # app_cmd_vel_callback 클램프와 동일
 MAX_ANGULAR = 0.5
+
+# TODO(#148): 아래 세 값은 M3 시연장에서 실측 후 확정한다.
+# PHASE 1 -> 2 진입 허용 yaw 오차. 현재 값은 자리 표시자(약 5.7도).
+YAW_ALIGN_TOL_RAD = 0.1
+# PHASE 2 -> 1 복귀 임계값. 진입값보다 크게 두어 채터링을 막는다.
+YAW_REALIGN_TRIG_RAD = 0.3
+# 도착 근처 atan2 요동 구간에서는 PHASE 1로 되돌아가지 않는다.
+REALIGN_MIN_DIST_M = 0.10
+
+# 클라이언트 ACTION_RESULT_TIMEOUT_SEC(60s)보다 먼저 서버가 정지/abort한다.
+DRIVE_TO_TIMEOUT_SEC = 55.0
 
 
 def _yaw_from_quat(q):
@@ -69,33 +83,87 @@ class BaseDriverNode(Node):
         target = goal_handle.request.target  # Pose2D(x, y, theta)
         rate = self.create_rate(20)
         result = DriveTo.Result()
+        started_at = time.monotonic()
+
+        # #148: 회전과 직진을 동시에 명령하면 오픈루프 odom에서 목표 주변을
+        # 도는 발산이 생긴다. 먼저 제자리 정렬하고, 그 뒤에는 직진만 한다.
+        phase = "ALIGN"
 
         while rclpy.ok():
-            if self._pose is None:
-                rate.sleep()
-                continue
-            x, y, yaw = self._pose
-            dx, dy = target.x - x, target.y - y
-            dist = math.hypot(dx, dy)
-
             if goal_handle.is_cancel_requested:
                 self._cmd_vel_pub.publish(Twist())
                 goal_handle.canceled()
                 result.arrived = False
                 return result
 
-            if dist < ARRIVE_XY_TOL:
+            elapsed = time.monotonic() - started_at
+            if elapsed >= DRIVE_TO_TIMEOUT_SEC:
+                self._cmd_vel_pub.publish(Twist())
+                self.get_logger().error(
+                    f"drive_to timeout after {elapsed:.1f}s "
+                    f"(phase={phase}, target=({target.x:.3f}, {target.y:.3f}))"
+                )
+                goal_handle.abort()
+                result.arrived = False
+                return result
+
+            if self._pose is None:
+                rate.sleep()
+                continue
+
+            x, y, yaw = self._pose
+            dx, dy = target.x - x, target.y - y
+            dist = math.hypot(dx, dy)
+
+            if dist <= ARRIVE_XY_TOL:
                 self._cmd_vel_pub.publish(Twist())
                 goal_handle.succeed()
                 result.arrived = True
                 return result
 
             target_yaw = math.atan2(dy, dx)
-            yaw_err = math.atan2(math.sin(target_yaw - yaw), math.cos(target_yaw - yaw))
+            yaw_err = math.atan2(
+                math.sin(target_yaw - yaw),
+                math.cos(target_yaw - yaw),
+            )
 
             twist = Twist()
-            twist.linear.x = max(-MAX_LINEAR, min(MAX_LINEAR, KP_LINEAR * dist))
-            twist.angular.z = max(-MAX_ANGULAR, min(MAX_ANGULAR, KP_ANGULAR * yaw_err))
+
+            if phase == "ALIGN":
+                # PHASE 1: 제자리 회전만 한다.
+                twist.linear.x = 0.0
+                twist.angular.z = max(
+                    -MAX_ANGULAR,
+                    min(MAX_ANGULAR, KP_ANGULAR * yaw_err),
+                )
+
+                if abs(yaw_err) <= YAW_ALIGN_TOL_RAD:
+                    phase = "DRIVE"
+                    twist.angular.z = 0.0
+                    self.get_logger().info(
+                        "drive_to phase ALIGN -> DRIVE "
+                        f"(dist={dist:.3f}m, yaw_err={yaw_err:.3f}rad)"
+                    )
+
+            else:
+                # PHASE 2: 직진만 한다. 회전 명령을 섞지 않아 #148의
+                # 목표 주변 회전 발산을 구조적으로 막는다.
+                twist.linear.x = max(
+                    -MAX_LINEAR,
+                    min(MAX_LINEAR, KP_LINEAR * dist),
+                )
+                twist.angular.z = 0.0
+
+                # 슬립 등으로 방위가 크게 틀어졌다면 다시 제자리 정렬한다.
+                # 단, 도착 근처에서는 atan2가 불안정하므로 재정렬하지 않는다.
+                if dist > REALIGN_MIN_DIST_M and abs(yaw_err) >= YAW_REALIGN_TRIG_RAD:
+                    phase = "ALIGN"
+                    twist.linear.x = 0.0
+                    self.get_logger().warn(
+                        "drive_to phase DRIVE -> ALIGN "
+                        f"(dist={dist:.3f}m, yaw_err={yaw_err:.3f}rad)"
+                    )
+
             self._cmd_vel_pub.publish(twist)
 
             fb = DriveTo.Feedback()
@@ -103,6 +171,7 @@ class BaseDriverNode(Node):
             goal_handle.publish_feedback(fb)
             rate.sleep()
 
+        self._cmd_vel_pub.publish(Twist())
         result.arrived = False
         return result
 
