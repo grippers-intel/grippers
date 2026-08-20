@@ -58,3 +58,12 @@ def test_hardware_acceptance_contract_records_verified_cube_load():
     assert module.MEASURED_CUBE_HOLD_LOAD_RATIO == 0.0704
     assert module.HARDWARE_HOLD_SECONDS == 5.0
     assert module.MIN_GRIPPER_CLEARANCE_MM == 140.0
+
+
+def test_horizontal_arm_poses_keep_gabe_and_chess_heights_separate():
+    module = _load_profiles()
+
+    assert module.HORIZONTAL_SAFE_140_DEG == (-1.67, 45.87, 37.34, -83.70, 84.30)
+    assert module.HORIZONTAL_CHESS_MID_40_DEG == (-1.67, 96.57, -9.79, -87.29, 84.30)
+    assert module.HORIZONTAL_GABE_LOW_20_DEG == (-1.39, 95.70, -18.16, -68.88, 84.18)
+    assert module.HORIZONTAL_CHESS_MID_40_DEG != module.HORIZONTAL_GABE_LOW_20_DEG
