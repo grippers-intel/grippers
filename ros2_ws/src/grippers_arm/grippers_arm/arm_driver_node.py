@@ -408,8 +408,8 @@ class ArmDriverNode(Node):
         if stage == "idle":
             if self._near_pose(actual, idle):
                 return
-            if not self._near_pose(actual, safe):
-                raise ValueError("idle 복귀는 145 mm safe 자세에서만 시작할 수 있습니다")
+            if not (self._near_pose(actual, safe) or self._near_pose(actual, drop)):
+                raise ValueError("idle 복귀는 safe/drop 자세에서만 시작할 수 있습니다")
             self._glide_to_raw_positions(backend, idle)
             return
 
@@ -432,8 +432,8 @@ class ArmDriverNode(Node):
             raise ValueError("safe 이동 시작 자세가 등록된 idle/grasp/midpoint/drop이 아닙니다")
 
         if stage == "drop":
-            if not self._near_pose(actual, safe):
-                raise ValueError("drop 이동은 145 mm safe 자세에서만 시작할 수 있습니다")
+            if not (self._near_pose(actual, idle) or self._near_pose(actual, safe)):
+                raise ValueError("drop 이동은 idle/safe 자세에서만 시작할 수 있습니다")
             self._glide_to_raw_positions(backend, drop)
             return
 

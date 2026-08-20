@@ -708,10 +708,8 @@ def test_basket_insert_opens_at_drop_195_without_lowering_to_floor(make_ports, r
     states = run_to_completion(ports)
 
     assert "INSERT" in [state.name for state in states]
-    assert arm.floor_pose_calls[-4:] == [
-        ("soccer_polyhedron", "safe"),
+    assert arm.floor_pose_calls[-2:] == [
         ("soccer_polyhedron", "drop"),
-        ("soccer_polyhedron", "safe"),
         ("soccer_polyhedron", "idle"),
     ]
     assert arm.gripper_widths[-1] == states_module.OPEN_MM

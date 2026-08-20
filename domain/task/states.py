@@ -415,16 +415,13 @@ class InsertState(State):
             return RejectState(self.ctx, self.target, "투입 중 접촉 위험")
 
         # 바구니에서는 바닥 파지 높이로 내려가지 않는다. CARRY_IDLE에서 검증된
-        # SAFE_145로 전개한 뒤 실측 DROP_195에서 그리퍼를 열어 낙하시킨다.
+        # 베이스가 정지·정렬된 CARRY_IDLE에서 실측 DROP_195로 직접 전개한 뒤
+        # 그리퍼를 열어 낙하시킨다.
         # 가장 낮은 파지점(나이트)도 120 mm 테두리 위로 통과한다.
         plan = select_horizontal_grasp_plan(self.target)
-        if not ports.arm.move_to_floor_pose(plan.profile, "safe"):
-            return EstopState()
         if not ports.arm.move_to_floor_pose(plan.profile, "drop"):
             return EstopState()
         ports.arm.set_gripper(OPEN_MM)
-        if not ports.arm.move_to_floor_pose(plan.profile, "safe"):
-            return EstopState()
         if not ports.arm.move_to_floor_pose(plan.profile, "idle"):
             return EstopState()
         return ScanState(self.ctx.complete(self.target.track_id))
