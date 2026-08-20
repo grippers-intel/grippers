@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Operator-gated empty-hand validation for the candidate basket drop pose.
+"""Operator-gated empty-hand validation for the direct basket drop path.
 
-This does not release an object.  It only validates IDLE/SAFE_145 to the
-candidate DROP_195 pose and returns to SAFE_145.  Keep the base stationary.
+This does not release an object.  It validates IDLE -> DROP_195 -> IDLE
+without the SAFE_145 waypoints.  Keep the base stationary.
 """
 
 import time
@@ -10,7 +10,6 @@ import time
 from driver_sdk import STS3215Driver
 from grippers_arm.floor_grasp_profiles import (
     BASKET_DROP_195_RAW,
-    HORIZONTAL_SAFE_145_RAW,
     IDLE_CRADLE_RAW,
 )
 from grippers_arm.gripper_calibration import position_from_width
@@ -71,10 +70,9 @@ def main():
     driver.connect()
 
     actual = read_arm(driver)
-    if not (near_pose(actual, IDLE_CRADLE_RAW) or near_pose(actual, HORIZONTAL_SAFE_145_RAW)):
+    if not near_pose(actual, IDLE_CRADLE_RAW):
         raise RuntimeError(
-            "시작 자세가 등록된 IDLE/SAFE_145와 다릅니다. 자동 이동하지 않습니다: "
-            f"actual={actual}"
+            "시작 자세가 등록된 IDLE과 다릅니다. 자동 이동하지 않습니다: " f"actual={actual}"
         )
     servo2_temp = driver.get_temperature(2)
     if servo2_temp > MAX_START_SERVO2_TEMP_C:
@@ -88,17 +86,14 @@ def main():
         raise RuntimeError("servo 6 position write failed")
     time.sleep(1.5)
 
-    confirm("SAFE_145로 이동")
-    glide_raw(driver, "safe-145", HORIZONTAL_SAFE_145_RAW)
-
-    confirm("바구니 테두리와 간섭을 지켜보며 실측 DROP_195로 이동")
+    confirm("차체·바구니·케이블 간섭을 지켜보며 IDLE에서 실측 DROP_195로 직접 이동")
     glide_raw(driver, "drop-195", BASKET_DROP_195_RAW)
     report(driver, "drop-195")
 
-    confirm("중심 높이·전방거리·좌우편향과 바구니 간섭을 측정했습니다. " "SAFE_145로 복귀")
-    glide_raw(driver, "return-safe-145", HORIZONTAL_SAFE_145_RAW)
+    confirm("직접 전개 경로의 무간섭을 확인했습니다. DROP_195에서 IDLE로 직접 복귀")
+    glide_raw(driver, "return-idle", IDLE_CRADLE_RAW)
     report(driver, "complete")
-    print("\n빈손 DROP_195 왕복 완료")
+    print("\n빈손 IDLE ↔ DROP_195 직접 왕복 완료")
 
 
 if __name__ == "__main__":
