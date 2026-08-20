@@ -27,10 +27,11 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Empty, String
 
-# TODO: Ros2Perception 어댑터 (perception 노드 만든 뒤 추가)
 from domain.adapters.fake.fake_arm import FakeArm
+from domain.adapters.fake.fake_base import FakeBase
 from domain.adapters.fake.scripted_interpreter import ScriptedInterpreter
 from domain.adapters.fake.scripted_perception import ScriptedPerception
+from domain.adapters.logged_port import LoggedPort
 from domain.adapters.real.ros2_arm_driver import Ros2ArmDriver
 from domain.adapters.real.ros2_command_interpreter import Ros2CommandInterpreter
 from domain.adapters.real.ros2_mecanum_base import Ros2MecanumBase
@@ -68,6 +69,7 @@ class MissionOrchestratorNode(Node):
             callback_group=cb_group,
         )
         self._estop_flag = threading.Event()
+        self.declare_parameter("use_fake_base", True)
         self.declare_parameter("use_fake_arm", True)
         self.declare_parameter("use_fake_perception", True)
         self.declare_parameter("use_fake_interpreter", True)
@@ -86,10 +88,10 @@ class MissionOrchestratorNode(Node):
 
     def _run_fsm(self):
         ports = Ports(
-            base=Ros2MecanumBase(self),
-            arm=self._make_arm(),
-            perception=self._make_perception(),
-            interpreter=self._make_interpreter(),
+            base=self._logged("BaseDriver", self._make_base()),
+            arm=self._logged("ArmDriver", self._make_arm()),
+            perception=self._logged("Perception", self._make_perception()),
+            interpreter=self._logged("CommandInterpreter", self._make_interpreter()),
             estop=self._estop_flag,
         )
         task = MissionTask(ports)
@@ -144,6 +146,16 @@ class MissionOrchestratorNode(Node):
         msg = MissionState()
         msg.state = "IDLE"
         self._state_pub.publish(msg)
+
+    def _logged(self, name, adapter):
+        return LoggedPort(name, adapter, self.get_logger())
+
+    def _make_base(self):
+        use_fake = self.get_parameter("use_fake_base").value
+        if use_fake:
+            self.get_logger().warn("use_fake_base=True — FakeBase 사용 중")
+            return FakeBase()
+        return Ros2MecanumBase(self)
 
     def _make_arm(self):
         use_fake = self.get_parameter("use_fake_arm").value
