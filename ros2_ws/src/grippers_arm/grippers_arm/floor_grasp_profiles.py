@@ -32,3 +32,4 @@ FLOOR_GRASP_PROFILES = {
 # is not sufficient validation, so hardware tests also require lift and hold.
 MEASURED_CUBE_HOLD_LOAD_RATIO = 0.0704
 HARDWARE_HOLD_SECONDS = 5.0
+MIN_GRIPPER_CLEARANCE_MM = 140.0
