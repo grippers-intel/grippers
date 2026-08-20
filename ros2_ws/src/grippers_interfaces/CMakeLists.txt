@@ -29,6 +29,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/DriveTo.action"
   "action/ReorientArm.action"
   "action/MoveToCartesian.action"
+  "action/MoveToFloorPose.action"
   DEPENDENCIES geometry_msgs action_msgs
 )
 

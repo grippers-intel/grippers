@@ -114,6 +114,19 @@ def test_move_checks_servos_before_and_after_motion():
     assert "go" in names
 
 
+def test_horizontal_floor_pose_uses_checked_interpolated_joint_writes():
+    execute = _function("_execute_floor_pose")
+    glide = _function("_glide_to_joint_angles")
+    execute_names = [_called_name(call) for call in _calls(execute)]
+    glide_names = [_called_name(call) for call in _calls(glide)]
+
+    assert execute_names.count("_require_operational_servos") >= 2
+    assert "_glide_to_joint_angles" in execute_names
+    assert "get_temperature" in execute_names
+    assert "get_position" in glide_names
+    assert "set_position" in glide_names
+
+
 def test_fold_to_cradle_checks_servos_before_and_after_motion():
     fn = _function("_on_fold_to_cradle")
     names = [_called_name(call) for call in _calls(fn)]

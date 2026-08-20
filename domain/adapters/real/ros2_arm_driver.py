@@ -4,7 +4,7 @@ geometry_msgs/Point 생성자 자리에 그대로 넘기면 rclpy가 필드 타�
 assert로 검사해서 런타임 AssertionError가 난다 — 여기서 필드별로 옮긴다."""
 
 from geometry_msgs.msg import Point
-from grippers_interfaces.action import MoveToCartesian, ReorientArm
+from grippers_interfaces.action import MoveToCartesian, MoveToFloorPose, ReorientArm
 from grippers_interfaces.srv import GetLoad, SetGripper
 from rclpy.action import ActionClient
 from std_srvs.srv import Trigger
@@ -23,6 +23,9 @@ class Ros2ArmDriver(ArmDriver):
     def __init__(self, node):
         self._node = node
         self._move_client = ActionClient(node, MoveToCartesian, "arm_driver/move_to_cartesian")
+        self._floor_pose_client = ActionClient(
+            node, MoveToFloorPose, "arm_driver/move_to_floor_pose"
+        )
         self._reorient_client = ActionClient(node, ReorientArm, "arm_driver/reorient")
         self._gripper_client = node.create_client(SetGripper, "arm_driver/set_gripper")
         self._load_client = node.create_client(GetLoad, "arm_driver/get_load")
@@ -40,6 +43,16 @@ class Ros2ArmDriver(ArmDriver):
         if result is None:
             return False
         return result.reached
+
+    def move_to_floor_pose(self, profile: str, stage: str) -> bool:
+        goal = MoveToFloorPose.Goal(profile=profile, stage=stage)
+        result = call_action(
+            self._node,
+            self._floor_pose_client,
+            goal,
+            label="move_to_floor_pose",
+        )
+        return result is not None and result.reached
 
     def set_gripper(self, width_mm: float) -> None:
         """포트가 값을 돌려주지 않으므로 실패는 경고 로그로만 남는다

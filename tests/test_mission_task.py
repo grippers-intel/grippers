@@ -15,7 +15,6 @@ from domain.task import states as states_module
 from domain.task.mission_task import MissionTask
 from domain.task.states import (
     ALIGN_TOLERANCE_RAD,
-    MIN_GRIPPER_CLEARANCE_M,
     SCAN_NO_CHANGE_LIMIT,
     GraspState,
     PosePlanState,
@@ -434,7 +433,7 @@ def test_minimum_holding_load_passes_grasp(make_ports, run_to_completion):
 
 
 def test_grasp_lifts_to_140mm_clearance_before_transport(make_ports):
-    """파지 전 접근과 파지 후 운반 자세는 물체 바닥에서 140 mm 이상이다."""
+    """수평 기본 파지는 중간 재검증 뒤 140 mm 안전 자세에 도달한다."""
     target = _detection(track_id=1)
     arm = FakeArm(load_ratio=0.047)
     ports = make_ports(arm=arm)
@@ -449,10 +448,13 @@ def test_grasp_lifts_to_140mm_clearance_before_transport(make_ports):
 
     next_state = GraspState(ctx, target).execute(ports)
 
-    floor_z = target.pose_m.z - target.dims_m.z / 2.0
-    safe_moves = [call for call in arm.move_calls if not call[1]]
-    assert len(safe_moves) == 2  # 접근 1회 + 파지 성공 후 상승 1회
-    assert all(point.z - floor_z >= MIN_GRIPPER_CLEARANCE_M for point, _ in safe_moves)
+    assert arm.floor_pose_calls == [
+        ("soccer_polyhedron", "safe"),
+        ("soccer_polyhedron", "grasp"),
+        ("soccer_polyhedron", "midpoint"),
+        ("soccer_polyhedron", "safe"),
+    ]
+    assert arm.gripper_widths == [80.0, 35.0]
     assert next_state.name == "TRANSPORT"
 
 
@@ -460,9 +462,9 @@ def test_failed_lift_releases_object_and_blocks_transport(make_ports):
     """파지는 됐어도 140 mm 안전 높이 상승 실패를 운반 성공으로 보지 않는다."""
 
     class LiftFailingArm(FakeArm):
-        def move_to_cartesian(self, xyz_m, down=False):
-            self.move_calls.append((xyz_m, down))
-            return len(self.move_calls) < 3
+        def move_to_floor_pose(self, profile, stage):
+            self.floor_pose_calls.append((profile, stage))
+            return len(self.floor_pose_calls) < 4
 
     target = _detection(track_id=1)
     arm = LiftFailingArm(load_ratio=0.047)
@@ -483,6 +485,52 @@ def test_failed_lift_releases_object_and_blocks_transport(make_ports):
 
     assert next_state.name == "GRASP"
     assert arm.gripper_widths[-1] == states_module.OPEN_MM
+
+
+def test_horizontal_mid_lift_load_drop_blocks_safe_lift(make_ports):
+    target = _detection(track_id=1)
+    arm = FakeArm(load_ratio=[0.07, 0.03])
+    ports = make_ports(arm=arm, perception=ScriptedPerception(detections=[target]))
+    ctx = MissionContext(
+        spec=MissionSpec(
+            mode=MissionMode.TIDY,
+            target_cls=ObjectClass.GABE,
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            raw_text="",
+        )
+    )
+
+    next_state = GraspState(ctx, target).execute(ports)
+
+    assert next_state.name == "GRASP"
+    assert arm.floor_pose_calls[-1] == ("soccer_polyhedron", "midpoint")
+    assert arm.floor_pose_calls.count(("soccer_polyhedron", "safe")) == 1
+    assert arm.gripper_widths[-1] == states_module.OPEN_MM
+
+
+def test_vertical_fallback_is_used_only_when_horizontal_safe_pose_is_unavailable(make_ports):
+    class NoHorizontalArm(FakeArm):
+        def move_to_floor_pose(self, profile, stage):
+            self.floor_pose_calls.append((profile, stage))
+            return False
+
+    target = _detection(track_id=1)
+    arm = NoHorizontalArm(load_ratio=0.07)
+    ports = make_ports(arm=arm)
+    ctx = MissionContext(
+        spec=MissionSpec(
+            mode=MissionMode.TIDY,
+            target_cls=ObjectClass.GABE,
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            raw_text="",
+        )
+    )
+
+    next_state = GraspState(ctx, target).execute(ports)
+
+    assert arm.floor_pose_calls == [("soccer_polyhedron", "safe")]
+    assert [down for _, down in arm.move_calls] == [False, True, False]
+    assert next_state.name == "TRANSPORT"
 
 
 def test_load_threshold_sits_between_measured_distributions():
@@ -572,7 +620,7 @@ def test_fetch_mode_routes_through_deliver_and_handover(make_ports, run_to_compl
     ports = make_ports(
         # get_load()는 GRASP(1회차, 높아야 성공)과 HANDOVER(2회차, 낮아야
         # '사람이 받아감')가 반대 의미로 같이 쓴다 — 순서대로 반환.
-        arm=FakeArm(load_ratio=[LOAD_HOLDING, LOAD_EMPTY]),
+        arm=FakeArm(load_ratio=[LOAD_HOLDING, LOAD_HOLDING, LOAD_EMPTY]),
         perception=ScriptedPerception(detections=[target]),
     )
 

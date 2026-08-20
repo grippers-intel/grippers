@@ -107,7 +107,7 @@ stateDiagram-v2
 | `SCAN` | `perception.scan_floor()` | 대상 有 → `SELECT` / 無 → `DONE` | 재스캔 (n < 3) |
 | `SELECT` | — (순수 판단) | `APPROACH` | `DONE` |
 | `APPROACH` | `base.drive_to()` | `GRASP` | `SCAN` (보류) |
-| `GRASP` | `arm.move_to_cartesian()` · `set_gripper()` · `get_load()` | `TRANSPORT` / `DELIVER` | 자기 자신 → `SCAN` |
+| `GRASP` | `arm.move_to_floor_pose()` · `set_gripper()` · `get_load()` (수직 fallback은 `move_to_cartesian()`) | `TRANSPORT` / `DELIVER` | 자기 자신 → `SCAN` |
 | `TRANSPORT` | `perception.find_box()` · `base.drive_to()` · `base.align_to_box()` | `POSE_PLAN` | `SCAN` (보류) — 상자 미발견 · 주행 실패 · **정렬 오차 초과** |
 | `POSE_PLAN` | `perception.measure_opening()` | `INSERT` | `REJECT` |
 | `INSERT` | `arm.reorient()` · `move_to_cartesian()` · `set_gripper()` | `SCAN` (완료) | `SCAN` (보류) |
