@@ -23,6 +23,7 @@ from domain.values import MissionContext, MissionMode, Point3, Pose2D
 OPEN_MM = 168.0
 CLOSED_MM = 9.0
 GRASP_APPROACH_HEIGHT_M = 0.10  # TODO: 실측 — 파지 하강 전 안전 여유 높이
+MIN_GRIPPER_CLEARANCE_M = 0.14  # 실측 요구 — 베이스 이동 전 바닥부터 파지 중심 높이
 INSERT_DROP_HEIGHT_M = 0.05  # TODO: 실측 — 상자 입구 상단에서 투입 낙차 높이
 HANDOVER_POINT_M = Point3(x=0.30, y=0.0, z=0.35)  # TODO: 실측 — 사용자 인계 손끝 위치
 HANDOVER_LOAD_THRESHOLD = 0.05  # TODO: 실측 — '사람이 받아감' 판정 부하 임계값
@@ -232,21 +233,30 @@ class GraspState(State):
         self.target = target
 
     def execute(self, ports):
+        floor_z = self.target.pose_m.z - self.target.dims_m.z / 2.0
+        safe_z = max(
+            self.target.pose_m.z + GRASP_APPROACH_HEIGHT_M,
+            floor_z + MIN_GRIPPER_CLEARANCE_M,
+        )
         approach_point = Point3(
             x=self.target.pose_m.x,
             y=self.target.pose_m.y,
-            z=self.target.pose_m.z + GRASP_APPROACH_HEIGHT_M,
+            z=safe_z,
         )
         ports.arm.move_to_cartesian(approach_point)
         ports.arm.move_to_cartesian(self.target.pose_m, down=True)
         ports.arm.set_gripper(CLOSED_MM)
 
-        if ports.arm.get_load() >= self.LOAD_THRESHOLD:
+        if ports.arm.get_load() >= self.LOAD_THRESHOLD and ports.arm.move_to_cartesian(
+            approach_point
+        ):
             if self.ctx.spec.mode is MissionMode.TIDY:
                 return TransportState(self.ctx, self.target)
             return DeliverState(self.ctx, self.target)
 
-        # 빈손 — 그리퍼가 끝까지 닫힘.
+        # 빈손이거나 안전 운반 높이까지 들지 못했다. 낮은 위치에서 물체를 놓고
+        # 이전 pose를 재사용하지 않는다. 들어 올리지 못한 상태로 베이스가 움직이는
+        # 것보다 대상을 보류하고 재스캔하는 편이 안전하다.
         ports.arm.set_gripper(OPEN_MM)
         if self.ctx.grasp_attempts >= self.MAX_GRASP_RETRY:
             return ScanState(self.ctx.hold(self.target.track_id))

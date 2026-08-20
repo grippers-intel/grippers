@@ -105,6 +105,7 @@ sequenceDiagram
     loop 대상 1개 기준 · attempt ≤ MAX_GRASP_RETRY (3)
         T->>A: move_to_cartesian(접근 지점)
         T->>A: move_to_cartesian(파지 지점, down=True)
+        T->>A: 파지 성공 후 move_to_cartesian(바닥 + 140 mm 이상)
         T->>A: set_gripper(CLOSED_MM)
         T->>A: get_load()
         A-->>T: load_ratio (0.0~1.0)

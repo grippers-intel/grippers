@@ -57,3 +57,4 @@ def test_hardware_acceptance_contract_records_verified_cube_load():
 
     assert module.MEASURED_CUBE_HOLD_LOAD_RATIO == 0.0704
     assert module.HARDWARE_HOLD_SECONDS == 5.0
+    assert module.MIN_GRIPPER_CLEARANCE_MM == 140.0
