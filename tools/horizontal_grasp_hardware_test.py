@@ -14,6 +14,8 @@ from grippers_arm.floor_grasp_profiles import (
     FLOOR_GRASP_PROFILES,
     HORIZONTAL_GRASP_POSES_DEG,
     HORIZONTAL_SAFE_145_DEG,
+    HORIZONTAL_SAFE_145_RAW,
+    IDLE_CRADLE_RAW,
 )
 from grippers_arm.gripper_calibration import GRIPPER_CLOSED_MM, position_from_width
 
@@ -48,9 +50,9 @@ def near_pose(actual, expected, tolerance=SAFE_START_TOLERANCE_RAW):
     return all(abs(actual[i] - expected[i]) <= tolerance for i in SERVO_IDS)
 
 
-def glide(driver, label, angles_deg, steps=30, delay=0.10):
+def glide_raw(driver, label, goal_raw, steps=30, delay=0.10):
     start = read_arm(driver)
-    goal = raw_goals(driver, angles_deg)
+    goal = {servo_id: goal_raw[servo_id - 1] for servo_id in SERVO_IDS}
     print(f"\n[{label}] start={start}")
     print(f"[{label}] goal={goal}")
     for step_index in range(1, steps + 1):
@@ -66,6 +68,30 @@ def glide(driver, label, angles_deg, steps=30, delay=0.10):
         if step_index % 5 == 0:
             print(f"[{label}] step={step_index}/{steps} present={read_arm(driver)}")
     time.sleep(1.0)
+
+
+def glide(driver, label, angles_deg, steps=30, delay=0.10):
+    glide_raw(
+        driver,
+        label,
+        tuple(raw_goals(driver, angles_deg).values()),
+        steps=steps,
+        delay=delay,
+    )
+
+
+def require_hold_load(driver, stage):
+    load_raw = driver.get_load(6)
+    ratio = abs(load_raw) / LOAD_MAX_RAW
+    print(
+        f"[{stage}] gripper={driver.get_position(6)} " f"load_raw={load_raw} load_ratio={ratio:.4f}"
+    )
+    if ratio < MIN_HOLD_LOAD_RATIO:
+        raise RuntimeError(
+            f"{stage} 후 파지 부하 {ratio:.4f}가 임계값 "
+            f"{MIN_HOLD_LOAD_RATIO:.2f} 미만입니다. 현재 자세를 유지합니다"
+        )
+    return ratio
 
 
 def set_width(driver, width_mm):
@@ -113,10 +139,13 @@ def main():
     actual = read_arm(driver)
     safe_raw = raw_goals(driver, safe_pose)
     grasp_raw = raw_goals(driver, grasp_pose)
-    if not (near_pose(actual, safe_raw) or near_pose(actual, grasp_raw)):
+    idle_raw = {servo_id: IDLE_CRADLE_RAW[servo_id - 1] for servo_id in SERVO_IDS}
+    if not (
+        near_pose(actual, idle_raw) or near_pose(actual, safe_raw) or near_pose(actual, grasp_raw)
+    ):
         raise RuntimeError(
-            "시작 자세가 등록된 safe/grasp 자세와 다릅니다. 자동 이동하지 않습니다: "
-            f"actual={actual} safe={safe_raw} grasp={grasp_raw}"
+            "시작 자세가 등록된 idle/safe/grasp 자세와 다릅니다. 자동 이동하지 않습니다: "
+            f"actual={actual} idle={idle_raw} safe={safe_raw} grasp={grasp_raw}"
         )
 
     print(f"profile={args.profile} geometry={profile}")
@@ -171,7 +200,19 @@ def main():
             f"load_raw={load_raw} load_ratio={abs(load_raw) / LOAD_MAX_RAW:.4f}"
         )
 
-    confirm("5초 유지 성공을 확인했습니다. 물체를 파지 높이로 내리기")
+    require_hold_load(driver, "safe-145-hold")
+
+    confirm("파지가 유지됐습니다. 그리퍼는 닫은 채 CARRY_IDLE로 접기")
+    glide_raw(driver, "carry-idle", IDLE_CRADLE_RAW)
+    report(driver, "carry-idle")
+    require_hold_load(driver, "carry-idle")
+
+    confirm("CARRY_IDLE 파지가 유지됐습니다. 145mm 안전 자세로 다시 전개")
+    glide_raw(driver, "carry-return-safe", HORIZONTAL_SAFE_145_RAW)
+    report(driver, "carry-return-safe")
+    require_hold_load(driver, "carry-return-safe")
+
+    confirm("운반 자세 왕복 성공을 확인했습니다. 물체를 파지 높이로 내리기")
     glide(driver, "lower", grasp_pose)
 
     confirm("물체가 바닥에 안정적으로 닿았습니다. 그리퍼 열기")
