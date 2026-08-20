@@ -517,14 +517,16 @@ def cmd_calib(a: argparse.Namespace) -> None:
         # 기지점은 "자기 담당 절반의 네 귀퉁이" 다 — 가까운 변 두 점 + 경계 두 점.
         # 네 모서리를 다 쓰려고 하지 마라. 변 중앙 배치에서 반대편 절반은 프레임 밖이다.
         # 두 시야를 묶는 것은 점을 공유하는 게 아니라 같은 줄자 원점·같은 X 축을 쓰는 것이다.
-        near_y = 0 if a.cam_id == "A" else WORKSPACE_MM
+        side = a.side
+        half = side / 2
+        near_y = 0 if a.cam_id == "A" else side
         with open(points, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["name", "world_x", "world_y"])
             w.writerow(["near_x0", 0, near_y])
-            w.writerow(["near_x1", WORKSPACE_MM, near_y])
-            w.writerow(["boundary_x1", WORKSPACE_MM, HALF_MM])
-            w.writerow(["boundary_x0", 0, HALF_MM])
+            w.writerow(["near_x1", side, near_y])
+            w.writerow(["boundary_x1", side, half])
+            w.writerow(["boundary_x0", 0, half])
         print(f"[+] {points} 템플릿 생성. 실측값(mm)으로 고쳐서 다시 실행하세요.")
         print(f"    {a.cam_id} 담당 절반의 네 귀퉁이입니다 (가까운 변 2점 + 경계 2점).")
         print("    A · B 카메라가 같은 원점·같은 축을 써야 병합이 됩니다.")
@@ -565,8 +567,10 @@ def cmd_calib(a: argparse.Namespace) -> None:
                 "at": datetime.now().isoformat(timespec="seconds"),
                 "image": os.path.abspath(image),
                 "image_size": [img.shape[1], img.shape[0]],
-                "camera_height_mm": CAM_HEIGHT_MM,
-                "workspace_mm": WORKSPACE_MM,
+                "camera_height_mm": a.height,
+                "camera_setback_mm": a.setback,
+                "workspace_mm": a.side,
+                "rig_measured": _rig_differs(a),
                 "H": homography.tolist(),
                 "base_points": [
                     {
@@ -826,10 +830,15 @@ def cmd_report(_: argparse.Namespace) -> None:
     add("")
     add("| 항목 | 값 |")
     add("|---|---|")
-    add(f"| 작업 공간 | {WORKSPACE_MM / 1000:.1f} × {WORKSPACE_MM / 1000:.1f} m |")
-    add(f"| 카메라 | 환경 고정 · 높이 {CAM_HEIGHT_MM / 1000:.2f} m |")
+    ca = _load_json(calib_json("A")) or {}
+    side = ca.get("workspace_mm", WORKSPACE_MM)
+    height = ca.get("camera_height_mm", CAM_HEIGHT_MM)
+    setback = ca.get("camera_setback_mm", CAM_SETBACK_MM)
+    stamp = " *(실측)*" if ca.get("rig_measured") else " *(계획값 — 실측 미기입)*"
+    add(f"| 작업 공간 | {side / 1000:.2f} × {side / 1000:.2f} m{stamp} |")
+    add(f"| 카메라 | 환경 고정 · 높이 {height / 1000:.2f} m{stamp} |")
     add(f"| 배치 | {GEOMETRY_NOTE} |")
-    add(f"| 변 중앙 후퇴 | {CAM_SETBACK_MM / 1000:.2f} m · 하향 {CAM_PITCH_DEG}° |")
+    add(f"| 변 중앙 후퇴 | {setback / 1000:.2f} m{stamp} · 하향 {CAM_PITCH_DEG}° |")
     add(f"| 핀홀 초점거리 | {FOCAL_PX:.0f} px |")
     add(f"| 최악점 | 슬랜트 {WORST_SLANT_MM / 1000:.2f} m · 고도각 {WORST_ELEV_DEG}° |")
     add(f"| 최소 물체 폭 | {MIN_OBJECT_MM:.0f} mm (최악점 20 px 보장) |")
@@ -913,6 +922,21 @@ def _add_camera_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--height", type=int, default=720)
 
 
+def _add_rig_args(p: argparse.ArgumentParser) -> None:
+    """실제로 세운 값. 기본값은 계획값이고, 다르면 그 자리에서 넘기면 된다.
+
+    호모그래피 자체는 줄자로 찍은 기지점에서 나오므로 이 값에 의존하지 않는다.
+    기록용이다 — 나중에 "그날 실제로 어떻게 세웠나" 를 남기지 않으면 재현이 안 된다.
+    """
+    p.add_argument("--height", type=float, default=CAM_HEIGHT_MM, help="렌즈 높이 mm")
+    p.add_argument("--setback", type=float, default=CAM_SETBACK_MM, help="변 중앙 후퇴 mm")
+    p.add_argument("--side", type=float, default=WORKSPACE_MM, help="작업 공간 한 변 mm")
+
+
+def _rig_differs(a: argparse.Namespace) -> bool:
+    return (a.height, a.setback, a.side) != (CAM_HEIGHT_MM, CAM_SETBACK_MM, WORKSPACE_MM)
+
+
 def _add_cam_id(p: argparse.ArgumentParser) -> None:
     p.add_argument("--cam-id", choices=CAM_IDS, default="A", help="산출물 구분자")
 
@@ -941,6 +965,7 @@ def main() -> None:
 
     p = sub.add_parser("calib", help="기지점 4개로 호모그래피 계산")
     _add_cam_id(p)
+    _add_rig_args(p)
     p.add_argument("--image", default=None)
     p.add_argument("--points", default=None)
     p.add_argument("--make-template", action="store_true")
