@@ -29,9 +29,9 @@ def test_every_motion_stage_is_operator_gated():
     main = _function("main")
     names = _called_names(main)
 
-    assert names.count("confirm") == 9
+    assert names.count("confirm") == 10
     assert names.count("glide") == 6
-    assert names.count("set_width") == 3
+    assert names.count("set_width") == 4
 
 
 def test_unknown_start_pose_is_rejected_before_motion():

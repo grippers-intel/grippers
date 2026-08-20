@@ -21,6 +21,7 @@ SERVO_IDS = range(1, 6)
 LOAD_MAX_RAW = 1023.0
 MIN_HOLD_LOAD_RATIO = 0.04
 SAFE_START_TOLERANCE_RAW = 120
+RETRY_TIGHTEN_MM = 5.0
 
 
 def confirm(message):
@@ -125,7 +126,17 @@ def main():
     confirm("물체를 두 손가락 중앙에 놓고 손을 완전히 뺐습니다. 그리퍼 닫기")
     ratio = set_width(driver, profile.close_width_mm)
     if ratio < MIN_HOLD_LOAD_RATIO:
-        raise RuntimeError(f"파지 부하 {ratio:.4f}가 임계값 {MIN_HOLD_LOAD_RATIO:.2f} 미만입니다")
+        retry_width_mm = profile.close_width_mm - RETRY_TIGHTEN_MM
+        confirm(
+            f"파지 부하 {ratio:.4f}가 임계값 {MIN_HOLD_LOAD_RATIO:.2f} 미만입니다. "
+            f"물체가 중앙에 있고 손을 뺀 상태라면 {retry_width_mm:.1f}mm로 한 번 더 조이기"
+        )
+        ratio = set_width(driver, retry_width_mm)
+        if ratio < MIN_HOLD_LOAD_RATIO:
+            raise RuntimeError(
+                f"재조임 후에도 파지 부하 {ratio:.4f}가 임계값 "
+                f"{MIN_HOLD_LOAD_RATIO:.2f} 미만입니다. 상승하지 않습니다"
+            )
 
     midpoint = tuple(
         (grasp + safe) / 2.0 for grasp, safe in zip(grasp_pose, safe_pose, strict=True)
