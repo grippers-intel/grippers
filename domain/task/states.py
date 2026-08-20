@@ -20,7 +20,7 @@ from domain.values import MissionContext, MissionMode, Point3, Pose2D
 # ── 실측/미실측 상수 ─────────────────────────────────────────────────────
 # 그리퍼 개구 폭은 2026-08-20 실측 완료. 나머지 좌표/임계값은 TODO이며,
 # 하드코딩된 값을 이 블록 한 곳에 모아 실측 후 교체한다.
-OPEN_MM = 170.0
+OPEN_MM = 168.0
 CLOSED_MM = 9.0
 GRASP_APPROACH_HEIGHT_M = 0.10  # TODO: 실측 — 파지 하강 전 안전 여유 높이
 INSERT_DROP_HEIGHT_M = 0.05  # TODO: 실측 — 상자 입구 상단에서 투입 낙차 높이

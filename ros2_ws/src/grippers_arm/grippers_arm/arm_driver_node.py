@@ -37,33 +37,17 @@ from std_srvs.srv import Trigger
 # 둬서(내부 모듈끼리 flat import 되게) 그 다음부터 real/driver_sdk를 이렇게 바로
 # 가져올 수 있다 — 반드시 soarm_lab import 다음에 와야 한다.
 from soarm_lab import arm as soarm
-from driver_sdk import JOINT_LIMITS, position_from_fraction
 from real import RealBackend
+
+from .gripper_calibration import (
+    GRIPPER_CLOSED_MM,
+    GRIPPER_OPEN_MM,
+    position_from_width,
+)
 
 WRIST_SERVO_ID = 4
 GRIPPER_SERVO_ID = 6
 ALL_SERVO_IDS = range(1, 7)
-
-# 2026-08-20 SO-ARM101 실측 안전 개구 폭(핑거 안쪽 면 사이 거리).
-# servo 6 goal 1150 ↔ 2000에 각각 대응하며 count 증가는 OPEN 방향이다.
-# domain/task/states.py의 OPEN_MM/CLOSED_MM과 반드시 같은 값을 유지할 것 —
-# 도메인 계층이 이 범위로 폭(mm)을 계산해 보내므로, 여기서 다른 범위로
-# 해석하면 "닫으라고 보낸 명령이 살짝 벌어진 채로 멈추는" 식의 조용한
-# 단위 불일치가 생긴다.
-GRIPPER_CLOSED_MM = 9.0
-GRIPPER_OPEN_MM = 170.0
-GRIPPER_CLOSED_RAW = 1150
-GRIPPER_OPEN_RAW = 2000
-
-# JOINT_LIMITS[6]의 third-party 기본값은 다른 SO-ARM101 조립체용이며 이 저장소의
-# 실측값이 아니다. 서브모듈을 fork하지 않고 arm adapter 경계에서 servo 6 범위만
-# override한다. kind/rad 범위 등 공통 메타데이터는 보존한다.
-GRIPPER_JOINT_LIMIT = {
-    **JOINT_LIMITS[GRIPPER_SERVO_ID],
-    "min": GRIPPER_CLOSED_RAW,
-    "max": GRIPPER_OPEN_RAW,
-    "flip": False,
-}
 
 # STS3215 PRESENT_LOAD 는 하위 10비트가 크기(0~1023), 0x400 비트가 방향이다
 # (third_party/soarm_provided_d/soarm_lab/driver_sdk.py get_load).
@@ -313,8 +297,7 @@ class ArmDriverNode(Node):
 
     def _on_set_gripper(self, request, response):
         width_mm = max(GRIPPER_CLOSED_MM, min(GRIPPER_OPEN_MM, request.width_mm))
-        fraction = (width_mm - GRIPPER_CLOSED_MM) / (GRIPPER_OPEN_MM - GRIPPER_CLOSED_MM)
-        raw_position = position_from_fraction(fraction, GRIPPER_JOINT_LIMIT)
+        raw_position = position_from_width(width_mm)
         try:
             self._require_operational_servos((GRIPPER_SERVO_ID,))
 
