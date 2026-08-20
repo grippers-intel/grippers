@@ -88,3 +88,11 @@ def test_every_object_profile_has_a_horizontal_arm_pose():
     )
     assert module.HORIZONTAL_GRASP_POSES_DEG["chess_queen"][1] == 91.23
     assert module.HORIZONTAL_GRASP_POSES_DEG["chess_knight"][1] == 86.10
+
+
+def test_idle_cradle_and_transition_waypoints_match_measured_contract():
+    module = _load_profiles()
+
+    assert module.IDLE_CRADLE_RAW == (2045, 823, 3099, 2272, 3088)
+    assert module.VERTICAL_SAFE_OVERHEAD_DEG == (0.0, 9.2, 20.8, 55.3, 0.4)
+    assert module.HORIZONTAL_OVERHEAD_RAW == (2044, 2712, 2380, 1000, 3006)

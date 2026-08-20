@@ -44,7 +44,13 @@ from .gripper_calibration import (
     GRIPPER_OPEN_MM,
     position_from_width,
 )
-from .floor_grasp_profiles import HORIZONTAL_GRASP_POSES_DEG, HORIZONTAL_SAFE_140_DEG
+from .floor_grasp_profiles import (
+    HORIZONTAL_GRASP_POSES_DEG,
+    HORIZONTAL_OVERHEAD_RAW,
+    HORIZONTAL_SAFE_140_DEG,
+    IDLE_CRADLE_RAW,
+    VERTICAL_SAFE_OVERHEAD_DEG,
+)
 
 WRIST_SERVO_ID = 4
 GRIPPER_SERVO_ID = 6
@@ -66,8 +72,9 @@ FLOOR_POSE_STEPS = 30
 FLOOR_POSE_STEP_SEC = 0.10
 FLOOR_POSE_SETTLE_SEC = 1.0
 MAX_FLOOR_POSE_SERVO2_TEMP_C = 40
+FLOOR_POSE_START_TOLERANCE_RAW = 120
 
-CRADLE_XYZ_M = [0.15, 0.0, 0.20]  # TODO: 실측 — 이동용 거치 자세 손끝 좌표
+CRADLE_XYZ_M = [0.15, 0.0, 0.20]  # TODO: INSERT 후 복귀 경로 별도 실측 필요
 
 # MentorPi 베이스 보드가 잡는 장치. arm_port가 이걸 가리키면 팔 드라이버가
 # 베이스 보드의 시리얼을 열어 버려 주행 명령이 통째로 깨진다.
@@ -313,7 +320,7 @@ class ArmDriverNode(Node):
         try:
             if req.profile not in HORIZONTAL_GRASP_POSES_DEG:
                 raise ValueError(f"알 수 없는 수평 파지 profile: {req.profile}")
-            if req.stage not in {"safe", "grasp", "midpoint"}:
+            if req.stage not in {"idle", "safe", "grasp", "midpoint"}:
                 raise ValueError(f"알 수 없는 수평 파지 stage: {req.stage}")
 
             self._require_operational_servos(range(1, 6))
@@ -329,18 +336,7 @@ class ArmDriverNode(Node):
                         f"{MAX_FLOOR_POSE_SERVO2_TEMP_C}°C"
                     )
 
-            grasp = HORIZONTAL_GRASP_POSES_DEG[req.profile]
-            if req.stage == "safe":
-                angles_deg = HORIZONTAL_SAFE_140_DEG
-            elif req.stage == "grasp":
-                angles_deg = grasp
-            else:
-                angles_deg = tuple(
-                    (low + safe) / 2.0
-                    for low, safe in zip(grasp, HORIZONTAL_SAFE_140_DEG, strict=True)
-                )
-
-            self._glide_to_joint_angles(backend, angles_deg)
+            self._move_floor_stage(backend, req.profile, req.stage)
             self._require_operational_servos(range(1, 6))
             result.reached = True
             goal_handle.succeed()
@@ -356,13 +352,17 @@ class ArmDriverNode(Node):
 
     def _glide_to_joint_angles(self, backend, angles_deg) -> None:
         """실측 시험과 같은 선형 waypoint로 servo 1..5를 천천히 이동한다."""
-        start = {servo_id: backend.drv.get_position(servo_id) for servo_id in range(1, 6)}
-        if any(position is None for position in start.values()):
-            raise ArmHardwareUnavailableError(f"시작 관절 위치 읽기 실패: {start}")
         goal = {
             servo_id: backend.drv.degrees_to_position(angles_deg[servo_id - 1])
             for servo_id in range(1, 6)
         }
+        self._glide_to_raw_positions(backend, goal)
+
+    def _glide_to_raw_positions(self, backend, goal) -> None:
+        """servo 1..5 raw 목표로 선형 보간 이동한다."""
+        start = {servo_id: backend.drv.get_position(servo_id) for servo_id in range(1, 6)}
+        if any(position is None for position in start.values()):
+            raise ArmHardwareUnavailableError(f"시작 관절 위치 읽기 실패: {start}")
 
         for step_index in range(1, FLOOR_POSE_STEPS + 1):
             ratio = step_index / FLOOR_POSE_STEPS
@@ -374,6 +374,68 @@ class ArmDriverNode(Node):
                     )
             time.sleep(FLOOR_POSE_STEP_SEC)
         time.sleep(FLOOR_POSE_SETTLE_SEC)
+
+    def _raw_goals(self, backend, angles_deg):
+        return {
+            servo_id: backend.drv.degrees_to_position(angles_deg[servo_id - 1])
+            for servo_id in range(1, 6)
+        }
+
+    @staticmethod
+    def _tuple_goals(raw_positions):
+        return {servo_id: raw_positions[servo_id - 1] for servo_id in range(1, 6)}
+
+    @staticmethod
+    def _near_pose(actual, expected):
+        return all(
+            abs(actual[servo_id] - expected[servo_id]) <= FLOOR_POSE_START_TOLERANCE_RAW
+            for servo_id in range(1, 6)
+        )
+
+    def _move_floor_stage(self, backend, profile, stage) -> None:
+        """검증된 자세 사이에서만 움직이고 IDLE 전환은 중간 waypoint를 거친다."""
+        actual = {servo_id: backend.drv.get_position(servo_id) for servo_id in range(1, 6)}
+        if any(position is None for position in actual.values()):
+            raise ArmHardwareUnavailableError(f"현재 관절 위치 읽기 실패: {actual}")
+
+        idle = self._tuple_goals(IDLE_CRADLE_RAW)
+        vertical = self._raw_goals(backend, VERTICAL_SAFE_OVERHEAD_DEG)
+        horizontal = self._tuple_goals(HORIZONTAL_OVERHEAD_RAW)
+        safe = self._raw_goals(backend, HORIZONTAL_SAFE_140_DEG)
+        grasp = self._raw_goals(backend, HORIZONTAL_GRASP_POSES_DEG[profile])
+        midpoint = {
+            servo_id: round((grasp[servo_id] + safe[servo_id]) / 2.0) for servo_id in range(1, 6)
+        }
+
+        if stage == "idle":
+            if self._near_pose(actual, idle):
+                return
+            if not self._near_pose(actual, safe):
+                raise ValueError("idle 복귀는 140 mm safe 자세에서만 시작할 수 있습니다")
+            for waypoint in (horizontal, vertical, idle):
+                self._glide_to_raw_positions(backend, waypoint)
+            return
+
+        if stage == "safe":
+            if self._near_pose(actual, idle):
+                for waypoint in (vertical, horizontal, safe):
+                    self._glide_to_raw_positions(backend, waypoint)
+                return
+            if self._near_pose(actual, grasp):
+                self._glide_to_raw_positions(backend, midpoint)
+                self._glide_to_raw_positions(backend, safe)
+                return
+            if self._near_pose(actual, midpoint):
+                self._glide_to_raw_positions(backend, safe)
+                return
+            if self._near_pose(actual, safe):
+                return
+            raise ValueError("safe 이동 시작 자세가 등록된 idle/grasp/midpoint가 아닙니다")
+
+        expected_start = safe if stage == "grasp" else grasp
+        if not self._near_pose(actual, expected_start):
+            raise ValueError(f"{stage} 이동 시작 자세가 등록된 이전 단계가 아닙니다")
+        self._glide_to_raw_positions(backend, grasp if stage == "grasp" else midpoint)
 
     def _on_set_gripper(self, request, response):
         width_mm = max(GRIPPER_CLOSED_MM, min(GRIPPER_OPEN_MM, request.width_mm))

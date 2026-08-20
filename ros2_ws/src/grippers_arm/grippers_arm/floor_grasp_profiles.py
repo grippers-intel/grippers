@@ -42,6 +42,14 @@ HORIZONTAL_CHESS_ROOK_45_DEG = (-1.67, 93.87, -6.32, -88.06, 84.30)
 HORIZONTAL_CHESS_QUEEN_50_DEG = (-1.67, 91.23, -3.04, -88.70, 84.30)
 HORIZONTAL_CHESS_KNIGHT_60_DEG = (-1.67, 86.10, 3.06, -89.67, 84.30)
 
+# 2026-08-20 실측 저부하 빈손 이동 자세. servo 1..5 raw를 그대로 보존한다.
+# torque를 현재 위치에 latch한 뒤 관절 load가 모두 0인 것을 확인했다.
+IDLE_CRADLE_RAW = (2045, 823, 3099, 2272, 3088)
+
+# IDLE_CRADLE과 수평 자세 사이에서 차체 접촉 없이 검증한 중간 waypoint.
+VERTICAL_SAFE_OVERHEAD_DEG = (0.0, 9.2, 20.8, 55.3, 0.4)
+HORIZONTAL_OVERHEAD_RAW = (2044, 2712, 2380, 1000, 3006)
+
 HORIZONTAL_GRASP_POSES_DEG = {
     "cube": HORIZONTAL_GABE_LOW_20_DEG,
     "star_column": HORIZONTAL_GABE_LOW_20_DEG,
