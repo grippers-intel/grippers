@@ -18,6 +18,7 @@ ARM_NODE = (
     / "grippers_arm"
     / "arm_driver_node.py"
 )
+DOMAIN_STATES = pathlib.Path(__file__).resolve().parent.parent / "domain" / "task" / "states.py"
 
 
 def _parse():
@@ -33,6 +34,18 @@ def _function(name):
         for node in ast.walk(_parse())
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
     )
+
+
+def _module_constants(path, names):
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return {
+        node.targets[0].id: ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id in names
+    }
 
 
 def _calls(node):
@@ -106,6 +119,37 @@ def test_gripper_checks_servo_and_position_write_result():
 
     assert "_require_operational_servos" in names
     assert "set_position" in names
+
+
+def test_gripper_calibration_matches_measured_safe_contract():
+    arm = _module_constants(
+        ARM_NODE,
+        {
+            "GRIPPER_CLOSED_MM",
+            "GRIPPER_OPEN_MM",
+            "GRIPPER_CLOSED_RAW",
+            "GRIPPER_OPEN_RAW",
+        },
+    )
+    domain = _module_constants(DOMAIN_STATES, {"CLOSED_MM", "OPEN_MM"})
+
+    assert arm == {
+        "GRIPPER_CLOSED_MM": 9.0,
+        "GRIPPER_OPEN_MM": 170.0,
+        "GRIPPER_CLOSED_RAW": 1150,
+        "GRIPPER_OPEN_RAW": 2000,
+    }
+    assert domain == {"CLOSED_MM": 9.0, "OPEN_MM": 170.0}
+
+
+def test_gripper_uses_application_calibration_not_third_party_defaults():
+    fn = _function("_on_set_gripper")
+    position_call = next(
+        call for call in _calls(fn) if _called_name(call) == "position_from_fraction"
+    )
+
+    assert isinstance(position_call.args[1], ast.Name)
+    assert position_call.args[1].id == "GRIPPER_JOINT_LIMIT"
 
 
 def test_hold_position_does_not_use_lossy_bulk_torque_helper():
