@@ -48,3 +48,10 @@ def test_operator_can_abort_before_next_transition():
 
     assert "input" in names
     assert "KeyboardInterrupt" in names
+
+
+def test_retry_width_is_clamped_to_calibrated_closed_limit():
+    main = _function("main")
+    names = _called_names(main)
+
+    assert "max" in names

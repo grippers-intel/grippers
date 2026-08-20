@@ -32,6 +32,8 @@ def test_floor_grasp_profiles_match_measured_object_geometry():
     assert profiles["star_column"].object_width_mm == 45.0
     assert profiles["star_column"].close_width_mm == 35.0
     assert profiles["soccer_polyhedron"].object_width_mm == 46.0
+    assert profiles["chess_rook"].close_width_mm == 15.0
+    assert all(profile.preopen_width_mm == 80.0 for profile in profiles.values())
     assert (
         profiles["chess_knight"].object_width_mm,
         profiles["chess_knight"].grasp_center_height_mm,
