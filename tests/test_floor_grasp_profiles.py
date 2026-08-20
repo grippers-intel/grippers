@@ -28,6 +28,7 @@ def test_floor_grasp_profiles_match_measured_object_geometry():
         40.0,
         20.0,
     )
+    assert profiles["cube"].close_width_mm == 30.0
     assert profiles["star_column"].object_width_mm == 45.0
     assert profiles["soccer_polyhedron"].object_width_mm == 46.0
     assert (
@@ -67,3 +68,18 @@ def test_horizontal_arm_poses_keep_gabe_and_chess_heights_separate():
     assert module.HORIZONTAL_CHESS_MID_40_DEG == (-1.67, 96.57, -9.79, -87.29, 84.30)
     assert module.HORIZONTAL_GABE_LOW_20_DEG == (-1.39, 95.70, -18.16, -68.88, 84.18)
     assert module.HORIZONTAL_CHESS_MID_40_DEG != module.HORIZONTAL_GABE_LOW_20_DEG
+
+
+def test_every_object_profile_has_a_horizontal_arm_pose():
+    module = _load_profiles()
+
+    assert set(module.HORIZONTAL_GRASP_POSES_DEG) == set(module.FLOOR_GRASP_PROFILES)
+    assert module.HORIZONTAL_GRASP_POSES_DEG["chess_rook"] == (
+        -1.67,
+        93.87,
+        -6.32,
+        -88.06,
+        84.30,
+    )
+    assert module.HORIZONTAL_GRASP_POSES_DEG["chess_queen"][1] == 91.23
+    assert module.HORIZONTAL_GRASP_POSES_DEG["chess_knight"][1] == 86.10
