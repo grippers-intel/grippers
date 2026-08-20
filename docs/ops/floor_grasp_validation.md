@@ -167,7 +167,10 @@ servo 2 온도가 시작 42 °C에서 종료 44 °C까지 상승했으므로 다
 요구 자세는 손가락의 긴 방향과 두 손끝을 이은 닫힘축을 모두 바닥과 평행하게 두고
 물체 옆에서 가로로 무는 측면 파지다. 6개 프로필의 상승·유지 시험이 끝났으므로 FSM의
 기본 경로는 `MoveToFloorPose(profile, stage)`로 검증된 관절 자세를 호출한다. 순서는
-`safe(140 mm) → 80 mm 개방 → grasp → 닫기 → midpoint 부하 재검증 → safe`다.
+`safe(145 mm) → 80 mm 개방 → grasp → 닫기 → midpoint 부하 재검증 → safe →
+CARRY_IDLE`이다. 큐브 실측에서 SAFE_145→IDLE 직선 전환 전체 구간 동안 gripper
+load_ratio가 0.1056으로 유지됐고 servo 2 load는 196에서 64로 감소했다. 수평 기본
+경로는 수직 상공 waypoint를 거치지 않으며 수직 자세는 수직 fallback에만 쓴다.
 
 YOLO subtype이 들어오기 전에는 검출 바닥면 폭으로 프로필을 고른다. 가베 40 mm는
 cube, 그보다 넓으면 별기둥과 같은 자세/닫힘값을 쓰는 soccer_polyhedron을 선택한다.

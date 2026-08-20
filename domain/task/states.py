@@ -25,7 +25,6 @@ OPEN_MM = 168.0
 CLOSED_MM = 9.0
 GRASP_APPROACH_HEIGHT_M = 0.10  # TODO: 실측 — 파지 하강 전 안전 여유 높이
 MIN_GRIPPER_CLEARANCE_M = 0.14  # 실측 요구 — 베이스 이동 전 바닥부터 파지 중심 높이
-INSERT_DROP_HEIGHT_M = 0.05  # TODO: 실측 — 상자 입구 상단에서 투입 낙차 높이
 HANDOVER_POINT_M = Point3(x=0.30, y=0.0, z=0.35)  # TODO: 실측 — 사용자 인계 손끝 위치
 HANDOVER_LOAD_THRESHOLD = 0.05  # TODO: 실측 — '사람이 받아감' 판정 부하 임계값
 PUT_DOWN_POINT_M = Point3(x=0.30, y=0.0, z=0.0)  # TODO: 실측 — REJECT 시 안전한 내려놓기 위치
@@ -261,6 +260,13 @@ class GraspState(State):
         held = lifted and ports.arm.get_load() >= self.LOAD_THRESHOLD
         cleared = held and ports.arm.move_to_floor_pose(plan.profile, "safe")
         if cleared:
+            # 물체를 든 채 SAFE_145 → IDLE 관절 자세로 직접 접는 경로를 큐브로
+            # 실측했다. servo 2 load가 196 → 64로 줄고 gripper load는 0.1056으로
+            # 유지됐다. CARRY_IDLE 도달과 파지 재검증 전에는 베이스가 움직이면 안 된다.
+            if not ports.arm.move_to_floor_pose(plan.profile, "idle"):
+                return EstopState()
+            if ports.arm.get_load() < self.LOAD_THRESHOLD:
+                return EstopState()
             if self.ctx.spec.mode is MissionMode.TIDY:
                 return TransportState(self.ctx, self.target)
             return DeliverState(self.ctx, self.target)
@@ -404,20 +410,18 @@ class InsertState(State):
 
     def execute(self, ports):
         ports.base.stop()
-        settled = ports.arm.reorient(self.phi_rad)
-        if not settled:
-            return RejectState(self.ctx, self.target, "자세 정착 실패")
-
         clearance = ports.perception.monitor_clearance()
         if clearance.contact_risk:
             return RejectState(self.ctx, self.target, "투입 중 접촉 위험")
 
-        # TODO: 실측 — 실제 삽입 지점은 box.pose_m + 낙차 오프셋을 IK로 풀어야
-        # 한다. 실측 전까지는 상자 위치 + 고정 낙차 높이를 그대로 쓴다.
-        insert_point = Point3(x=self.box.pose_m.x, y=self.box.pose_m.y, z=INSERT_DROP_HEIGHT_M)
-        ports.arm.move_to_cartesian(insert_point, down=True)
+        # 바구니에서는 바닥 파지 높이로 내려가지 않는다. CARRY_IDLE에서 검증된
+        # SAFE_145로 전개한 뒤 개구 중심 위에서 그리퍼만 열어 낙하시킨다.
+        plan = select_horizontal_grasp_plan(self.target)
+        if not ports.arm.move_to_floor_pose(plan.profile, "safe"):
+            return EstopState()
         ports.arm.set_gripper(OPEN_MM)
-        ports.arm.fold_to_cradle()
+        if not ports.arm.move_to_floor_pose(plan.profile, "idle"):
+            return EstopState()
         return ScanState(self.ctx.complete(self.target.track_id))
 
 
