@@ -58,6 +58,24 @@
 퀸 50 mm, 나이트 60 mm로 각각 올려야 한다. 아직 세 자세 모두 FSM 기본 경로에는
 연결하지 않는다.
 
+### 대화형 실기 시험
+
+`tools/horizontal_grasp_hardware_test.py`는 모든 물리 동작 전에 Enter를 기다린다.
+`q`를 입력하면 다음 동작 전에 현재 자세를 유지한 채 중단한다. 시작 자세가 등록된
+140 mm 안전 자세 또는 선택한 파지 자세에서 120 raw count 이상 벗어나면 자동 이동하지
+않는다.
+
+```bash
+cd ~/docker/shared/grippers
+PYTHONPATH=third_party/soarm_provided_d/soarm_lab:ros2_ws/src/grippers_arm \
+python3 tools/horizontal_grasp_hardware_test.py cube
+```
+
+지원 프로파일은 `cube`, `star_column`, `soccer_polyhedron`, `chess_rook`,
+`chess_queen`, `chess_knight`다. 순서는 안전 자세, 개방, 파지 자세, 닫힘, 중간 상승,
+140 mm 상승 및 5초 유지, 하강, 놓기, 안전 자세 복귀다. 물체 배치와 제거는 스크립트가
+명시적으로 안내하며 운영자가 Enter를 눌러야 다음 단계로 진행한다.
+
 ## 아직 확정하지 않은 사항
 
 요구 자세는 손가락의 긴 방향을 바닥과 평행하게 두고 물체 옆에서 가로로 무는
