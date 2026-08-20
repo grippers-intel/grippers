@@ -103,7 +103,7 @@ sequenceDiagram
     Note over T,A: 부하 기반 파지 검증 — 힘 센서 없음
 
     loop 대상 1개 기준 · attempt ≤ MAX_GRASP_RETRY (3)
-        T->>A: move_to_floor_pose(profile, safe=140 mm)
+        T->>A: move_to_floor_pose(profile, safe=145 mm; minimum=140 mm)
         T->>A: set_gripper(80 mm)
         T->>A: move_to_floor_pose(profile, grasp)
         T->>A: set_gripper(profile.close_width_mm)
@@ -113,7 +113,7 @@ sequenceDiagram
         alt load_ratio ≥ LOAD_THRESHOLD
             T->>A: move_to_floor_pose(profile, midpoint)
             T->>A: get_load()
-            T->>A: move_to_floor_pose(profile, safe=140 mm)
+            T->>A: move_to_floor_pose(profile, safe=145 mm; minimum=140 mm)
             Note right of A: 중간 부하 유지 + 140 mm 도달 → TRANSPORT / DELIVER
         else load_ratio < LOAD_THRESHOLD
             Note right of A: 빈손 — 그리퍼가 끝까지 닫힘
