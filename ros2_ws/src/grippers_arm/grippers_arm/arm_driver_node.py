@@ -73,6 +73,11 @@ FLOOR_POSE_SETTLE_SEC = 1.0
 MAX_FLOOR_POSE_SERVO2_TEMP_C = 40
 FLOOR_POSE_START_TOLERANCE_RAW = 120
 
+# 기동 시 IDLE 대비 편차를 로그로만 남기는 임계값 — 절대 자동 이동의 기준이
+# 아니다. tools/align_to_idle.py가 실제 정렬을 담당한다.
+IDLE_OFFSET_WARN_RAW = 120
+IDLE_OFFSET_ERROR_RAW = 800
+
 CRADLE_XYZ_M = [0.15, 0.0, 0.20]  # TODO: INSERT 후 복귀 경로 별도 실측 필요
 
 # MentorPi 베이스 보드가 잡는 장치. arm_port가 이걸 가리키면 팔 드라이버가
@@ -113,6 +118,7 @@ class ArmDriverNode(Node):
             soarm._real,
             enable_torque_on_start=enable_torque_on_start,
         )
+        self._log_idle_offset(soarm._real)
 
         self._move_action_server = ActionServer(
             self,
@@ -211,6 +217,52 @@ class ArmDriverNode(Node):
             )
 
         self.get_logger().info("SO-ARM101 torque enable 완료")
+
+    def _log_idle_offset(self, backend) -> None:
+        """기동 시 현재 자세와 IDLE 사이 편차를 로그로만 남긴다 — 절대 서보를
+        움직이지 않는다. 정렬은 사람이 tools/align_to_idle.py로 실행한다.
+
+        use_fake_arm 파라미터가 로그가 없어 며칠간 묻힌 사고(#128)의 재발
+        방지책이다: 안전 관련 상태는 반드시 실제 값을 로그로 남긴다."""
+        targets = {servo_id: IDLE_CRADLE_RAW[servo_id - 1] for servo_id in range(1, 6)}
+        targets[GRIPPER_SERVO_ID] = position_from_width(GRIPPER_CLOSED_MM)
+
+        offsets = {}
+        unreadable = []
+        for servo_id, target in targets.items():
+            present = backend.drv.get_position(servo_id)
+            if present is None:
+                unreadable.append(servo_id)
+                continue
+            offsets[servo_id] = present - target
+
+        if unreadable:
+            self.get_logger().error(
+                f"IDLE offset 확인 실패 — present position 읽기 불가 servo IDs: {unreadable}"
+            )
+        if not offsets:
+            return
+
+        summary = " ".join(f"s{sid}={offsets[sid]:+d}" for sid in sorted(offsets))
+
+        breaches = {sid: off for sid, off in offsets.items() if abs(off) > IDLE_OFFSET_WARN_RAW}
+        if not breaches:
+            self.get_logger().info(f"IDLE offset: {summary} -> OK")
+            return
+
+        self.get_logger().warn(f"IDLE offset: {summary}")
+        for servo_id in sorted(breaches):
+            offset = breaches[servo_id]
+            if abs(offset) > IDLE_OFFSET_ERROR_RAW:
+                self.get_logger().error(
+                    f"ERROR: s{servo_id} offset {offset:+d} exceeds {IDLE_OFFSET_ERROR_RAW}. "
+                    "Run tools/align_to_idle.py before motion tests."
+                )
+            else:
+                self.get_logger().warn(
+                    f"WARN: s{servo_id} offset {offset:+d} exceeds {IDLE_OFFSET_WARN_RAW}. "
+                    "Run tools/align_to_idle.py before motion tests."
+                )
 
     def _require_operational_servos(self, servo_ids=ALL_SERVO_IDS) -> None:
         """모션 전후 대상 서보가 통신 가능하고 torque ON인지 확인한다."""

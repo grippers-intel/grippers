@@ -202,6 +202,30 @@ def test_load_read_failure_is_logged():
     assert "warn" in names
 
 
+def test_startup_logs_idle_offset_but_never_moves_a_servo():
+    init = _function("__init__")
+    names = [_called_name(call) for call in _calls(init)]
+
+    assert "_log_idle_offset" in names
+    assert names.index("_check_startup_torque") < names.index("_log_idle_offset")
+
+
+def test_idle_offset_logging_reads_position_and_never_writes_it():
+    fn = _function("_log_idle_offset")
+    names = [_called_name(call) for call in _calls(fn)]
+
+    assert "get_position" in names
+    assert "set_position" not in names
+    assert "set_torque" not in names
+    assert {"info", "warn", "error"} & set(names)
+
+
+def test_idle_offset_thresholds_match_documented_warn_and_error_levels():
+    constants = _module_constants(ARM_NODE, {"IDLE_OFFSET_WARN_RAW", "IDLE_OFFSET_ERROR_RAW"})
+
+    assert constants == {"IDLE_OFFSET_WARN_RAW": 120, "IDLE_OFFSET_ERROR_RAW": 800}
+
+
 def test_startup_hardware_failure_is_caught_by_main():
     main = _function("main")
 
