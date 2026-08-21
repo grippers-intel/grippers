@@ -54,6 +54,14 @@ MAX_START_SERVO2_TEMP_C = 40
 
 # 끼임 감지: 이만큼 스텝 동안 진전(prior_error - current_error)이 잡음 여유
 # STALL_PROGRESS_RAW를 넘지 못하면 끼임으로 본다.
+#
+# 이 값은 "스텝당 최소 유의미 진전"이지 "정렬 성공 판정 기준"이 아니다 —
+# 그건 --tolerance(기본 120, DEFAULT_TOLERANCE_RAW)가 담당한다. 실기
+# (2026-08-21)에서 offset=6인 서보가 12스텝 보간의 반올림 격자상 스텝마다
+# 동일한 waypoint를 받아 "진전 없음"으로 오판, 이미 최종 허용치 안에
+# 들어와 있는데도 JamDetected가 나는 걸 확인했다. glide_to_targets가
+# current_error를 STALL_PROGRESS_RAW가 아니라 tolerance와 비교해 "이미
+# 충분히 가깝다"를 먼저 걸러내는 이유가 이것.
 STALL_STEPS = 2
 STALL_PROGRESS_RAW = 2
 
@@ -148,12 +156,19 @@ def glide_to_targets(
     settle=DEFAULT_SETTLE_SEC,
     stall_steps=STALL_STEPS,
     stall_progress=STALL_PROGRESS_RAW,
+    tolerance=DEFAULT_TOLERANCE_RAW,
 ):
     """선형 보간 이동. 스텝마다 present를 읽어 로그로 출력한다.
 
     목표에 유의미하게 못 미친 채(오차가 stall_progress보다 큰 채) 진전이
     stall_steps 스텝 연속 없으면 즉시 중단한다 — 전 서보를 현재 위치로
-    goal 고정하고 어느 서보가 걸렸는지 담아 JamDetected를 낸다."""
+    goal 고정하고 어느 서보가 걸렸는지 담아 JamDetected를 낸다.
+
+    단, current_error가 이미 tolerance(최종 허용치) 이내면 그 서보는 스텝
+    진전 여부와 무관하게 "이미 다 왔다"로 보고 stall 판정에서 뺀다. 총
+    오프셋이 작으면(예: 6 raw를 12스텝으로 보간) 반올림 격자상 연속 스텝의
+    waypoint가 같은 값이 되어 stall_progress(2)보다 미세하게 낮은 진전만
+    보일 수 있는데, 이건 끼임이 아니라 애초에 옮길 게 거의 없었던 것이다."""
     servo_ids = list(targets)
     prior_error = {servo_id: abs(start[servo_id] - targets[servo_id]) for servo_id in servo_ids}
     stall_counts = dict.fromkeys(servo_ids, 0)
@@ -177,7 +192,7 @@ def glide_to_targets(
             if position is None:
                 continue
             current_error = abs(position - targets[servo_id])
-            if current_error <= stall_progress:
+            if current_error <= tolerance:
                 stall_counts[servo_id] = 0
                 prior_error[servo_id] = current_error
                 continue
@@ -252,7 +267,9 @@ def main(argv=None):
         driver.set_acceleration(servo_id, ACCELERATION_RAW)
 
     try:
-        final = glide_to_targets(driver, start, targets, steps=args.steps, settle=args.settle)
+        final = glide_to_targets(
+            driver, start, targets, steps=args.steps, settle=args.settle, tolerance=args.tolerance
+        )
     except JamDetected as e:
         print(f"[align] 끼임 감지 — 중단: {e}", file=sys.stderr)
         return 2

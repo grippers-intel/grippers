@@ -167,6 +167,21 @@ def test_goal_latches_to_present_before_interpolated_motion(monkeypatch):
     assert any(pos != original_positions[sid] for sid, pos in later_calls)
 
 
+def test_small_offset_within_tolerance_does_not_false_jam(monkeypatch):
+    # Real-hardware regression (2026-08-21): a 6-raw offset over the default
+    # 12-step glide rounds to identical consecutive waypoints, so a servo
+    # that never visibly moves used to trip JamDetected even though 6 is
+    # nowhere near the 120-raw acceptance tolerance. Simulate the worst
+    # case — the servo never moves at all, from the very first write.
+    targets, positions = _at_target({2: 6})
+    driver = FakeDriver(positions, jam_servo=2, jam_after_calls=0)
+    monkeypatch.setattr(align, "_connect", lambda port: driver)
+
+    code = align.main(["--port", "/dev/fake", "--settle", "0"])
+
+    assert code == 0
+
+
 def test_jam_stops_after_two_stalled_steps(monkeypatch):
     targets, positions = _at_target({1: 180, 4: -400})
     driver = FakeDriver(positions, jam_servo=4, jam_after_calls=1)
