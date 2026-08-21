@@ -31,6 +31,11 @@ from grippers_interfaces.srv import (
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 
+# 클래스 이름·매핑은 hailo_scan_mapping.py로 뽑았다 — rclpy 없이 순수 pytest로
+# 테스트하려면(2026-08-22, PR #185 리뷰 후속) 이 파일 밖에 둬야 한다.
+# perception_node.py는 rclpy를 무조건 import해서 ROS2 없이는 아예 못 불러온다.
+from grippers_perception.hailo_scan_mapping import HAILO_CLASS_NAMES, object_class_for_hailo_id
+
 try:
     from cv_bridge import CvBridge
     from sensor_msgs.msg import Image
@@ -99,16 +104,8 @@ CONFIRM_GRASP_DIFF_THRESHOLD_DEFAULT = 6.0
 SCAN_FLOOR_ENABLED_DEFAULT = False
 HAILO_HEF_PATH_DEFAULT = "/tmp/best_640.hef"
 HAILO_SCORE_THRESHOLD = 0.35
-HAILO_CLASS_TO_OBJECT_CLASS = {
-    "knight": "CHESS_PIECE",
-    "queen": "CHESS_PIECE",
-    "rook": "CHESS_PIECE",
-    "soccer": "GABE",
-    "star": "GABE",
-    # "container", "box": 목적지 상자로 추정 — 바닥 스캔 후보에서 제외.
-}
-# metadata.yaml의 names 순서 — HEF가 바뀌면 같이 바꿀 것.
-HAILO_CLASS_NAMES = ["container", "knight", "queen", "rook", "box", "soccer", "star"]
+# HAILO_CLASS_NAMES · 클래스 매핑은 hailo_scan_mapping.py 참고 (모듈 상단 import).
+
 # 진짜 3D 위치가 아니다 — 위 경고 참고. base_link 앞 임의 고정점.
 FAKE_POSE_M = (0.3, 0.0, 0.0)
 FAKE_DIMS_M = (0.05, 0.05, 0.05)
@@ -264,10 +261,10 @@ class PerceptionNode(Node):
         detections = []
         track_id = 0
         for class_id, dets in enumerate(detections_by_class):
-            class_name = HAILO_CLASS_NAMES[class_id] if class_id < len(HAILO_CLASS_NAMES) else None
-            object_class = HAILO_CLASS_TO_OBJECT_CLASS.get(class_name)
+            object_class = object_class_for_hailo_id(class_id)
             if object_class is None:
                 continue  # 매핑 미확정 클래스(container/box 등) — 바닥 후보에서 제외
+            class_name = HAILO_CLASS_NAMES[class_id]
             for det in dets:
                 score = float(det[4])
                 if score < HAILO_SCORE_THRESHOLD:
