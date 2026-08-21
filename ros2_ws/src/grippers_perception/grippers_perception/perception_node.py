@@ -8,11 +8,19 @@
   DONE으로 유도한다.
 - find_box: 모르면 found=False로 응답한다 — TRANSPORT가 이걸 받으면 대상을
   보류 등록하고 SCAN으로 복귀한다.
+- confirm_grasp: 카메라를 못 열거나 기준 프레임이 없으면 confirmed=False다 —
+  다른 관측 포트와 같은 "모르면 실패" 관례(domain/ports/perception.py 참고).
 """
 
 import rclpy
 from grippers_interfaces.msg import BoxObservation, DetectionArray
-from grippers_interfaces.srv import FindBox, MeasureOpening, MonitorClearance, ScanFloor
+from grippers_interfaces.srv import (
+    ConfirmGrasp,
+    FindBox,
+    MeasureOpening,
+    MonitorClearance,
+    ScanFloor,
+)
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 
@@ -23,6 +31,29 @@ try:
     _CV_AVAILABLE = True
 except ImportError:
     _CV_AVAILABLE = False
+
+try:
+    import cv2
+    import numpy as np
+
+    _GRASP_CAM_CV_AVAILABLE = True
+except ImportError:
+    _GRASP_CAM_CV_AVAILABLE = False
+
+
+# ── confirm_grasp (1단계, classical CV 임시 구현) ───────────────────────────
+# YOLO가 아직 안 붙어서(2026-08-21 기준) 실기 로그 수집을 시작하려고 정교한
+# 검출 없이 "기준(빈 그리퍼) 프레임과 지금 프레임이 얼마나 다른가"만 본다.
+# GRASP는 이 결과를 아직 판정에 안 쓴다(domain/task/states.py GraspState 참고) —
+# 로그만 쌓아서 나중에 임계값을 실측으로 잡는다.
+GRIPPER_CAM_DEVICE_DEFAULT = "/dev/gripper_cam"
+GRIPPER_CAM_WIDTH = 640
+GRIPPER_CAM_HEIGHT = 480
+GRIPPER_CAM_WARMUP_FRAMES = 5  # 노출 자동조정 전 프레임은 검게 나온다 (실기 확인됨)
+# TODO: 실측 — 지금은 근거 없는 자리 표시자다. confirm_grasp 로그(diff_score)를
+# 실제 파지 성공/실패 케이스별로 모은 뒤 재보정한다. ros2 param set으로
+# 재배포 없이 튜닝할 수 있게 파라미터로도 노출한다.
+CONFIRM_GRASP_DIFF_THRESHOLD_DEFAULT = 15.0
 
 
 class PerceptionNode(Node):
@@ -67,6 +98,26 @@ class PerceptionNode(Node):
             self._on_monitor_clearance,
             callback_group=cb_group,
         )
+        self.create_service(
+            ConfirmGrasp,
+            "perception/confirm_grasp",
+            self._on_confirm_grasp,
+            callback_group=cb_group,
+        )
+
+        self.declare_parameter("gripper_cam_device", GRIPPER_CAM_DEVICE_DEFAULT)
+        self.declare_parameter("confirm_grasp_diff_threshold", CONFIRM_GRASP_DIFF_THRESHOLD_DEFAULT)
+        self._grasp_cam = None
+        self._grasp_cam_reference = None  # 기준(빈 그리퍼) 프레임 — 그레이스케일
+        if _GRASP_CAM_CV_AVAILABLE:
+            self._grasp_cam_reference = self._capture_grasp_frame()
+            if self._grasp_cam_reference is None:
+                self.get_logger().warn(
+                    "confirm_grasp: 기준 프레임 캡처 실패 — 그리퍼캠 연결/조명 확인 필요"
+                )
+        else:
+            self.get_logger().warn("opencv 미설치 — confirm_grasp 항상 confirmed=False 반환")
+
         self.get_logger().info("perception_node ready (vision pipeline: NOT IMPLEMENTED)")
 
     def _on_image(self, msg):
@@ -106,6 +157,69 @@ class PerceptionNode(Node):
         response.top = 0.0
         response.contact_risk = True
         return response
+
+    # ---- confirm_grasp (1단계, classical CV 임시 구현) ----
+    def _open_grasp_cam(self):
+        device = self.get_parameter("gripper_cam_device").value
+        cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+        if not cap.isOpened():
+            cap.release()
+            return None
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, GRIPPER_CAM_WIDTH)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, GRIPPER_CAM_HEIGHT)
+        return cap
+
+    def _capture_grasp_frame(self):
+        """그리퍼캠에서 그레이스케일 프레임 한 장을 잡는다. 카메라가 없거나
+        읽기에 실패하면 **None** — 호출자가 confirmed=False로 접는다.
+
+        열려 있던 캡처가 죽어 있으면(핫플러그 재연결 등) 한 번 다시 연다.
+        노출 자동조정이 끝나기 전 프레임은 실기에서 검게 나오는 게 확인됐으므로
+        (2026-08-21) 앞쪽 몇 프레임은 버린다."""
+        if not _GRASP_CAM_CV_AVAILABLE:
+            return None
+        if self._grasp_cam is None or not self._grasp_cam.isOpened():
+            self._grasp_cam = self._open_grasp_cam()
+        if self._grasp_cam is None:
+            return None
+        for _ in range(GRIPPER_CAM_WARMUP_FRAMES):
+            self._grasp_cam.grab()
+        ok, frame = self._grasp_cam.read()
+        if not ok or frame is None:
+            self._grasp_cam.release()
+            self._grasp_cam = None
+            return None
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    def _on_confirm_grasp(self, request, response):
+        frame = self._capture_grasp_frame()
+        if frame is None or self._grasp_cam_reference is None:
+            self.get_logger().warn("confirm_grasp: 프레임/기준 없음 — confirmed=False 반환")
+            response.confirmed = False
+            response.confidence = 0.0
+            return response
+
+        # 기준(빈 그리퍼) 프레임과의 평균 절대 밝기 차이 — 정교한 검출이 아니라
+        # "뭔가 달라졌다"만 보는 1단계 임시 신호다. threshold는 미실측 자리
+        # 표시자이니 로그(diff_score)를 실제 파지 성공/실패와 대조해 재보정한다.
+        diff_score = float(np.mean(cv2.absdiff(frame, self._grasp_cam_reference)))
+        threshold = self.get_parameter("confirm_grasp_diff_threshold").value
+        confirmed = diff_score > threshold
+        confidence = max(0.0, min(1.0, diff_score / (2.0 * threshold)))
+
+        self.get_logger().info(
+            f"confirm_grasp: diff_score={diff_score:.2f} threshold={threshold:.2f} "
+            f"confirmed={confirmed} confidence={confidence:.3f}"
+        )
+        response.confirmed = confirmed
+        response.confidence = confidence
+        return response
+
+    def destroy_node(self):
+        if self._grasp_cam is not None:
+            self._grasp_cam.release()
+        super().destroy_node()
 
 
 def main(args=None):
