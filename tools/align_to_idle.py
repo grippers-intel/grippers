@@ -202,6 +202,12 @@ def glide_to_targets(
 def _connect(port):
     # driver_sdk(pyserial 의존)는 여기서만 import한다 — 그래야 위의 검사/보간
     # 로직은 하드웨어 없이도 fake driver로 단위 테스트할 수 있다.
+    #
+    # soarm_lab을 먼저 import해야 한다 — soarm_lab/__init__.py가 자기
+    # 디렉터리를 sys.path에 얹어 둬서 driver_sdk를 flat import할 수 있게
+    # 만든다 (arm_driver_node.py와 동일한 규칙). 실기(2026-08-21)에서
+    # 이 줄 없이 바로 driver_sdk를 import해 ModuleNotFoundError로 확인됨.
+    import soarm_lab  # noqa: F401
     from driver_sdk import STS3215Driver
 
     driver = STS3215Driver(port)
