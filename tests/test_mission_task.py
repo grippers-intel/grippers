@@ -436,7 +436,8 @@ def test_grasp_rechecks_at_145mm_then_folds_to_carry_idle_before_transport(make_
     """수평 파지는 145 mm 재검증과 CARRY_IDLE을 마쳐야 운반으로 넘어간다."""
     target = _detection(track_id=1)
     arm = FakeArm(load_ratio=0.047)
-    ports = make_ports(arm=arm)
+    perception = ScriptedPerception(detections=[target])
+    ports = make_ports(arm=arm, perception=perception)
     ctx = MissionContext(
         spec=MissionSpec(
             mode=MissionMode.TIDY,
@@ -457,6 +458,9 @@ def test_grasp_rechecks_at_145mm_then_folds_to_carry_idle_before_transport(make_
     ]
     assert arm.gripper_widths == [80.0, 35.0]
     assert next_state.name == "TRANSPORT"
+    # 1단계(로깅 전용): confirm_grasp가 실제로 호출되는지만 검증한다 — 판정에는
+    # 아직 안 쓰이므로 next_state는 confirm_grasp 결과와 무관하게 TRANSPORT다.
+    assert perception.confirm_grasp_calls == 1
 
 
 def test_failed_lift_releases_object_and_blocks_transport(make_ports):

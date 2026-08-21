@@ -258,6 +258,12 @@ class GraspState(State):
             plan.profile, "midpoint"
         )
         held = lifted and ports.arm.get_load() >= self.LOAD_THRESHOLD
+        # 1단계(로깅 전용, 이슈 그리퍼캠 파지 확인): confirm_grasp는 아직 판정에
+        # 안 쓴다. 반환값은 버리고 호출만 한다 — 실제 로그는 어댑터가 남긴다
+        # (Ros2Perception.confirm_grasp 참고). load 기반 판정과 비교할 실측
+        # 자료가 쌓이면 그때 이 결과를 held에 편입한다 (Perception.confirm_grasp
+        # 포트 계약 참고).
+        ports.perception.confirm_grasp()
         cleared = held and ports.arm.move_to_floor_pose(plan.profile, "safe")
         if cleared:
             # 물체를 든 채 SAFE_145 → IDLE 관절 자세로 직접 접는 경로를 큐브로
