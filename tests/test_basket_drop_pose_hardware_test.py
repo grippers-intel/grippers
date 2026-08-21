@@ -35,7 +35,7 @@ def test_return_to_idle_waits_for_convergence_and_closes_gripper():
     # instead of the IDLE convention of CLOSED.
     calls = _main_calls()
 
-    assert calls.count("wait_until_converged") == 1
+    assert calls.count("wait_until_converged") == 2
     assert calls.count("position_from_width") == 2
 
 

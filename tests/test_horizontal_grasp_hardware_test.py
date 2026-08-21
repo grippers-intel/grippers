@@ -46,7 +46,7 @@ def test_final_transitions_wait_for_actual_convergence():
     main = _function("main")
     names = _called_names(main)
 
-    assert names.count("wait_until_converged") == 2
+    assert names.count("wait_until_converged") == 3
 
 
 def test_unknown_start_pose_is_rejected_before_motion():
