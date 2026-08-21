@@ -99,6 +99,13 @@ FAILURE_CONTRACTS = [
         "contact_risk=True",
     ),
     (
+        Perception,
+        "confirm_grasp",
+        lambda: ScriptedPerception(grasp_confirmed=False).confirm_grasp(),
+        False,
+        "`False`",
+    ),
+    (
         CommandInterpreter,
         "parse",
         lambda: ScriptedInterpreter().parse("등록되지 않은 문형"),

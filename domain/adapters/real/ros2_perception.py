@@ -8,7 +8,13 @@ perception_node에 서비스로 말을 건다.
 넘기면 런타임에 AssertionError가 난다. 필드 하나하나를 명시적으로
 꺼내 옮긴다."""
 
-from grippers_interfaces.srv import FindBox, MeasureOpening, MonitorClearance, ScanFloor
+from grippers_interfaces.srv import (
+    ConfirmGrasp,
+    FindBox,
+    MeasureOpening,
+    MonitorClearance,
+    ScanFloor,
+)
 
 from domain.adapters.real._ros_call import SAFETY_TIMEOUT_SEC, call_service
 from domain.adapters.real._ros_convert import box_observation_from_msg, box_observation_to_msg
@@ -47,6 +53,7 @@ class Ros2Perception(Perception):
         self._clearance_client = node.create_client(
             MonitorClearance, "perception/monitor_clearance"
         )
+        self._confirm_grasp_client = node.create_client(ConfirmGrasp, "perception/confirm_grasp")
 
     def scan_floor(self) -> list[Detection]:
         """검출 목록. 서비스가 없거나 응답이 없으면 **빈 목록** — `SELECT` 가
@@ -103,3 +110,20 @@ class Ros2Perception(Perception):
             right_m=res.right,
             contact_risk=res.contact_risk,
         )
+
+    def confirm_grasp(self) -> bool:
+        """그리퍼캠 시각 확인. 서비스가 없거나 응답이 없으면 **False** —
+        다른 관측 포트와 같은 "모르면 실패" 관례.
+
+        ⚠️ 1단계(로깅 전용): `confidence` 는 도메인 계약에 없으므로 여기서
+        진단 로그로만 남기고 버린다 — GraspState가 판정에 편입할 임계값을
+        잡을 실측 자료다."""
+        res = call_service(
+            self._node, self._confirm_grasp_client, ConfirmGrasp.Request(), label="confirm_grasp"
+        )
+        if res is None:
+            return False
+        self._node.get_logger().info(
+            f"[confirm_grasp] confirmed={res.confirmed} confidence={res.confidence:.3f}"
+        )
+        return res.confirmed

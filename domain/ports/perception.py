@@ -43,3 +43,17 @@ class Perception(ABC):
         반환하는 것은 **그 구현의 현재 상태**이지 포트 계약이 아니다. 시나리오를
         주입받는 테스트 더블은 '모르는' 상태가 아니므로 기본값이 happy path여도
         계약 위반이 아니다 (`ScriptedPerception.monitor_clearance` 참고)."""
+
+    @abstractmethod
+    def confirm_grasp(self) -> bool:
+        """그리퍼 캠으로 손끝에 물체가 실제로 물려 있는지 시각 확인한다.
+
+        ⚠️ 2026-08-21 기준 1단계(로깅 전용)다. `GraspState` 는 이 값을 아직
+        성공 판정에 쓰지 않는다 — `get_load()` 의 `LOAD_THRESHOLD` 처럼 실측으로
+        검증된 임계값이 이 신호에는 아직 없어서다. load 임계값을 n=25 실측으로
+        잡았던 것과 같은 절차(GraspState 주석 참고)를 거친 뒤에만 성공 판정에
+        편입한다.
+
+        **서비스 부재 · 응답 없음도 `False`** — 다른 관측 포트와 같은 "모르면
+        실패" 관례를 따른다. 신뢰도(confidence)는 이 포트 계약에 없다 — 필요한
+        만큼만 어댑터가 진단 로그로 남긴다."""
