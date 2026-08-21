@@ -50,6 +50,10 @@ GRIPPER_CAM_DEVICE_DEFAULT = "/dev/gripper_cam"
 GRIPPER_CAM_WIDTH = 640
 GRIPPER_CAM_HEIGHT = 480
 GRIPPER_CAM_WARMUP_FRAMES = 5  # 노출 자동조정 전 프레임은 검게 나온다 (실기 확인됨)
+# 손가락은 프레임 하단 중앙 일부에만 작게 잡힌다(2026-08-21 실기 스냅샷 확인) —
+# 전체 프레임으로 diff를 내면 배경(의자·책상) 변화에 신호가 희석된다. 정확한
+# 비율은 카메라 장착이 바뀌면 같이 바뀌니 재장착 후 스냅샷으로 재확인할 것.
+GRIPPER_CAM_ROI = (0.30, 0.55, 0.70, 1.00)  # (x0, y0, x1, y1), 프레임 폭/높이 비율
 # TODO: 실측 — 지금은 근거 없는 자리 표시자다. confirm_grasp 로그(diff_score)를
 # 실제 파지 성공/실패 케이스별로 모은 뒤 재보정한다. ros2 param set으로
 # 재배포 없이 튜닝할 수 있게 파라미터로도 노출한다.
@@ -192,6 +196,12 @@ class PerceptionNode(Node):
             return None
         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+    def _grasp_roi(self, gray_frame):
+        """GRIPPER_CAM_ROI(비율)를 실제 픽셀 슬라이스로 잘라낸다."""
+        h, w = gray_frame.shape
+        x0, y0, x1, y1 = GRIPPER_CAM_ROI
+        return gray_frame[int(y0 * h) : int(y1 * h), int(x0 * w) : int(x1 * w)]
+
     def _on_confirm_grasp(self, request, response):
         frame = self._capture_grasp_frame()
         if frame is None or self._grasp_cam_reference is None:
@@ -201,9 +211,14 @@ class PerceptionNode(Node):
             return response
 
         # 기준(빈 그리퍼) 프레임과의 평균 절대 밝기 차이 — 정교한 검출이 아니라
-        # "뭔가 달라졌다"만 보는 1단계 임시 신호다. threshold는 미실측 자리
-        # 표시자이니 로그(diff_score)를 실제 파지 성공/실패와 대조해 재보정한다.
-        diff_score = float(np.mean(cv2.absdiff(frame, self._grasp_cam_reference)))
+        # "뭔가 달라졌다"만 보는 1단계 임시 신호다. GRIPPER_CAM_ROI로 손가락
+        # 부근만 잘라서 비교한다 — 전체 프레임으로 하면 배경 변화에 묻힌다
+        # (2026-08-21 실기 확인: 전체 프레임 diff는 물체 유무와 무관하게 ~1로 고정).
+        # threshold는 미실측 자리 표시자이니 로그(diff_score)를 실제 파지
+        # 성공/실패와 대조해 재보정한다.
+        diff_score = float(
+            np.mean(cv2.absdiff(self._grasp_roi(frame), self._grasp_roi(self._grasp_cam_reference)))
+        )
         threshold = self.get_parameter("confirm_grasp_diff_threshold").value
         confirmed = diff_score > threshold
         confidence = max(0.0, min(1.0, diff_score / (2.0 * threshold)))
