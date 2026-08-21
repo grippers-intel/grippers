@@ -33,6 +33,17 @@ SAFE_START_TOLERANCE_RAW = 120
 RETRY_TIGHTEN_MM = 5.0
 MAX_START_SERVO2_TEMP_C = 40
 
+# glide_raw/glide는 고정 스텝 수(30)×delay(0.1s)로만 보간을 커밋하고 present가
+# 실제로 goal에 닿았는지는 보지 않는다. 큰 폭 이동(예: IDLE 접기)은 그 창 안에
+# 안 끝날 수 있다 — 실기(2026-08-21)에서 step=30/30에 servo 2가 920 raw,
+# servo 4가 462 raw 남은 채 "완료"가 찍혔다. STS3215 자체 컨트롤러는 이미
+# 써놓은 goal을 향해 계속 움직이므로 위험하진 않았지만(나중에 확인하니 도착),
+# 이후 사람이 없는 자동화 경로에서는 이 창을 놓치면 안 도착한 걸 도착했다고
+# 보고하게 된다. 마지막 전환에는 반드시 이 확인을 거친다.
+SETTLE_TOLERANCE_RAW = 120
+SETTLE_TIMEOUT_SEC = 15.0
+SETTLE_POLL_SEC = 0.3
+
 
 def confirm(message):
     """Wait for Enter before a transition; q aborts without moving."""
@@ -85,6 +96,35 @@ def glide(driver, label, angles_deg, steps=30, delay=0.10):
         steps=steps,
         delay=delay,
     )
+
+
+def wait_until_converged(
+    driver,
+    label,
+    targets,
+    tolerance=SETTLE_TOLERANCE_RAW,
+    timeout=SETTLE_TIMEOUT_SEC,
+    poll=SETTLE_POLL_SEC,
+):
+    """glide_raw/glide가 끝난 뒤에도 present가 goal에 닿지 않았을 수 있다
+    (모듈 상단 SETTLE_TOLERANCE_RAW 주석 참고). 전 서보가 tolerance 안에
+    들어올 때까지 poll 간격으로 최대 timeout초 present를 다시 읽는다.
+    끝까지 못 들어오면 무엇이 얼마나 남았는지 담아 RuntimeError를 낸다 —
+    "완료"를 실제로 확인 없이 찍지 않는다."""
+    deadline = time.monotonic() + timeout
+    present = read_arm(driver)
+    while True:
+        offsets = {sid: present[sid] - targets[sid] for sid in targets}
+        if all(abs(offset) <= tolerance for offset in offsets.values()):
+            print(f"[{label}] 수렴 확인 offsets={offsets}")
+            return present
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"[{label}] {timeout}s 안에 허용치 {tolerance}로 수렴하지 않았습니다: "
+                f"present={present} targets={targets} offsets={offsets}"
+            )
+        time.sleep(poll)
+        present = read_arm(driver)
 
 
 def require_hold_load(driver, stage):
@@ -224,6 +264,13 @@ def main():
 
         confirm("투하를 확인했습니다. 빈손 DROP_195에서 IDLE로 직접 복귀")
         glide_raw(driver, "basket-return-idle", IDLE_CRADLE_RAW)
+        wait_until_converged(driver, "basket-return-idle", idle_raw)
+
+        # IDLE 관례는 그리퍼 CLOSED다 (align_to_idle.py의 idle_targets() 참고).
+        # 투하 직후엔 그리퍼가 열린 채라 여기서 닫아 정식 IDLE로 맞춘다.
+        confirm("그리퍼 주변이 비어 있습니다. 정식 IDLE로 그리퍼 닫기")
+        set_width(driver, GRIPPER_CLOSED_MM)
+
         report(driver, "basket-complete")
         print("\n수평 파지 및 바구니 투하 시험 완료")
         return
@@ -241,6 +288,7 @@ def main():
 
     confirm("물체와 손을 이동 경로에서 치웠습니다. 145mm 안전 자세로 복귀")
     glide(driver, "finish-safe", safe_pose)
+    wait_until_converged(driver, "finish-safe", safe_raw)
     report(driver, "complete")
     print("\n수평 파지 시험 완료")
 
