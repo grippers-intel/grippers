@@ -1,4 +1,8 @@
-"""perception_node — 카메라 기반 인식. 지금은 실제 비전 파이프라인(YOLO/마커) 미구현.
+"""perception_node — 카메라 기반 인식.
+
+scan_floor는 Hailo-10H YOLO로 실제 검출을 반환한다(2026-08-21, 구조 검증용
+— 모듈 하단 HAILO_* 상수 블록의 경고 참고: pose_m은 자리표시자고 클래스
+매핑도 불완전하다). find_box/measure_opening은 아직 정직한 미구현 스텁.
 
 ⚠️ 안전 원칙 (domain/ports/perception.py의 Perception ABC 계약, 실측 전까지 절대
 어기면 안 됨):
@@ -13,7 +17,8 @@
 """
 
 import rclpy
-from grippers_interfaces.msg import BoxObservation, DetectionArray
+from geometry_msgs.msg import Point, Vector3
+from grippers_interfaces.msg import BoxObservation, Detection, DetectionArray
 from grippers_interfaces.srv import (
     ConfirmGrasp,
     FindBox,
@@ -40,6 +45,13 @@ try:
 except ImportError:
     _GRASP_CAM_CV_AVAILABLE = False
 
+try:
+    from hailo_platform import FormatType, HailoSchedulingAlgorithm, VDevice
+
+    _HAILO_AVAILABLE = True
+except ImportError:
+    _HAILO_AVAILABLE = False
+
 
 # ── confirm_grasp (1단계, classical CV 임시 구현) ───────────────────────────
 # YOLO가 아직 안 붙어서(2026-08-21 기준) 실기 로그 수집을 시작하려고 정교한
@@ -59,6 +71,34 @@ GRIPPER_CAM_ROI = (0.30, 0.55, 0.70, 1.00)  # (x0, y0, x1, y1), 프레임 폭/�
 # 재배포 없이 튜닝할 수 있게 파라미터로도 노출한다.
 CONFIRM_GRASP_DIFF_THRESHOLD_DEFAULT = 15.0
 
+# ── scan_floor (구조 검증용, 2026-08-21) ─────────────────────────────────────
+# ⚠️ 이건 "SCAN→SELECT→APPROACH가 실기 FSM 경로로 실제로 도는가"만 검증하는
+# 자리다. pose_m/dims_m/yaw_rad는 진짜 3D 위치가 아니라 **자리표시자**다 —
+# depth 채널(depth_cam/depth0/image_raw)로 역투영하는 작업을 아직 안 했다.
+# 이 값으로 APPROACH의 실제 base.drive_to()를 실행하면 로봇이 엉뚱한 좌표로
+# 주행한다 — 반드시 SELECT까지만 확인하고 실제 주행 전에 멈출 것.
+#
+# 클래스 매핑도 불완전하다. domain.values.ObjectClass는 GABE/CHESS_PIECE
+# 둘뿐인데 Hailo 모델은 7종(container/knight/queen/rook/box/soccer/star)이다.
+# knight/queen/rook은 CHESS_PIECE로, soccer/star는 GABE로 매핑했지만
+# "cube"는 애초에 학습 클래스에 없고, container/box는 목적지 상자로 보여서
+# **바닥 물체 후보에서 제외**했다 — 확실하지 않은 매핑을 코드에 박지 않는다.
+HAILO_HEF_PATH_DEFAULT = "/tmp/best_640.hef"
+HAILO_SCORE_THRESHOLD = 0.35
+HAILO_CLASS_TO_OBJECT_CLASS = {
+    "knight": "CHESS_PIECE",
+    "queen": "CHESS_PIECE",
+    "rook": "CHESS_PIECE",
+    "soccer": "GABE",
+    "star": "GABE",
+    # "container", "box": 목적지 상자로 추정 — 바닥 스캔 후보에서 제외.
+}
+# metadata.yaml의 names 순서 — HEF가 바뀌면 같이 바꿀 것.
+HAILO_CLASS_NAMES = ["container", "knight", "queen", "rook", "box", "soccer", "star"]
+# 진짜 3D 위치가 아니다 — 위 경고 참고. base_link 앞 임의 고정점.
+FAKE_POSE_M = (0.3, 0.0, 0.0)
+FAKE_DIMS_M = (0.05, 0.05, 0.05)
+
 
 class PerceptionNode(Node):
     def __init__(self):
@@ -68,9 +108,12 @@ class PerceptionNode(Node):
         self._latest_frame = None
         self._bridge = CvBridge() if _CV_AVAILABLE else None
         if _CV_AVAILABLE:
+            # depth_cam_rotate_node가 내보내는 회전 보정된 컬러 스트림.
+            # (예전엔 "camera/color/image_raw"를 구독했는데, 실제로 이 이름으로
+            # 퍼블리시하는 노드가 없어 _on_image가 한 번도 안 불렸다 — 2026-08-21 확인)
             self.create_subscription(
                 Image,
-                "camera/color/image_raw",
+                "depth_cam/rgb/image_rotated",
                 self._on_image,
                 10,
                 callback_group=cb_group,
@@ -122,19 +165,104 @@ class PerceptionNode(Node):
         else:
             self.get_logger().warn("opencv 미설치 — confirm_grasp 항상 confirmed=False 반환")
 
-        self.get_logger().info("perception_node ready (vision pipeline: NOT IMPLEMENTED)")
+        self.declare_parameter("hailo_hef_path", HAILO_HEF_PATH_DEFAULT)
+        self._hailo_model = None
+        self._hailo_output_shape = None
+        self._hailo_input_size = None
+        if _HAILO_AVAILABLE:
+            self._load_hailo_model()
+        else:
+            self.get_logger().warn("hailo_platform 미설치 — scan_floor 항상 빈 목록 반환")
+
+        self.get_logger().info(
+            "perception_node ready "
+            "(scan_floor: Hailo, find_box/measure_opening/monitor_clearance: NOT IMPLEMENTED)"
+        )
+
+    def _load_hailo_model(self):
+        """VDevice/ConfiguredInferModel을 한 번만 만든다. 물리 Hailo-10H가
+        1개뿐이라, tools/hailo/live_yolo_demo.py 같은 다른 프로세스가 이미
+        VDevice를 쥐고 있으면 HAILO_OUT_OF_PHYSICAL_DEVICES로 실패한다 —
+        둘 중 하나만 켜둘 것.
+
+        ⚠️ vdevice/infer_model을 self에 안 붙이고 지역 변수로만 두면 이 함수가
+        끝나는 순간 가비지 컬렉션되고, 나중에 self._hailo_model.run()을 부를 때
+        "Lost communication with the server. This may happen if VDevice is
+        released while the CIM is in use."로 죽는다 (2026-08-21 실기 확인 —
+        MultiThreadedExecutor 탓으로 오진했다가, 단일 스레드로 바꿔도 똑같이
+        죽는 걸 보고서야 진짜 원인을 찾았다). configure()가 반환하는
+        ConfiguredInferModel이 부모를 안 붙잡아 주므로 노드 수명 내내
+        직접 붙잡아야 한다."""
+        hef_path = self.get_parameter("hailo_hef_path").value
+        try:
+            params = VDevice.create_params()
+            params.scheduling_algorithm = HailoSchedulingAlgorithm.ROUND_ROBIN
+            self._hailo_vdevice = VDevice(params)
+            self._hailo_infer_model = self._hailo_vdevice.create_infer_model(hef_path)
+            self._hailo_infer_model.input().set_format_type(FormatType.UINT8)
+            self._hailo_model = self._hailo_infer_model.configure()
+            self._hailo_output_shape = self._hailo_infer_model.output().shape
+            self._hailo_input_size = self._hailo_infer_model.input().shape[0]
+            self.get_logger().info(
+                f"scan_floor: Hailo-10H 모델 로드됨 {hef_path} (입력={self._hailo_input_size})"
+            )
+        except Exception as exc:  # noqa: BLE001 -- 장치 경합 등 다양한 원인을 전부 접는다
+            self.get_logger().warn(f"scan_floor: Hailo 모델 로드 실패, 빈 목록으로 접음 ({exc})")
+            self._hailo_model = None
 
     def _on_image(self, msg):
-        self._latest_frame = msg  # TODO: cv_bridge.imgmsg_to_cv2 후 YOLO/마커 파이프라인 연결
+        self._latest_frame = msg
 
-    # ---- 서비스 콜백 (전부 TODO — 지금은 정직하게 미구현 응답) ----
+    # ---- 서비스 콜백 ----
     def _on_scan_floor(self, request, response):
-        self.get_logger().warn("scan_floor: 비전 파이프라인 미구현 — 빈 목록 반환")
         # TODO: 상자 영역 마스킹 (state_machine.md §4 재진입 방지 방어선) — 실제
-        # 검출 파이프라인이 붙으면, 여기서 상자 ROI와 겹치는 detection을 걸러내야
-        # 한다. 필터링을 빼먹으면 이미 처리된 상자 내부 물체를 계속 재검출해
-        # 무한 루프 방지의 첫 번째 방어선(done_ids/held_ids 필터링)이 무력화된다.
-        response.detections = DetectionArray(detections=[])
+        # 위치 추정이 붙으면, 여기서 상자 ROI와 겹치는 detection을 걸러내야 한다.
+        # 필터링을 빼먹으면 이미 처리된 상자 내부 물체를 계속 재검출해 무한 루프
+        # 방지의 첫 번째 방어선(done_ids/held_ids 필터링)이 무력화된다.
+        if self._hailo_model is None or self._latest_frame is None:
+            self.get_logger().warn("scan_floor: Hailo 미로드 또는 프레임 없음 — 빈 목록 반환")
+            response.detections = DetectionArray(detections=[])
+            return response
+
+        frame = self._bridge.imgmsg_to_cv2(self._latest_frame, desired_encoding="bgr8")
+        canvas = self._letterbox(frame, self._hailo_input_size)
+
+        bindings = self._hailo_model.create_bindings()
+        bindings.input().set_buffer(np.ascontiguousarray(canvas))
+        bindings.output().set_buffer(np.empty(self._hailo_output_shape, dtype=np.float32))
+        self._hailo_model.run([bindings], timeout=1000)
+        detections_by_class = bindings.output().get_buffer()
+
+        detections = []
+        track_id = 0
+        for class_id, dets in enumerate(detections_by_class):
+            class_name = HAILO_CLASS_NAMES[class_id] if class_id < len(HAILO_CLASS_NAMES) else None
+            object_class = HAILO_CLASS_TO_OBJECT_CLASS.get(class_name)
+            if object_class is None:
+                continue  # 매핑 미확정 클래스(container/box 등) — 바닥 후보에서 제외
+            for det in dets:
+                score = float(det[4])
+                if score < HAILO_SCORE_THRESHOLD:
+                    continue
+                track_id += 1
+                detections.append(
+                    Detection(
+                        track_id=track_id,
+                        cls=object_class,
+                        # ⚠️ 자리표시자 — 진짜 3D 위치 아님. 모듈 상단 FAKE_POSE_M
+                        # 경고 참고. APPROACH의 실제 주행에 그대로 쓰면 안 된다.
+                        pose=Point(x=FAKE_POSE_M[0], y=FAKE_POSE_M[1], z=FAKE_POSE_M[2]),
+                        dims=Vector3(x=FAKE_DIMS_M[0], y=FAKE_DIMS_M[1], z=FAKE_DIMS_M[2]),
+                        yaw_rad=0.0,
+                        confidence=score,
+                    )
+                )
+                self.get_logger().info(
+                    f"scan_floor: {class_name}->{object_class} score={score:.2f} "
+                    f"track_id={track_id}"
+                )
+
+        response.detections = DetectionArray(detections=detections)
         return response
 
     def _on_find_box(self, request, response):
@@ -196,6 +324,19 @@ class PerceptionNode(Node):
             return None
         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+    @staticmethod
+    def _letterbox(frame, size):
+        """정사각형 size x size로 비율 유지 레터박스한다 (tools/hailo/
+        live_yolo_demo.py의 letterbox()와 동일 로직)."""
+        h, w = frame.shape[:2]
+        scale = min(size / h, size / w)
+        resized = cv2.resize(frame, (round(w * scale), round(h * scale)))
+        canvas = np.zeros((size, size, 3), dtype=np.uint8)
+        y0 = (size - resized.shape[0]) // 2
+        x0 = (size - resized.shape[1]) // 2
+        canvas[y0 : y0 + resized.shape[0], x0 : x0 + resized.shape[1]] = resized
+        return canvas
+
     def _grasp_roi(self, gray_frame):
         """GRIPPER_CAM_ROI(비율)를 실제 픽셀 슬라이스로 잘라낸다."""
         h, w = gray_frame.shape
@@ -240,6 +381,14 @@ class PerceptionNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = PerceptionNode()
+    # 2026-08-21 실기 디버깅 메모: scan_floor의 Hailo 추론이 "Lost communication
+    # with the server..."로 죽어서 한때 이 MultiThreadedExecutor가 원인인 줄
+    # 알았다(서비스 콜백이 __init__과 다른 워커 스레드에서 돈다고 추정) —
+    # 단일 스레드(rclpy.spin)로 바꿔도 똑같이 죽는 걸 보고 오진이었다는 걸
+    # 확인했다. 진짜 원인은 _load_hailo_model()이 vdevice/infer_model을
+    # self에 안 붙이고 지역 변수로 둬서 가비지 컬렉션된 것이었다 (그 함수의
+    # docstring 참고). 그래서 원래대로 되돌린다 — monitor_clearance 같은
+    # 안전 판정이 다른 서비스 처리에 밀리지 않게 유지한다.
     from rclpy.executors import MultiThreadedExecutor
 
     executor = MultiThreadedExecutor()

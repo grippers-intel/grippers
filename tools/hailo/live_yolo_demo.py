@@ -17,8 +17,9 @@ HAILO_OUT_OF_PHYSICAL_DEVICES로 죽음), 카메라마다 별도 프로세스를
 해보는 탐색용 스크립트다. domain/ports/perception.py 계약에 편입하려면
 별도 작업이 필요하다.
 
-입력을 640x640으로 레터박스하기 때문에, 편의상 좌표 역변환 없이 **레터박스된
-프레임 자체에 박스를 그려 퍼블리시**한다 — 원본 프레임 좌표계가 아니다.
+입력을 (로드된 HEF의 실제 입력 크기로) 정사각형 레터박스하기 때문에, 편의상
+좌표 역변환 없이 **레터박스된 프레임 자체에 박스를 그려 퍼블리시**한다 —
+원본 프레임 좌표계가 아니다.
 """
 
 import cv2
@@ -36,14 +37,13 @@ CAMERA_TOPICS_DEFAULT = (
     "depth_cam/rgb/image_rotated=depth_cam/yolo/image_detections,"
     "gripper_cam/image_raw=gripper_cam/yolo/image_detections"
 )
-MODEL_INPUT_SIZE = 640
 SCORE_THRESHOLD = 0.35
 # metadata.yaml의 names — HEF 컴파일 당시 클래스 순서와 반드시 일치해야 한다.
 CLASS_NAMES = ["container", "knight", "queen", "rook", "box", "soccer", "star"]
 BOX_COLOR = (0, 255, 0)
 
 
-def letterbox(frame, size=MODEL_INPUT_SIZE):
+def letterbox(frame, size):
     h, w = frame.shape[:2]
     scale = min(size / h, size / w)
     resized = cv2.resize(frame, (round(w * scale), round(h * scale)))
@@ -99,8 +99,12 @@ class LiveYoloDemoNode(Node):
         # 2026-08-21: 안 하면 "not configured as view"로 run_async가 죽는다).
         # shape는 (max_bboxes_per_class*5 + 1) * num_classes = 3507 (실측).
         self._output_shape = self._infer_model.output().shape
+        # 입력 크기는 HEF마다 다르다(640 vs 1152 등) -- 하드코딩하지 않고
+        # 로드된 모델에서 그대로 읽는다. shape는 [H, W, 3]이고 정사각형이라 H만 쓴다.
+        self._model_input_size = self._infer_model.input().shape[0]
         self.get_logger().info(
-            f"Hailo-10H model loaded: {hef_path} (output shape={self._output_shape})"
+            f"Hailo-10H model loaded: {hef_path} "
+            f"(input={self._model_input_size}, output shape={self._output_shape})"
         )
 
         for pair in camera_topics.split(","):
@@ -117,7 +121,7 @@ class LiveYoloDemoNode(Node):
 
     def _on_image(self, msg, publisher, source_label):
         frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        canvas = letterbox(frame)
+        canvas = letterbox(frame, self._model_input_size)
 
         bindings = self._configured_model.create_bindings()
         bindings.input().set_buffer(np.ascontiguousarray(canvas))
