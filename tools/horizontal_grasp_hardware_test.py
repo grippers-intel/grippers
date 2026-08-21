@@ -33,6 +33,10 @@ SAFE_START_TOLERANCE_RAW = 120
 RETRY_TIGHTEN_MM = 5.0
 MAX_START_SERVO2_TEMP_C = 40
 
+# CLOSED는 하드코딩하지 않는다 — align_to_idle.py와 동일하게 gripper_calibration의
+# 실측 보정표에서 그대로 끌어온다.
+GRIPPER_CLOSED_RAW = position_from_width(GRIPPER_CLOSED_MM)
+
 # glide_raw/glide는 고정 스텝 수(30)×delay(0.1s)로만 보간을 커밋하고 present가
 # 실제로 goal에 닿았는지는 보지 않는다. 큰 폭 이동(예: IDLE 접기)은 그 창 안에
 # 안 끝날 수 있다 — 실기(2026-08-21)에서 step=30/30에 servo 2가 920 raw,
@@ -106,13 +110,18 @@ def wait_until_converged(
     timeout=SETTLE_TIMEOUT_SEC,
     poll=SETTLE_POLL_SEC,
 ):
-    """glide_raw/glide가 끝난 뒤에도 present가 goal에 닿지 않았을 수 있다
-    (모듈 상단 SETTLE_TOLERANCE_RAW 주석 참고). 전 서보가 tolerance 안에
-    들어올 때까지 poll 간격으로 최대 timeout초 present를 다시 읽는다.
-    끝까지 못 들어오면 무엇이 얼마나 남았는지 담아 RuntimeError를 낸다 —
-    "완료"를 실제로 확인 없이 찍지 않는다."""
+    """glide_raw/glide/set_width가 끝난 뒤에도 present가 goal에 닿지 않았을
+    수 있다 (모듈 상단 SETTLE_TOLERANCE_RAW 주석 참고). targets에 있는
+    서보(팔 1~5뿐 아니라 그리퍼 6도 가능)가 전부 tolerance 안에 들어올 때까지
+    poll 간격으로 최대 timeout초 present를 다시 읽는다. 끝까지 못 들어오면
+    무엇이 얼마나 남았는지 담아 RuntimeError를 낸다 — "완료"를 실제로 확인
+    없이 찍지 않는다.
+
+    ⚠️ 물체를 잡느라 목표에 못 미치는 게 정상인 호출(그리퍼로 물체를 쥘 때)에는
+    쓰지 않는다 — 그건 require_hold_load처럼 load로 판정해야 한다. 여기는
+    "주변이 비었다고 확신하는" 자유 이동에만 쓴다."""
     deadline = time.monotonic() + timeout
-    present = read_arm(driver)
+    present = {sid: driver.get_position(sid) for sid in targets}
     while True:
         offsets = {sid: present[sid] - targets[sid] for sid in targets}
         if all(abs(offset) <= tolerance for offset in offsets.values()):
@@ -124,7 +133,7 @@ def wait_until_converged(
                 f"present={present} targets={targets} offsets={offsets}"
             )
         time.sleep(poll)
-        present = read_arm(driver)
+        present = {sid: driver.get_position(sid) for sid in targets}
 
 
 def require_hold_load(driver, stage):
@@ -270,6 +279,7 @@ def main():
         # 투하 직후엔 그리퍼가 열린 채라 여기서 닫아 정식 IDLE로 맞춘다.
         confirm("그리퍼 주변이 비어 있습니다. 정식 IDLE로 그리퍼 닫기")
         set_width(driver, GRIPPER_CLOSED_MM)
+        wait_until_converged(driver, "gripper-idle-close", {6: GRIPPER_CLOSED_RAW})
 
         report(driver, "basket-complete")
         print("\n수평 파지 및 바구니 투하 시험 완료")

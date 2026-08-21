@@ -24,6 +24,10 @@ SERVO_IDS = range(1, 6)
 START_TOLERANCE_RAW = 120
 MAX_START_SERVO2_TEMP_C = 40
 
+# CLOSED는 하드코딩하지 않는다 — align_to_idle.py와 동일하게 gripper_calibration의
+# 실측 보정표에서 그대로 끌어온다.
+GRIPPER_CLOSED_RAW = position_from_width(GRIPPER_CLOSED_MM)
+
 # glide_raw는 고정 스텝 수(30)×delay(0.1s)로만 보간을 커밋하고 present가 실제로
 # goal에 닿았는지는 보지 않는다. 큰 폭 이동(IDLE 접기)은 그 창 안에 안 끝날 수
 # 있다 — horizontal_grasp_hardware_test.py에서 실기(2026-08-21)로 확인된 문제와
@@ -81,11 +85,15 @@ def wait_until_converged(
     poll=SETTLE_POLL_SEC,
 ):
     """glide_raw가 끝난 뒤에도 present가 goal에 닿지 않았을 수 있다 (모듈 상단
-    SETTLE_TOLERANCE_RAW 주석 참고). 전 서보가 tolerance 안에 들어올 때까지
-    poll 간격으로 최대 timeout초 present를 다시 읽는다. 끝까지 못 들어오면
-    무엇이 얼마나 남았는지 담아 RuntimeError를 낸다."""
+    SETTLE_TOLERANCE_RAW 주석 참고). targets에 있는 서보(팔 1~5뿐 아니라
+    그리퍼 6도 가능)가 전부 tolerance 안에 들어올 때까지 poll 간격으로 최대
+    timeout초 present를 다시 읽는다. 끝까지 못 들어오면 무엇이 얼마나
+    남았는지 담아 RuntimeError를 낸다.
+
+    ⚠️ 물체를 잡느라 목표에 못 미치는 게 정상인 호출에는 쓰지 않는다 — 여기는
+    "주변이 비었다고 확신하는" 자유 이동에만 쓴다."""
     deadline = time.monotonic() + timeout
-    present = read_arm(driver)
+    present = {sid: driver.get_position(sid) for sid in targets}
     while True:
         offsets = {sid: present[sid] - targets[sid] for sid in targets}
         if all(abs(offset) <= tolerance for offset in offsets.values()):
@@ -97,7 +105,7 @@ def wait_until_converged(
                 f"present={present} targets={targets} offsets={offsets}"
             )
         time.sleep(poll)
-        present = read_arm(driver)
+        present = {sid: driver.get_position(sid) for sid in targets}
 
 
 def report(driver, label):
@@ -143,6 +151,7 @@ def main():
     if not driver.set_position(6, position_from_width(GRIPPER_CLOSED_MM)):
         raise RuntimeError("servo 6 position write failed")
     time.sleep(1.5)
+    wait_until_converged(driver, "gripper-idle-close", {6: GRIPPER_CLOSED_RAW})
 
     report(driver, "complete")
     print("\n빈손 IDLE ↔ DROP_195 직접 왕복 완료")
