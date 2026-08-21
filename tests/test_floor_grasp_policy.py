@@ -38,3 +38,16 @@ def test_chess_policy_chooses_nearest_measured_grasp_width():
     )
     rook = select_horizontal_grasp_plan(detection(ObjectClass.CHESS_PIECE, 24.5))
     assert (rook.profile, rook.close_width_mm) == ("chess_rook", 15.0)
+
+
+def test_star_column_and_soccer_share_one_profile():
+    """폭 45 와 46 은 호모그래피 추정 오차 안이라 갈 수 없다 — 같은 프로필로 간다.
+
+    `star_column` 프로필이 존재한다는 것만 검사하면 정책이 그걸 고르는 것처럼
+    읽힌다. 실제로는 둘 다 `soccer_polyhedron` 으로 가고, 값이 같아 동작한다.
+    """
+    star = detection(ObjectClass.GABE, 45.0)
+    soccer = detection(ObjectClass.GABE, 46.0)
+
+    assert select_horizontal_grasp_plan(star) == select_horizontal_grasp_plan(soccer)
+    assert select_horizontal_grasp_plan(star).profile == "soccer_polyhedron"
