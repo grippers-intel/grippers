@@ -19,6 +19,8 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 from std_srvs.srv import Trigger
 
+from .drive_control import forward_speed
+
 ARRIVE_XY_TOL = 0.03  # m
 KP_LINEAR = 0.6
 KP_ANGULAR = 1.2
@@ -148,10 +150,9 @@ class BaseDriverNode(Node):
             else:
                 # PHASE 2: 직진만 한다. 회전 명령을 섞지 않아 #148의
                 # 목표 주변 회전 발산을 구조적으로 막는다.
-                twist.linear.x = max(
-                    -MAX_LINEAR,
-                    min(MAX_LINEAR, KP_LINEAR * dist),
-                )
+                # #148 잔여: dist 는 부호가 없어 목표가 등 뒤에 있어도 전진했다.
+                # 전진축 투영을 쓰면 뒤에 있을 때 음수가 되어 후진으로 거리를 줄인다.
+                twist.linear.x = forward_speed(dist, yaw_err)
                 twist.angular.z = 0.0
 
                 # 슬립 등으로 방위가 크게 틀어졌다면 다시 제자리 정렬한다.
