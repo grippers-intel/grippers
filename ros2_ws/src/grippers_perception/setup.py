@@ -20,6 +20,8 @@ setup(
     entry_points={
         "console_scripts": [
             "perception_node = grippers_perception.perception_node:main",
+            "depth_cam_rotate_node = grippers_perception.depth_cam_rotate_node:main",
+            "gripper_cam_publisher_node = grippers_perception.gripper_cam_publisher_node:main",
         ],
     },
 )
