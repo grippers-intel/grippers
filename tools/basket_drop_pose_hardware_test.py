@@ -18,11 +18,19 @@ from grippers_arm.floor_grasp_profiles import (
     BASKET_DROP_195_RAW,
     IDLE_CRADLE_RAW,
 )
-from grippers_arm.gripper_calibration import position_from_width
+from grippers_arm.gripper_calibration import GRIPPER_CLOSED_MM, position_from_width
 
 SERVO_IDS = range(1, 6)
 START_TOLERANCE_RAW = 120
 MAX_START_SERVO2_TEMP_C = 40
+
+# glide_raw는 고정 스텝 수(30)×delay(0.1s)로만 보간을 커밋하고 present가 실제로
+# goal에 닿았는지는 보지 않는다. 큰 폭 이동(IDLE 접기)은 그 창 안에 안 끝날 수
+# 있다 — horizontal_grasp_hardware_test.py에서 실기(2026-08-21)로 확인된 문제와
+# 동일. 마지막 IDLE 복귀에는 반드시 이 확인을 거친다.
+SETTLE_TOLERANCE_RAW = 120
+SETTLE_TIMEOUT_SEC = 15.0
+SETTLE_POLL_SEC = 0.3
 
 
 def confirm(message):
@@ -64,6 +72,34 @@ def glide_raw(driver, label, goal_raw, steps=30, delay=0.10):
     time.sleep(1.0)
 
 
+def wait_until_converged(
+    driver,
+    label,
+    targets,
+    tolerance=SETTLE_TOLERANCE_RAW,
+    timeout=SETTLE_TIMEOUT_SEC,
+    poll=SETTLE_POLL_SEC,
+):
+    """glide_raw가 끝난 뒤에도 present가 goal에 닿지 않았을 수 있다 (모듈 상단
+    SETTLE_TOLERANCE_RAW 주석 참고). 전 서보가 tolerance 안에 들어올 때까지
+    poll 간격으로 최대 timeout초 present를 다시 읽는다. 끝까지 못 들어오면
+    무엇이 얼마나 남았는지 담아 RuntimeError를 낸다."""
+    deadline = time.monotonic() + timeout
+    present = read_arm(driver)
+    while True:
+        offsets = {sid: present[sid] - targets[sid] for sid in targets}
+        if all(abs(offset) <= tolerance for offset in offsets.values()):
+            print(f"[{label}] 수렴 확인 offsets={offsets}")
+            return present
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"[{label}] {timeout}s 안에 허용치 {tolerance}로 수렴하지 않았습니다: "
+                f"present={present} targets={targets} offsets={offsets}"
+            )
+        time.sleep(poll)
+        present = read_arm(driver)
+
+
 def report(driver, label):
     print(f"\n[{label}] arm={read_arm(driver)} gripper={driver.get_position(6)}")
     print(f"[{label}] load={ {i: driver.get_load(i) for i in range(1, 7)} }")
@@ -98,6 +134,16 @@ def main():
 
     confirm("직접 전개 경로의 무간섭을 확인했습니다. DROP_195에서 IDLE로 직접 복귀")
     glide_raw(driver, "return-idle", IDLE_CRADLE_RAW)
+    idle_raw = {servo_id: IDLE_CRADLE_RAW[servo_id - 1] for servo_id in SERVO_IDS}
+    wait_until_converged(driver, "return-idle", idle_raw)
+
+    # IDLE 관례는 그리퍼 CLOSED다 (align_to_idle.py의 idle_targets() 참고).
+    # 시험 시작에 80mm로 열어뒀으니 여기서 닫아 정식 IDLE로 맞춘다.
+    confirm("그리퍼 주변이 비어 있습니다. 정식 IDLE로 그리퍼 닫기")
+    if not driver.set_position(6, position_from_width(GRIPPER_CLOSED_MM)):
+        raise RuntimeError("servo 6 position write failed")
+    time.sleep(1.5)
+
     report(driver, "complete")
     print("\n빈손 IDLE ↔ DROP_195 직접 왕복 완료")
 

@@ -29,10 +29,24 @@ def test_every_motion_stage_is_operator_gated():
     main = _function("main")
     names = _called_names(main)
 
-    assert names.count("confirm") == 15
+    assert names.count("confirm") == 16
     assert names.count("glide") == 6
     assert names.count("glide_raw") == 4
-    assert names.count("set_width") == 5
+    assert names.count("set_width") == 6
+
+
+def test_final_transitions_wait_for_actual_convergence():
+    # Real-hardware regression (2026-08-21): glide/glide_raw commit a fixed
+    # step schedule and never check whether present actually reached goal.
+    # A large sweep (e.g. folding into IDLE) can still be hundreds of raw
+    # units short when the schedule ends, yet the script printed "complete"
+    # anyway. Both terminal transitions (drop-to-basket's IDLE return and
+    # the no-basket path's finish-safe) must verify convergence before
+    # reporting done.
+    main = _function("main")
+    names = _called_names(main)
+
+    assert names.count("wait_until_converged") == 2
 
 
 def test_unknown_start_pose_is_rejected_before_motion():
