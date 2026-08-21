@@ -1,8 +1,10 @@
 """perception_node — 카메라 기반 인식.
 
-scan_floor는 Hailo-10H YOLO로 실제 검출을 반환한다(2026-08-21, 구조 검증용
-— 모듈 하단 HAILO_* 상수 블록의 경고 참고: pose_m은 자리표시자고 클래스
-매핑도 불완전하다). find_box/measure_opening은 아직 정직한 미구현 스텁.
+scan_floor는 Hailo-10H YOLO로 실제 검출을 반환할 수 있지만 `scan_floor_enabled`
+파라미터(기본값 False)로 잠겨 있다(2026-08-21, 구조 검증용 — 모듈 하단 HAILO_*
+상수 블록의 경고 참고: pose_m은 자리표시자고 클래스 매핑도 불완전하다). 게이트를
+켜지 않으면 지금까지처럼 빈 목록을 반환한다. find_box/measure_opening은 아직
+정직한 미구현 스텁.
 
 ⚠️ 안전 원칙 (domain/ports/perception.py의 Perception ABC 계약, 실측 전까지 절대
 어기면 안 됨):
@@ -66,10 +68,14 @@ GRIPPER_CAM_WARMUP_FRAMES = 5  # 노출 자동조정 전 프레임은 검게 나
 # 전체 프레임으로 diff를 내면 배경(의자·책상) 변화에 신호가 희석된다. 정확한
 # 비율은 카메라 장착이 바뀌면 같이 바뀌니 재장착 후 스냅샷으로 재확인할 것.
 GRIPPER_CAM_ROI = (0.30, 0.55, 0.70, 1.00)  # (x0, y0, x1, y1), 프레임 폭/높이 비율
-# TODO: 실측 — 지금은 근거 없는 자리 표시자다. confirm_grasp 로그(diff_score)를
-# 실제 파지 성공/실패 케이스별로 모은 뒤 재보정한다. ros2 param set으로
-# 재배포 없이 튜닝할 수 있게 파라미터로도 노출한다.
-CONFIRM_GRASP_DIFF_THRESHOLD_DEFAULT = 15.0
+# 실측 4건(2026-08-21, n=1 각각) 기준 임시치 — "실측 확정"은 아니지만 최소한
+# 관측값 안쪽에 두는 게 관측값 밖(15.0)보다 낫다:
+#   빈 그리퍼 4.65 · 축구공(위치 이탈) 1.88 · 별 7.46 · 큐브 10.97
+# 15.0은 네 값 전부보다 커서 confirmed가 상시 False였다(PR #185 리뷰 지적).
+# TODO: 실측 — 케이스를 더 모아 재보정한다. confirm_grasp 로그(diff_score)를
+# 실제 파지 성공/실패 케이스별로 모은다. ros2 param set으로 재배포 없이
+# 튜닝할 수 있게 파라미터로도 노출한다.
+CONFIRM_GRASP_DIFF_THRESHOLD_DEFAULT = 6.0
 
 # ── scan_floor (구조 검증용, 2026-08-21) ─────────────────────────────────────
 # ⚠️ 이건 "SCAN→SELECT→APPROACH가 실기 FSM 경로로 실제로 도는가"만 검증하는
@@ -83,6 +89,14 @@ CONFIRM_GRASP_DIFF_THRESHOLD_DEFAULT = 15.0
 # knight/queen/rook은 CHESS_PIECE로, soccer/star는 GABE로 매핑했지만
 # "cube"는 애초에 학습 클래스에 없고, container/box는 목적지 상자로 보여서
 # **바닥 물체 후보에서 제외**했다 — 확실하지 않은 매핑을 코드에 박지 않는다.
+#
+# 🔴 안전 게이트 (PR #185 리뷰 지적, 2026-08-21): 위 자리표시자 pose_m을 SELECT가
+# 그대로 골라 APPROACH가 base.drive_to()에 넘기면 실제 베이스가 가짜 좌표로
+# 움직인다. HEF 로드 성공 여부에만 기대면 "파일이 없어서 우연히 안전"인
+# 상태라 게이트가 아니다 — 그래서 별도 파라미터로 기본값을 꺼둔다.
+# 구조 검증(SCAN→SELECT→APPROACH 실기 경로 확인)이 필요할 때만 명시적으로
+# `-p scan_floor_enabled:=true`로 켤 것.
+SCAN_FLOOR_ENABLED_DEFAULT = False
 HAILO_HEF_PATH_DEFAULT = "/tmp/best_640.hef"
 HAILO_SCORE_THRESHOLD = 0.35
 HAILO_CLASS_TO_OBJECT_CLASS = {
@@ -165,6 +179,7 @@ class PerceptionNode(Node):
         else:
             self.get_logger().warn("opencv 미설치 — confirm_grasp 항상 confirmed=False 반환")
 
+        self.declare_parameter("scan_floor_enabled", SCAN_FLOOR_ENABLED_DEFAULT)
         self.declare_parameter("hailo_hef_path", HAILO_HEF_PATH_DEFAULT)
         self._hailo_model = None
         self._hailo_output_shape = None
@@ -174,9 +189,15 @@ class PerceptionNode(Node):
         else:
             self.get_logger().warn("hailo_platform 미설치 — scan_floor 항상 빈 목록 반환")
 
+        scan_floor_state = (
+            "Hailo (게이트 켜짐)"
+            if self.get_parameter("scan_floor_enabled").value
+            else "Hailo 로드됨 · 게이트 꺼짐 → 빈 목록 반환"
+        )
         self.get_logger().info(
             "perception_node ready "
-            "(scan_floor: Hailo, find_box/measure_opening/monitor_clearance: NOT IMPLEMENTED)"
+            f"(scan_floor: {scan_floor_state}, "
+            "find_box/measure_opening/monitor_clearance: NOT IMPLEMENTED)"
         )
 
     def _load_hailo_model(self):
@@ -219,6 +240,13 @@ class PerceptionNode(Node):
         # 위치 추정이 붙으면, 여기서 상자 ROI와 겹치는 detection을 걸러내야 한다.
         # 필터링을 빼먹으면 이미 처리된 상자 내부 물체를 계속 재검출해 무한 루프
         # 방지의 첫 번째 방어선(done_ids/held_ids 필터링)이 무력화된다.
+        if not self.get_parameter("scan_floor_enabled").value:
+            # 안전 게이트 — 모듈 상단 SCAN_FLOOR_ENABLED_DEFAULT 경고 참고.
+            # pose_m이 자리표시자인 채로 SELECT/APPROACH가 실제 베이스를
+            # 움직이는 걸 막는 기본값이다. 구조 검증 때만 명시적으로 켤 것.
+            response.detections = DetectionArray(detections=[])
+            return response
+
         if self._hailo_model is None or self._latest_frame is None:
             self.get_logger().warn("scan_floor: Hailo 미로드 또는 프레임 없음 — 빈 목록 반환")
             response.detections = DetectionArray(detections=[])
