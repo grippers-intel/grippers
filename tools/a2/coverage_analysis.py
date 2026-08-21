@@ -6,7 +6,7 @@ issue #149 의 D1·D3 근거 자료다. 실행하면 `docs/assets/vision/` 아�
     python tools/a2/coverage_analysis.py
 
 전제
-- Logitech C270 · 720p · f = 1411 px (HFOV 48.8° 로부터 (1280/2)/tan(24.4°))
+- Logitech C270 · 720p · f = 1410 px (배치도 Rev.I 실측. HFOV 48.8° 환산은 1411)
 - 작업 공간 1.8 × 1.8 m
 - **마주보는 두 "변 중앙" 바깥에 한 대씩** — #130 확정 (모서리 배치가 아니다)
 - 높이 1,650 mm 는 삼각대 최대치라 고정값이다. 후퇴만 조절 가능하다
@@ -51,10 +51,11 @@ def _warn_if_font_missing() -> None:
 FOCAL_PX = 1410.0  # 배치도 Rev.I 실측 (HFOV 48.8° 환산 1411 과 반올림 차이)
 WORKSPACE_MM = 1800.0
 HALF_MM = WORKSPACE_MM / 2
-WALL_H_MM = 350.0  # 보수적인 쪽. 배치도 Rev.I 는 탑뷰1 쪽 0.25 m / 탑뷰2 쪽 0.35 m
+WALL_H_MM = 350.0  # 울타리 35 x 45 cm 확정 실측. 배치도의 0.25 m 열은 미채택 대조군
 U_LIMIT, V_LIMIT = 640.0, 360.0
 DETECT_PX = 20.0  # YOLO 가 안정적으로 무는 최소 물체 폭
-OBJ_MM = 30.0  # 폐기된 옛 규격. 왜 50 mm 로 올렸는지의 근거라 그대로 둔다
+OBJ_SPEC_MM = 40.0  # 확정 규격 (#180 Rev.II) — 그리퍼가 이 이상은 못 집는다
+OBJ_MM = 30.0  # 폐기된 옛 규격. 왜 40 mm 로 올렸는지의 근거라 그대로 둔다
 # 가벽이 만드는 사각지대는 **비용이지 제약이 아니다.**
 # 예전에 204 mm 를 feasibility 필터로 썼는데, 그 값은 폐기된 모서리 배치
 # (2050/1400)에서 우연히 나온 수치였을 뿐 독립적인 설계 요구가 아니었다.
@@ -64,7 +65,11 @@ OBJ_MM = 30.0  # 폐기된 옛 규격. 왜 50 mm 로 올렸는지의 근거라 �
 BLIND_CONTOURS_MM = (150.0, 250.0, 350.0, 450.0)
 PICK = (1650.0, 950.0)  # 배치도 Rev.I · 8/20 팀 확정 (높이, 변 중앙에서의 후퇴)
 PITCH_DEG = 44.1  # 확정 하향각 — 프레임 상단을 먼 울타리에 맞춘 값
-COVER_START_MM = 212.0  # 화각 전폭이 시작되는 지점. 그 앞은 마주보는 카메라가 덮는다
+COVER_START_MM = 256.0  # 담당 구역이 시작하는 y. blind_band(1650, 950) = 255.8 에서 왔다.
+# 이 앞은 (a) 울타리에 가려 애초에 안 찍히고 (b) 마주보는 카메라가 덮는다. 배치도의
+# "화각 전폭 시작 0.21 m" 보다 크므로 이쪽이 지배한다 — 실효 커버 0.26 m 는 그대로다.
+# 0.21 을 그대로 쓰면 확정 피치에서 max|u| 가 640.03 으로 넘쳐, 판정이 자기 자신을
+# 통과 조건으로 삼는 꼴이 되고 좌우 설치 오차를 1 mm 도 못 받는다.
 CORNER_OLD = (2050.0, 1400.0)  # 8/19 오전에 검토했다가 폐기한 모서리 배치
 TALLER = (1900.0, 900.0)  # 더 높은 거치가 가능할 때의 대안 (#149 D3)
 OUT = Path(__file__).resolve().parents[2] / "docs" / "assets" / "vision"
@@ -93,8 +98,9 @@ def duty_points(layout: str) -> list[tuple[float, float]]:
 
     변 중앙 배치는 **가까운 벽에 딱 붙은 귀퉁이를 요구하지 않는다.** 배치도 Rev.I
     가 후퇴를 권고 1100 에서 950 mm 로 줄이면서 앞쪽 COVER_START_MM 를 포기하기로
-    확정했고, 그 안쪽은 마주보는 반대편 카메라가 덮는다. 이 전제를 빼면 확정 배치가
-    FOV 초과(max|u| 675/640)로 판정된다 — 예전 duty 정의가 그랬다.
+    확정했고, 그 안쪽은 울타리에 가려 어차피 안 찍히며 마주보는 카메라가 덮는다.
+    이 전제를 빼면 확정 배치가 FOV 초과(max|u| 675/640)로 판정된다 — 예전 정의가
+    그랬다. 판정에 쓸 피치는 best_pitch 가 아니라 PITCH_DEG 다(fits 의 docstring).
     """
     if layout == "edge":
         y0 = COVER_START_MM
@@ -138,8 +144,28 @@ def _best_pitch_for(
     return pitch, u, v
 
 
-def fits(h: float, s: float, layout: str) -> bool:
-    r = best_pitch(h, s, layout)
+def frame_extent(h: float, s: float, layout: str, pitch_deg: float) -> tuple[float, float, float]:
+    """주어진 피치에서의 (pitch, max|u|, max|v|). 최적 피치가 아니라 실제로 세울 각도."""
+    center, right, down, fwd = _rig(h, s, pitch_deg, layout)
+    us, vs = [], []
+    for x, y in duty_points(layout):
+        d = np.array([x, y, 0.0]) - center
+        z = d @ fwd
+        if z <= 0:
+            return pitch_deg, float("inf"), float("inf")
+        us.append(abs(FOCAL_PX * (d @ right) / z))
+        vs.append(abs(FOCAL_PX * (d @ down) / z))
+    return pitch_deg, max(us), max(vs)
+
+
+def fits(h: float, s: float, layout: str, pitch_deg: float | None = None) -> bool:
+    """pitch_deg 를 주면 그 피치로, 없으면 최적 피치로 판정한다.
+
+    fig1 전수 탐색은 칸마다 최적 피치가 다르므로 None 을 쓴다. 확정 리그 판정에는
+    PITCH_DEG 를 넘겨야 한다 — 안 그러면 "최적 피치로는 들어오지만 확정 피치로는
+    넘치는" 배치를 통과시킨다.
+    """
+    r = frame_extent(h, s, layout, pitch_deg) if pitch_deg is not None else best_pitch(h, s, layout)
     return r is not None and r[1] <= U_LIMIT and r[2] <= V_LIMIT
 
 
@@ -325,7 +351,10 @@ def fig_object_size() -> float:
         arrowprops=dict(arrowstyle="->", lw=1.6, color="#ff3b30"),
         bbox=dict(fc="#fff3f2", ec="#ff3b30", lw=1.3, pad=5),
     )
-    for x, lab, col in [(30, "현재 원기둥\n30 mm", "#8e8e93"), (50, "권고\n50 mm", "#34c759")]:
+    for x, lab, col in [
+        (OBJ_MM, "폐기 규격\n30 mm", "#8e8e93"),
+        (OBJ_SPEC_MM, "확정\n40 mm", "#34c759"),
+    ]:
         ax.axvline(x, color=col, lw=1.2, alpha=0.8)
         ax.text(x, 1.5, lab, ha="center", va="bottom", fontsize=10, color="#3a3a3c")
         ax.plot([x], [x * FOCAL_PX / worst], "s", ms=8, mec="k", mfc="w", zorder=5)
@@ -469,13 +498,13 @@ def four_edge_best(strip_mm: float = 450.0) -> tuple[float, float, float, float]
 
 def sensitivity_table() -> None:
     h, s = PICK
-    pitch, umax, vmax = best_pitch(h, s, "edge")
+    pitch, umax, vmax = frame_extent(h, s, "edge", PITCH_DEG)
     print(
-        f"# 변 중앙 배치 h={h:.0f} s={s:.0f} · 하향 {pitch:.1f}° (확정 {PITCH_DEG}°) · "
+        f"# 변 중앙 배치 h={h:.0f} s={s:.0f} · 확정 하향 {pitch:.1f}° · "
         f"max|u|={umax:.0f}/{U_LIMIT:.0f} max|v|={vmax:.0f}/{V_LIMIT:.0f} · "
         f"가림 띠 {blind_band(h, s):.0f} mm"
     )
-    if not fits(h, s, "edge"):
+    if not fits(h, s, "edge", PITCH_DEG):
         print(
             f"[!] 이 배치는 FOV 를 초과합니다 (max|u|={umax:.0f}/{U_LIMIT:.0f}). "
             "아래 값은 참고용입니다 — duty_points 전제와 배치도를 대조하세요."
@@ -483,12 +512,15 @@ def sensitivity_table() -> None:
     print()
     head = (
         f"{'지점':<24}{'슬랜트':>8}{'고도각':>8}{'σmax':>9}"
-        f"{'근사식':>9}{'3px':>8}{'30mm':>8}{'50mm':>8}"
+        f"{'근사식':>9}{'3px':>8}{'30mm':>8}{'40mm':>8}"
     )
     print(head)
+    # 첫 두 행은 y=0(벽에 붙은 선)이 아니라 COVER_START_MM 위의 점이다.
+    # y=0 은 확정 피치에서 v=403/360 으로 프레임 아래로 잘려 나가 애초에 안 찍힌다 —
+    # 거기 값을 "가장 좋은 조건"으로 표 맨 위에 올리면 없는 성능을 보고하는 셈이다.
     rows = [
-        ("가까운 변 중앙", HALF_MM, 0.0),
-        ("가까운 변 모서리", 0.0, 0.0),
+        ("커버 시작 변 중앙", HALF_MM, COVER_START_MM),
+        ("커버 시작 모서리", 0.0, COVER_START_MM),
         ("담당 구역 중앙", HALF_MM, HALF_MM / 2),
         ("경계 중앙", HALF_MM, HALF_MM),
         ("경계 모서리 — 최악점", 0.0, HALF_MM),
@@ -499,7 +531,7 @@ def sensitivity_table() -> None:
         approx = slant / (FOCAL_PX * math.sin(math.radians(elev)))
         print(
             f"{name:<24}{slant / 1000:8.2f}{elev:8.1f}{sig:9.2f}{approx:9.2f}"
-            f"{3 * sig:8.1f}{OBJ_MM * FOCAL_PX / slant:8.1f}{50 * FOCAL_PX / slant:8.1f}"
+            f"{3 * sig:8.1f}{OBJ_MM * FOCAL_PX / slant:8.1f}{OBJ_SPEC_MM * FOCAL_PX / slant:8.1f}"
         )
 
 
