@@ -14,6 +14,7 @@ E-STOP은 이 전이 그래프에 없다 — `MissionTask.run()` 이 다음 `exe
 
 from dataclasses import replace
 
+from domain.task.floor_grasp_policy import select_horizontal_grasp_plan
 from domain.task.state import State
 from domain.values import MissionContext, MissionMode, Point3, Pose2D
 
@@ -23,7 +24,7 @@ from domain.values import MissionContext, MissionMode, Point3, Pose2D
 OPEN_MM = 168.0
 CLOSED_MM = 9.0
 GRASP_APPROACH_HEIGHT_M = 0.10  # TODO: 실측 — 파지 하강 전 안전 여유 높이
-INSERT_DROP_HEIGHT_M = 0.05  # TODO: 실측 — 상자 입구 상단에서 투입 낙차 높이
+MIN_GRIPPER_CLEARANCE_M = 0.14  # 실측 요구 — 베이스 이동 전 바닥부터 파지 중심 높이
 HANDOVER_POINT_M = Point3(x=0.30, y=0.0, z=0.35)  # TODO: 실측 — 사용자 인계 손끝 위치
 HANDOVER_LOAD_THRESHOLD = 0.05  # TODO: 실측 — '사람이 받아감' 판정 부하 임계값
 PUT_DOWN_POINT_M = Point3(x=0.30, y=0.0, z=0.0)  # TODO: 실측 — REJECT 시 안전한 내려놓기 위치
@@ -226,27 +227,90 @@ class GraspState(State):
     # 이전 값 0.15 는 어떤 물체도 넘지 못했다(가베조차 0.137) — 실기에서
     # 파지 판정이 항상 실패했다.
     LOAD_THRESHOLD = 0.04
+    RETRY_ELIGIBLE_LOAD = 0.031
+    RETRY_TIGHTEN_MM = 5.0
 
     def __init__(self, ctx, target):
         self.ctx = ctx
         self.target = target
 
     def execute(self, ports):
-        approach_point = Point3(
-            x=self.target.pose_m.x,
-            y=self.target.pose_m.y,
-            z=self.target.pose_m.z + GRASP_APPROACH_HEIGHT_M,
-        )
-        ports.arm.move_to_cartesian(approach_point)
-        ports.arm.move_to_cartesian(self.target.pose_m, down=True)
-        ports.arm.set_gripper(CLOSED_MM)
+        plan = select_horizontal_grasp_plan(self.target)
 
-        if ports.arm.get_load() >= self.LOAD_THRESHOLD:
+        # 기본 경로는 실기 검증된 수평 파지다. 80 mm로 충분히 벌린 뒤 내려가
+        # 체스말의 돌출된 머리에 손가락이 걸리지 않게 한다.
+        if not ports.arm.move_to_floor_pose(plan.profile, "safe"):
+            return self._execute_vertical_fallback(ports)
+        ports.arm.set_gripper(plan.preopen_width_mm)
+        if not ports.arm.move_to_floor_pose(plan.profile, "grasp"):
+            return self._retry_after_release(ports)
+
+        ports.arm.set_gripper(plan.close_width_mm)
+        load = ports.arm.get_load()
+        if self.RETRY_ELIGIBLE_LOAD < load < self.LOAD_THRESHOLD:
+            retry_width = max(CLOSED_MM, plan.close_width_mm - self.RETRY_TIGHTEN_MM)
+            ports.arm.set_gripper(retry_width)
+            load = ports.arm.get_load()
+
+        # 바닥에서 곧장 140 mm로 들지 않는다. 실측처럼 중간 높이에서 미끄러짐을
+        # 다시 확인한 뒤에만 베이스가 움직일 수 있는 안전 자세로 간다.
+        lifted = load >= self.LOAD_THRESHOLD and ports.arm.move_to_floor_pose(
+            plan.profile, "midpoint"
+        )
+        held = lifted and ports.arm.get_load() >= self.LOAD_THRESHOLD
+        cleared = held and ports.arm.move_to_floor_pose(plan.profile, "safe")
+        if cleared:
+            # 물체를 든 채 SAFE_145 → IDLE 관절 자세로 직접 접는 경로를 큐브로
+            # 실측했다. servo 2 load가 196 → 64로 줄고 gripper load는 0.1056으로
+            # 유지됐다. CARRY_IDLE 도달과 파지 재검증 전에는 베이스가 움직이면 안 된다.
+            #
+            # 여기서 자세 실패·로드 하락은 EstopState가 아니라 _retry_after_release다
+            # — E-STOP은 사람이 개입해야 하는 인터럽트다(파일 헤더 참고), 물체를
+            # 놓친 것은 이 루프 FSM이 원래 복구하도록 설계된 조건이다.
+            # _execute_vertical_fallback도 개념적으로 같은 상황(잡았는데 안전
+            # 위치로 못 감)에서 이미 이렇게 처리한다 — 여기만 안 맞춰져 있었다.
+            if not ports.arm.move_to_floor_pose(plan.profile, "idle"):
+                return self._retry_after_release(ports)
+            if ports.arm.get_load() < self.LOAD_THRESHOLD:
+                return self._retry_after_release(ports)
             if self.ctx.spec.mode is MissionMode.TIDY:
                 return TransportState(self.ctx, self.target)
             return DeliverState(self.ctx, self.target)
 
-        # 빈손 — 그리퍼가 끝까지 닫힘.
+        return self._retry_after_release(ports)
+
+    def _execute_vertical_fallback(self, ports):
+        """수평 전용 자세를 쓸 수 없을 때만 기존 수직 IK를 한 번 시도한다."""
+        floor_z = self.target.pose_m.z - self.target.dims_m.z / 2.0
+        safe_z = max(
+            self.target.pose_m.z + GRASP_APPROACH_HEIGHT_M,
+            floor_z + MIN_GRIPPER_CLEARANCE_M,
+        )
+        approach_point = Point3(
+            x=self.target.pose_m.x,
+            y=self.target.pose_m.y,
+            z=safe_z,
+        )
+        if not ports.arm.move_to_cartesian(approach_point):
+            return self._retry_after_release(ports)
+        ports.arm.set_gripper(OPEN_MM)
+        if not ports.arm.move_to_cartesian(self.target.pose_m, down=True):
+            return self._retry_after_release(ports)
+        ports.arm.set_gripper(CLOSED_MM)
+
+        if ports.arm.get_load() >= self.LOAD_THRESHOLD and ports.arm.move_to_cartesian(
+            approach_point
+        ):
+            if self.ctx.spec.mode is MissionMode.TIDY:
+                return TransportState(self.ctx, self.target)
+            return DeliverState(self.ctx, self.target)
+
+        # 빈손이거나 안전 운반 높이까지 들지 못했다. 낮은 위치에서 물체를 놓고
+        # 이전 pose를 재사용하지 않는다. 들어 올리지 못한 상태로 베이스가 움직이는
+        # 것보다 대상을 보류하고 재스캔하는 편이 안전하다.
+        return self._retry_after_release(ports)
+
+    def _retry_after_release(self, ports):
         ports.arm.set_gripper(OPEN_MM)
         if self.ctx.grasp_attempts >= self.MAX_GRASP_RETRY:
             return ScanState(self.ctx.hold(self.target.track_id))
@@ -352,20 +416,25 @@ class InsertState(State):
 
     def execute(self, ports):
         ports.base.stop()
-        settled = ports.arm.reorient(self.phi_rad)
-        if not settled:
-            return RejectState(self.ctx, self.target, "자세 정착 실패")
-
         clearance = ports.perception.monitor_clearance()
         if clearance.contact_risk:
             return RejectState(self.ctx, self.target, "투입 중 접촉 위험")
 
-        # TODO: 실측 — 실제 삽입 지점은 box.pose_m + 낙차 오프셋을 IK로 풀어야
-        # 한다. 실측 전까지는 상자 위치 + 고정 낙차 높이를 그대로 쓴다.
-        insert_point = Point3(x=self.box.pose_m.x, y=self.box.pose_m.y, z=INSERT_DROP_HEIGHT_M)
-        ports.arm.move_to_cartesian(insert_point, down=True)
+        # 바구니에서는 바닥 파지 높이로 내려가지 않는다. CARRY_IDLE에서 검증된
+        # 베이스가 정지·정렬된 CARRY_IDLE에서 실측 DROP_195로 직접 전개한 뒤
+        # 그리퍼를 열어 낙하시킨다.
+        # 가장 낮은 파지점(나이트)도 120 mm 테두리 위로 통과한다.
+        #
+        # 자세 실패는 EstopState가 아니라 RejectState다 — 바로 위 접촉 위험과
+        # 같은 종류의 실패(투입 동작 중 못 감)인데 EstopState를 쓰면 미션이
+        # 그 자리에서 끝난다. 물체는 이미 든 채이므로 REJECT가 내려놓고
+        # 보류 등록한 뒤 SCAN으로 복귀시킨다.
+        plan = select_horizontal_grasp_plan(self.target)
+        if not ports.arm.move_to_floor_pose(plan.profile, "drop"):
+            return RejectState(self.ctx, self.target, "투입 자세 실패")
         ports.arm.set_gripper(OPEN_MM)
-        ports.arm.fold_to_cradle()
+        if not ports.arm.move_to_floor_pose(plan.profile, "idle"):
+            return RejectState(self.ctx, self.target, "투입 자세 실패")
         return ScanState(self.ctx.complete(self.target.track_id))
 
 

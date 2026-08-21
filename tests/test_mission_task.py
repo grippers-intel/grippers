@@ -17,16 +17,19 @@ from domain.task.states import (
     ALIGN_TOLERANCE_RAD,
     SCAN_NO_CHANGE_LIMIT,
     GraspState,
+    InsertState,
     PosePlanState,
 )
 from domain.values import (
     BoxColor,
+    BoxObservation,
     Detection,
     MissionContext,
     MissionMode,
     MissionSpec,
     ObjectClass,
     Point3,
+    Pose2D,
 )
 
 
@@ -38,6 +41,15 @@ def _detection(track_id, cls=ObjectClass.GABE, x=0.2, confidence=0.9):
         dims_m=Point3(x=0.05, y=0.05, z=0.05),
         yaw_rad=0.0,
         confidence=confidence,
+    )
+
+
+def _box_observation(color=BoxColor.RED, opening_mm=400.0):
+    return BoxObservation(
+        color=color,
+        pose_m=Pose2D(x=0.5, y=0.0, theta=0.0),
+        opening_mm=opening_mm,
+        long_axis_rad=0.0,
     )
 
 
@@ -432,6 +444,161 @@ def test_minimum_holding_load_passes_grasp(make_ports, run_to_completion):
     assert states[-1].ctx.done_ids == {1}
 
 
+def test_grasp_rechecks_at_145mm_then_folds_to_carry_idle_before_transport(make_ports):
+    """수평 파지는 145 mm 재검증과 CARRY_IDLE을 마쳐야 운반으로 넘어간다."""
+    target = _detection(track_id=1)
+    arm = FakeArm(load_ratio=0.047)
+    ports = make_ports(arm=arm)
+    ctx = MissionContext(
+        spec=MissionSpec(
+            mode=MissionMode.TIDY,
+            target_cls=ObjectClass.GABE,
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            raw_text="",
+        )
+    )
+
+    next_state = GraspState(ctx, target).execute(ports)
+
+    assert arm.floor_pose_calls == [
+        ("soccer_polyhedron", "safe"),
+        ("soccer_polyhedron", "grasp"),
+        ("soccer_polyhedron", "midpoint"),
+        ("soccer_polyhedron", "safe"),
+        ("soccer_polyhedron", "idle"),
+    ]
+    assert arm.gripper_widths == [80.0, 35.0]
+    assert next_state.name == "TRANSPORT"
+
+
+def test_failed_lift_releases_object_and_blocks_transport(make_ports):
+    """파지는 됐어도 140 mm 안전 높이 상승 실패를 운반 성공으로 보지 않는다."""
+
+    class LiftFailingArm(FakeArm):
+        def move_to_floor_pose(self, profile, stage):
+            self.floor_pose_calls.append((profile, stage))
+            return len(self.floor_pose_calls) < 4
+
+    target = _detection(track_id=1)
+    arm = LiftFailingArm(load_ratio=0.047)
+    ports = make_ports(
+        arm=arm,
+        perception=ScriptedPerception(detections=[target]),
+    )
+    ctx = MissionContext(
+        spec=MissionSpec(
+            mode=MissionMode.TIDY,
+            target_cls=ObjectClass.GABE,
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            raw_text="",
+        )
+    )
+
+    next_state = GraspState(ctx, target).execute(ports)
+
+    assert next_state.name == "GRASP"
+    assert arm.gripper_widths[-1] == states_module.OPEN_MM
+
+
+def test_horizontal_mid_lift_load_drop_blocks_safe_lift(make_ports):
+    target = _detection(track_id=1)
+    arm = FakeArm(load_ratio=[0.07, 0.03])
+    ports = make_ports(arm=arm, perception=ScriptedPerception(detections=[target]))
+    ctx = MissionContext(
+        spec=MissionSpec(
+            mode=MissionMode.TIDY,
+            target_cls=ObjectClass.GABE,
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            raw_text="",
+        )
+    )
+
+    next_state = GraspState(ctx, target).execute(ports)
+
+    assert next_state.name == "GRASP"
+    assert arm.floor_pose_calls[-1] == ("soccer_polyhedron", "midpoint")
+    assert arm.floor_pose_calls.count(("soccer_polyhedron", "safe")) == 1
+    assert arm.gripper_widths[-1] == states_module.OPEN_MM
+
+
+def test_carry_idle_load_drop_retries_instead_of_estopping(make_ports):
+    """물체를 이미 성공적으로 들어 SAFE_145까지 확인했는데 CARRY_IDLE로 접는
+    도중 로드가 떨어지면(놓침) 미션을 끝내는 게 아니라 놓고 재스캔해서 같은
+    대상을 다시 시도한다 — EstopState는 사람 개입이 필요한 인터럽트고, 이건
+    루프 FSM이 원래 복구하도록 설계된 조건이다(_execute_vertical_fallback이
+    같은 상황에서 이미 이렇게 처리한다)."""
+    target = _detection(track_id=1)
+    arm = FakeArm(load_ratio=[0.07, 0.07, 0.03])
+    ports = make_ports(arm=arm)
+    ctx = MissionContext(
+        spec=MissionSpec(
+            mode=MissionMode.TIDY,
+            target_cls=ObjectClass.GABE,
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            raw_text="",
+        )
+    )
+
+    next_state = GraspState(ctx, target).execute(ports)
+
+    assert next_state.name == "GRASP"
+    assert next_state.ctx.grasp_attempts == 1
+    assert arm.floor_pose_calls[-1] == ("soccer_polyhedron", "idle")
+    assert arm.gripper_widths[-1] == states_module.OPEN_MM
+
+
+def test_carry_idle_pose_failure_retries_instead_of_estopping(make_ports):
+    """CARRY_IDLE 자세 자체에 못 닿아도(로드가 아니라 서보 이동 실패) 같은
+    경로 — EstopState가 아니라 재시도다."""
+
+    class FailsIdleStage(FakeArm):
+        def move_to_floor_pose(self, profile, stage):
+            self.floor_pose_calls.append((profile, stage))
+            return stage != "idle"
+
+    target = _detection(track_id=1)
+    arm = FailsIdleStage(load_ratio=0.07)
+    ports = make_ports(arm=arm)
+    ctx = MissionContext(
+        spec=MissionSpec(
+            mode=MissionMode.TIDY,
+            target_cls=ObjectClass.GABE,
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            raw_text="",
+        )
+    )
+
+    next_state = GraspState(ctx, target).execute(ports)
+
+    assert next_state.name == "GRASP"
+    assert next_state.ctx.grasp_attempts == 1
+
+
+def test_vertical_fallback_is_used_only_when_horizontal_safe_pose_is_unavailable(make_ports):
+    class NoHorizontalArm(FakeArm):
+        def move_to_floor_pose(self, profile, stage):
+            self.floor_pose_calls.append((profile, stage))
+            return False
+
+    target = _detection(track_id=1)
+    arm = NoHorizontalArm(load_ratio=0.07)
+    ports = make_ports(arm=arm)
+    ctx = MissionContext(
+        spec=MissionSpec(
+            mode=MissionMode.TIDY,
+            target_cls=ObjectClass.GABE,
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            raw_text="",
+        )
+    )
+
+    next_state = GraspState(ctx, target).execute(ports)
+
+    assert arm.floor_pose_calls == [("soccer_polyhedron", "safe")]
+    assert [down for _, down in arm.move_calls] == [False, True, False]
+    assert next_state.name == "TRANSPORT"
+
+
 def test_load_threshold_sits_between_measured_distributions():
     """임계값이 상수로 분리돼 있고, 실측 두 분포 사이에 있다.
     물체 종류가 추가돼 재측정할 때 이 테스트가 경계를 다시 확인해 준다."""
@@ -519,7 +686,7 @@ def test_fetch_mode_routes_through_deliver_and_handover(make_ports, run_to_compl
     ports = make_ports(
         # get_load()는 GRASP(1회차, 높아야 성공)과 HANDOVER(2회차, 낮아야
         # '사람이 받아감')가 반대 의미로 같이 쓴다 — 순서대로 반환.
-        arm=FakeArm(load_ratio=[LOAD_HOLDING, LOAD_EMPTY]),
+        arm=FakeArm(load_ratio=[LOAD_HOLDING, LOAD_HOLDING, LOAD_HOLDING, LOAD_EMPTY]),
         perception=ScriptedPerception(detections=[target]),
     )
 
@@ -575,6 +742,77 @@ def test_align_error_within_tolerance_proceeds_to_insert(make_ports, run_to_comp
 
     assert names.count("INSERT") == 1
     assert states[-1].ctx.done_ids == {1}
+
+
+def test_basket_insert_opens_at_drop_195_without_lowering_to_floor(make_ports, run_to_completion):
+    arm = FakeArm()
+    ports = make_ports(
+        arm=arm,
+        perception=ScriptedPerception(detections=[_detection(track_id=1)]),
+    )
+
+    states = run_to_completion(ports)
+
+    assert "INSERT" in [state.name for state in states]
+    assert arm.floor_pose_calls[-2:] == [
+        ("soccer_polyhedron", "drop"),
+        ("soccer_polyhedron", "idle"),
+    ]
+    assert arm.gripper_widths[-1] == states_module.OPEN_MM
+    assert all(not down for _, down in arm.move_calls)
+
+
+def test_insert_drop_pose_failure_rejects_instead_of_estopping(make_ports):
+    """DROP_195 자세로 못 가면 미션을 끝내는 게 아니라 REJECT다 — 바로 위
+    접촉 위험 분기와 같은 종류의 실패(투입 동작 중 못 감)라 같은 경로를
+    탄다. 물체는 이미 든 채이므로 REJECT가 내려놓고 보류 등록한다."""
+
+    class FailsDropStage(FakeArm):
+        def move_to_floor_pose(self, profile, stage):
+            self.floor_pose_calls.append((profile, stage))
+            return stage != "drop"
+
+    target = _detection(track_id=1)
+    arm = FailsDropStage(load_ratio=0.07)
+    ports = make_ports(arm=arm)
+    ctx = MissionContext(
+        spec=MissionSpec(
+            mode=MissionMode.TIDY,
+            target_cls=ObjectClass.GABE,
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            raw_text="",
+        )
+    )
+
+    next_state = InsertState(ctx, target, _box_observation(), phi_rad=0.0).execute(ports)
+
+    assert next_state.name == "REJECT"
+
+
+def test_insert_idle_return_failure_rejects_instead_of_estopping(make_ports):
+    """투하 자체는 성공했는데(DROP_195 도달, 그리퍼 개방) 빈손으로 IDLE 복귀만
+    실패해도 같은 경로 — REJECT다."""
+
+    class FailsIdleStage(FakeArm):
+        def move_to_floor_pose(self, profile, stage):
+            self.floor_pose_calls.append((profile, stage))
+            return stage != "idle"
+
+    target = _detection(track_id=1)
+    arm = FailsIdleStage(load_ratio=0.07)
+    ports = make_ports(arm=arm)
+    ctx = MissionContext(
+        spec=MissionSpec(
+            mode=MissionMode.TIDY,
+            target_cls=ObjectClass.GABE,
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            raw_text="",
+        )
+    )
+
+    next_state = InsertState(ctx, target, _box_observation(), phi_rad=0.0).execute(ports)
+
+    assert next_state.name == "REJECT"
 
 
 def test_align_error_beyond_tolerance_holds_the_target(make_ports, run_to_completion):

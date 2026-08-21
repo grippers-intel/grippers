@@ -21,6 +21,7 @@ ARM_NODE = (
 )
 DOMAIN_STATES = pathlib.Path(__file__).resolve().parent.parent / "domain" / "task" / "states.py"
 GRIPPER_CALIBRATION = ARM_NODE.with_name("gripper_calibration.py")
+FLOOR_GRASP_PROFILES = ARM_NODE.with_name("floor_grasp_profiles.py")
 
 
 def _parse():
@@ -114,6 +115,32 @@ def test_move_checks_servos_before_and_after_motion():
     assert "go" in names
 
 
+def test_horizontal_floor_pose_uses_checked_interpolated_joint_writes():
+    execute = _function("_execute_floor_pose")
+    move_stage = _function("_move_floor_stage")
+    glide = _function("_glide_to_raw_positions")
+    execute_names = [_called_name(call) for call in _calls(execute)]
+    move_stage_names = [_called_name(call) for call in _calls(move_stage)]
+    glide_names = [_called_name(call) for call in _calls(glide)]
+
+    assert execute_names.count("_require_operational_servos") >= 2
+    assert "_move_floor_stage" in execute_names
+    assert "get_temperature" in execute_names
+    assert "_near_pose" in move_stage_names
+    assert "_glide_to_raw_positions" in move_stage_names
+    assert "get_position" in glide_names
+    assert "set_position" in glide_names
+
+
+def test_horizontal_idle_safe_transition_does_not_use_vertical_waypoints():
+    source = ast.unparse(_function("_move_floor_stage"))
+
+    assert "VERTICAL_SAFE_OVERHEAD" not in source
+    assert "HORIZONTAL_OVERHEAD" not in source
+    assert "self._glide_to_raw_positions(backend, idle)" in source
+    assert "self._glide_to_raw_positions(backend, safe)" in source
+
+
 def test_fold_to_cradle_checks_servos_before_and_after_motion():
     fn = _function("_on_fold_to_cradle")
     names = [_called_name(call) for call in _calls(fn)]
@@ -140,6 +167,16 @@ def test_gripper_calibration_matches_measured_safe_contract():
         (168.0, 2000),
     )
     assert domain == {"CLOSED_MM": 9.0, "OPEN_MM": 168.0}
+
+
+def test_min_gripper_clearance_matches_across_modules():
+    """MIN_GRIPPER_CLEARANCE는 states.py(m)와 floor_grasp_profiles.py(mm) 두 곳에
+    같은 실측값을 다른 단위로 들고 있다. #173이 gripper_calibration 쪽에서 이미
+    막은 것과 같은 종류의 드리프트라, 같은 AST 계약 패턴으로 묶는다."""
+    domain = _module_constants(DOMAIN_STATES, {"MIN_GRIPPER_CLEARANCE_M"})
+    floor_profile = _module_constants(FLOOR_GRASP_PROFILES, {"MIN_GRIPPER_CLEARANCE_MM"})
+
+    assert domain["MIN_GRIPPER_CLEARANCE_M"] * 1000 == floor_profile["MIN_GRIPPER_CLEARANCE_MM"]
 
 
 def test_gripper_calibration_interpolates_and_clamps():
@@ -174,6 +211,30 @@ def test_load_read_failure_is_logged():
 
     assert "get_load" in names
     assert "warn" in names
+
+
+def test_startup_logs_idle_offset_but_never_moves_a_servo():
+    init = _function("__init__")
+    names = [_called_name(call) for call in _calls(init)]
+
+    assert "_log_idle_offset" in names
+    assert names.index("_check_startup_torque") < names.index("_log_idle_offset")
+
+
+def test_idle_offset_logging_reads_position_and_never_writes_it():
+    fn = _function("_log_idle_offset")
+    names = [_called_name(call) for call in _calls(fn)]
+
+    assert "get_position" in names
+    assert "set_position" not in names
+    assert "set_torque" not in names
+    assert {"info", "warn", "error"} & set(names)
+
+
+def test_idle_offset_thresholds_match_documented_warn_and_error_levels():
+    constants = _module_constants(ARM_NODE, {"IDLE_OFFSET_WARN_RAW", "IDLE_OFFSET_ERROR_RAW"})
+
+    assert constants == {"IDLE_OFFSET_WARN_RAW": 120, "IDLE_OFFSET_ERROR_RAW": 800}
 
 
 def test_startup_hardware_failure_is_caught_by_main():

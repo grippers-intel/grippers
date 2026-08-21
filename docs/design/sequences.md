@@ -103,14 +103,20 @@ sequenceDiagram
     Note over T,A: 부하 기반 파지 검증 — 힘 센서 없음
 
     loop 대상 1개 기준 · attempt ≤ MAX_GRASP_RETRY (3)
-        T->>A: move_to_cartesian(접근 지점)
-        T->>A: move_to_cartesian(파지 지점, down=True)
-        T->>A: set_gripper(CLOSED_MM)
+        T->>A: move_to_floor_pose(profile, safe=145 mm; minimum=140 mm)
+        T->>A: set_gripper(80 mm)
+        T->>A: move_to_floor_pose(profile, grasp)
+        T->>A: set_gripper(profile.close_width_mm)
         T->>A: get_load()
         A-->>T: load_ratio (0.0~1.0)
 
         alt load_ratio ≥ LOAD_THRESHOLD
-            Note right of A: 파지 성공 → TRANSPORT / DELIVER
+            T->>A: move_to_floor_pose(profile, midpoint)
+            T->>A: get_load()
+            T->>A: move_to_floor_pose(profile, safe=145 mm; minimum=140 mm)
+            T->>A: move_to_floor_pose(profile, idle=CARRY_IDLE)
+            T->>A: get_load()
+            Note right of A: 중간 부하 유지 + SAFE_145 + CARRY_IDLE<br/>재검증 후 TRANSPORT / DELIVER
         else load_ratio < LOAD_THRESHOLD
             Note right of A: 빈손 — 그리퍼가 끝까지 닫힘
             T->>A: set_gripper(OPEN_MM)
@@ -119,6 +125,8 @@ sequenceDiagram
             Note right of P: 실패한 파지가 물체를 밀었을 수 있음<br/>이전 pose 재사용은 같은 실패를 반복
         end
     end
+
+    Note over T,A: 첫 safe 액션을 사용할 수 없을 때만 기존 down=True 수직 파지를 1회 fallback
 
     Note over T,A: 재시도 소진 → held_ids 등록 후 SCAN 복귀<br/>미션은 끝나지 않는다
 ```
@@ -173,10 +181,10 @@ sequenceDiagram
 
 ---
 
-## 3. 상자 투입 자세 재조정 (⏸ 보류)
+## 3. 바구니 투입
 
-긴 막대(L=0.50 m)를 좁은 상자 입구(W_open=0.40 m)에 넣으려면 **세워야** 합니다.
-프로젝트에서 유일하게 닫힌 형태 해가 있는 기하 계획이자, 시연의 하이라이트입니다.
+현재 대상은 바구니 바닥까지 팔을 내리지 않고 개구 중심 위에서 낙하시킨다.
+베이스가 정지·정렬된 뒤 CARRY_IDLE에서 SAFE_145로 전개하고 그리퍼만 연다.
 
 ```mermaid
 sequenceDiagram
@@ -186,7 +194,7 @@ sequenceDiagram
     participant B as BaseDriver
     participant A as ArmDriver
 
-    Note over T,A: 전제 — 파지 직후 물체는 수평(φ=0)<br/>요(yaw)는 align_to_box()에서 이미 정렬 → 1자유도 문제
+    Note over T,A: 전제 — CARRY_IDLE로 운반 완료<br/>베이스는 바구니 개구 중심에 정렬
 
     T->>P: measure_opening(box)
     P-->>T: opening_mm (상자 입구 짧은 변)
@@ -200,12 +208,8 @@ sequenceDiagram
         T->>A: set_gripper(OPEN_MM)
         Note right of T: 물체를 든 채 미션을 끝내지 않는다<br/>held_ids 등록 후 SCAN 복귀
     else 해 구간 존재
-        Note over T: 해 구간 중 손목 서보 부하 최소 φ 선택 (발열 억제)
         T->>B: stop()
-        Note right of B: ⚠️ 자세 전환은 반드시 정지 상태에서<br/>주행 중 전환 시 무게중심 이탈 → 전복
-        T->>A: reorient(φ)
-        A-->>T: is_settled = true
-        Note right of A: 수평→수직은 피치 회전<br/>손목 단독 불가 — 어깨·팔꿈치 포함 IK 전체 관여
+        T->>A: move_to_floor_pose(profile, safe=145 mm)
 
         loop 투입 중
             T->>P: monitor_clearance()
@@ -213,9 +217,8 @@ sequenceDiagram
             Note right of P: 상자·가구 접촉 = 성공 기준 위반<br/>접촉 예상 시 즉시 정지
         end
 
-        T->>A: move_to_cartesian(입구 상단 → 하강)
         T->>A: set_gripper(OPEN_MM)
-        T->>A: fold_to_cradle()
+        T->>A: move_to_floor_pose(profile, idle)
         A-->>T: 투입 완료 (접촉 0회)
     end
 ```

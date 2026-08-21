@@ -23,7 +23,7 @@ sys.path.insert(0, "/third_party/soarm_provided_d")  # PYTHONPATH 미설정 환�
 
 import rclpy  # noqa: I001
 import rclpy.logging  # main()이 노드 생성 실패 시 노드 없이 로그를 남긴다
-from grippers_interfaces.action import MoveToCartesian, ReorientArm
+from grippers_interfaces.action import MoveToCartesian, MoveToFloorPose, ReorientArm
 from grippers_interfaces.srv import GetLoad, SetGripper
 from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -44,6 +44,12 @@ from .gripper_calibration import (
     GRIPPER_OPEN_MM,
     position_from_width,
 )
+from .floor_grasp_profiles import (
+    BASKET_DROP_195_RAW,
+    HORIZONTAL_GRASP_POSES_DEG,
+    HORIZONTAL_SAFE_145_RAW,
+    IDLE_CRADLE_RAW,
+)
 
 WRIST_SERVO_ID = 4
 GRIPPER_SERVO_ID = 6
@@ -61,8 +67,18 @@ GRIPPER_LOAD_MAX_RAW = 1023.0
 # 1.0s 안정 + 여유로 1.5s. 정착 타이밍은 서보 물리 지식이므로 도메인이 아니라
 # 여기 둔다 — GraspState 에 sleep 을 넣지 않는다.
 GRASP_SETTLE_SEC = 1.5
+FLOOR_POSE_STEPS = 30
+FLOOR_POSE_STEP_SEC = 0.10
+FLOOR_POSE_SETTLE_SEC = 1.0
+MAX_FLOOR_POSE_SERVO2_TEMP_C = 40
+FLOOR_POSE_START_TOLERANCE_RAW = 120
 
-CRADLE_XYZ_M = [0.15, 0.0, 0.20]  # TODO: 실측 — 이동용 거치 자세 손끝 좌표
+# 기동 시 IDLE 대비 편차를 로그로만 남기는 임계값 — 절대 자동 이동의 기준이
+# 아니다. tools/align_to_idle.py가 실제 정렬을 담당한다.
+IDLE_OFFSET_WARN_RAW = 120
+IDLE_OFFSET_ERROR_RAW = 800
+
+CRADLE_XYZ_M = [0.15, 0.0, 0.20]  # TODO: INSERT 후 복귀 경로 별도 실측 필요
 
 # MentorPi 베이스 보드가 잡는 장치. arm_port가 이걸 가리키면 팔 드라이버가
 # 베이스 보드의 시리얼을 열어 버려 주행 명령이 통째로 깨진다.
@@ -102,6 +118,7 @@ class ArmDriverNode(Node):
             soarm._real,
             enable_torque_on_start=enable_torque_on_start,
         )
+        self._log_idle_offset(soarm._real)
 
         self._move_action_server = ActionServer(
             self,
@@ -115,6 +132,13 @@ class ArmDriverNode(Node):
             ReorientArm,
             "arm_driver/reorient",
             execute_callback=self._execute_reorient,
+            callback_group=cb_group,
+        )
+        self._floor_pose_action_server = ActionServer(
+            self,
+            MoveToFloorPose,
+            "arm_driver/move_to_floor_pose",
+            execute_callback=self._execute_floor_pose,
             callback_group=cb_group,
         )
         self.create_service(
@@ -193,6 +217,52 @@ class ArmDriverNode(Node):
             )
 
         self.get_logger().info("SO-ARM101 torque enable 완료")
+
+    def _log_idle_offset(self, backend) -> None:
+        """기동 시 현재 자세와 IDLE 사이 편차를 로그로만 남긴다 — 절대 서보를
+        움직이지 않는다. 정렬은 사람이 tools/align_to_idle.py로 실행한다.
+
+        use_fake_arm 파라미터가 로그가 없어 며칠간 묻힌 사고(#128)의 재발
+        방지책이다: 안전 관련 상태는 반드시 실제 값을 로그로 남긴다."""
+        targets = {servo_id: IDLE_CRADLE_RAW[servo_id - 1] for servo_id in range(1, 6)}
+        targets[GRIPPER_SERVO_ID] = position_from_width(GRIPPER_CLOSED_MM)
+
+        offsets = {}
+        unreadable = []
+        for servo_id, target in targets.items():
+            present = backend.drv.get_position(servo_id)
+            if present is None:
+                unreadable.append(servo_id)
+                continue
+            offsets[servo_id] = present - target
+
+        if unreadable:
+            self.get_logger().error(
+                f"IDLE offset 확인 실패 — present position 읽기 불가 servo IDs: {unreadable}"
+            )
+        if not offsets:
+            return
+
+        summary = " ".join(f"s{sid}={offsets[sid]:+d}" for sid in sorted(offsets))
+
+        breaches = {sid: off for sid, off in offsets.items() if abs(off) > IDLE_OFFSET_WARN_RAW}
+        if not breaches:
+            self.get_logger().info(f"IDLE offset: {summary} -> OK")
+            return
+
+        self.get_logger().warn(f"IDLE offset: {summary}")
+        for servo_id in sorted(breaches):
+            offset = breaches[servo_id]
+            if abs(offset) > IDLE_OFFSET_ERROR_RAW:
+                self.get_logger().error(
+                    f"ERROR: s{servo_id} offset {offset:+d} exceeds {IDLE_OFFSET_ERROR_RAW}. "
+                    "Run tools/align_to_idle.py before motion tests."
+                )
+            else:
+                self.get_logger().warn(
+                    f"WARN: s{servo_id} offset {offset:+d} exceeds {IDLE_OFFSET_WARN_RAW}. "
+                    "Run tools/align_to_idle.py before motion tests."
+                )
 
     def _require_operational_servos(self, servo_ids=ALL_SERVO_IDS) -> None:
         """모션 전후 대상 서보가 통신 가능하고 torque ON인지 확인한다."""
@@ -294,6 +364,135 @@ class ArmDriverNode(Node):
         result.wrist_load = self._read_load(WRIST_SERVO_ID)
         goal_handle.succeed()
         return result
+
+    def _execute_floor_pose(self, goal_handle):
+        req = goal_handle.request
+        result = MoveToFloorPose.Result()
+        try:
+            if req.profile not in HORIZONTAL_GRASP_POSES_DEG:
+                raise ValueError(f"알 수 없는 수평 파지 profile: {req.profile}")
+            if req.stage not in {"idle", "safe", "grasp", "midpoint", "drop"}:
+                raise ValueError(f"알 수 없는 수평 파지 stage: {req.stage}")
+
+            self._require_operational_servos(range(1, 6))
+            backend = soarm._backend(real=True)
+            # 내려가기 직전에만 온도 상한을 적용한다. 물체를 든 뒤 온도가
+            # 상한을 넘었더라도 midpoint/safe 상승은 막지 않아야 바닥 가까이에
+            # 물체를 든 채 정지하는 더 위험한 상태를 피할 수 있다.
+            if req.stage == "grasp":
+                servo2_temp = backend.drv.get_temperature(2)
+                if servo2_temp is None or servo2_temp > MAX_FLOOR_POSE_SERVO2_TEMP_C:
+                    raise ArmHardwareUnavailableError(
+                        f"servo 2 온도 {servo2_temp}°C — 수평 파지 시작 상한 "
+                        f"{MAX_FLOOR_POSE_SERVO2_TEMP_C}°C"
+                    )
+
+            self._move_floor_stage(backend, req.profile, req.stage)
+            self._require_operational_servos(range(1, 6))
+            result.reached = True
+            goal_handle.succeed()
+        except ValueError as e:
+            self.get_logger().warn(f"수평 파지 자세 거부: {e}")
+            result.reached = False
+            goal_handle.abort()
+        except Exception as e:
+            self.get_logger().error(f"수평 파지 자세 하드웨어 오류: {e}")
+            result.reached = False
+            goal_handle.abort()
+        return result
+
+    def _glide_to_joint_angles(self, backend, angles_deg) -> None:
+        """실측 시험과 같은 선형 waypoint로 servo 1..5를 천천히 이동한다."""
+        goal = {
+            servo_id: backend.drv.degrees_to_position(angles_deg[servo_id - 1])
+            for servo_id in range(1, 6)
+        }
+        self._glide_to_raw_positions(backend, goal)
+
+    def _glide_to_raw_positions(self, backend, goal) -> None:
+        """servo 1..5 raw 목표로 선형 보간 이동한다."""
+        start = {servo_id: backend.drv.get_position(servo_id) for servo_id in range(1, 6)}
+        if any(position is None for position in start.values()):
+            raise ArmHardwareUnavailableError(f"시작 관절 위치 읽기 실패: {start}")
+
+        for step_index in range(1, FLOOR_POSE_STEPS + 1):
+            ratio = step_index / FLOOR_POSE_STEPS
+            for servo_id in range(1, 6):
+                position = round(start[servo_id] + ratio * (goal[servo_id] - start[servo_id]))
+                if not backend.drv.set_position(servo_id, position):
+                    raise ArmHardwareUnavailableError(
+                        f"servo {servo_id} write 실패 — step {step_index}/{FLOOR_POSE_STEPS}"
+                    )
+            time.sleep(FLOOR_POSE_STEP_SEC)
+        time.sleep(FLOOR_POSE_SETTLE_SEC)
+
+    def _raw_goals(self, backend, angles_deg):
+        return {
+            servo_id: backend.drv.degrees_to_position(angles_deg[servo_id - 1])
+            for servo_id in range(1, 6)
+        }
+
+    @staticmethod
+    def _tuple_goals(raw_positions):
+        return {servo_id: raw_positions[servo_id - 1] for servo_id in range(1, 6)}
+
+    @staticmethod
+    def _near_pose(actual, expected):
+        return all(
+            abs(actual[servo_id] - expected[servo_id]) <= FLOOR_POSE_START_TOLERANCE_RAW
+            for servo_id in range(1, 6)
+        )
+
+    def _move_floor_stage(self, backend, profile, stage) -> None:
+        """검증된 자세 사이에서만 움직인다. 수평 IDLE↔SAFE는 직접 전환한다."""
+        actual = {servo_id: backend.drv.get_position(servo_id) for servo_id in range(1, 6)}
+        if any(position is None for position in actual.values()):
+            raise ArmHardwareUnavailableError(f"현재 관절 위치 읽기 실패: {actual}")
+
+        idle = self._tuple_goals(IDLE_CRADLE_RAW)
+        safe = self._tuple_goals(HORIZONTAL_SAFE_145_RAW)
+        drop = self._tuple_goals(BASKET_DROP_195_RAW)
+        grasp = self._raw_goals(backend, HORIZONTAL_GRASP_POSES_DEG[profile])
+        midpoint = {
+            servo_id: round((grasp[servo_id] + safe[servo_id]) / 2.0) for servo_id in range(1, 6)
+        }
+
+        if stage == "idle":
+            if self._near_pose(actual, idle):
+                return
+            if not (self._near_pose(actual, safe) or self._near_pose(actual, drop)):
+                raise ValueError("idle 복귀는 safe/drop 자세에서만 시작할 수 있습니다")
+            self._glide_to_raw_positions(backend, idle)
+            return
+
+        if stage == "safe":
+            if self._near_pose(actual, idle):
+                self._glide_to_raw_positions(backend, safe)
+                return
+            if self._near_pose(actual, grasp):
+                self._glide_to_raw_positions(backend, midpoint)
+                self._glide_to_raw_positions(backend, safe)
+                return
+            if self._near_pose(actual, midpoint):
+                self._glide_to_raw_positions(backend, safe)
+                return
+            if self._near_pose(actual, safe):
+                return
+            if self._near_pose(actual, drop):
+                self._glide_to_raw_positions(backend, safe)
+                return
+            raise ValueError("safe 이동 시작 자세가 등록된 idle/grasp/midpoint/drop이 아닙니다")
+
+        if stage == "drop":
+            if not (self._near_pose(actual, idle) or self._near_pose(actual, safe)):
+                raise ValueError("drop 이동은 idle/safe 자세에서만 시작할 수 있습니다")
+            self._glide_to_raw_positions(backend, drop)
+            return
+
+        expected_start = safe if stage == "grasp" else grasp
+        if not self._near_pose(actual, expected_start):
+            raise ValueError(f"{stage} 이동 시작 자세가 등록된 이전 단계가 아닙니다")
+        self._glide_to_raw_positions(backend, grasp if stage == "grasp" else midpoint)
 
     def _on_set_gripper(self, request, response):
         width_mm = max(GRIPPER_CLOSED_MM, min(GRIPPER_OPEN_MM, request.width_mm))

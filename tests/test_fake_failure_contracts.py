@@ -58,6 +58,13 @@ FAILURE_CONTRACTS = [
         False,
         None,
     ),
+    (
+        ArmDriver,
+        "move_to_floor_pose",
+        lambda: FakeArm(move_ok=False).move_to_floor_pose("cube", "safe"),
+        False,
+        "`False`",
+    ),
     (ArmDriver, "get_load", lambda: FakeArm(load_ratio=0.0).get_load(), 0.0, None),
     (ArmDriver, "reorient", lambda: FakeArm(reorient_ok=False).reorient(0.0), False, None),
     (ArmDriver, "fold_to_cradle", lambda: FakeArm(fold_ok=False).fold_to_cradle(), False, None),

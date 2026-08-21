@@ -7,6 +7,15 @@ from domain.values import Point3
 
 class ArmDriver(ABC):
     @abstractmethod
+    def move_to_floor_pose(self, profile: str, stage: str) -> bool:
+        """실측된 수평 바닥 파지 자세로 단계 이동한다.
+
+        ``stage`` 는 ``idle``, ``safe``(145 mm), ``grasp``, ``midpoint`` 또는
+        바구니 투하용 ``drop``(195 mm)이다.
+        프로필/단계를 지원하지 않거나 하드웨어 이동에 실패하면 ``False``다.
+        """
+
+    @abstractmethod
     def move_to_cartesian(self, xyz_m: Point3, down: bool = False) -> bool:
         """손끝을 xyz_m(m)로 이동한다. 도달 불가하면 False.
         그리퍼 개폐는 이 메서드가 하지 않는다 — `set_gripper()` 를 별도로 호출한다

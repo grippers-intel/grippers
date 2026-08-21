@@ -31,12 +31,20 @@ class FakeArm(ArmDriver):
             [load_ratio] if isinstance(load_ratio, (int, float)) else list(load_ratio)
         )
         self._load_call_count = 0
+        self.move_calls = []
+        self.floor_pose_calls = []
+        self.gripper_widths = []
+
+    def move_to_floor_pose(self, profile: str, stage: str) -> bool:
+        self.floor_pose_calls.append((profile, stage))
+        return self._move_ok
 
     def move_to_cartesian(self, xyz_m: Point3, down: bool = False) -> bool:
+        self.move_calls.append((xyz_m, down))
         return self._move_ok
 
     def set_gripper(self, width_mm: float) -> None:
-        pass
+        self.gripper_widths.append(width_mm)
 
     def get_load(self) -> float:
         idx = min(self._load_call_count, len(self._load_ratios) - 1)
