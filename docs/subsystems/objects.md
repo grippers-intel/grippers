@@ -55,7 +55,7 @@
 고른 값으로 최악점 **21.4 px** — 20 px 기준 대비 **7% 여유**뿐이라 조명·모션블러
 여지를 남기지 마세요. 30 mm는 최악점 16.0 px로 검출 미달입니다.
 **현재 실물 30~37 mm는 재출력 대상입니다.**
-(정본 [`workspace_layout.html`](../design/workspace_layout.html) Rev.I · 재현 `tools/a2/coverage_analysis.py`)
+(정본 [`workspace_layout.html`](../design/workspace_layout.html) Rev.II · 재현 `tools/a2/coverage_analysis.py`)
 
 ## 3D 프린팅 체스말 설계
 
