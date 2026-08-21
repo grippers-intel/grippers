@@ -8,6 +8,7 @@ arm_driver_node는 rclpy·grippers_interfaces와 실제 SO-ARM101 의존성이 �
 """
 
 import ast
+import importlib.util
 import pathlib
 
 ARM_NODE = (
@@ -18,6 +19,8 @@ ARM_NODE = (
     / "grippers_arm"
     / "arm_driver_node.py"
 )
+DOMAIN_STATES = pathlib.Path(__file__).resolve().parent.parent / "domain" / "task" / "states.py"
+GRIPPER_CALIBRATION = ARM_NODE.with_name("gripper_calibration.py")
 
 
 def _parse():
@@ -33,6 +36,25 @@ def _function(name):
         for node in ast.walk(_parse())
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
     )
+
+
+def _module_constants(path, names):
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return {
+        node.targets[0].id: ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id in names
+    }
+
+
+def _load_gripper_calibration():
+    spec = importlib.util.spec_from_file_location("gripper_calibration", GRIPPER_CALIBRATION)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _calls(node):
@@ -106,6 +128,36 @@ def test_gripper_checks_servo_and_position_write_result():
 
     assert "_require_operational_servos" in names
     assert "set_position" in names
+
+
+def test_gripper_calibration_matches_measured_safe_contract():
+    calibration = _load_gripper_calibration()
+    domain = _module_constants(DOMAIN_STATES, {"CLOSED_MM", "OPEN_MM"})
+
+    assert calibration.GRIPPER_CALIBRATION_POINTS == (
+        (9.0, 1150),
+        (96.0, 1578),
+        (168.0, 2000),
+    )
+    assert domain == {"CLOSED_MM": 9.0, "OPEN_MM": 168.0}
+
+
+def test_gripper_calibration_interpolates_and_clamps():
+    calibration = _load_gripper_calibration()
+
+    assert calibration.position_from_width(9.0) == 1150
+    assert calibration.position_from_width(90.0) == 1548
+    assert calibration.position_from_width(96.0) == 1578
+    assert calibration.position_from_width(168.0) == 2000
+    assert calibration.position_from_width(-1.0) == 1150
+    assert calibration.position_from_width(999.0) == 2000
+
+
+def test_gripper_uses_piecewise_calibration_not_third_party_defaults():
+    fn = _function("_on_set_gripper")
+    position_call = next(call for call in _calls(fn) if _called_name(call) == "position_from_width")
+
+    assert len(position_call.args) == 1
 
 
 def test_hold_position_does_not_use_lossy_bulk_torque_helper():
