@@ -94,16 +94,28 @@ def test_align_phase_commands_rotation_without_translation():
 
     assert "twist.linear.x = 0.0" in source
     assert "KP_ANGULAR * yaw_err" in source
-    assert "KP_LINEAR * dist" not in source
+    assert "forward_speed(" not in source
 
 
 def test_drive_phase_commands_translation_without_rotation():
     _, drive_body = _phase_branch(_drive_to())
     source = "\n".join(_source(node) or "" for node in drive_body)
 
-    assert "KP_LINEAR * dist" in source
+    assert "forward_speed(dist, yaw_err)" in source
     assert "twist.angular.z = 0.0" in source
     assert "KP_ANGULAR * yaw_err" not in source
+
+
+def test_drive_phase_speed_is_signed_by_heading():
+    """#148 잔여 회귀 방지 — 부호 없는 `dist` 를 그대로 속도로 쓰면 안 된다.
+
+    근접 구간에서는 재정렬을 하지 않으므로, 목표가 등 뒤일 때 전진하면
+    거리가 늘어난다. 전진축 투영이 그 부호를 만든다.
+    """
+    _, drive_body = _phase_branch(_drive_to())
+    source = "\n".join(_source(node) or "" for node in drive_body)
+
+    assert "KP_LINEAR * dist" not in source
 
 
 def test_realign_requires_distance_and_larger_yaw_error():
