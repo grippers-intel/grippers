@@ -64,7 +64,21 @@ RUN pip3 install --no-cache-dir \
       pytest
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. 환경변수
+# 4. YOLO (CPU 추론) — 2026-08-21 임시 추가
+#
+#    Hailo HEF 파이프라인(§6)이 준비되기 전까지 PyTorch 기반 YOLO를 CPU로 돌리기
+#    위해 컨테이너에 직접 pip install 했던 패키지들을 재현 가능하게 옮겨온 것.
+#    버전은 그때 라이브 컨테이너에 실제로 설치되어 검증된 값과 맞춤.
+#    Hailo 경로가 자리잡으면 이 블록은 제거될 수 있다 — 지금은 유지만 한다.
+# ─────────────────────────────────────────────────────────────────────────────
+RUN pip3 install --no-cache-dir \
+      ultralytics==8.2.38 \
+      torch==2.3.1 \
+      torchvision==0.18.1 \
+      opencv-python-headless==4.10.0.84
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. 환경변수
 #
 #    MACHINE_TYPE   : controller/odom_publisher_node 가 이 값으로 mecanum 역기구학
 #                     경로를 선택합니다 (os.environ['MACHINE_TYPE'] 직접 참조).
@@ -83,7 +97,7 @@ ENV MACHINE_TYPE=MentorPi_Mecanum \
     PYTHONPATH=/grippers:/third_party/soarm_provided_d
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Hailo-10H 런타임
+# 6. Hailo-10H 런타임
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Vendor binaries are not tracked by Git.
@@ -110,7 +124,7 @@ RUN --mount=type=bind,source=docker/vendor,target=/vendor \
     fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. 사용자
+# 7. 사용자
 #
 #    exec_shell.sh 가 `-u ubuntu` 로 진입합니다.
 #    dialout — 시리얼 장치 접근 (/dev/ttyACM0=베이스보드, /dev/ttyACM1=SO-ARM101)
