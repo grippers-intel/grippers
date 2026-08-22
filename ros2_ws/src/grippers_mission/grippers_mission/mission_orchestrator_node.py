@@ -15,6 +15,7 @@ FSM은 parse()만 안다(state_machine.md §3 IDLE 계약).
 import queue
 import sys
 import threading
+import time
 import traceback
 
 sys.path.insert(0, "/grippers")  # PYTHONPATH 미설정 환경 대비 안전장치
@@ -97,20 +98,34 @@ class MissionOrchestratorNode(Node):
         task = MissionTask(ports)
         while rclpy.ok():
             raw_text = self._command_queue.get()  # 다음 명령이 올 때까지 블로킹 대기
+            mission_started_at = time.monotonic()
             self.get_logger().info(f"[MISSION] 시작: {raw_text!r}")
             try:
                 for state in task.run(raw_text):
                     self.get_logger().info(f"[MISSION] -> {state.name}")
-                    msg = MissionState()
-                    msg.state = state.name
-                    self._state_pub.publish(msg)
+                    self._state_pub.publish(
+                        self._mission_state_message(state.name, mission_started_at)
+                    )
             except Exception:
                 # 이 except가 없으면 FSM 스레드만 조용히 죽고 노드는 계속 스핀한다 —
                 # /command는 큐에 쌓이기만 하고 /mission/state는 끊겨서, 밖에서는
                 # 멈춘 이유를 알 수 없다. 미션 하나만 버리고 루프는 살려 둔다.
-                self._abort_mission(ports)
+                self._abort_mission(ports, mission_started_at)
 
-    def _abort_mission(self, ports):
+    @staticmethod
+    def _mission_state_message(state_name, mission_started_at):
+        """미션 시작 이후 경과 시간을 포함한 상태 메시지를 만든다.
+
+        벽시계는 NTP 보정이나 수동 변경으로 뒤로 갈 수 있으므로 경과 시간에는
+        `time.monotonic()`을 쓴다. 명령이 큐에서 꺼내진 순간을 0점으로 삼아 GUI와
+        M4 검증이 같은 사이클 시간을 보게 한다.
+        """
+        msg = MissionState()
+        msg.state = state_name
+        msg.elapsed_s = time.monotonic() - mission_started_at
+        return msg
+
+    def _abort_mission(self, ports, mission_started_at):
         """미션 실행 중 예외를 수습하고 IDLE로 돌아간다.
 
         순서가 중요하다 — **로봇을 먼저 세운다**. 예외는 FSM이 어디까지 진행한
@@ -143,9 +158,7 @@ class MissionOrchestratorNode(Node):
                 f"[MISSION] 중단 처리 중 arm.hold_position() 실패\n{traceback.format_exc()}"
             )
 
-        msg = MissionState()
-        msg.state = "IDLE"
-        self._state_pub.publish(msg)
+        self._state_pub.publish(self._mission_state_message("IDLE", mission_started_at))
 
     def _logged(self, name, adapter):
         return LoggedPort(name, adapter, self.get_logger())

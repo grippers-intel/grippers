@@ -181,10 +181,10 @@ MentorPi 벤더 스택(`app`, `bringup`, `driver`, `peripherals`, `navigation`, 
 # MissionState.msg
 string state          # State.name
 uint32 contact_count  # 현재 미채움
-float64 elapsed_s     # 현재 미채움
+float64 elapsed_s     # 명령 dequeue 시점부터의 monotonic 경과 시간
 ```
 
-> `contact_count` 와 `elapsed_s` 는 **성공 기준(접촉 0회 / 소요 시간)의 측정 채널**입니다. 지금은 `state` 만 채워집니다. → §6.4
+> `contact_count` 와 `elapsed_s` 는 **성공 기준(접촉 0회 / 소요 시간)의 측정 채널**입니다. `elapsed_s` 는 mission orchestrator가 명령을 큐에서 꺼낸 순간부터 채우며, `contact_count` 는 접촉 감지 수단 결정 전까지 0입니다. → §6.4
 
 ### 4.5 포트 시그니처
 
@@ -286,7 +286,7 @@ IDLE → TRANSIT_OUT → LIGHT_ADAPT → DOCKING → IDENTIFY
 | 2 | **파지 실패 재시도** | `GRASP_FAILED` 즉시 종료 | 재인식 → 보정 → 재시도 | **P0** |
 | 3 | **통과 불가 판정 (유즈케이스 2)** | `_solve_phi()` 가 `0.0` 고정, 항상 `NARROW_EXIT` | 해 없으면 거부·복귀 → `REJECT` 상태 | **P0** |
 | 4 | **`ReorientArm` 액션 미사용** | `NARROW_EXIT` 이 `_phi_to_xyz()` 스텁으로 `[0.2, 0, 0.15]` 고정 | φ 기반 자세 전환 | **P0** |
-| 5 | **`contact_count` / `elapsed_s` 미채움** | `state` 만 발행 | 성공 기준 측정 채널 | **P0** |
+| 5 | **`contact_count` 미채움** | 접촉 감지 수단 미결정으로 0만 발행 | 접촉 0회 성공 기준 측정 불가 | **P0** |
 | 6 | **E-STOP 시 팔 자세 유지 없음** | `base.stop()` 만 | 낙하 방지 | P1 |
 | 7 | **`NARROW_EXIT` 무한 루프** | `while True` 에 타임아웃 없음 | 전 상태 타임아웃 | P1 |
 | 8 | **조명 프로파일 문자열** | `"default"` 하드코딩 | `NORMAL` / `DARKROOM` 열거 | P1 |
