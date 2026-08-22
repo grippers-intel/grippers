@@ -8,12 +8,18 @@ perception_node에 서비스로 말을 건다.
 넘기면 런타임에 AssertionError가 난다. 필드 하나하나를 명시적으로
 꺼내 옮긴다."""
 
-from grippers_interfaces.srv import FindBox, MeasureOpening, MonitorClearance, ScanFloor
+from grippers_interfaces.srv import (
+    ConfirmGrasp,
+    FindBox,
+    MeasureOpening,
+    MonitorClearance,
+    ScanFloor,
+)
 
 from domain.adapters.real._ros_call import SAFETY_TIMEOUT_SEC, call_service
 from domain.adapters.real._ros_convert import box_observation_from_msg, box_observation_to_msg
 from domain.ports.perception import Perception
-from domain.values import BoxColor, BoxObservation, Clearance, Detection, ObjectClass, Point3
+from domain.values import BoxObservation, Clearance, Destination, Detection, ObjectClass, Point3
 
 
 def _blind_clearance() -> Clearance:
@@ -47,6 +53,7 @@ class Ros2Perception(Perception):
         self._clearance_client = node.create_client(
             MonitorClearance, "perception/monitor_clearance"
         )
+        self._confirm_grasp_client = node.create_client(ConfirmGrasp, "perception/confirm_grasp")
 
     def scan_floor(self) -> list[Detection]:
         """검출 목록. 서비스가 없거나 응답이 없으면 **빈 목록** — `SELECT` 가
@@ -57,10 +64,14 @@ class Ros2Perception(Perception):
             return []
         return [_detection_from_msg(d) for d in res.detections.detections]
 
-    def find_box(self, color: BoxColor) -> BoxObservation | None:
+    def find_box(self, dest: Destination) -> BoxObservation | None:
         """찾지 못했거나 서비스가 응답하지 않으면 **None** — `TRANSPORT` 가
-        대상을 보류 등록하고 `SCAN` 으로 복귀한다."""
-        req = FindBox.Request(color=color.name)
+        대상을 보류 등록하고 `SCAN` 으로 복귀한다.
+
+        ⚠️ FindBox.srv의 필드명은 아직 `color`다(_ros_convert.py 상단 경고와
+        같은 이유로 와이어 인터페이스는 이번 변경 범위 밖) — Destination의
+        이름("LEFT"/"RIGHT")을 그 문자열 필드에 담아 보낸다."""
+        req = FindBox.Request(color=dest.name)
         res = call_service(self._node, self._find_box_client, req, label="find_box")
         if res is None or not res.found:
             return None
@@ -103,3 +114,29 @@ class Ros2Perception(Perception):
             right_m=res.right,
             contact_risk=res.contact_risk,
         )
+
+    def confirm_grasp(self) -> bool:
+        """그리퍼캠 시각 확인. 서비스가 없거나 응답이 없으면 **False** —
+        다른 관측 포트와 같은 "모르면 실패" 관례.
+
+        ⚠️ 1단계(로깅 전용): `confidence` 는 도메인 계약에 없으므로 여기서
+        진단 로그로만 남기고 버린다 — GraspState가 판정에 편입할 임계값을
+        잡을 실측 자료다.
+
+        상한을 `monitor_clearance`와 같은 `SAFETY_TIMEOUT_SEC`(0.5초)로 짧게
+        둔다 (PR #185 리뷰 지적, 2026-08-21) — `GraspState.execute()` 안에서
+        파지 직후 동기 호출되므로, 일반 서비스와 같은 3초를 기다리면 그만큼
+        파지 사이클 전체가 늘어진다."""
+        res = call_service(
+            self._node,
+            self._confirm_grasp_client,
+            ConfirmGrasp.Request(),
+            label="confirm_grasp",
+            timeout_sec=SAFETY_TIMEOUT_SEC,
+        )
+        if res is None:
+            return False
+        self._node.get_logger().info(
+            f"[confirm_grasp] confirmed={res.confirmed} confidence={res.confidence:.3f}"
+        )
+        return res.confirmed

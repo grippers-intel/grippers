@@ -16,11 +16,19 @@ class ObjectClass(Enum):
     CHESS_PIECE = auto()
 
 
-class BoxColor(Enum):
-    BLACK = auto()
-    RED = auto()
-    BLUE = auto()
-    GREEN = auto()
+class Destination(Enum):
+    """정리 목적지 — 아레나 안 바구니 2개, 좌우 위치로만 구분한다.
+
+    ⚠️ 2026-08-23 확정 미션 명세서 이전엔 `BoxColor`(BLACK/RED/BLUE/GREEN)로
+    상자를 색으로 구분하고 비전으로 색 탐색을 했다. 확정 명세서는 "좌표를
+    하드코딩한다. 색 탐색은 하지 않는다 — ArUco 기준 아레나 좌표계가 있으므로
+    고정 좌표가 그대로 의미를 갖는다"고 결정했고, 바구니도 원래 예정된
+    4색이 아니라 실제로는 좌/우 2개뿐이다. 그래서 색 열거형을 걷어내고
+    위치 열거형으로 바꿨다 — 이 이름을 쓰는 모든 곳(포트·real/fake
+    어댑터·ROS 메시지 변환)이 함께 바뀌어야 한다."""
+
+    LEFT = auto()
+    RIGHT = auto()
 
 
 class MissionMode(Enum):
@@ -54,7 +62,7 @@ class Detection:
 
 @dataclass
 class BoxObservation:
-    color: BoxColor
+    dest: Destination
     pose_m: Pose2D
     opening_mm: float
     long_axis_rad: float

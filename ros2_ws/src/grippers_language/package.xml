@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>grippers_language</name>
+  <version>0.0.0</version>
+  <description>미션 명세서(2026-08-23) 01번 파이프라인 — 채팅 명령을 미션 규칙으로 해석한다</description>
+  <maintainer email="11306260+liangfuyuan@user.noreply.gitee.com">ubuntu</maintainer>
+  <license>TODO: License declaration</license>
+
+  <depend>rclpy</depend>
+  <depend>grippers_interfaces</depend>
+  <!-- 원시 YOLO 클래스 어휘·domain 클래스 매핑을 한 곳(cpu_yolo_scan_mapping.py)만
+       두려고 grippers_perception에 의존한다 — 매핑 테이블을 두 패키지에 복제하면
+       한쪽만 고치는 사고가 난다(hailo_scan_mapping.py 테스트가 이미 잡았던
+       종류의 문제). -->
+  <depend>grippers_perception</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -23,6 +23,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/FindBox.srv"
   "srv/MeasureOpening.srv"
   "srv/MonitorClearance.srv"
+  "srv/ConfirmGrasp.srv"
   "srv/AlignToBox.srv"
   "srv/Parse.srv"
   "srv/ConfirmPhrase.srv"

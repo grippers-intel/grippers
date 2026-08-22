@@ -181,8 +181,12 @@ class BaseDriverNode(Node):
         # 기준으로 마커·박스 검출 기반 정렬 로직을 붙인다 (지금은 자리만 잡아둠).
         # perception이 실제로 box pose를 재관측해 넘겨주기 전까지는 여기서
         # 할 수 있는 게 없어 항상 성공으로 스텁 응답한다.
+        # request.box.color는 와이어 필드명이 아직 레거시라 그렇다 — 2026-08-23
+        # 확정 미션 명세서로 domain.values.BoxColor가 Destination(LEFT/RIGHT)
+        # 으로 바뀌었고 지금 이 필드엔 그 이름이 들어온다(domain/adapters/
+        # real/_ros_convert.py 상단 경고 참고).
         self.get_logger().warn(
-            f"align_to_box(color={request.box.color}): 마커/박스 정렬 미구현 — "
+            f"align_to_box(dest={request.box.color}): 마커/박스 정렬 미구현 — "
             "aligned=True로 스텁 응답"
         )
         response.aligned = True
