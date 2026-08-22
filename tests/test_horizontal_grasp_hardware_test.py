@@ -95,3 +95,12 @@ def test_hot_servo2_is_rejected_before_motion():
 
     assert "get_temperature" in names
     assert names.index("get_temperature") < names.index("glide")
+
+
+def test_prepositioned_object_mode_is_not_described_as_autonomous():
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert "--prepositioned-object" in source
+    assert "perception-bypassed, operator-gated scripted grasp" in source
+    assert "전역 절대좌표/자율 E2E가 아닙니다" in source
+    assert "사전 교시한 바닥 표시점" in source
