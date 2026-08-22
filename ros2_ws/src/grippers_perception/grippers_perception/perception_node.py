@@ -121,14 +121,20 @@ CONFIRM_GRASP_DIFF_THRESHOLD_DEFAULT = 6.0
 # `-p scan_floor_enabled:=true`로 켤 것.
 SCAN_FLOOR_ENABLED_DEFAULT = False
 HAILO_HEF_PATH_DEFAULT = "/tmp/best_640.hef"
-HAILO_SCORE_THRESHOLD = 0.35
+# 2026-08-22: 0.35였다가 0.8로 올림 — 실기 검증 중 물체를 놓기 전인데도
+# CPU YOLO가 0.35~0.48대 confidence로 오검출을 냈다(사용자 실측 지적).
+# 오검출이 SELECT/APPROACH로 흘러 들어가는 게 더 위험하므로, 놓친 검출(재스캔하면
+# 그만) 쪽보다 오검출(엉뚱한 좌표로 주행) 쪽을 훨씬 더 강하게 억제한다.
+HAILO_SCORE_THRESHOLD = 0.8
 # HAILO_CLASS_NAMES · 클래스 매핑은 hailo_scan_mapping.py 참고 (모듈 상단 import).
 
 # CPU YOLO(ultralytics) 폴백 — 2026-08-22, Hailo-10H 하드웨어 고장(위 _HAILO_AVAILABLE
 # 강제 비활성화 참고)으로 임시 대체. 클래스 구성이 Hailo 모델과 다르다(6종,
 # "container" 없음) — cpu_yolo_scan_mapping.py 참고.
 CPU_YOLO_MODEL_PATH_DEFAULT = "/tmp/best_cpu.pt"
-CPU_YOLO_SCORE_THRESHOLD = 0.35
+# 위 HAILO_SCORE_THRESHOLD와 같은 이유로 0.8 — 물체 없는 장면에서 0.35~0.48대
+# 오검출 확인됨 (2026-08-22 실기 테스트).
+CPU_YOLO_SCORE_THRESHOLD = 0.8
 
 # 진짜 3D 위치가 아니다 — 위 경고 참고. base_link 앞 임의 고정점.
 FAKE_POSE_M = (0.3, 0.0, 0.0)
