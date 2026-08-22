@@ -177,6 +177,7 @@ CLASS_DISTANCE_CALIBRATION_SQRT_PX_M = {
     "knight": None,  # TODO 실측
     "queen": None,  # TODO 실측
     "rook": None,  # TODO 실측
+    "box": None,  # TODO 실측 — 2026-08-23 확정 명세서로 GABE 후보에 추가됨
     "soccer": None,  # TODO 실측
     "star": None,  # TODO 실측
 }
@@ -537,8 +538,12 @@ class PerceptionNode(Node):
         )
 
     def _on_find_box(self, request, response):
+        # request.color는 와이어 필드명이 아직 레거시라 그렇다 — 2026-08-23
+        # 확정 미션 명세서로 domain.values.BoxColor가 Destination(LEFT/RIGHT)
+        # 으로 바뀌었고 지금 이 필드엔 그 이름이 들어온다(domain/adapters/
+        # real/_ros_convert.py 상단 경고 참고).
         self.get_logger().warn(
-            f"find_box(color={request.color}): 비전 파이프라인 미구현 — found=False 반환"
+            f"find_box(dest={request.color}): 비전 파이프라인 미구현 — found=False 반환"
         )
         response.found = False
         response.box = BoxObservation()

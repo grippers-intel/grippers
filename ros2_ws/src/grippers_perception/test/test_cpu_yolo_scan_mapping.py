@@ -16,6 +16,7 @@ from grippers_perception.cpu_yolo_scan_mapping import (
         ("knight", "CHESS_PIECE"),
         ("queen", "CHESS_PIECE"),
         ("rook", "CHESS_PIECE"),
+        ("box", "GABE"),
         ("soccer", "GABE"),
         ("star", "GABE"),
     ],
@@ -24,11 +25,9 @@ def test_known_classes_map_to_expected_object_class(class_name, expected):
     assert object_class_for_cpu_yolo_class_name(class_name) == expected
 
 
-def test_box_class_is_excluded_pending_team_confirmation():
-    assert object_class_for_cpu_yolo_class_name("box") is None
-
-
 def test_unknown_class_name_returns_none():
+    """확정 미션 명세서(2026-08-23)로 "box"는 GABE(장난감)로 확정됐다 —
+    "container"/"cube"는 이 모델의 학습 클래스가 아니라 여전히 제외."""
     assert object_class_for_cpu_yolo_class_name("container") is None
     assert object_class_for_cpu_yolo_class_name("cube") is None
 

@@ -18,6 +18,7 @@ from grippers_perception.hailo_scan_mapping import (
         ("knight", "CHESS_PIECE"),
         ("queen", "CHESS_PIECE"),
         ("rook", "CHESS_PIECE"),
+        ("box", "GABE"),
         ("soccer", "GABE"),
         ("star", "GABE"),
     ],
@@ -27,10 +28,11 @@ def test_known_classes_map_to_expected_object_class(class_name, expected):
     assert object_class_for_hailo_id(class_id) == expected
 
 
-@pytest.mark.parametrize("class_name", ["container", "box"])
-def test_destination_box_classes_are_excluded(class_name):
-    """container/box는 목적지 상자로 추정 — 바닥 스캔 후보에서 제외돼야 한다."""
-    class_id = HAILO_CLASS_NAMES.index(class_name)
+def test_destination_box_class_is_excluded():
+    """"container"는 목적지 상자 클래스로 추정된다 — 목적지는 YOLO로 찾지
+    않으므로(2026-08-23 확정 미션 명세서, 좌표 하드코딩) 바닥 스캔 후보에서
+    제외돼야 한다. "box"는 장난감(GABE)이라 더 이상 여기 포함되지 않는다."""
+    class_id = HAILO_CLASS_NAMES.index("container")
     assert object_class_for_hailo_id(class_id) is None
 
 
