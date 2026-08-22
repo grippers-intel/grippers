@@ -58,6 +58,24 @@ def confirm(message):
         raise RuntimeError("Enter 또는 q만 입력하세요")
 
 
+def grasp_descent_prompt(profile, prepositioned_object):
+    """Describe the truthful setup required before descending to grasp height.
+
+    The default harness deliberately asks the operator to remove the object and
+    place it between the fingers after descent.  ``--prepositioned-object`` is
+    the attended scripted-demo variant: the object is taped at a taught fixture
+    location before descent.  It is still a fixed servo waypoint, not a
+    perception result or a world-coordinate target.
+    """
+    if prepositioned_object:
+        return (
+            "물체 중심을 사전 교시한 바닥 표시점에 고정했고, 열린 그리퍼의 "
+            "전체 하강 경로에서 손을 뺐습니다. 고정 서보 자세의 파지 중심 "
+            f"{profile.grasp_center_height_mm:.1f}mm로 이동"
+        )
+    return "물체를 치운 상태입니다. " f"파지 중심 {profile.grasp_center_height_mm:.1f}mm로 이동"
+
+
 def read_arm(driver):
     return {servo_id: driver.get_position(servo_id) for servo_id in SERVO_IDS}
 
@@ -181,6 +199,14 @@ def main():
         action="store_true",
         help="CARRY_IDLE 검증 후 DROP_195에서 투하하고 IDLE로 복귀",
     )
+    parser.add_argument(
+        "--prepositioned-object",
+        action="store_true",
+        help=(
+            "물체를 사전 교시한 바닥 표시점에 둔 채 열린 그리퍼로 하강. "
+            "인식/전역 절대좌표가 아닌 운영자 확인형 고정 서보 자세"
+        ),
+    )
     args = parser.parse_args()
 
     profile = FLOOR_GRASP_PROFILES[args.profile]
@@ -210,6 +236,11 @@ def main():
         )
 
     print(f"profile={args.profile} geometry={profile}")
+    if args.prepositioned_object:
+        print(
+            "[MODE] perception-bypassed, operator-gated scripted grasp: "
+            "사전 배치 물체 + 고정 서보 waypoint; 전역 절대좌표/자율 E2E가 아닙니다"
+        )
     report(driver, "start")
 
     confirm("작업 공간과 베이스가 안전한지 확인했습니다. 145mm 안전 자세로 이동")
@@ -218,10 +249,16 @@ def main():
     confirm(f"그리퍼를 {profile.preopen_width_mm:.1f}mm로 열기")
     set_width(driver, profile.preopen_width_mm)
 
-    confirm(f"물체를 치운 상태입니다. 파지 중심 {profile.grasp_center_height_mm:.1f}mm로 이동")
+    confirm(grasp_descent_prompt(profile, args.prepositioned_object))
     glide(driver, "grasp", grasp_pose)
 
-    confirm("물체를 두 손가락 중앙에 놓고 손을 완전히 뺐습니다. 그리퍼 닫기")
+    close_prompt = (
+        "열린 두 손가락 사이에 물체가 있고 충돌·밀림이 없습니다. "
+        "손을 완전히 뺀 상태에서 그리퍼 닫기"
+        if args.prepositioned_object
+        else "물체를 두 손가락 중앙에 놓고 손을 완전히 뺐습니다. 그리퍼 닫기"
+    )
+    confirm(close_prompt)
     ratio = set_width(driver, profile.close_width_mm)
     if ratio < MIN_HOLD_LOAD_RATIO:
         retry_width_mm = max(GRIPPER_CLOSED_MM, profile.close_width_mm - RETRY_TIGHTEN_MM)
