@@ -19,7 +19,7 @@ from grippers_interfaces.srv import (
 from domain.adapters.real._ros_call import SAFETY_TIMEOUT_SEC, call_service
 from domain.adapters.real._ros_convert import box_observation_from_msg, box_observation_to_msg
 from domain.ports.perception import Perception
-from domain.values import BoxColor, BoxObservation, Clearance, Detection, ObjectClass, Point3
+from domain.values import BoxObservation, Clearance, Destination, Detection, ObjectClass, Point3
 
 
 def _blind_clearance() -> Clearance:
@@ -64,10 +64,14 @@ class Ros2Perception(Perception):
             return []
         return [_detection_from_msg(d) for d in res.detections.detections]
 
-    def find_box(self, color: BoxColor) -> BoxObservation | None:
+    def find_box(self, dest: Destination) -> BoxObservation | None:
         """찾지 못했거나 서비스가 응답하지 않으면 **None** — `TRANSPORT` 가
-        대상을 보류 등록하고 `SCAN` 으로 복귀한다."""
-        req = FindBox.Request(color=color.name)
+        대상을 보류 등록하고 `SCAN` 으로 복귀한다.
+
+        ⚠️ FindBox.srv의 필드명은 아직 `color`다(_ros_convert.py 상단 경고와
+        같은 이유로 와이어 인터페이스는 이번 변경 범위 밖) — Destination의
+        이름("LEFT"/"RIGHT")을 그 문자열 필드에 담아 보낸다."""
+        req = FindBox.Request(color=dest.name)
         res = call_service(self._node, self._find_box_client, req, label="find_box")
         if res is None or not res.found:
             return None

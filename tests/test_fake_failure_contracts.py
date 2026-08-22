@@ -26,12 +26,12 @@ from domain.ports.arm_driver import ArmDriver
 from domain.ports.base_driver import BaseDriver
 from domain.ports.command_interpreter import CommandInterpreter
 from domain.ports.perception import Perception
-from domain.values import BoxColor, BoxObservation, Point3, Pose2D
+from domain.values import BoxObservation, Destination, Point3, Pose2D
 
 _TARGET = Pose2D(x=0.2, y=0.0, theta=0.0)
 _POINT = Point3(x=0.2, y=0.0, z=0.0)
 _BOX = BoxObservation(
-    color=BoxColor.GREEN,
+    dest=Destination.LEFT,
     pose_m=Pose2D(x=0.5, y=0.0, theta=0.0),
     opening_mm=400.0,
     long_axis_rad=0.0,
@@ -78,7 +78,7 @@ FAILURE_CONTRACTS = [
     (
         Perception,
         "find_box",
-        lambda: ScriptedPerception(box_found=False).find_box(BoxColor.GREEN),
+        lambda: ScriptedPerception(box_found=False).find_box(Destination.LEFT),
         None,
         "`None`",
     ),
@@ -254,7 +254,7 @@ def test_measure_opening_failure_does_not_corrupt_box_observation():
     """정밀 실측 실패(None)가 BoxObservation의 float 계약까지 오염시키지 않는다."""
     perception = ScriptedPerception(opening_mm=None)
 
-    box = perception.find_box(BoxColor.GREEN)
+    box = perception.find_box(Destination.LEFT)
 
     assert box is not None
     assert isinstance(box.opening_mm, float)

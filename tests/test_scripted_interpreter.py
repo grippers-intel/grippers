@@ -6,7 +6,7 @@ from domain.adapters.fake.scripted_interpreter import ScriptedInterpreter
 from domain.adapters.fake.scripted_perception import ScriptedPerception
 from domain.task.states import TransportState
 from domain.values import (
-    BoxColor,
+    Destination,
     Detection,
     MissionContext,
     MissionMode,
@@ -16,22 +16,35 @@ from domain.values import (
 )
 
 
-def test_default_tidy_phrase_uses_confirmed_placement_rule():
-    spec = ScriptedInterpreter().parse("장난감 정리해줘")
+def test_command_phrase_sets_rule_it_states():
+    """확정 미션 명세서 예문 — 명령이 지정한 대로 규칙이 나온다."""
+    spec = ScriptedInterpreter().parse(
+        "모든 체스 기물을 왼쪽 박스에, 장난감들은 오른쪽 박스에 정리해주세요"
+    )
 
     assert spec.mode is MissionMode.TIDY
-    # docs/subsystems/objects.md 확정값: GABE→GREEN, CHESS_PIECE→BLUE
-    assert spec.placement_rule[ObjectClass.GABE] is BoxColor.GREEN
-    assert spec.placement_rule[ObjectClass.CHESS_PIECE] is BoxColor.BLUE
+    assert spec.placement_rule[ObjectClass.CHESS_PIECE] is Destination.LEFT
+    assert spec.placement_rule[ObjectClass.GABE] is Destination.RIGHT
 
 
-def test_rule_change_phrase_updates_placement_rule():
-    """'체스말은 검은 상자에' 는 placement_rule[CHESS_PIECE]를 BLACK으로 바꾼다
-    — 다른 규칙(GABE→GREEN)은 그대로 유지된다."""
-    spec = ScriptedInterpreter().parse("체스말은 검은 상자에")
+def test_reversed_command_flips_destinations():
+    """같은 물체 구성이라도 명령이 다르면 다르게 행동한다(명세서 핵심 성질) —
+    좌우를 뒤집은 명령은 정반대 규칙을 내야 한다."""
+    spec = ScriptedInterpreter().parse(
+        "체스 기물은 오른쪽 박스에, 장난감은 왼쪽 박스에 정리해주세요"
+    )
 
-    assert spec.placement_rule[ObjectClass.CHESS_PIECE] is BoxColor.BLACK
-    assert spec.placement_rule[ObjectClass.GABE] is BoxColor.GREEN
+    assert spec.placement_rule[ObjectClass.CHESS_PIECE] is Destination.RIGHT
+    assert spec.placement_rule[ObjectClass.GABE] is Destination.LEFT
+
+
+def test_partial_rule_omits_unmentioned_class():
+    """명령이 언급하지 않은 클래스는 placement_rule에 아예 없다 — SELECT가
+    '목적지가 정의돼 있을 것' 조건으로 걸러 후보에서 제외한다."""
+    spec = ScriptedInterpreter().parse("체스 기물만 왼쪽 박스에 정리해줘")
+
+    assert spec.placement_rule[ObjectClass.CHESS_PIECE] is Destination.LEFT
+    assert ObjectClass.GABE not in spec.placement_rule
 
 
 def test_fetch_phrase_sets_mode_and_target_cls():
@@ -56,11 +69,11 @@ def test_parse_does_not_leak_mutations_into_table():
     parse()했을 때 오염되면 안 된다 (얕은 dict 참조를 그대로 넘기면 샌다)."""
     interpreter = ScriptedInterpreter()
 
-    first = interpreter.parse("체스말은 검은 상자에")
-    first.placement_rule[ObjectClass.GABE] = BoxColor.RED
+    first = interpreter.parse("체스 기물만 왼쪽 박스에 정리해줘")
+    first.placement_rule[ObjectClass.GABE] = Destination.RIGHT
 
-    second = interpreter.parse("체스말은 검은 상자에")
-    assert second.placement_rule[ObjectClass.GABE] is BoxColor.GREEN
+    second = interpreter.parse("체스 기물만 왼쪽 박스에 정리해줘")
+    assert ObjectClass.GABE not in second.placement_rule
 
 
 def test_custom_table_overrides_default():
@@ -74,21 +87,23 @@ def test_custom_table_overrides_default():
 
 
 class _RecordingPerception(ScriptedPerception):
-    """find_box()에 실제로 어떤 색이 넘어오는지 기록하는 스파이."""
+    """find_box()에 실제로 어떤 목적지가 넘어오는지 기록하는 스파이."""
 
     def __init__(self):
         super().__init__()
-        self.requested_colors = []
+        self.requested_dests = []
 
-    def find_box(self, color):
-        self.requested_colors.append(color)
-        return super().find_box(color)
+    def find_box(self, dest):
+        self.requested_dests.append(dest)
+        return super().find_box(dest)
 
 
-def test_rule_change_phrase_flows_into_transport_box_color(make_ports):
-    """단위 테스트를 넘어 — 규칙 변경 문형으로 얻은 placement_rule이 실제로
-    TRANSPORT의 find_box() 호출에 반영되는지 FSM 레벨에서 확인한다."""
-    spec = ScriptedInterpreter().parse("체스말은 검은 상자에")
+def test_command_destination_flows_into_transport_find_box(make_ports):
+    """단위 테스트를 넘어 — 명령으로 얻은 placement_rule이 실제로 TRANSPORT의
+    find_box() 호출에 반영되는지 FSM 레벨에서 확인한다."""
+    spec = ScriptedInterpreter().parse(
+        "모든 체스 기물을 왼쪽 박스에, 장난감들은 오른쪽 박스에 정리해주세요"
+    )
     target = Detection(
         track_id=1,
         cls=ObjectClass.CHESS_PIECE,
@@ -103,4 +118,4 @@ def test_rule_change_phrase_flows_into_transport_box_color(make_ports):
 
     TransportState(ctx, target).execute(ports)
 
-    assert perception.requested_colors == [BoxColor.BLACK]
+    assert perception.requested_dests == [Destination.LEFT]

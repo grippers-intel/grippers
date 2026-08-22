@@ -9,9 +9,9 @@ docs/design/architecture.puml). `script` 를 넘기지 않으면 원소 1개짜�
 
 from domain.ports.perception import Perception
 from domain.values import (
-    BoxColor,
     BoxObservation,
     Clearance,
+    Destination,
     Detection,
     ObjectClass,
     Point3,
@@ -62,11 +62,11 @@ class ScriptedPerception(Perception):
         self._call_count += 1
         return self._script[idx]
 
-    def find_box(self, color: BoxColor) -> BoxObservation | None:
+    def find_box(self, dest: Destination) -> BoxObservation | None:
         if not self._box_found:
             return None
         return BoxObservation(
-            color=color,
+            dest=dest,
             pose_m=Pose2D(x=0.5, y=0.0, theta=0.0),
             opening_mm=self._box_opening_mm,
             long_axis_rad=0.0,

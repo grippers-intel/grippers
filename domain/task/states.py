@@ -346,8 +346,8 @@ class TransportState(State):
         self.target = target
 
     def execute(self, ports):
-        color = self.ctx.spec.placement_rule[self.target.cls]
-        box = ports.perception.find_box(color)
+        dest = self.ctx.spec.placement_rule[self.target.cls]
+        box = ports.perception.find_box(dest)
         if box is None:
             return ScanState(self.ctx.hold(self.target.track_id))
 

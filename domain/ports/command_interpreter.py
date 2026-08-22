@@ -5,8 +5,16 @@ grippers_vla의 LanguageAdapter가 이걸 구현한다.
 새 주제에서는 **자연어가 미션 도중에도 `placement_rule` 을 실제로 바꾼다** —
 이게 이 포트가 신설된 이유다 (docs/design/class_diagram.md §2 '포트가 4종이 된 이유').
 
-    "체스말은 검은 상자에 넣어줘"
-        → placement_rule[ObjectClass.CHESS_PIECE] = BoxColor.BLACK
+    "모든 체스 기물을 왼쪽 박스에, 장난감들은 오른쪽 박스에 정리해주세요"
+        → placement_rule = {
+              ObjectClass.CHESS_PIECE: Destination.LEFT,
+              ObjectClass.GABE: Destination.RIGHT,
+          }
+
+⚠️ 2026-08-23 확정 미션 명세서: 목적지는 고정 규칙이 아니라 **매 명령이
+대상과 목적지를 함께 지정**한다 — 같은 장면이라도 명령이 다르면 다른
+placement_rule이 나와야 한다. 위 예문을 뒤집은 "체스 기물은 오른쪽 박스에,
+장난감은 왼쪽 박스에 정리해주세요"는 정반대 규칙을 내야 한다.
 
 미션 파라미터를 바꾸는 것은 도메인 로직이므로 포트 뒤에 있어야 하고,
 `ScriptedInterpreter` 로 Fake 대체가 되어야 CI에서 명령 문형 회귀 테스트가 돌아간다."""

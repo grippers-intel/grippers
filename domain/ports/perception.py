@@ -3,7 +3,7 @@ grippers_perception의 LearnedPerception이 이걸 구현한다."""
 
 from abc import ABC, abstractmethod
 
-from domain.values import BoxColor, BoxObservation, Clearance, Detection
+from domain.values import BoxObservation, Clearance, Destination, Detection
 
 
 class Perception(ABC):
@@ -17,10 +17,17 @@ class Perception(ABC):
         것보다 미션을 끝내고 이유를 로그로 남기는 편이 낫다."""
 
     @abstractmethod
-    def find_box(self, color: BoxColor) -> BoxObservation | None:
-        """지정한 색의 상자를 관측한다. 찾지 못하면 **`None`** 을 반환해야 한다 —
-        `TRANSPORT` 는 `None` 을 받으면 대상을 보류 등록하고 `SCAN` 으로 복귀한다.
-        서비스 부재 · 응답 없음도 같은 `None` 이다."""
+    def find_box(self, dest: Destination) -> BoxObservation | None:
+        """지정한 목적지(왼쪽/오른쪽) 바구니를 관측한다. 찾지 못하면 **`None`** 을
+        반환해야 한다 — `TRANSPORT` 는 `None` 을 받으면 대상을 보류 등록하고
+        `SCAN` 으로 복귀한다. 서비스 부재 · 응답 없음도 같은 `None` 이다.
+
+        ⚠️ 2026-08-23 확정 미션 명세서: 바구니 좌표는 하드코딩이고 색 탐색은
+        하지 않는다. 그래도 이 메서드가 남아 있는 이유는, 하드코딩된 좌표
+        근처에서 실제 바구니 자세(opening_mm·long_axis_rad 등 INSERT가 쓰는
+        정밀값)를 확인하는 역할까지는 아직 없애지 않았기 때문이다 — "색으로
+        어디 있는지 찾는다"에서 "위치는 이미 알고, 그 자리의 상세를 잰다"로
+        의미가 바뀌었을 뿐이다."""
 
     @abstractmethod
     def measure_opening(self, box: BoxObservation) -> float | None:
