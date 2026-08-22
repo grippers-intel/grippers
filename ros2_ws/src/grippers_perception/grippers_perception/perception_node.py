@@ -31,9 +31,12 @@ from grippers_interfaces.srv import (
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 
-# 클래스 이름·매핑은 hailo_scan_mapping.py로 뽑았다 — rclpy 없이 순수 pytest로
+# 클래스 이름·매핑은 각 백엔드별 매핑 모듈로 뽑았다 — rclpy 없이 순수 pytest로
 # 테스트하려면(2026-08-22, PR #185 리뷰 후속) 이 파일 밖에 둬야 한다.
 # perception_node.py는 rclpy를 무조건 import해서 ROS2 없이는 아예 못 불러온다.
+from grippers_perception.cpu_yolo_scan_mapping import (
+    object_class_for_cpu_yolo_class_name,
+)
 from grippers_perception.hailo_scan_mapping import HAILO_CLASS_NAMES, object_class_for_hailo_id
 
 try:
@@ -58,6 +61,21 @@ try:
     _HAILO_AVAILABLE = True
 except ImportError:
     _HAILO_AVAILABLE = False
+
+# 🔴 임시 비활성화 (2026-08-22, 배포 전용 — 커밋 안 함): AI HAT+2가 부팅마다
+# "Timeout waiting for firmware file / Failed writing SOC firmware on stage 2"로
+# 죽는다 (재부팅 2회 + 완전 파워사이클 1회로도 재현, hailortcli scan에 장치 자체가
+# 안 잡힘). Hailo 커뮤니티의 동일 증상 스레드가 온보드 DDR 손상으로 결론났다.
+# 새 보드가 들어오기 전까지 여기서 강제로 꺼서 scan_floor가 Hailo 경로를 안 탄다 —
+# 아래 CPU YOLO 경로가 대신한다. 하드웨어 복구되면 이 한 줄만 지우면 된다.
+_HAILO_AVAILABLE = False
+
+try:
+    from ultralytics import YOLO
+
+    _CPU_YOLO_AVAILABLE = True
+except ImportError:
+    _CPU_YOLO_AVAILABLE = False
 
 
 # ── confirm_grasp (1단계, classical CV 임시 구현) ───────────────────────────
@@ -105,6 +123,12 @@ SCAN_FLOOR_ENABLED_DEFAULT = False
 HAILO_HEF_PATH_DEFAULT = "/tmp/best_640.hef"
 HAILO_SCORE_THRESHOLD = 0.35
 # HAILO_CLASS_NAMES · 클래스 매핑은 hailo_scan_mapping.py 참고 (모듈 상단 import).
+
+# CPU YOLO(ultralytics) 폴백 — 2026-08-22, Hailo-10H 하드웨어 고장(위 _HAILO_AVAILABLE
+# 강제 비활성화 참고)으로 임시 대체. 클래스 구성이 Hailo 모델과 다르다(6종,
+# "container" 없음) — cpu_yolo_scan_mapping.py 참고.
+CPU_YOLO_MODEL_PATH_DEFAULT = "/tmp/best_cpu.pt"
+CPU_YOLO_SCORE_THRESHOLD = 0.35
 
 # 진짜 3D 위치가 아니다 — 위 경고 참고. base_link 앞 임의 고정점.
 FAKE_POSE_M = (0.3, 0.0, 0.0)
@@ -178,18 +202,30 @@ class PerceptionNode(Node):
 
         self.declare_parameter("scan_floor_enabled", SCAN_FLOOR_ENABLED_DEFAULT)
         self.declare_parameter("hailo_hef_path", HAILO_HEF_PATH_DEFAULT)
+        self.declare_parameter("cpu_yolo_model_path", CPU_YOLO_MODEL_PATH_DEFAULT)
         self._hailo_model = None
         self._hailo_output_shape = None
         self._hailo_input_size = None
+        self._cpu_yolo_model = None
         if _HAILO_AVAILABLE:
             self._load_hailo_model()
+        elif _CPU_YOLO_AVAILABLE:
+            self._load_cpu_yolo_model()
         else:
-            self.get_logger().warn("hailo_platform 미설치 — scan_floor 항상 빈 목록 반환")
+            self.get_logger().warn(
+                "hailo_platform·ultralytics 둘 다 미설치 — scan_floor 항상 빈 목록 반환"
+            )
 
+        if self._hailo_model is not None:
+            backend_state = "Hailo"
+        elif self._cpu_yolo_model is not None:
+            backend_state = "CPU YOLO(ultralytics, Hailo 하드웨어 고장 임시 대체 — 이슈 #189)"
+        else:
+            backend_state = "백엔드 없음 → 항상 빈 목록"
         scan_floor_state = (
-            "Hailo (게이트 켜짐)"
+            f"{backend_state} (게이트 켜짐)"
             if self.get_parameter("scan_floor_enabled").value
-            else "Hailo 로드됨 · 게이트 꺼짐 → 빈 목록 반환"
+            else f"{backend_state} · 게이트 꺼짐 → 빈 목록 반환"
         )
         self.get_logger().info(
             "perception_node ready "
@@ -228,6 +264,18 @@ class PerceptionNode(Node):
             self.get_logger().warn(f"scan_floor: Hailo 모델 로드 실패, 빈 목록으로 접음 ({exc})")
             self._hailo_model = None
 
+    def _load_cpu_yolo_model(self):
+        """ultralytics YOLO를 CPU로 로드한다. Hailo-10H 하드웨어 고장(이슈 #189)
+        임시 대체 — 모듈 상단 CPU_YOLO_* 상수 경고 참고. 클래스 구성이 Hailo
+        모델과 다르다(cpu_yolo_scan_mapping.py 참고)."""
+        model_path = self.get_parameter("cpu_yolo_model_path").value
+        try:
+            self._cpu_yolo_model = YOLO(model_path)
+            self.get_logger().info(f"scan_floor: CPU YOLO 모델 로드됨 {model_path}")
+        except Exception as exc:  # noqa: BLE001 -- 파일 없음 등 다양한 원인을 전부 접는다
+            self.get_logger().warn(f"scan_floor: CPU YOLO 모델 로드 실패, 빈 목록으로 접음 ({exc})")
+            self._cpu_yolo_model = None
+
     def _on_image(self, msg):
         self._latest_frame = msg
 
@@ -244,12 +292,25 @@ class PerceptionNode(Node):
             response.detections = DetectionArray(detections=[])
             return response
 
-        if self._hailo_model is None or self._latest_frame is None:
-            self.get_logger().warn("scan_floor: Hailo 미로드 또는 프레임 없음 — 빈 목록 반환")
+        if self._latest_frame is None:
+            self.get_logger().warn("scan_floor: 프레임 없음 — 빈 목록 반환")
             response.detections = DetectionArray(detections=[])
             return response
 
         frame = self._bridge.imgmsg_to_cv2(self._latest_frame, desired_encoding="bgr8")
+
+        if self._hailo_model is not None:
+            detections = self._scan_floor_detections_hailo(frame)
+        elif self._cpu_yolo_model is not None:
+            detections = self._scan_floor_detections_cpu_yolo(frame)
+        else:
+            self.get_logger().warn("scan_floor: 백엔드 미로드 — 빈 목록 반환")
+            detections = []
+
+        response.detections = DetectionArray(detections=detections)
+        return response
+
+    def _scan_floor_detections_hailo(self, frame):
         canvas = self._letterbox(frame, self._hailo_input_size)
 
         bindings = self._hailo_model.create_bindings()
@@ -270,25 +331,50 @@ class PerceptionNode(Node):
                 if score < HAILO_SCORE_THRESHOLD:
                     continue
                 track_id += 1
-                detections.append(
-                    Detection(
-                        track_id=track_id,
-                        cls=object_class,
-                        # ⚠️ 자리표시자 — 진짜 3D 위치 아님. 모듈 상단 FAKE_POSE_M
-                        # 경고 참고. APPROACH의 실제 주행에 그대로 쓰면 안 된다.
-                        pose=Point(x=FAKE_POSE_M[0], y=FAKE_POSE_M[1], z=FAKE_POSE_M[2]),
-                        dims=Vector3(x=FAKE_DIMS_M[0], y=FAKE_DIMS_M[1], z=FAKE_DIMS_M[2]),
-                        yaw_rad=0.0,
-                        confidence=score,
-                    )
-                )
+                detections.append(self._make_detection(track_id, object_class, score))
                 self.get_logger().info(
-                    f"scan_floor: {class_name}->{object_class} score={score:.2f} "
+                    f"scan_floor(Hailo): {class_name}->{object_class} score={score:.2f} "
                     f"track_id={track_id}"
                 )
+        return detections
 
-        response.detections = DetectionArray(detections=detections)
-        return response
+    def _scan_floor_detections_cpu_yolo(self, frame):
+        """ultralytics CPU 추론. Hailo와 달리 레터박스·바인딩을 라이브러리가
+        알아서 처리한다 — `predict()`에 원본 프레임을 그대로 넘긴다."""
+        results = self._cpu_yolo_model.predict(frame, verbose=False)[0]
+
+        detections = []
+        track_id = 0
+        for box in results.boxes:
+            class_name = results.names[int(box.cls[0])]
+            object_class = object_class_for_cpu_yolo_class_name(class_name)
+            if object_class is None:
+                continue  # 매핑 미확정 클래스(box 등) — 바닥 후보에서 제외
+            score = float(box.conf[0])
+            if score < CPU_YOLO_SCORE_THRESHOLD:
+                continue
+            track_id += 1
+            detections.append(self._make_detection(track_id, object_class, score))
+            self.get_logger().info(
+                f"scan_floor(CPU YOLO): {class_name}->{object_class} score={score:.2f} "
+                f"track_id={track_id}"
+            )
+        return detections
+
+    @staticmethod
+    def _make_detection(track_id, object_class, score):
+        """자리표시자 pose_m/dims_m을 실은 Detection 메시지를 만든다.
+
+        ⚠️ 진짜 3D 위치가 아니다 — 모듈 상단 FAKE_POSE_M 경고 참고. APPROACH의
+        실제 주행에 그대로 쓰면 안 된다. Hailo/CPU YOLO 두 백엔드가 공유한다."""
+        return Detection(
+            track_id=track_id,
+            cls=object_class,
+            pose=Point(x=FAKE_POSE_M[0], y=FAKE_POSE_M[1], z=FAKE_POSE_M[2]),
+            dims=Vector3(x=FAKE_DIMS_M[0], y=FAKE_DIMS_M[1], z=FAKE_DIMS_M[2]),
+            yaw_rad=0.0,
+            confidence=score,
+        )
 
     def _on_find_box(self, request, response):
         self.get_logger().warn(
