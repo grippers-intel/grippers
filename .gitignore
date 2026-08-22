@@ -253,3 +253,4 @@ ros2_ws/log/
 # HailoRT vendor binaries
 docker/vendor/*.whl
 docker/vendor/*.deb
+.DS_Store

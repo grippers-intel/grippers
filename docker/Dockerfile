@@ -64,7 +64,21 @@ RUN pip3 install --no-cache-dir \
       pytest
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. 환경변수
+# 4. 카메라 이미지 처리 (cv2)
+#
+#    depth_cam_rotate_node · gripper_cam_publisher_node · perception_node의
+#    confirm_grasp · tools/hailo/live_yolo_demo.py가 전부 opencv를 쓴다.
+#
+#    ⚠️ 2026-08-21: PyTorch 기반 YOLO CPU 추론 대비용으로 ultralytics/torch/
+#    torchvision도 잠깐 여기 있었다. Hailo-10H 경로가 실기에서 230 FPS로
+#    검증되고 나서(tools/hailo/README_LIVE_DEMO.md 참고) 안 쓰는 게 확정돼
+#    지웠다 — CPU YOLO로 되돌아갈 일이 생기면 그때 다시 추가할 것.
+# ─────────────────────────────────────────────────────────────────────────────
+RUN pip3 install --no-cache-dir \
+      opencv-python-headless==4.10.0.84
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. 환경변수
 #
 #    MACHINE_TYPE   : controller/odom_publisher_node 가 이 값으로 mecanum 역기구학
 #                     경로를 선택합니다 (os.environ['MACHINE_TYPE'] 직접 참조).
@@ -83,7 +97,7 @@ ENV MACHINE_TYPE=MentorPi_Mecanum \
     PYTHONPATH=/grippers:/third_party/soarm_provided_d
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Hailo-10H 런타임
+# 6. Hailo-10H 런타임
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Vendor binaries are not tracked by Git.
@@ -110,7 +124,7 @@ RUN --mount=type=bind,source=docker/vendor,target=/vendor \
     fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. 사용자
+# 7. 사용자
 #
 #    exec_shell.sh 가 `-u ubuntu` 로 진입합니다.
 #    dialout — 시리얼 장치 접근 (/dev/ttyACM0=베이스보드, /dev/ttyACM1=SO-ARM101)

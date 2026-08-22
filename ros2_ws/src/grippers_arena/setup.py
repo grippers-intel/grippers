@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = "grippers_perception"
+package_name = "grippers_arena"
 
 setup(
     name=package_name,
@@ -19,9 +19,7 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "perception_node = grippers_perception.perception_node:main",
-            "depth_cam_rotate_node = grippers_perception.depth_cam_rotate_node:main",
-            "gripper_cam_publisher_node = grippers_perception.gripper_cam_publisher_node:main",
+            "arena_localization_node = grippers_arena.arena_localization_node:main",
         ],
     },
 )

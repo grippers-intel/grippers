@@ -9,9 +9,9 @@ docs/design/architecture.puml). `script` 를 넘기지 않으면 원소 1개짜�
 
 from domain.ports.perception import Perception
 from domain.values import (
-    BoxColor,
     BoxObservation,
     Clearance,
+    Destination,
     Detection,
     ObjectClass,
     Point3,
@@ -38,6 +38,7 @@ class ScriptedPerception(Perception):
         opening_mm: float | None = 400.0,
         box_opening_mm: float = 400.0,
         contact_risk: bool = False,
+        grasp_confirmed: bool = True,
     ):
         if script is not None:
             self._script = script
@@ -52,6 +53,8 @@ class ScriptedPerception(Perception):
         self._opening_mm = opening_mm
         self._box_opening_mm = box_opening_mm
         self._contact_risk = contact_risk
+        self._grasp_confirmed = grasp_confirmed
+        self.confirm_grasp_calls = 0
 
     def scan_floor(self) -> list[Detection]:
         # 스크립트가 소진되면 마지막 원소를 계속 반환한다 (같은 목록 반복).
@@ -59,11 +62,11 @@ class ScriptedPerception(Perception):
         self._call_count += 1
         return self._script[idx]
 
-    def find_box(self, color: BoxColor) -> BoxObservation | None:
+    def find_box(self, dest: Destination) -> BoxObservation | None:
         if not self._box_found:
             return None
         return BoxObservation(
-            color=color,
+            dest=dest,
             pose_m=Pose2D(x=0.5, y=0.0, theta=0.0),
             opening_mm=self._box_opening_mm,
             long_axis_rad=0.0,
@@ -93,3 +96,11 @@ class ScriptedPerception(Perception):
         `found=True`·`box_found=True` 처럼 기본값을 전부 happy path로 두는 이 클래스의
         일관성도 깨진다. 위험 시나리오는 `contact_risk=True` 로 명시 주입한다."""
         return Clearance(front_m=1.0, left_m=1.0, right_m=1.0, contact_risk=self._contact_risk)
+
+    def confirm_grasp(self) -> bool:
+        """기본값 `True`(happy path) — 이 클래스의 다른 기본값들과 같은 관례.
+        호출 횟수는 `confirm_grasp_calls` 로 테스트에서 확인할 수 있다 —
+        1단계(로깅 전용)라 GRASP가 이 값을 판정에 쓰지는 않지만, 실제로
+        호출은 되는지는 검증해야 한다."""
+        self.confirm_grasp_calls += 1
+        return self._grasp_confirmed

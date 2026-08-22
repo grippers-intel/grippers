@@ -1,15 +1,20 @@
 """Ros2CommandInterpreter — mission_orchestrator가 쓰는 CommandInterpreter 포트 구현
 (class_diagram.md §2의 LanguageAdapter). language 노드에 서비스로 말을 건다.
 
-placement_rule(dict[ObjectClass, BoxColor])은 MissionSpec.msg에서 병렬 배열
-2개로 평탄화돼 있다 — 여기서 dict ↔ 배열 왕복 변환을 전담한다."""
+placement_rule(dict[ObjectClass, Destination])은 MissionSpec.msg에서 병렬 배열
+2개로 평탄화돼 있다 — 여기서 dict ↔ 배열 왕복 변환을 전담한다.
+
+⚠️ 2026-08-23: domain.values.BoxColor가 Destination(LEFT/RIGHT)으로 바뀌었지만,
+MissionSpec.msg의 배열 필드명은 아직 `placement_colors`다 — .msg 필드명을
+바꾸는 건 인터페이스 재빌드가 필요한 별도 변경이라 이번 범위 밖에 둔다.
+같은 문자열 배열에 Destination의 이름을 담는 것으로만 맞춘다."""
 
 from grippers_interfaces.msg import MissionSpec as RosMissionSpec
 from grippers_interfaces.srv import ConfirmPhrase, Parse
 
 from domain.adapters.real._ros_call import call_service
 from domain.ports.command_interpreter import CommandInterpreter
-from domain.values import BoxColor, MissionMode, MissionSpec, ObjectClass
+from domain.values import Destination, MissionMode, MissionSpec, ObjectClass
 
 # 복창 문구를 받지 못했을 때의 값. 보고가 누락될 뿐 미션은 계속된다 —
 # 복창은 사용자에게 들려주는 확인 문구이지 전이 조건이 아니다.
@@ -18,8 +23,8 @@ NO_CONFIRM_PHRASE = ""
 
 def _mission_spec_from_msg(msg) -> MissionSpec:
     placement_rule = {
-        ObjectClass[cls]: BoxColor[color]
-        for cls, color in zip(msg.placement_classes, msg.placement_colors, strict=True)
+        ObjectClass[cls]: Destination[dest]
+        for cls, dest in zip(msg.placement_classes, msg.placement_colors, strict=True)
     }
     return MissionSpec(
         mode=MissionMode[msg.mode],
@@ -34,7 +39,7 @@ def _mission_spec_to_msg(spec: MissionSpec) -> RosMissionSpec:
         mode=spec.mode.name,
         target_cls=spec.target_cls.name if spec.target_cls is not None else "",
         placement_classes=[cls.name for cls in spec.placement_rule],
-        placement_colors=[color.name for color in spec.placement_rule.values()],
+        placement_colors=[dest.name for dest in spec.placement_rule.values()],
         raw_text=spec.raw_text,
     )
 

@@ -1,0 +1,3 @@
+---
+bool confirmed
+float32 confidence
