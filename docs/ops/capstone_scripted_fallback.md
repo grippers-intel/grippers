@@ -50,14 +50,23 @@ GitHub #189에서 계속한다.
 
 4. 출력된 현재 자세·온도·통신 상태를 사람이 확인한다. 정렬이 필요하면 작업공간을 비운
    뒤에만 `--dry-run`을 제거해 실행한다.
-5. 첫 리허설은 물체 없이 기본 모드로 수행한다. 그다음 물체 표시점을 미세 조정한다.
+5. 바구니 경로는 빈손 전용 도구로 먼저 확인한다.
+
+   ```bash
+   PYTHONPATH=third_party/soarm_provided_d/soarm_lab:ros2_ws/src/grippers_arm \
+     python3 tools/basket_drop_pose_hardware_test.py
+   ```
+
+6. 기존 기본 모드는 물체가 없는 상태로 파지 높이까지 하강한 뒤, 운영자가 손가락
+   사이에 물체를 놓고 상승·투하 경로를 확인한다. 빈 그리퍼는 부하 검사에서 중단되므로
+   전체 경로의 무부하 시험으로 오해하지 않는다.
 
    ```bash
    PYTHONPATH=third_party/soarm_provided_d/soarm_lab:ros2_ws/src/grippers_arm \
      python3 tools/horizontal_grasp_hardware_test.py cube --drop-to-basket
    ```
 
-6. 빈 경로가 안전한 것을 확인한 뒤에만 사전 배치 물체 모드를 실행한다.
+7. 하강 경로와 상승·투하 경로를 각각 확인한 뒤에만 사전 배치 물체 모드를 실행한다.
 
    ```bash
    PYTHONPATH=third_party/soarm_provided_d/soarm_lab:ros2_ws/src/grippers_arm \
@@ -65,7 +74,7 @@ GitHub #189에서 계속한다.
        --prepositioned-object --drop-to-basket
    ```
 
-7. 같은 물체·표시점·바구니 배치로 3회 리허설한다. 실패를 숨기지 말고 원본 영상과
+8. 같은 물체·표시점·바구니 배치로 3회 리허설한다. 실패를 숨기지 말고 원본 영상과
    콘솔 로그를 모두 보존한다.
 
 지원 프로필은 `cube`, `star_column`, `soccer_polyhedron`, `chess_rook`,
