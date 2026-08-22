@@ -6,15 +6,25 @@
 **두 단계 모두에 상한이 필요하다.** `wait_for_service()` 만 막으면 "서비스는 떠
 있는데 응답을 주지 않는" 경우를 놓친다 — 2026-08-18 실기에서 ros_robot_controller
 수신 스레드가 죽어 노드는 살아 있는데 응답이 없던 상황이 실제로 있었다. 그래서
-`spin_until_future_complete()` 에도 `timeout_sec` 를 주고 미완료 future를 처리한다.
+future 대기에도 상한을 두고 미완료 future를 처리한다.
 
 **타임아웃은 예외를 던지지 않는다.** 실패는 `None` 으로 돌아오고, 각 어댑터가 자기
 포트의 실패 계약(`False` · `None` · 빈 목록 · `contact_risk=True`)으로 번역한다.
 그래야 서비스 부재가 미션 종료가 아니라 루프 FSM의 정상적인 실패 경로 —
 보류 등록 후 `SCAN` 복귀 — 로 흡수된다 (docs/design/state_machine.md §3).
+
+⚠️ **`rclpy.spin_until_future_complete(node, ...)` 를 쓰지 않는다** (이슈 #141).
+그 함수는 내부적으로 전역 `SingleThreadedExecutor` 에 노드를 `add_node` 했다가
+`finally` 에서 `remove_node` 하는데, `Node.executor` setter가 그 전에 노드를
+**기존 executor에서 먼저 떼어낸다.** `mission_orchestrator_node`는 FSM을 별도
+스레드에서 돌리면서 주 스레드는 `MultiThreadedExecutor`로 노드를 스핀하므로,
+FSM 스레드가 이 헬퍼로 서비스를 호출할 때마다 노드가 그 executor에서 떨어져
+나갔다가 호출이 끝나면 아예 executor 없는 상태가 된다. `MultiThreadedExecutor`가
+이미 콜백을 처리하고 있으므로 여기서 또 스핀할 필요가 없다 — `future.done()`을
+그냥 폴링한다(`_wait_for_future`).
 """
 
-import rclpy
+import time
 
 # E-STOP 경로 전용 상한. 이 경로는 "응답을 기다리지 않는다"가 계약이라 대기 자체가
 # 위험하므로, 서비스가 없으면 즉시 포기하고 로그만 남긴다.
@@ -38,6 +48,23 @@ ACTION_RESULT_TIMEOUT_SEC = 60.0
 # 나머지 서비스 상한.
 SERVICE_TIMEOUT_SEC = 3.0
 
+# _wait_for_future 폴링 주기. 상한(0.5~60초) 대비 충분히 촘촘하면서, 바쁜
+# 대기로 CPU를 태우지 않을 정도로 둔다.
+_POLL_INTERVAL_SEC = 0.01
+
+
+def _wait_for_future(future, timeout_sec):
+    """future가 끝날 때까지 폴링한다 — `rclpy.spin_until_future_complete(node, ...)`
+    와 달리 노드를 어떤 executor에도 붙이지 않는다(이슈 #141 참고, 모듈 docstring).
+    `MultiThreadedExecutor`가 이미 콜백을 실행해 future를 완료시키므로, 호출
+    스레드는 완료 여부만 확인하면 된다."""
+    deadline = time.monotonic() + timeout_sec
+    while not future.done():
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_POLL_INTERVAL_SEC)
+    return True
+
 
 def call_service(node, client, request, *, label, timeout_sec=SERVICE_TIMEOUT_SEC):
     """서비스를 호출해 응답을 반환한다. 서버가 없거나 응답이 없으면 `None`.
@@ -49,7 +76,7 @@ def call_service(node, client, request, *, label, timeout_sec=SERVICE_TIMEOUT_SE
         return None
 
     future = client.call_async(request)
-    rclpy.spin_until_future_complete(node, future, timeout_sec=timeout_sec)
+    _wait_for_future(future, timeout_sec)
     if not future.done():
         # 늦게 도착한 응답에 매달리지 않도록 정리한다.
         future.cancel()
@@ -82,7 +109,7 @@ def call_action(
         return None
 
     goal_future = client.send_goal_async(goal)
-    rclpy.spin_until_future_complete(node, goal_future, timeout_sec=server_timeout_sec)
+    _wait_for_future(goal_future, server_timeout_sec)
     if not goal_future.done():
         goal_future.cancel()
         node.get_logger().warn(
@@ -96,7 +123,7 @@ def call_action(
         return None
 
     result_future = goal_handle.get_result_async()
-    rclpy.spin_until_future_complete(node, result_future, timeout_sec=result_timeout_sec)
+    _wait_for_future(result_future, result_timeout_sec)
     if not result_future.done():
         # ⚠️ 그냥 빠져나가면 로봇은 계속 움직인다 — 취소를 요청하고 응답은
         # 기다리지 않는다. 여기서 또 블록되면 상한을 둔 의미가 없다.
