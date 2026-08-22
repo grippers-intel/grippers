@@ -59,6 +59,16 @@ def _called_names(function):
     ]
 
 
+def _assigned_attributes(function):
+    return {
+        target.attr
+        for node in ast.walk(function)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        if isinstance(target, ast.Attribute)
+    }
+
+
 def test_logged_port_records_call_and_return_without_changing_result():
     logger = RecordingLogger()
     port = LoggedPort("ExamplePort", ExamplePort(), logger)
@@ -92,6 +102,19 @@ def test_state_is_published_in_normal_and_abort_paths():
     assert "publish" in _called_names(run_fsm)
     assert "publish" in _called_names(abort)
     assert '"/mission/state"' in ORCHESTRATOR.read_text(encoding="utf-8")
+
+
+def test_elapsed_time_is_set_once_for_normal_and_abort_state_messages():
+    """elapsed_s는 공통 메시지 생성기에서 monotonic 경과 시간으로 채운다."""
+    message_builder = _function(ORCHESTRATOR, "_mission_state_message")
+    run_fsm = _function(ORCHESTRATOR, "_run_fsm")
+    abort = _function(ORCHESTRATOR, "_abort_mission")
+
+    assert "elapsed_s" in _assigned_attributes(message_builder)
+    assert "monotonic" in _called_names(message_builder)
+    assert "monotonic" in _called_names(run_fsm)
+    assert "_mission_state_message" in _called_names(run_fsm)
+    assert "_mission_state_message" in _called_names(abort)
 
 
 def test_launch_exposes_four_fake_switches_and_optional_rosbag():
