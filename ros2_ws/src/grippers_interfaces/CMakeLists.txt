@@ -28,6 +28,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/Parse.srv"
   "srv/ConfirmPhrase.srv"
   "action/DriveTo.action"
+  "action/ApproachObject.action"
   "action/ReorientArm.action"
   "action/MoveToCartesian.action"
   "action/MoveToFloorPose.action"

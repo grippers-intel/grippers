@@ -35,3 +35,29 @@ def select_horizontal_grasp_plan(target: Detection) -> HorizontalGraspPlan:
     )
     _, profile, close_mm = min(chess, key=lambda item: abs(narrow_mm - item[0]))
     return HorizontalGraspPlan(profile, 80.0, close_mm)
+
+
+# HANDOFF.md(2026-08-23)의 시각 서보 접근 루프(tools/perception/approach.py)는
+# 교시값을 raw YOLO 클래스 이름별로 저장한다(approach_target_<raw class>.json).
+# 그런데 domain.values.Detection에는 YOLO subtype이 없다 — select_horizontal_
+# grasp_plan()이 폭 휴리스틱을 쓰는 것과 같은 이유(위 주석 참고)다. 새 wire
+# 필드를 추가하는 대신 이미 검증된 같은 휴리스틱을 재사용한다.
+_PROFILE_TO_RAW_CLASS = {
+    "chess_rook": "rook",
+    "chess_knight": "knight",
+    "chess_queen": "queen",
+    "cube": "box",
+    # "soccer_polyhedron"은 star/soccer 둘 다를 가리켜 폭만으로는 못 가른다 —
+    # 모르면 실패 관례대로 매핑하지 않는다(아래 approach_target_key 참고).
+}
+
+
+def approach_target_key(target: Detection) -> str | None:
+    """target을 tools/perception/approach.py의 --cls(=교시 파일 키)로 바꾼다.
+
+    체스 기물 3종은 select_horizontal_grasp_plan과 같은 폭 휴리스틱으로
+    raw 클래스 이름과 정확히 대응된다. GABE는 cube(≈box)만 갈리고
+    star/soccer는 폭이 겹쳐 구분할 수 없다 — 이 경우 **`None`**을 돌려준다.
+    호출자(real adapter)는 이걸 "정밀 접근 불가"로 다뤄야 한다."""
+    plan = select_horizontal_grasp_plan(target)
+    return _PROFILE_TO_RAW_CLASS.get(plan.profile)

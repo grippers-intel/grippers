@@ -26,10 +26,18 @@ from domain.ports.arm_driver import ArmDriver
 from domain.ports.base_driver import BaseDriver
 from domain.ports.command_interpreter import CommandInterpreter
 from domain.ports.perception import Perception
-from domain.values import BoxObservation, Destination, Point3, Pose2D
+from domain.values import BoxObservation, Destination, Detection, ObjectClass, Point3, Pose2D
 
 _TARGET = Pose2D(x=0.2, y=0.0, theta=0.0)
 _POINT = Point3(x=0.2, y=0.0, z=0.0)
+_DETECTION = Detection(
+    track_id=1,
+    cls=ObjectClass.CHESS_PIECE,
+    pose_m=Point3(x=0.2, y=0.0, z=0.0),
+    dims_m=Point3(x=0.0245, y=0.0245, z=0.04),
+    yaw_rad=0.0,
+    confidence=0.9,
+)
 _BOX = BoxObservation(
     dest=Destination.LEFT,
     pose_m=Pose2D(x=0.5, y=0.0, theta=0.0),
@@ -44,6 +52,13 @@ _BOX = BoxObservation(
 # test_undocumented_contracts_are_only_the_ones_pr137_adds 가 그 목록을 고정한다.
 FAILURE_CONTRACTS = [
     (BaseDriver, "drive_to", lambda: FakeBase(arrive=False).drive_to(_TARGET), False, None),
+    (
+        BaseDriver,
+        "approach",
+        lambda: FakeBase(arrive=False).approach(_DETECTION),
+        False,
+        "`False`",
+    ),
     (
         BaseDriver,
         "align_to_box",

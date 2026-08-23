@@ -7,7 +7,7 @@ assert로 검사해서 런타임 AssertionError가 난다."""
 import math
 
 from geometry_msgs.msg import Pose2D as RosPose2D
-from grippers_interfaces.action import DriveTo
+from grippers_interfaces.action import ApproachObject, DriveTo
 from grippers_interfaces.srv import AlignToBox
 from rclpy.action import ActionClient
 from std_srvs.srv import Trigger
@@ -15,7 +15,8 @@ from std_srvs.srv import Trigger
 from domain.adapters.real._ros_call import ESTOP_TIMEOUT_SEC, call_action, call_service
 from domain.adapters.real._ros_convert import box_observation_to_msg
 from domain.ports.base_driver import BaseDriver
-from domain.values import BoxObservation, Pose2D
+from domain.task.floor_grasp_policy import approach_target_key
+from domain.values import BoxObservation, Detection, Pose2D
 
 # 정렬에 실패했을 때 돌려줄 yaw 오차. 0.0(= 완벽 정렬)을 쓰면 실패가 최선의
 # 성공으로 읽힌다 — 임계값과 비교하는 어떤 판정도 통과해 버린다. 무한대는
@@ -27,15 +28,37 @@ class Ros2MecanumBase(BaseDriver):
     def __init__(self, node):
         self._node = node
         self._drive_client = ActionClient(node, DriveTo, "base_driver/drive_to")
+        self._approach_client = ActionClient(node, ApproachObject, "base_driver/approach_object")
         self._align_client = node.create_client(AlignToBox, "base_driver/align_to_box")
         self._stop_client = node.create_client(Trigger, "base_driver/stop")
 
     def drive_to(self, target: Pose2D) -> bool:
         """도착하면 True. 액션 서버가 없거나 결과가 오지 않으면 **False** —
-        `APPROACH`/`TRANSPORT` 가 대상을 보류 등록하고 `SCAN` 으로 복귀한다."""
+        `TRANSPORT` 가 대상을 보류 등록하고 `SCAN` 으로 복귀한다."""
         ros_target = RosPose2D(x=target.x, y=target.y, theta=target.theta)
         goal = DriveTo.Goal(target=ros_target)
         result = call_action(self._node, self._drive_client, goal, label="drive_to")
+        if result is None:
+            return False
+        return result.arrived
+
+    def approach(self, target: Detection) -> bool:
+        """물체 앞 파지 위치로 시각 서보 폐루프 접근한다(포트 docstring 참고).
+
+        raw YOLO 클래스를 특정 못 하면(예: GABE의 star/soccer, floor_grasp_
+        policy.approach_target_key 참고) 액션 서버를 부르지도 않고 바로
+        **False** — "모르면 실패" 관례. 액션 서버 쪽 구현은 base_driver_node의
+        `approach_object` 액션(2026-08-23 신설, 실기 미검증 — tools/perception/
+        approach.py 이식) 참고."""
+        raw_cls = approach_target_key(target)
+        if raw_cls is None:
+            self._node.get_logger().warn(
+                f"approach: {target.cls.name} 세부 클래스를 폭만으로 특정 못 함 — "
+                "정밀 접근 불가"
+            )
+            return False
+        goal = ApproachObject.Goal(raw_cls=raw_cls)
+        result = call_action(self._node, self._approach_client, goal, label="approach_object")
         if result is None:
             return False
         return result.arrived

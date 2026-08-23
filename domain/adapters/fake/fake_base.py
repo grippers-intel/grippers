@@ -2,7 +2,7 @@
 기본값은 전부 '성공'이며, 생성자 인자로 실패 시나리오를 주입한다."""
 
 from domain.ports.base_driver import ALIGN_FAILED_YAW_ERROR_RAD, BaseDriver
-from domain.values import BoxObservation, Pose2D
+from domain.values import BoxObservation, Detection, Pose2D
 
 
 class FakeBase(BaseDriver):
@@ -17,6 +17,13 @@ class FakeBase(BaseDriver):
         self._align_error_rad = align_error_rad
 
     def drive_to(self, target: Pose2D) -> bool:
+        return self._arrive
+
+    def approach(self, target: Detection) -> bool:
+        """`arrive`와 같은 플래그를 공유한다 — Fake는 FSM 로직만 검증하면
+        되고, real 어댑터가 다루는 raw 클래스 특정 가능 여부 같은 하드웨어
+        디테일은 여기서 흉내낼 필요가 없다(tests/test_mission_task.py의
+        기존 FakeBase(arrive=False) 시나리오들과 계약을 그대로 공유한다)."""
         return self._arrive
 
     def align_to_box(self, box: BoxObservation) -> float:

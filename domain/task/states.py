@@ -187,6 +187,12 @@ class SelectState(State):
 
 
 class ApproachState(State):
+    """⚠️ 2026-08-23: `base.approach()`는 시각 서보 폐루프다 — pose 1회 추정치로
+    목표점을 계산해 오도메트리로 주행하는 게 아니라, real 어댑터가 라이브
+    카메라 관측에 반복 수렴시킨다(domain/ports/base_driver.py의 `approach`
+    docstring, HANDOFF.md 참고). 그래서 여기서 목표 pose를 따로 계산하지
+    않는다 — `target`을 그대로 넘기면 real 구현이 필요한 것만 뽑아 쓴다."""
+
     name = "APPROACH"
 
     def __init__(self, ctx, target):
@@ -194,10 +200,7 @@ class ApproachState(State):
         self.target = target
 
     def execute(self, ports):
-        # TODO: 실측 — 접근 지점은 target 위치 그대로가 아니라 그리퍼 스탠드오프를
-        # 반영해야 한다. 실측 전까지는 검출 pose를 그대로 목표로 쓴다.
-        approach = Pose2D(x=self.target.pose_m.x, y=self.target.pose_m.y, theta=self.target.yaw_rad)
-        arrived = ports.base.drive_to(approach)
+        arrived = ports.base.approach(self.target)
         if not arrived:
             return ScanState(self.ctx.hold(self.target.track_id))
         return GraspState(self.ctx, self.target)
@@ -347,6 +350,14 @@ class TransportState(State):
 
         # TODO: 실측 — 상자 "앞" 지점은 box.pose_m 그대로가 아니라 접근 오프셋이
         # 필요하다. 실측 전까지는 상자 관측 pose를 그대로 목표로 쓴다.
+        #
+        # ⚠️ 2026-08-23: HANDOFF.md "바구니 접근 — 인식기만 갈아끼운다"는
+        # 바구니도 물체와 같은 approach.py 시각 서보 루프(ArUco 관측기로
+        # 교체)로 접근해야 한다고 본다 — 즉 여기도 궁극적으로 drive_to가
+        # 아니라 base.approach()가 될 후보다. 다만 어느 ArUco 마커 ID가
+        # 어느 Destination(LEFT/RIGHT)인지가 아직 실기로 확인 안 됐다
+        # (HANDOFF.md는 "빨강=4, 파랑=5" 예시만 남겼고 지금은 색이 아니라
+        # 좌우 모델이다) — 확정 전까지 drive_to를 그대로 둔다.
         arrived = ports.base.drive_to(box.pose_m)
         if not arrived:
             return ScanState(self.ctx.hold(self.target.track_id))

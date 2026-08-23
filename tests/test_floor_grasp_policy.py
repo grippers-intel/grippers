@@ -1,4 +1,4 @@
-from domain.task.floor_grasp_policy import select_horizontal_grasp_plan
+from domain.task.floor_grasp_policy import approach_target_key, select_horizontal_grasp_plan
 from domain.values import Detection, ObjectClass, Point3
 
 
@@ -38,3 +38,20 @@ def test_chess_policy_chooses_nearest_measured_grasp_width():
     )
     rook = select_horizontal_grasp_plan(detection(ObjectClass.CHESS_PIECE, 24.5))
     assert (rook.profile, rook.close_width_mm) == ("chess_rook", 15.0)
+
+
+def test_approach_target_key_resolves_chess_pieces_by_measured_width():
+    """체스 3종은 select_horizontal_grasp_plan과 정확히 같은 폭 휴리스틱으로
+    tools/perception/approach.py의 교시 파일 키(raw YOLO 클래스 이름)와
+    1:1 대응된다 — HANDOFF.md 검증 케이스(chess_rook)가 이 경로다."""
+    assert approach_target_key(detection(ObjectClass.CHESS_PIECE, 17.0)) == "queen"
+    assert approach_target_key(detection(ObjectClass.CHESS_PIECE, 22.0)) == "knight"
+    assert approach_target_key(detection(ObjectClass.CHESS_PIECE, 24.5)) == "rook"
+
+
+def test_approach_target_key_resolves_cube_but_not_ambiguous_gabe():
+    """GABE는 cube(≈box)만 폭으로 갈리고, star/soccer는 폭이 겹쳐(둘 다
+    soccer_polyhedron 프로필) raw 클래스를 특정할 수 없다 — 모르면 실패
+    관례대로 None."""
+    assert approach_target_key(detection(ObjectClass.GABE, 40.0)) == "box"
+    assert approach_target_key(detection(ObjectClass.GABE, 46.0)) is None
