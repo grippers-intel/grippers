@@ -1,270 +1,233 @@
-# Grippers — 작업 인수인계 (2026-08-23 06:00)
+# Grippers — 작업 인수인계 (2026-08-23 갱신)
 
-실기체 자율 파지 파이프라인 구축 현황. 검증된 수치와 다음 할 일.
+이전 HANDOFF(06:00, CLI 도구 단계 검증)에 이어, 이후 세션에서 ROS2 노드 기반
+아키텍처(`grippers_base`/`grippers_arm`/`grippers_perception`, `mission_orchestrator`)로
+전환한 뒤 실기로 진행한 작업 결과. **아래 "확정된 파이프라인 설계"와 "미해결
+과제"가 지금 가장 중요하다.**
 
 ---
 
-## 지금 바로 할 일 (진행 중이던 순서)
+## 지금 하드웨어 상태
 
-### ① 팔 복귀 — 아직 안 했으면 최우선
+- 팔: IDLE(cradle) 자세, torque 켜짐, 정상
+- 그리퍼: 열림(80mm)
+- 룩(rook): 그리퍼에서 내려놓음(정밀 배치 아님 — 중간 높이에서 열어 낙하)
+- 베이스: 정지
+- 서보2 온도: 상승 이력 있음(41→43°C, 안전 상한 40°C) — 다음 GRASP 자세
+  진입 전 반드시 냉각 확인 필요
 
-팔이 바닥을 밀며 차체를 들어올린 상태로 방치하면 어깨 서보가 상한다.
+---
 
-```bash
-ssh -t pi 'docker exec -it IntelPi bash -lc "cd /grippers && PYTHONPATH=/ros2_ws/src/grippers_arm:/third_party/soarm_provided_d python3 tools/return_home.py --accel 40"'
+## 확정된 파이프라인 설계 (사용자 지시, 최우선 참고)
+
+1. 물체 detect (YOLO)
+2. 물체 정면 **30cm**로 접근 (필요 시 회피 기동)
+3. **GRASP 돌입** — 그리퍼 열고 파지 자세로 내려옴
+4. 물체 방향으로 **직진 접근** — 정확한 전진 거리는 아직 미확정, 실측/캘리브레이션 필요 (다음 세션 최우선 과제)
+5. **그리퍼 캠 컨투어 면적 + 부하(load) 값 둘 다**로 파지 검증
+6. 들어올리기
+
+**신규 설계 지시 (미반영, 코드 작업 필요)**: GRASP 단계에서 **servo 1을 능동
+적으로 움직여 물체가 그리퍼 정면(좌우 중앙)으로 오도록 보정**한다. 지금까지는
+평행 죠(parallel jaw)가 벌어진 채 전진하면 좌우 오차를 수동적으로 흡수하는
+효과만 확인됐다 — 이건 그걸 대체하는 게 아니라 보강하는 능동 보정이다.
+
+**캘리브레이션 방법론 (사용자 지시)**: 4번 단계의 전진 거리를 정할 때 Claude가
+임의로 타이밍/거리 기반 스크립트를 짜지 않는다. 사용자가 **WASD 키보드
+텔레옵으로 직접 베이스를 조작**하고, Claude는 그리퍼 카메라를 실시간
+모니터링하면서 정지 조건(예: 컨투어 면적이 파지 기준치 초과)을 실시간으로
+안내한다. 정밀 이동거리는 `/odom_raw`(`nav_msgs/Odometry`, 휠 엔코더 기반)로
+교차 검증한다 — Ctrl+C 타이밍 추정보다 훨씬 정확하다. `/odom` 은 없다(EKF
+미가동, `imu_calib` 패키지 부재) — 반드시 `/odom_raw`를 쓸 것.
+
+---
+
+## 이번 세션에 실기로 검증한 것
+
+### 그리퍼 캠 기반 근접 파지 절차 — 2회 연속 성공
+
+절차: GRASP 자세(그리퍼 열림)로 진입 → 그리퍼 캠을 보며 조금씩 전진 → 물체가
+손가락 사이에 확실히 들어온 것을 확인 → 정지 후 닫기.
+
+**판정 기준(신규 확정)**: 그리퍼 캠 프레임(640×480)에서 물체 컨투어 면적이
+**82,854px²(27.0%) 이상**이면 닫아도 된다. 그 이상(예: 172,738px², 56.2%)도
+문제없이 성공했다 — "기준치 초과"가 조건이지 정확히 맞출 필요는 없다.
+
+| 회차 | 방식 | 닫기 직전 면적 | 닫을 때 load | midpoint load |
+|---|---|---|---|---|
+| 1 | 2cm+3cm 수동 미세 전진 | (기준치 역산) | 0.0704 | 0.0704 (lift 끝까지 유지) |
+| 2 | `forward_manual.py`로 직접 조작, Ctrl+C 정지 | 172,738px² | 0.0899 | 0.0704 |
+
+두 회차 모두 `LOAD_THRESHOLD=0.04`를 크게 상회.
+
+컨투어 측정 방법: 그레이스케일 → `cv2.threshold(gray, 150, 255, THRESH_BINARY)`
+→ 5×5 모폴로지 open/close → `cv2.findContours` → 최대 면적 컨투어.
+
+### 순수 전진은 안정적, 회전+전진 APPROACH는 미해결
+
+- **회전+전진으로 재설계한 APPROACH**(`visual_approach_control.py`,
+  `base_driver_node.py`, 커밋 `298e884` personal-mirror)는 실기 첫 테스트에서
+  좌측 약 90° 회전, 목표 이탈. 이후 제자리 회전만 단독 테스트(0.3, 0.6 rad/s)
+  했으나 모터가 소리만 내고 실제 회전 없음 — **사용자 지시로 전면 중단**
+  ("그냥 멈춰. 하나도 안 움직이니까"). 원인 미규명, 재검증은 다음 기회로 미룸.
+- 반면 **순수 전진(linear_x만)은 안정적으로 작동** — 오늘 성공 사례 전부 순수
+  전진 기반. 회전 문제 해결 전까지는 "정렬 이후 순수 전진만으로 파지 직전까지
+  접근"이 유일하게 검증된 경로.
+- 장애물 회피(옆으로 비키기) 로직도 이 커밋에 같이 들어갔으나, 아래 LiDAR
+  문제로 **실전 사용은 보류** 상태.
+
+### LiDAR — 연결 확인, 각도 보정 미해결, 사용 보류
+
+- LD19가 실제로 연결돼 있고(`/dev/ldlidar`), `/scan_raw`(주의: launch 인자
+  기본값은 `/scan`이지만 실제 토픽은 `/scan_raw`)로 정상 발행함을 확인.
+- LD19 장착 높이(base_link 기준 9.25cm)에서는 체스말·축구공 같은 작은
+  파지 대상이 전방 스캔에 아예 안 잡힌다 — 즉 이 게이트가 파지 대상 자체를
+  장애물로 오인할 걱정은 없다(장점). 다만 낮은 문턱류 장애물은 여전히 못 봄.
+- **각도 기준 불일치 발견**: 카메라상 완만한 좌측 오프셋 물체가 LiDAR
+  각도로는 +82~89°로 나옴 — LiDAR 프레임과 base_link/카메라 정면 축 사이에
+  설명 안 된 회전 오프셋이 있다. **사용자 지시로 이 보정은 보류**
+  ("라이다는 보류"). 회피 로직을 실전 투입하려면 이걸 먼저 풀어야 한다.
+- `-60°~-90°` 구간은 로봇 자체 팔/구조물에 의한 자기 차폐로, 항상
+  0.026~0.034m가 나온다 — 실제 장애물 아님.
+
+### 서보2 과열 안전 게이트 — 반복 테스트 시 자주 걸림
+
+`MAX_FLOOR_POSE_SERVO2_TEMP_C=40`°C. 오늘 두 차례(45°C, 이후 41→43°C) 걸려
+`move_to_floor_pose(..., "grasp"/"idle")`가 즉시 거부됨. **이전에는 이 거부를
+전부 "safe→grasp 자세 재확인 실패"(pose tolerance 문제)로 오진단했었는데,
+실제로는 서보 과열이 지배적 원인이었다.** 연속 실기 테스트 사이에 의도적으로
+냉각 시간을 두는 것을 권장. `idle 복귀는 safe/drop 자세에서만 시작 가능`
+이라는 별도 상태 제약도 있음(순서: `... → safe → idle`, `midpoint`에서 바로
+`idle`은 거부됨).
+
+---
+
+## 이번 세션에 새로 겪은 환경 함정
+
+- **`rclpy.init()`의 기본 SIGINT 처리** — 기본값은 자체 시그널 핸들러를 깔아,
+  Ctrl+C 시 스크립트의 `except KeyboardInterrupt`/`finally`보다 먼저 컨텍스트를
+  닫아버릴 수 있다(`RCLError: Failed to publish: publisher's context is
+  invalid`, 정지 명령이 실제로는 하나도 안 나감). 수동 `cmd_vel` 스크립트는
+  반드시 `rclpy.init(signal_handler_options=SignalHandlerOptions.NO)`
+  (`from rclpy.signals import SignalHandlerOptions`)로 열 것.
+- **구독자 연결 대기 필수** — `pub.get_subscription_count() > 0`을 확인하고
+  발행 시작할 것. DDS discovery 전에 보낸 메시지는 조용히 유실된다.
+- **`ROS_DOMAIN_ID=21`을 매 셸/스크립트에서 export** — 안 하면 스크립트가
+  "전진 시작" 메시지를 찍고도 실제로는 다른 DDS 도메인으로 발행돼 로봇이
+  안 움직인다.
+- **`depth_camera.launch.py`가 띄우는 `ascamera_node`는 `/ros2_ws`가 아니라
+  별도 워크스페이스(`/home/ubuntu/third_party_ros2/third_party_ws`)에 설치돼
+  있다** — `source .../third_party_ws/install/setup.zsh`를 빠뜨리면
+  `package 'ascamera' not found`로 조용히 실패한다(2026-08-23 재확인, 옛
+  HANDOFF 노트가 이미 언급했지만 이번 세션에서 실제로 빠뜨려서 재확인함).
+  `ros2 launch`가 `uvc_open:Busy`로 첫 시도에 실패했다가 자동 재시도해
+  뜨는 경우가 있어 기동 후 8초 정도 여유를 두고 확인할 것.
+- **노드 재시작 전엔 항상 이전 프로세스를 먼저 죽일 것** — `odom_publisher`,
+  `depth_cam_rotate_node`, `perception_node` 전부 중복 실행하면(구 프로세스를
+  안 죽이고 새로 띄우면) arm_driver 중복 실행 때와 같은 시리얼/장치 충돌이
+  난다(2026-08-23 재확인). `pkill -f <패턴>` 후 기동할 것.
+- **`docker exec` 안에서 실행해야 함** — 호스트(`/home/pi/...`)에만 둔
+  스크립트는 컨테이너 안에서 `No such file or directory`. `docker cp`로
+  `/tmp/`에 복사해서 컨테이너 안에서 실행할 것.
+- **`ros2 topic pub --rate`를 백그라운드(`&`)로 단일 비대화형 SSH
+  `bash -c` 안에서 돌리는 방식은 신뢰 불가** — 전용 Python 스크립트를 쓸 것
+  (`forward_manual.py` 패턴 참고, 아래).
+- **`/dev/gripper_cam`(`/dev/video0`)은 `perception_node`가 계속 독점
+  보유** — **정정(2026-08-23 재실기 확인, `lsof /dev/video0`으로 직접
+  확인)**: "confirm_grasp를 호출해야 lazy하게 연다"는 이전 노트는 틀렸다.
+  실제로는 `perception_node.__init__`이 confirm_grasp용 기준(빈 그리퍼)
+  프레임을 찍으려고 **기동 즉시 무조건** 이 장치를 열어서 그대로 쥐고
+  있는다. 직접 `cv2.VideoCapture`로 접근하려면(예: `grasp_test_console.py`)
+  먼저 `pkill -f grippers_perception/perception_node` 필요(YOLO/`scan_floor`/
+  `observe_target`도 같이 멈춤 — 필요하면 나중에 재기동). `observe_target`을
+  더 안 쓰는 시점(예: 접근 완료 후)에 죽이면 안전하다.
+- **팔 시리얼 포트(`/dev/soarm`) 동시 접속 금지** — `arm_driver_node`가 이미
+  열고 있는 상태에서 별도 진단 스크립트가 같은 포트에 `STS3215Driver`로
+  붙으면 전 서보 torque가 예고 없이 꺼진다. 직접 접근 전엔 반드시
+  `pkill -f grippers_arm/arm_driver`, 이후 현재 위치를 읽어 그 자리에서
+  `set_position(i, present[i])`로 torque를 래치한 뒤 노드 재기동.
+- **`observe_target`의 "매칭 클래스 중 최대 높이 박스 선택" 로직이 혼잡한
+  장면에서 불안정** — 낮은 신뢰도의 가짜 "rook" 박스(비정상 종횡비)를 대신
+  고르는 경우가 여러 번 관찰됨. 코드 미수정 — 의심스러우면 직접 YOLO 추론
+  스냅샷으로 눈으로 확인할 것.
+
+---
+
+## `forward_manual.py` — 수동 전진 + 안전 정지 (검증된 최종본)
+
+컨테이너 안(`docker cp`로 `/tmp/forward_manual.py`)에서 실행:
+
+```python
+#!/usr/bin/env python3
+import sys, time
+import rclpy
+from rclpy.signals import SignalHandlerOptions
+from geometry_msgs.msg import Twist
+
+speed = float(sys.argv[1]) if len(sys.argv) > 1 else 0.06
+
+rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+node = rclpy.create_node('forward_manual')
+pub = node.create_publisher(Twist, 'cmd_vel', 10)
+
+start = time.time()
+while pub.get_subscription_count() == 0 and time.time() - start < 5:
+    time.sleep(0.05)
+print(f'구독자 연결됨 ({pub.get_subscription_count()}) — {speed} m/s로 전진 시작. Ctrl+C로 정지.')
+
+t = Twist()
+t.linear.x = speed
+
+try:
+    while True:
+        pub.publish(t)
+        time.sleep(0.05)
+except KeyboardInterrupt:
+    print('정지 명령 발행 중...')
+finally:
+    stop_until = time.time() + 1.0
+    while time.time() < stop_until:
+        pub.publish(Twist())
+        time.sleep(0.02)
+    print('정지 완료.')
+    node.destroy_node()
+    rclpy.shutdown()
 ```
 
-**어댑터 연결 필수.** 메인 배터리가 6.9V까지 떨어져 베이스가 안 움직인다(2셀 팩 기준 거의 방전).
-
-### ② 기준값 교시 — 파지 위치를 다시 정확히 잡는다
-
-a. 파지 자세로 그리퍼를 보낸다 (Enter 3번, "파지 중심 45mm로 이동"까지):
-
-```bash
-ssh -t pi 'docker exec -it IntelPi bash -lc "cd /grippers && PYTHONPATH=/ros2_ws/src/grippers_arm:/third_party/soarm_provided_d python3 tools/horizontal_grasp_hardware_test.py chess_rook --accel 40"'
-```
-
-b. 룩을 두 손가락 **정중앙**에 놓고 `q` 로 중단
-c. 팔 접기 — `return_home.py --accel 40`
-d. 그 위치를 기준으로 저장:
-
-```bash
-ssh pi 'docker exec IntelPi bash -lc "source /opt/ros/humble/setup.bash && export ROS_DOMAIN_ID=21 && python3 -u /grippers/tools/perception/approach.py --teach --note \"chess_rook 파지위치\""'
-```
-
-### ③ 접근 루프 — 먼저 움직이지 않고 방향만 확인
-
-로봇을 뒤로 20~30cm 물린 뒤:
-
-```bash
-ssh pi 'docker exec IntelPi bash -lc "source /opt/ros/humble/setup.bash && export ROS_DOMAIN_ID=21 && python3 -u /grippers/tools/perception/approach.py --dry-run"'
-```
-
-`높이=` 오차가 **+(양수)면 아직 멀다**는 뜻. 정상이다.
-
-### ④ 실제 접근
-
-```bash
-ssh pi 'docker exec IntelPi bash -lc "source /opt/ros/humble/setup.bash && export ROS_DOMAIN_ID=21 && python3 -u /grippers/tools/perception/approach.py"'
-```
-
-- 좌우가 반대로 가면 → `--invert-y`
-- 너무 느리면 → `--gain-h 0.003 --gain-x 0.0018`
-- 출렁이면 → 게인을 절반으로
-
-**수렴하면 자율 파지의 마지막 조각이 맞춰진다.** 이후 파지→운반→투하는 전부 검증된 것이라 이어 붙이기만 하면 된다.
+실행: `docker exec -it IntelPi bash -lc "source /opt/ros/humble/setup.bash && export ROS_DOMAIN_ID=21 && python3 /tmp/forward_manual.py 0.06"`
 
 ---
 
-## 검증 완료된 것
+## 다음 세션 최우선 과제
 
-### 인식
-
-| 항목 | 결과 |
-|---|---|
-| 추론 | **NCNN CPU 14.3 FPS** (640px, 학습 해상도 그대로) |
-| 합의 필터 | 프레임당 4~12개 검출 → 물체 단위로 수렴, **산포 0.2~1.1px** |
-| 6개 클래스 | `b_hard` 촬영본에서 **전부 순도 1.00** (queen .95 / knight .93 / box .90 / star .86 / rook .82 / soccer .61) |
-| 거리 게이트 | **y ≥ 290** — 빈 바닥 대조군에서 오탐 최대 y=277, 진짜 물체 최소 y=293 |
-
-동작점: `conf 0.45 · k-of-n 0.6 · 순도 ≥0.80 · y ≥290 · 산포 ≤40px`
-
-**한계** — 빈 아레나에서 오탐 4개가 60프레임 내내 일관되게 나온다(벽 밑동·바구니 주변).
-배경이 정지해 있어 합의 필터로는 원리적으로 못 거른다. 거리 게이트로 막는다.
-
-### 파지 (하드웨어 실측 검증 완료)
-
-`horizontal_grasp_hardware_test.py chess_rook --drop-to-basket` 전 구간 성공.
-
-- 파지 부하 `0.0665` → 운반 중 `0.0587` 유지 (최소 기준 0.04)
-- 온도 20→25°C, 수렴 오차 servo2 13카운트
-- 바구니 투하 정상 (테두리 위 80mm에서 놓음, 튐 허용 범위)
-
-**수평 파지가 맞다.** 체스 기물은 몸통(45~60mm)을 옆에서 감싸 쥔다. 수직 하강은 이 하드웨어에 부적합.
-
-### 개선한 것
-
-- **움직임 진동** — `glide` 보간을 30스텝×0.1s → **90스텝×0.034s**. 총 시간 동일, 스텝당 이동 1/3.
-  수렴 오차가 servo2 기준 36→13카운트로 개선. `--accel 40` 도 쓸 만하다.
-- `return_home.py` 신규 — `align_to_idle` 은 IDLE 근처(편차 800)만 처리한다.
-  파지 자세(편차 2296)에서는 거부하므로, 검증된 경로(현재→SAFE_145→IDLE)로 복귀시키는 도구를 만들었다.
+1. **직진 접근 거리 캘리브레이션** — 위 "확정된 파이프라인 설계" 4번.
+   룩을 실측 30cm에 놓고, GRASP 진입 → WASD 텔레옵으로 전진 → 그리퍼 캠
+   면적 + `/odom_raw` 이동거리를 같이 기록 → 면적이 82,854px² 이상이 되는
+   지점까지의 누적 이동거리를 산출해 고정값으로 만든다.
+2. **GRASP 시 servo 1 좌우 능동 보정** 구현 — 아직 코드 미반영.
+3. **회전(제자리 회전) 미작동 원인 규명** — 회전+전진 APPROACH 재검증의
+   전제조건. 모터가 소리만 내고 회전 안 하는 원인(정지마찰? 배터리 전압?
+   부호/게인?) 미규명.
+4. **LiDAR 각도 기준 보정** — 회피 기동을 실전 투입하려면 필요. 사용자가
+   명시적으로 보류 지시했으니, 재개 시점은 사용자 판단을 따를 것.
+5. `observe_target`의 오탐 박스 선택 문제 — 근본 수정(프레임 간 안정적
+   `track_id` 또는 클래스+위치 기반 매칭) 필요, 이번 세션엔 손 안 댐.
+6. `/grippers/config/approach_target.json`(Pi 로컬, h=247.0)이 아직
+   Mac/개인 repo에 커밋 안 됨 — 회전 APPROACH 검증이 끝나기 전까지는 보류
+   상태 유지 중.
 
 ---
 
-## 실패한 접근과 이유 (반복하지 말 것)
+## 참고 — 이전(06:00) HANDOFF에서 여전히 유효한 것
 
-**Hailo-10H — 사용 불가로 판정.** PCIe 열거·드라이버 적재·펌웨어 파일 모두 정상인데
-칩이 u-boot 단계에서 100% 재현적으로 멈춘다(`Timeout waiting for firmware file` →
-`Failed writing SOC firmware on stage 2`). Gen3→Gen2, 완전 전원 차단, 모듈 재적재,
-`force_hailo10h_legacy_mode`(Hailo-15용이라 무관), 패키지 업데이트(5.1.1이 최신) 전부 실패.
-파이 전원은 정상(5A 인식, `throttled=0x0`). **하드웨어 또는 물리적 접촉 문제로 본다.**
-판정용 후속 시험 — 여분의 파이 5에 모듈을 옮겨 꽂아보면 모듈 불량인지 로봇 쪽 문제인지 갈린다.
-
-**수동으로 파지 위치 맞추기 — 실패.** 화면 x 를 목표(168)에 맞췄는데도 팔이 물체를
-지나쳐 내려가 차체가 들렸다. 원인: **x 는 거리와 좌우 위치를 함께 담는다.**
-물체가 중심선에서 벗어나 있어 가까워지면 x 가 줄지만, 로봇이 옆으로 밀리거나
-살짝 회전해도 똑같이 변한다. 앞뒤로 여러 번 오가며 드리프트가 쌓였다.
-→ **해결: 박스 높이(거리) + x(좌우) 두 독립 신호로 제어 루프를 돌린다.** 그게 `approach.py`.
-
----
-
-## 실측 수치
-
-| 값 | 결과 |
-|---|---|
-| 파지 지점 | 화면 (168, 480) — **y=480 은 포화값이라 거리로 못 쓴다** |
-| 커밋 라인 | 화면 (221, 423), 전진 0.15m (±0.02) |
-| 파지 프로파일 | `chess_rook` 폭 24.5mm, 파지높이 45mm, 예열림 80mm, 닫기 15mm |
-| 파지 기하 | 차체 전면 기준 전방 185mm, 중심선 좌측 20mm |
-| 텔레옵 전송 | 50Hz, 패킷 유실 0%, 지터 중앙값 19.9ms |
-| 리더/팔로워 서보 | 6관절 읽기 2.0ms / 1.7ms |
-
----
-
-## 환경 함정 (다시 안 밟도록)
-
-- **뎁스카메라는 OpenCV 로 직접 열면 안 된다.** YUYV 1280x1040 은 RGB+뎁스 결합
-  원시 스트림이라 초록/보라 띠만 나온다. `ascamera` ROS 드라이버 경유가 유일한 길.
-  그 패키지는 `/ros2_ws` 가 아니라 **`third_party_ros2/third_party_ws`** 에 있다.
-  **카메라가 거꾸로 달려 있어 180도 회전 필수.**
-- **환경변수 누락이 잦다** — `need_compile`, `DEPTH_CAMERA_TYPE=ascamera` 가 없으면 런치가 KeyError 로 죽는다.
-- **`imu_calib` 패키지가 없다.** `controller.launch.py` 는 그것 때문에 런치 전체가 SIGINT 로 죽는다.
-  대신 `odom_publisher.launch.py` 를 띄운다. 그래서 **EKF 가 없고 `/odom` 도 없다 — `/odom_raw` 를 쓸 것.**
-- **경로 두 가지** — 호스트 `/home/pi/docker/shared/grippers/…` = 컨테이너 `/grippers/…`.
-  래퍼(`~/capture`, `~/teach`)는 호스트에서 실행한다.
-- **SSH 별칭** `pi` = 192.168.2.3 (유선), `pihotspot` = 아이폰 핫스팟 링크로컬.
-
----
-
-## 만든 도구
-
-| 파일 | 역할 |
-|---|---|
-| `tools/perception/consensus.py` | 다중 프레임 합의 — 클래스별 클러스터링, k-of-n, 중앙값, 순도 |
-| `tools/perception/floor_observer.py` | 카메라 → 확정된 물체 목록 (게이트 포함) |
-| `tools/cycle.sh` | **자율 사이클: 접근→파지→운반.** 호스트에서 `ssh -t pi '~/cycle'` |
-| `tools/perception/approach.sh` | 접근 루프만 실행 (스택 자동 기동) — `~/approach` |
-| `tools/perception/approach.py` | 자동 접근 루프 — 부분 검증(수렴 직전까지) |
-| `tools/perception/aruco_observer.py` | ArUco 관측기 — 바구니용. YOLO 와 같은 `Observation` 을 낸다 |
-| `tools/perception/make_markers.py` | 인쇄용 마커 생성 (`/grippers/markers/`) |
-| `tools/perception/overlay.py` | 합의 전/후 비교 그림 생성 — 발표 자료용 |
-| `tools/perception/measure_commit.py` | 커밋 거리 측정 (거리가 부호 없음 — 개선 필요) |
-| `tools/perception/eval_consensus.py` | 촬영본으로 임계값 튜닝 |
-| `tools/capture/capture.sh` | 프레임 촬영 (드라이버 자동 기동) — 호스트에서 `~/capture <라벨> [초]` |
-| `tools/return_home.py` | 팔을 검증된 경로로 IDLE 복귀 |
-| `tools/teach/teach.sh` | 자세 교시 (텔레옵 필요) — 아직 미사용 |
-| `tools/teleop/` | 리드암+키보드 텔레옵. `./teleop.sh --base-only` 로 베이스만도 가능 |
-| `config/grasp_target.json` | 파지 지점·커밋 라인 실측값 |
-| `config/approach_target.json` | 접근 루프 기준값 — **②에서 생성됨** |
-
----
-
-## 접근 루프에서 배운 것 (2026-08-23)
-
-- **모터 데드밴드가 실재한다.** 오차가 줄면 P 제어 지령이 0.02 m/s 아래로 내려가는데
-  그 속도로는 바퀴가 정지마찰을 못 이긴다. 명령은 정상인데 로봇만 안 움직이는,
-  가장 헷갈리는 증상이 나온다. `apply_floor()` 가 속도를 올리고 시간을 줄여
-  **이동 거리는 유지한 채** 데드밴드를 넘긴다.
-- **전압이 낮으면 데드밴드가 올라간다.** 7.2V 에서 같은 증상이 재현됐다.
-  그래서 `cycle.sh` 는 9.5V 미만이면 아예 시작하지 않는다.
-- **전진과 좌우 보정은 결합돼 있다.** 전진하면 물체의 좌우 편차가 원근으로 확대되므로,
-  횡보정이 못 따라가면 x 가 목표를 지나쳐 계속 밀려난다(실측: 224→134, 목표 170).
-  `--align-first` 가 좌우가 크게 어긋난 동안 전진을 1/4 로 줄여 끊는다.
-- **부호는 맞다.** `--invert-y` 는 필요 없었다.
-
-## 바구니 접근 — 인식기만 갈아끼운다 (2026-08-23)
-
-접근 루프는 목표가 무엇인지 모른다. `Observation(x, h, …)` 하나만 받는다. 그래서
-바구니는 **새 내비게이션이 아니라 새 인식기** 문제다.
-
-    YOLO   → Observation ┐
-                         ├→ approach.py → 목표 앞 정렬
-    ArUco  → Observation ┘
-
-- 바구니를 YOLO 로 잡으려면 렌더·라벨링·재학습이 필요하다. ArUco 는 학습이 없다.
-- ID 로 바구니를 구분한다 (빨강=4, 파랑=5 식).
-- **마커가 보여야만 한다.** 파지 직후 로봇은 물체 쪽을 보고 있으므로
-  `--search` 가 제자리에서 돌며 찾는다.
-- 교시값은 목표별로 나뉜다 (`approach_target_<cls>.json`). 예전 룩 교시본
-  (`approach_target.json`) 은 그대로 읽힌다.
-- **아직 안 푼 것: 요(yaw).** x·박스높이는 2 자유도만 묶는다. 로봇이 비스듬히
-  접근하면 그리퍼가 바구니 중심에서 벗어난다. 바구니 입구가 넓어 넘어갈 수도
-  있고, 안 되면 마커 좌우 변의 높이 차(원근 왜곡)를 세 번째 신호로 쓰면 된다.
-
-검증 상태 — 카메라→검출→합의 파이프라인 동작 확인. 마커 6종 생성·왕복 검출 6/6.
-**실제 바구니 접근은 미검증**(마커 미부착).
-
-## 사람을 기물로 확정한다 (2026-08-23 실측)
-
-카메라가 사무실 쪽을 향한 상태로 `overlay.py` 를 돌렸더니 **사람을 `knight` 0.90 으로,
-10 프레임 전부에서** 검출했다. 산포 1.5px. 합의 필터는 이걸 못 막는다 — 여러
-프레임에서 *일관되게 틀린* 검출은 필터가 정답과 구분할 수 없다.
-
-학습 데이터가 아레나 렌더뿐이라 도메인 밖 물체는 무엇이든 6 클래스 중 하나로
-끌려간다. 거리 게이트(y≥290)가 먼 곳을 잘라주지만, 가까이 선 사람은 통과한다.
-
-**How to apply:** 촬영·시연 중에는 로봇 카메라 시야에 사람이 들어가지 않게 한다.
-
-## 파지 지점은 카메라가 못 본다 (2026-08-23 실측)
-
-**시각 서보만으로는 파지 지점에 갈 수 없다.** 가까워질수록 물체가 화면 아래로
-잘려 나가 박스 높이가 거리 신호 구실을 못 하고, 결국 검출 자체를 잃는다.
-
-    교시값 +15px  →  안정적으로 수렴. 손가락 끝까지 약 10mm 남음
-    교시값 +20px  →  검출을 잃는다
-    교시값 +30px  →  검출을 잃는다
-
-이건 `config/grasp_target.json` 에 팀이 이미 적어둔 관찰과 같다 — y 가 480 으로
-포화되고 그보다 가까운 거리는 전부 같은 값으로 읽힌다. 그 문서의 처방(커밋 라인까지
-서보 → 개루프 전진)이 맞았다.
-
-**다만 개루프 구간을 훨씬 짧게 만들 수 있다.** 문서의 커밋 라인은 0.15m 를 개루프로
-가야 해서 오차가 ±0.02m 였다. 접근 루프로 10mm 앞까지 붙인 뒤 남은 구간만 가면
-그 오차가 거의 사라진다. `approach.py --final-push <mm>` 이 `/odom_raw` 로 재면서
-전진한다.
-
-**튜닝 단위가 픽셀에서 밀리미터로 바뀐 게 실질적인 이득이다.** 눈으로 본 간격을
-그대로 넣으면 된다.
-
-## 마무리 전진 — 실측으로 얻은 것들 (2026-08-23)
-
-**1. 전진 속도는 접근 속도와 달라야 한다.** `--min-speed` 0.05 는 데드밴드
-경계라 정지 상태에서 출발하면 바퀴가 안 돈다. 전진 15mm 와 25mm 가 **같은
-결과**를 낸 게 그 증거였다 — 둘 다 안 움직인 것이다. `--push-speed` 0.09 를 쓴다.
-
-**2. 오도메트리는 약 13% 과대 보고한다.** 지시 100mm 에 실제 87mm.
-`--push-scale` 1.15 로 보정한다.
-
-**3. 한 번에 밀면 관성으로 넘어간다.** 25mm 지시가 42.8mm 가 됐다. 그래서
-짧게 밀고 **완전히 멈춘 뒤 재기**를 반복한다. 관성 몫이 다음 회차 측정에
-자동으로 반영된다.
-
-**4. 파지 부하로는 "얼마나 빗나갔는지" 를 알 수 없다.** 그리퍼는 손가락 안쪽
-밑동에서 닫히므로, 물체가 손끝 바깥에 있으면 10mm 바깥이든 60mm 바깥이든
-부하가 똑같이 0.0313 이다. **부하가 안 변한다고 거리 문제가 아니라고 판단하면
-안 된다** — 실제로 그렇게 오판해서 좌우 오차를 의심했으나 사진으로 확인하니
-순수한 앞뒤 문제였다.
-
-**진단은 사진이 가장 빠르다.** 접근만 실행 → 파지 자세까지 전개(Enter 3번) →
-위에서 찍어 손가락과 물체의 관계를 본다. 숫자로 추측하는 것보다 훨씬 빠르다.
-
-## ✔ 전체 사이클 성공 (2026-08-23)
-
-    ssh -t pi '~/cycle --push 57 -- --frames-far 4'
-
-접근(20회 수렴) → 전진 57.9mm → 파지 → 상승 → 운반 → 복귀까지 자동으로 완주했다.
-
-    파지 부하   0.0665  (임계 0.04)
-    mid-lift    68
-    safe-145    68      세 단계 모두 동일 = 미끄러짐 없음
-    carry-idle  68
-    서보 온도   최고 30°C
-
-**확정된 값** — `--offset-h 15`, `--push 50`. 둘 다 cycle.sh 기본값이라
-`ssh -t pi '~/cycle'` 만으로 돈다. 50 에서 물체를 밀지 않고 깨끗하게 잡는다.
-두 번 연속 재현했다(57 → 살짝 밀림, 50 → 깨끗).
-
-## 알려진 미해결
-- `measure_commit.py` 의 거리가 원점으로부터의 **직선거리**라 앞뒤 구분이 안 된다
-- 빈 배경 오탐 4개 (거리 게이트로 회피 중)
-- 루트 파티션 79% (13GB 여유)
+- 뎁스카메라는 OpenCV로 직접 열면 안 됨(YUYV 결합 스트림) — `ascamera` ROS
+  드라이버 경유 필수, 카메라 180도 뒤집혀 있음.
+- `imu_calib` 패키지 없음 → EKF/`​/odom` 없음, `/odom_raw`만 사용.
+- 경로 이원화: 호스트 `/home/pi/docker/shared/grippers/…` = 컨테이너 `/grippers/…`.
+- 인식 동작점(`conf 0.45 · k-of-n 0.6 · 순도 ≥0.80 · y ≥290 · 산포 ≤40px`)과
+  6클래스 순도 수치는 여전히 유효한 값이나, **현재 아키텍처에서는
+  `tools/perception/*.py` CLI가 아니라 `grippers_perception/perception_node`
+  가 이 로직을 담당**하므로 옛 도구 경로를 그대로 실행하려 하지 말 것.
+- 수평 파지(체스 기물 몸통을 옆에서 감싸 쥠)가 맞다는 결론, 파지 프로파일
+  치수(`chess_rook` 폭 24.5mm, 파지높이 45mm, 예열림 80mm, 닫기 15mm)는
+  `floor_grasp_profiles.py`에 그대로 반영돼 있음.
