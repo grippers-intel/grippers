@@ -45,7 +45,6 @@ from grippers_perception.floor_consensus import CONF_THRESHOLD, confirmed_tracks
 from grippers_perception.hailo_scan_mapping import HAILO_CLASS_NAMES, object_class_for_hailo_id
 
 try:
-    from cv_bridge import CvBridge
     from sensor_msgs.msg import CameraInfo, Image
 
     _CV_AVAILABLE = True
@@ -240,6 +239,25 @@ def _standoff_arrival_pose(x_obj, y_obj):
     return x_final, y_final, phi
 
 
+def _bgr_from_image_msg(msg):
+    """Image 메시지를 BGR cv2 배열로 바꾼다 — cv_bridge를 쓰지 않는다.
+
+    ⚠️ 2026-08-23 실기 확인: cv_bridge의 컴파일된 확장(cv_bridge_boost.so)이
+    numpy 1.x ABI로 빌드돼 있어 이 환경의 numpy 2.x와 안 맞는다
+    (`AttributeError: _ARRAY_API not found` → 세그폴트, ultralytics/torch가
+    numpy 2.x를 끌어온 뒤 발생). tools/perception/floor_observer.py의
+    to_bgr()과 같은 방식(원시 바이트 버퍼를 numpy로 직접 해석)으로 우회
+    한다 — 같은 환경에서 이미 동작이 증명된 경로다."""
+    buf = np.frombuffer(msg.data, dtype=np.uint8)
+    enc = msg.encoding.lower()
+    if enc in ("bgr8", "rgb8"):
+        img = buf.reshape(msg.height, msg.width, 3)
+        return img[:, :, ::-1] if enc == "rgb8" else img
+    if enc == "mono8":
+        return cv2.cvtColor(buf.reshape(msg.height, msg.width), cv2.COLOR_GRAY2BGR)
+    raise ValueError(f"지원하지 않는 인코딩: {msg.encoding}")
+
+
 class PerceptionNode(Node):
     def __init__(self):
         super().__init__("perception_node")
@@ -247,7 +265,6 @@ class PerceptionNode(Node):
 
         self._latest_frame = None
         self._rgb_fx = self._rgb_cx = None
-        self._bridge = CvBridge() if _CV_AVAILABLE else None
         if _CV_AVAILABLE:
             # depth_cam_rotate_node가 내보내는 회전 보정된 컬러 스트림.
             # (예전엔 "camera/color/image_raw"를 구독했는데, 실제로 이 이름으로
@@ -272,7 +289,7 @@ class PerceptionNode(Node):
                 callback_group=cb_group,
             )
         else:
-            self.get_logger().warn("cv_bridge 미설치 — 카메라 구독 비활성화")
+            self.get_logger().warn("sensor_msgs 미설치 — 카메라 구독 비활성화")
 
         self.create_service(
             ScanFloor,
@@ -473,7 +490,7 @@ class PerceptionNode(Node):
             return response
 
         if self._hailo_model is not None:
-            frame = self._bridge.imgmsg_to_cv2(self._latest_frame, desired_encoding="bgr8")
+            frame = _bgr_from_image_msg(self._latest_frame)
             detections = self._scan_floor_detections_hailo(frame)
         elif self._cpu_yolo_model is not None:
             # 단일 프레임이 아니라 여러 프레임을 새로 모은다 — 다중 프레임
@@ -554,7 +571,7 @@ class PerceptionNode(Node):
                 time.sleep(0.01)
                 continue
             last_msg = current
-            frame = self._bridge.imgmsg_to_cv2(current, desired_encoding="bgr8")
+            frame = _bgr_from_image_msg(current)
             frames.append(self._yolo_raw_frame_detections(frame))
         return frames
 
@@ -643,7 +660,7 @@ class PerceptionNode(Node):
         if self._cpu_yolo_model is None or self._latest_frame is None:
             return response
 
-        frame = self._bridge.imgmsg_to_cv2(self._latest_frame, desired_encoding="bgr8")
+        frame = _bgr_from_image_msg(self._latest_frame)
         raw_detections = self._yolo_raw_frame_detections(frame)
         candidates = [d for d in raw_detections if d[0] == request.raw_cls]
         if not candidates:

@@ -15,7 +15,7 @@ from rclpy.node import Node
 
 try:
     import cv2
-    from cv_bridge import CvBridge
+    import numpy as np
     from sensor_msgs.msg import Image
 
     _CV_AVAILABLE = True
@@ -31,6 +31,37 @@ INPUT_TOPIC_DEFAULT = "/ascamera/camera_publisher/rgb0/image"
 OUTPUT_TOPIC_DEFAULT = "depth_cam/rgb/image_rotated"
 
 
+def _bgr_from_image_msg(msg):
+    """Image 메시지를 BGR cv2 배열로 바꾼다 — cv_bridge를 쓰지 않는다
+    (perception_node.py의 같은 이름 함수·같은 이유 참고. tools/perception/
+    floor_observer.py의 to_bgr()과 같은 방식)."""
+    buf = np.frombuffer(msg.data, dtype=np.uint8)
+    enc = msg.encoding.lower()
+    if enc in ("bgr8", "rgb8"):
+        img = buf.reshape(msg.height, msg.width, 3)
+        return img[:, :, ::-1] if enc == "rgb8" else img
+    if enc == "mono8":
+        return cv2.cvtColor(buf.reshape(msg.height, msg.width), cv2.COLOR_GRAY2BGR)
+    raise ValueError(f"지원하지 않는 인코딩: {msg.encoding}")
+
+
+def _image_msg_from_bgr(img, header):
+    """BGR cv2 배열을 Image 메시지로 바꾼다 — cv_bridge를 쓰지 않는다.
+
+    2026-08-23 실기 확인: cv_bridge의 컴파일된 확장(cv_bridge_boost.so)이
+    numpy 1.x ABI로 빌드돼 있어 이 환경의 numpy 2.x와 안 맞는다
+    (`AttributeError: _ARRAY_API not found` → 세그폴트). BGR uint8 배열을
+    Image 메시지로 직접 채우는 건 표준 절차라 cv_bridge 없이도 안전하다."""
+    msg = Image()
+    msg.header = header
+    msg.height, msg.width = img.shape[0], img.shape[1]
+    msg.encoding = "bgr8"
+    msg.is_bigendian = 0
+    msg.step = msg.width * 3
+    msg.data = np.ascontiguousarray(img).tobytes()
+    return msg
+
+
 class DepthCamRotateNode(Node):
     def __init__(self):
         super().__init__("depth_cam_rotate_node")
@@ -38,11 +69,9 @@ class DepthCamRotateNode(Node):
         self.declare_parameter("output_topic", OUTPUT_TOPIC_DEFAULT)
 
         if not _CV_AVAILABLE:
-            self.get_logger().warn("cv_bridge/opencv 미설치 — depth_cam_rotate_node 비활성화")
-            self._bridge = None
+            self.get_logger().warn("opencv/numpy 미설치 — depth_cam_rotate_node 비활성화")
             return
 
-        self._bridge = CvBridge()
         input_topic = self.get_parameter("input_topic").value
         output_topic = self.get_parameter("output_topic").value
         self._publisher = self.create_publisher(Image, output_topic, 10)
@@ -52,10 +81,9 @@ class DepthCamRotateNode(Node):
         )
 
     def _on_image(self, msg):
-        frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+        frame = _bgr_from_image_msg(msg)
         rotated = cv2.rotate(frame, cv2.ROTATE_180)
-        out_msg = self._bridge.cv2_to_imgmsg(rotated, encoding=msg.encoding)
-        out_msg.header = msg.header
+        out_msg = _image_msg_from_bgr(rotated, msg.header)
         self._publisher.publish(out_msg)
 
 

@@ -17,11 +17,28 @@ import sys
 from pathlib import Path
 
 _THIS_FILE = Path(__file__).resolve()
-# .../grippers/ros2_ws/src/grippers_perception/grippers_perception/floor_consensus.py
-# parents[4] == 리포 루트(grippers)
-_TOOLS_PERCEPTION_DIR = _THIS_FILE.parents[4] / "tools" / "perception"
-if str(_TOOLS_PERCEPTION_DIR) not in sys.path:
-    sys.path.insert(0, str(_TOOLS_PERCEPTION_DIR))
+# ⚠️ 2026-08-23 실기 확인: colcon 빌드 후에는 이 파일이 소스 트리
+# (.../grippers/ros2_ws/src/...)가 아니라 설치 경로
+# (/ros2_ws/install/grippers_perception/lib/python3.10/site-packages/...)에서
+# 실행된다 — __file__ 기준 상대 경로(parents[4])로는 tools/perception을
+# 못 찾는다(ModuleNotFoundError: consensus, 실기로 확인됨). 소스 트리에서
+# 직접 돌리는 경우(로컬 pytest)를 위해 상대 경로도 먼저 시도하되, 실제
+# 배포 환경(HANDOFF.md 환경 함정 — 호스트 `~/docker/shared/grippers` =
+# 컨테이너 `/grippers`)의 절대 경로를 확실한 대안으로 둔다.
+_CANDIDATE_TOOLS_DIRS = (
+    _THIS_FILE.parents[4] / "tools" / "perception",  # 소스 트리에서 직접 실행
+    Path("/grippers/tools/perception"),  # colcon install 이후 배포 환경
+)
+for _dir in _CANDIDATE_TOOLS_DIRS:
+    if _dir.is_dir():
+        if str(_dir) not in sys.path:
+            sys.path.insert(0, str(_dir))
+        break
+else:
+    raise ModuleNotFoundError(
+        "tools/perception/consensus.py를 못 찾음 — 확인한 경로: "
+        f"{[str(d) for d in _CANDIDATE_TOOLS_DIRS]}"
+    )
 
 from consensus import consensus  # noqa: E402  (tools/perception/consensus.py)
 
