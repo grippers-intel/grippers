@@ -454,7 +454,7 @@ def test_grasp_rechecks_at_145mm_then_folds_to_carry_idle_before_transport(make_
         spec=MissionSpec(
             mode=MissionMode.TIDY,
             target_cls=ObjectClass.GABE,
-            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            placement_rule={ObjectClass.GABE: Destination.LEFT},
             raw_text="",
         )
     )
@@ -493,7 +493,7 @@ def test_failed_lift_releases_object_and_blocks_transport(make_ports):
         spec=MissionSpec(
             mode=MissionMode.TIDY,
             target_cls=ObjectClass.GABE,
-            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            placement_rule={ObjectClass.GABE: Destination.LEFT},
             raw_text="",
         )
     )
@@ -512,7 +512,7 @@ def test_horizontal_mid_lift_load_drop_blocks_safe_lift(make_ports):
         spec=MissionSpec(
             mode=MissionMode.TIDY,
             target_cls=ObjectClass.GABE,
-            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            placement_rule={ObjectClass.GABE: Destination.LEFT},
             raw_text="",
         )
     )
@@ -533,7 +533,7 @@ def test_carry_idle_load_drop_hard_stops_before_base_transport(make_ports):
         spec=MissionSpec(
             mode=MissionMode.TIDY,
             target_cls=ObjectClass.GABE,
-            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            placement_rule={ObjectClass.GABE: Destination.LEFT},
             raw_text="",
         )
     )
@@ -557,7 +557,7 @@ def test_vertical_fallback_is_used_only_when_horizontal_safe_pose_is_unavailable
         spec=MissionSpec(
             mode=MissionMode.TIDY,
             target_cls=ObjectClass.GABE,
-            placement_rule={ObjectClass.GABE: BoxColor.RED},
+            placement_rule={ObjectClass.GABE: Destination.LEFT},
             raw_text="",
         )
     )
