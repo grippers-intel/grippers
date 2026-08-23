@@ -6,6 +6,7 @@ controller/odom_publisher_node가 이미 만들어둔 /cmd_vel(안전 클램프)
 import json
 import math
 import os
+import threading
 import time
 
 import rclpy
@@ -223,14 +224,33 @@ class BaseDriverNode(Node):
 
     def _observe_target_once(self, raw_cls):
         """perception/observe_target을 한 번 호출한다. 서비스가 없거나
-        응답이 없거나 물체를 못 찾으면 `None`."""
+        응답이 없거나 물체를 못 찾으면 `None`.
+
+        ⚠️ 2026-08-23 실기 확인(첫 전체 FSM 실기 테스트): 여기서
+        `rclpy.spin_until_future_complete(self, ...)`를 쓰면 안 된다 — 이
+        메서드는 `approach_object` 액션 서버의 execute_callback 안에서
+        반복 호출된다. 그 콜백은 이미 이 노드의 MultiThreadedExecutor
+        워커 스레드 하나를 점유 중인데, spin_until_future_complete()는
+        **같은 노드를 또 스핀하는 임시 executor**를 그 안에서 새로 만든다.
+        Pi는 코어 4개(=기본 워커 스레드 4개)뿐이라 반복 중첩되면 스레드가
+        고갈된다 — 실기에서 첫 approach_object goal은 끝까지 돌았지만
+        두 번째 goal부터 "goal 수락 응답 없음"으로 실패했고, 결국
+        base_driver_node가 `base_driver/stop` 서비스 요청에도 응답하지
+        못하는 상태(스레드 전부 중첩 대기에 묶임)에 빠졌다.
+
+        대신 future 완료를 콜백 스레드 자체에서 threading.Event로 기다린다
+        — 완료 자체(perception_node가 응답을 보내는 것)는 이미 돌고 있는
+        바깥 executor의 다른 워커 스레드가 처리하므로 추가 executor가
+        필요 없다. domain/adapters/real/_ros_call.py도 같은 이름의 함수를
+        쓰지만 거기는 mission_orchestrator의 전용 FSM 스레드(ROS 콜백이
+        아님)에서 불려 이 문제가 없다 — 콜백 안에서 부르는 이 자리만
+        다르게 짜야 한다."""
         if not self._observe_client.wait_for_service(timeout_sec=APPROACH_OBSERVE_TIMEOUT_SEC):
             return None
         future = self._observe_client.call_async(ObserveTarget.Request(raw_cls=raw_cls))
-        rclpy.spin_until_future_complete(
-            self, future, timeout_sec=APPROACH_OBSERVE_TIMEOUT_SEC
-        )
-        if not future.done():
+        done_event = threading.Event()
+        future.add_done_callback(lambda _f: done_event.set())
+        if not done_event.wait(timeout=APPROACH_OBSERVE_TIMEOUT_SEC):
             future.cancel()
             return None
         res = future.result()
