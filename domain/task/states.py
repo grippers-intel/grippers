@@ -269,16 +269,10 @@ class GraspState(State):
             # 물체를 든 채 SAFE_145 → IDLE 관절 자세로 직접 접는 경로를 큐브로
             # 실측했다. servo 2 load가 196 → 64로 줄고 gripper load는 0.1056으로
             # 유지됐다. CARRY_IDLE 도달과 파지 재검증 전에는 베이스가 움직이면 안 된다.
-            #
-            # 여기서 자세 실패·로드 하락은 EstopState가 아니라 _retry_after_release다
-            # — E-STOP은 사람이 개입해야 하는 인터럽트다(파일 헤더 참고), 물체를
-            # 놓친 것은 이 루프 FSM이 원래 복구하도록 설계된 조건이다.
-            # _execute_vertical_fallback도 개념적으로 같은 상황(잡았는데 안전
-            # 위치로 못 감)에서 이미 이렇게 처리한다 — 여기만 안 맞춰져 있었다.
             if not ports.arm.move_to_floor_pose(plan.profile, "idle"):
-                return self._retry_after_release(ports)
+                return EstopState()
             if ports.arm.get_load() < self.LOAD_THRESHOLD:
-                return self._retry_after_release(ports)
+                return EstopState()
             if self.ctx.spec.mode is MissionMode.TIDY:
                 return TransportState(self.ctx, self.target)
             return DeliverState(self.ctx, self.target)
@@ -430,17 +424,12 @@ class InsertState(State):
         # 베이스가 정지·정렬된 CARRY_IDLE에서 실측 DROP_195로 직접 전개한 뒤
         # 그리퍼를 열어 낙하시킨다.
         # 가장 낮은 파지점(나이트)도 120 mm 테두리 위로 통과한다.
-        #
-        # 자세 실패는 EstopState가 아니라 RejectState다 — 바로 위 접촉 위험과
-        # 같은 종류의 실패(투입 동작 중 못 감)인데 EstopState를 쓰면 미션이
-        # 그 자리에서 끝난다. 물체는 이미 든 채이므로 REJECT가 내려놓고
-        # 보류 등록한 뒤 SCAN으로 복귀시킨다.
         plan = select_horizontal_grasp_plan(self.target)
         if not ports.arm.move_to_floor_pose(plan.profile, "drop"):
-            return RejectState(self.ctx, self.target, "투입 자세 실패")
+            return EstopState()
         ports.arm.set_gripper(OPEN_MM)
         if not ports.arm.move_to_floor_pose(plan.profile, "idle"):
-            return RejectState(self.ctx, self.target, "투입 자세 실패")
+            return EstopState()
         return ScanState(self.ctx.complete(self.target.track_id))
 
 

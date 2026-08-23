@@ -49,8 +49,17 @@ SETTLE_TIMEOUT_SEC = 15.0
 SETTLE_POLL_SEC = 0.3
 
 
+# --yes 로 켠다. 자동 사이클에서는 사람이 매 전환마다 Enter 를 칠 수 없다.
+# 확인만 건너뛸 뿐, 파지 부하·서보 온도·시작 자세 검사는 그대로 살아 있다 —
+# 물체를 놓쳤으면 들어올리기 전에 여전히 멈춘다.
+AUTO = False
+
+
 def confirm(message):
     """Wait for Enter before a transition; q aborts without moving."""
+    if AUTO:
+        print(f"\n{message}\n  → 자동 진행")
+        return
     answer = input(f"\n{message}\nEnter=계속, q=중단 > ").strip().lower()
     if answer == "q":
         raise KeyboardInterrupt("operator aborted before transition")
@@ -72,7 +81,11 @@ def near_pose(actual, expected, tolerance=SAFE_START_TOLERANCE_RAW):
     return all(abs(actual[i] - expected[i]) <= tolerance for i in SERVO_IDS)
 
 
-def glide_raw(driver, label, goal_raw, steps=30, delay=0.10):
+# 2026-08-23: 스텝당 이동이 커서 서보가 "최대 속도로 튕기고 100ms 대기"를 반복해
+# 눈에 띄게 떨었다(servo2 기준 스텝당 약 55카운트 ≈ 5도). 총 소요 시간은 그대로 두고
+# 스텝을 3배 잘게 쪼개 스텝당 이동을 1/3로 줄였다. 도달 자세는 바뀌지 않는다.
+# 여전히 거칠면 --accel 로 서보 자체 가속도를 걸어볼 것.
+def glide_raw(driver, label, goal_raw, steps=90, delay=0.034):
     start = read_arm(driver)
     goal = {servo_id: goal_raw[servo_id - 1] for servo_id in SERVO_IDS}
     print(f"\n[{label}] start={start}")
@@ -87,12 +100,14 @@ def glide_raw(driver, label, goal_raw, steps=30, delay=0.10):
             if not driver.set_position(servo_id, position):
                 raise RuntimeError(f"servo {servo_id} write failed at step {step_index}")
         time.sleep(delay)
-        if step_index % 5 == 0:
+        # read_arm 은 서보 5회 읽기다. 30Hz 루프에서 자주 부르면 타이밍이 흔들리므로
+        # 스텝 수와 무관하게 6번쯤만 찍는다.
+        if step_index % max(1, steps // 6) == 0:
             print(f"[{label}] step={step_index}/{steps} present={read_arm(driver)}")
     time.sleep(1.0)
 
 
-def glide(driver, label, angles_deg, steps=30, delay=0.10):
+def glide(driver, label, angles_deg, steps=90, delay=0.034):
     glide_raw(
         driver,
         label,
@@ -177,11 +192,27 @@ def main():
     parser.add_argument("profile", choices=sorted(HORIZONTAL_GRASP_POSES_DEG))
     parser.add_argument("--port", default="/dev/soarm")
     parser.add_argument(
+        "--accel",
+        type=int,
+        default=None,
+        help="서보 1~5 가속도(0~254)를 이 값으로 설정한다. 생략하면 건드리지 않는다. "
+             "낮을수록 완만하지만 너무 낮으면 웨이포인트를 못 따라가 뒤처진다. 30~60 권장",
+    )
+    parser.add_argument(
         "--drop-to-basket",
         action="store_true",
         help="CARRY_IDLE 검증 후 DROP_195에서 투하하고 IDLE로 복귀",
     )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="운영자 확인(Enter)을 건너뛰고 끝까지 진행한다. 자동 사이클용. "
+             "안전 검사는 그대로 동작한다",
+    )
     args = parser.parse_args()
+
+    global AUTO
+    AUTO = args.yes
 
     profile = FLOOR_GRASP_PROFILES[args.profile]
     grasp_pose = HORIZONTAL_GRASP_POSES_DEG[args.profile]
@@ -189,6 +220,14 @@ def main():
 
     driver = STS3215Driver(args.port)
     driver.connect()
+
+    if args.accel is not None:
+        # 서보 자체 가속도 제한. 스텝마다 최대 속도로 튕기는 대신 완만하게
+        # 가감속한다. 값이 너무 낮으면 33ms 안에 웨이포인트에 못 닿아 뒤처지므로,
+        # 부드러워졌는지와 함께 수렴 offsets 도 같이 봐야 한다.
+        for servo_id in SERVO_IDS:
+            driver.set_acceleration(servo_id, args.accel)
+        print(f"[setup] servo 1~5 가속도={args.accel}")
 
     servo2_temp = driver.get_temperature(2)
     if servo2_temp > MAX_START_SERVO2_TEMP_C:
@@ -240,7 +279,7 @@ def main():
         (grasp + safe) / 2.0 for grasp, safe in zip(grasp_pose, safe_pose, strict=True)
     )
     confirm("파지가 안정적입니다. 중간 높이까지 시험 상승")
-    glide(driver, "mid-lift", midpoint, steps=20, delay=0.12)
+    glide(driver, "mid-lift", midpoint, steps=60, delay=0.040)
     report(driver, "mid-lift")
     mid_load_raw = driver.get_load(6)
     mid_load_ratio = abs(mid_load_raw) / LOAD_MAX_RAW
@@ -251,7 +290,7 @@ def main():
         )
 
     confirm("미끄러짐이 없습니다. 145mm 운반 전 안전 자세까지 상승")
-    glide(driver, "safe-lift", safe_pose, steps=20, delay=0.12)
+    glide(driver, "safe-lift", safe_pose, steps=60, delay=0.040)
     require_hold_load(driver, "safe-145")
 
     confirm("파지가 유지됐습니다. 그리퍼는 닫은 채 CARRY_IDLE로 접기")

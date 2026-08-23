@@ -144,57 +144,74 @@ CPU_YOLO_SCORE_THRESHOLD = 0.8
 FAKE_POSE_M = (0.3, 0.0, 0.0)
 FAKE_DIMS_M = (0.05, 0.05, 0.05)
 
-# ── RGB bbox 면적 기반 접근 자세 계산 (2026-08-23, depth 방식 폐기 후 교체) ──
-# 배경: 2026-08-22 depth 기반 거리 추정(window-min 방식)을 자로 잰 41cm/75cm
-# 물체로 검증했더니, 벽처럼 크고 평평한 면(116cm 실측, depth 1% 이내)에는
-# 맞았지만 체스 말·축구공처럼 작고 광택 있는 물체는 depth 프레임 전체를
-# 훑어도 진짜 거리값이 어디에도 없었다 — 구조광 IR이 표면에서 제대로
-# 반사되지 않는 flying-pixel 현상. 이 카메라의 depth 채널로는 이번 시연
-# 소품 크기의 물체 거리를 원리적으로 잴 수 없다는 하드웨어 한계 판정이라,
-# depth를 아예 버리고 **RGB bbox 픽셀 면적**으로 거리를 추정한다.
+# ── depth 기반 접근 자세 계산 (2026-08-22, CPU YOLO 경로 전용) ──────────────
+# 사용자 지시: pose_m을 고정값 대신 depth 실측으로 계산해서, 베이스가 도착했을
+# 때 물체가 차체 앞 APPROACH_STANDOFF_M 지점에 오도록 전진 거리를 역산한다.
+# 이어서 사용자가 "물체가 정면이 아니라 좌우로 벗어나 있으면?"이라고 물어서
+# 좌우(y) 오프셋도 depth0/camera_info의 fx·cx로 같이 계산하게 넓혔다 — 픽셀
+# 오프셋과 depth로 카메라 광학축 기준 좌우 각도를 구하는 표준 핀홀 역투영이라
+# 메카넘(홀로노믹) 베이스가 곧장 옆으로 스트레이프해 정렬할 수 있다.
 #
-# 원리(핀홀 투영의 면적 버전): 거리가 늘어나면 화면상 면적은 거리 제곱에
-# 반비례로 줄어든다.
-#     bbox_area_px ∝ 1 / distance_m**2  →  distance_m = K_class / sqrt(bbox_area_px)
-# K_class는 "그 클래스 물체가 1m 앞에 있을 때 나타날 bbox 면적의 제곱근"에
-# 해당하는 클래스별 경험 상수다. fx와 물체 실제 치수를 따로 재서
-# (K = fx * 실물_크기_m) 구할 수도 있지만, 물체가 바닥에 놓인 채 카메라를
-# 비스듬히 보므로 "실제 치수"라는 개념 자체가 애매하다 — 그래서 **한 지점
-# 실측으로 K_class를 통째로 역산**한다:
-#     1. 물체를 자로 잰 거리 d0(m)에 두고 scan_floor 실행
-#     2. _approach_pose_m()이 미보정 클래스에 대해 경고 로그로 남기는
-#        bbox_area_px0 값을 읽는다
-#     3. K_class = d0 * sqrt(bbox_area_px0)  (여러 거리에서 재서 평균 내면 더 안정적)
-# 클래스마다 물리적 크기가 다르므로(knight/queen/rook/soccer/star) K_class도
-# 클래스별로 따로 잰다.
-#
-# ⚠️ 아래 표는 전부 **미실측 placeholder(None)**다 — 모듈 상단 "모르면 실패/
-# 제외" 안전 원칙과 동일하게, K_class가 None이면 그 클래스는 거리를 모르는
-# 것으로 보고 바닥 스캔 후보에서 제외한다. 지어낸 값을 넣어 "일단 도는
-# 것처럼" 만들지 않는다 — 틀린 거리로 base.drive_to()를 부르면 실제
-# 베이스가 엉뚱한 곳으로 주행한다.
-CLASS_DISTANCE_CALIBRATION_SQRT_PX_M = {
-    "knight": None,  # TODO 실측
-    "queen": None,  # TODO 실측
-    "rook": None,  # TODO 실측
-    "box": None,  # TODO 실측 — 2026-08-23 확정 명세서로 GABE 후보에 추가됨
-    "soccer": None,  # TODO 실측
-    "star": None,  # TODO 실측
-}
-# 이보다 작은 bbox 면적(px^2)은 원거리 오검출/노이즈로 보고 제외한다 —
-# sqrt(bbox_area_px)가 0에 가까우면 distance_m이 발산하므로 0-division
-# 방지도 겸한다.
-MIN_BBOX_AREA_PX = 25.0
-
+# ⚠️ 범위: 처음엔 "도착 위치(x, y)"만 풀고 방위각(theta)은 이슈 #171 팀 결정
+#   전이라 0으로 미뤄뒀다. 그런데 사용자가 "파지를 위해 물체와 일직선상으로
+#   마주보게 자세를 잡을 것"이라고 명시적으로 지시해서(2026-08-22), 도메인
+#   코드 오너 본인의 지시로 이 자리에서 theta까지 함께 푼다 — #171을 팀
+#   대신 여기서 결정하는 게 아니라, "파지하려면 물체를 정면으로 마주봐야
+#   한다"는 이번 사용자 지시를 그대로 구현하는 것이다. 계산: 물체 원시 위치
+#   (x_obj, y_obj)에서 베어링각 phi=atan2(y_obj, x_obj)만큼 회전해 마주보고,
+#   그 방향으로 APPROACH_STANDOFF_M만큼 물러난 지점에 도착한다.
+#     x_final = x_obj - STANDOFF*cos(phi), y_final = y_obj - STANDOFF*sin(phi),
+#     theta_final = phi
+#   이렇게 하면 도착 지점에서 물체까지 거리가 정확히 STANDOFF이고, 로봇이
+#   phi만큼 돌아 있어 물체가 정면(차체 중심선상)에 온다.
+#   - 카메라 장착 위치(차체 기준 오프셋)를 실측한 상수가 없어 차체 기준점과
+#     같다고 근사한다. 카메라 광학축이 차체 정면 중심선과 나란하다고도
+#     가정한다(둘 다 실측 전 근사 — 오차 요인).
+#   - pose_m은 (state_machine.md의 "base_link 로부터 최단 거리" 관례와 일치하게)
+#     **스캔 시점 base_link 기준 상대 좌표**다. ApproachState는 이 값을 그대로
+#     base.drive_to()에 넘기고, 실기 base_driver_node는 이걸 odom 절대좌표처럼
+#     소비한다 — 그래서 이 값이 실제로 맞으려면 **스캔 시점에 로봇이 odom
+#     원점(위치·yaw 둘 다)에 있어야 한다**. 이건 이슈 #171/#177에서도 아직 안 풀린
+#     좌표계 갭이고 여기서 새로 풀지 않는다 — 대신 운영 절차로 막는다: 이
+#     pose_m으로 실기 APPROACH를 돌리기 전엔 반드시 odom을 로봇 현재 위치에서
+#     새로 0점 잡을 것.
 APPROACH_STANDOFF_M = 0.18
-# 좌우(y) 오프셋 계산에 RGB 카메라 자신의 intrinsics(fx·cx)를 쓴다 — 예전
-# depth 기반 버전은 depth0/camera_info를 썼는데, bbox가 RGB 프레임 좌표계인
-# 이상 depth 카메라의 cx는 애초에 안 맞는 값이었다(패럴랙스 문제의 근본
-# 원인 중 하나). depth를 아예 안 쓰는 지금은 이 불일치 자체가 사라진다.
-# ⚠️ 아래 토픽명은 실기 확인된 depth0/camera_info(모듈 git 히스토리 참고)와
-# 같은 명명 규칙으로 유추한 값이다 — rgb0/camera_info 자체는 아직 실기로
-# 확인 안 됐다. Pi 연결 후 `ros2 topic list`로 실제 이름부터 확인할 것.
-RGB_CAMERA_INFO_TOPIC_DEFAULT = "/ascamera_hp60c/camera_publisher/rgb0/camera_info"
+DEPTH_TOPIC_DEFAULT = "/ascamera_hp60c/camera_publisher/depth0/image_raw"
+DEPTH_CAMERA_INFO_TOPIC_DEFAULT = "/ascamera_hp60c/camera_publisher/depth0/camera_info"
+# 이보다 얕은(또는 0인) depth는 무효 리턴(반사·범위 밖 등)으로 보고 후보에서
+# 제외한다 — "모르면 제외"(hailo_scan_mapping.py와 같은 관례).
+DEPTH_MIN_VALID_MM = 50.0
+
+# ── RGB-depth 패럴랙스 보정 (2026-08-22, 실측 후 추가) ──────────────────────
+# 사용자가 축구공을 자로 재서 "차체 앞 41cm, 우측 15cm"라고 알려줬는데, bbox
+# 중심 픽셀을 그대로 depth에 인덱싱한 값은 150cm대로 3배 넘게 어긋났다.
+# bbox 전체 패치를 다 찍어봐도(디버그 스크립트) 85%가 유효값인데 전부
+# 1400~1512mm로 균일하다 — 공 표면이 아니라 그 뒤 배경(벽)을 읽고 있다는
+# 뜻이다. RGB와 depth 센서가 물리적으로 몇 cm 떨어져 있으면(패럴랙스), 가까운
+# 물체일수록 같은 화면 좌표라도 두 센서가 보는 실제 방향이 크게 어긋난다 —
+# 41cm 거리에서 관측된 정도의 오차는 baseline 2~3cm만으로도 설명된다.
+# `/tf`가 공개하는 depth-color 변환은 mm 단위라(진짜 baseline이라기엔 너무
+# 작음) 신뢰하지 않는다. 벤더 SDK 캘리브레이션 파일은 전부 암호화돼 있어
+# (`*_configEncrypt.json`) 실제 baseline을 읽어올 방법이 없고, 이 카메라는
+# 구조광 IR이라 가시광 체커보드로 정식 stereoCalibrate도 안 먹힌다.
+#
+# 그래서 baseline을 역산하는 대신, RGB bbox 영역을 좌우로 넉넉히 넓힌 창
+# 안에서 **가장 가까운(최솟값) 유효 depth**를 찾는 방식으로 우회한다 — 배경은
+# 항상 물체보다 멀리 있으므로, 그 창 안의 최솟값은 패럴랙스로 몇십 픽셀 밀려
+# 있어도 물체 표면일 가능성이 가장 높다. 좌우(y) 계산에 쓰는 각도는 이 창이
+# 아니라 **원래 RGB bbox 중심**을 쓴다 — 방향은 RGB가 정확하고, 거리만 창에서
+# 가져온 값으로 대체하는 방식이라 패럴랙스 오차가 방향 계산까지 새지 않는다.
+# WINDOW_MARGIN_PX=80은 baseline 3cm·fx=589·최근접 0.3m 기준 예상 픽셀
+# 이동량(~59px)에 여유를 더한 값이다 — 실측치가 늘어나면 다시 맞출 것.
+#
+# ⚠️ 후속 정정(같은 날, 75cm 물체로 재검증): 위 window-min으로도 안 맞았고,
+# depth 프레임의 해당 행 전체를 다 훑어도 물체의 진짜 거리값이 어디에도
+# 없었다 — 그래서 patch/baseline 문제가 아니라 **작고 광택 있는 물체 자체가
+# 이 depth 센서에 거의 안 잡히는 것**으로 결론을 바꿨다(비교로 벽 116cm는
+# 1% 이내로 맞았다 — 파이프라인 자체는 정상). window-min은 그래도 두되(큰
+# 확산 반사 물체엔 도움), 이 파일 하단 _approach_pose_m() docstring의
+# "2026-08-22 실측 결론"이 최종 판단이다.
+DEPTH_SEARCH_WINDOW_MARGIN_PX = 80
 
 
 def _standoff_arrival_pose(x_obj, y_obj):
@@ -222,7 +239,8 @@ class PerceptionNode(Node):
         cb_group = ReentrantCallbackGroup()
 
         self._latest_frame = None
-        self._rgb_fx = self._rgb_fy = self._rgb_cx = self._rgb_cy = None
+        self._latest_depth_frame = None
+        self._depth_fx = self._depth_fy = self._depth_cx = self._depth_cy = None
         self._bridge = CvBridge() if _CV_AVAILABLE else None
         if _CV_AVAILABLE:
             # depth_cam_rotate_node가 내보내는 회전 보정된 컬러 스트림.
@@ -235,12 +253,20 @@ class PerceptionNode(Node):
                 10,
                 callback_group=cb_group,
             )
-            # RGB bbox 면적 기반 거리 추정에 필요한 fx·cx — 모듈 상단 "RGB bbox
-            # 면적 기반 접근 자세 계산" 경고 참고 (토픽명 실기 미확인).
+            # depth는 depth_cam_rotate_node를 거치지 않지만(RGB만 회전한다),
+            # 실측 결과 그 자체로 이미 회전 보정된 RGB와 같은 방향이라 별도
+            # 변환 없이 그대로 쓴다 — _approach_pose_m() 참고.
+            self.create_subscription(
+                Image,
+                DEPTH_TOPIC_DEFAULT,
+                self._on_depth,
+                10,
+                callback_group=cb_group,
+            )
             self.create_subscription(
                 CameraInfo,
-                RGB_CAMERA_INFO_TOPIC_DEFAULT,
-                self._on_rgb_camera_info,
+                DEPTH_CAMERA_INFO_TOPIC_DEFAULT,
+                self._on_depth_camera_info,
                 10,
                 callback_group=cb_group,
             )
@@ -370,53 +396,70 @@ class PerceptionNode(Node):
     def _on_image(self, msg):
         self._latest_frame = msg
 
-    def _on_rgb_camera_info(self, msg):
-        self._rgb_fx = msg.k[0]
-        self._rgb_fy = msg.k[4]
-        self._rgb_cx = msg.k[2]
-        self._rgb_cy = msg.k[5]
+    def _on_depth(self, msg):
+        self._latest_depth_frame = msg
 
-    def _approach_pose_m(self, class_name, bbox_xyxy):
+    def _on_depth_camera_info(self, msg):
+        self._depth_fx = msg.k[0]
+        self._depth_fy = msg.k[4]
+        self._depth_cx = msg.k[2]
+        self._depth_cy = msg.k[5]
+
+    def _approach_pose_m(self, bbox_xyxy):
         """검출 bbox(회전 보정된 RGB 프레임 기준 픽셀)로 최종 도착 자세
         (x, y, theta)를 구한다 — 단위 m/rad, 스캔 시점 base_link 기준.
 
-        모듈 상단 "RGB bbox 면적 기반 접근 자세 계산" 경고 참고. 거리는
-        CLASS_DISTANCE_CALIBRATION_SQRT_PX_M의 클래스별 실측 상수로 bbox
-        면적에서 역산하고, 물체 원시 위치(x_obj=전방, y_obj=좌측)에서
-        베어링각 phi=atan2(y_obj, x_obj)만큼 회전해 물체를 정면으로
-        마주보고 APPROACH_STANDOFF_M만큼 물러난 지점을 반환한다(사용자
-        지시 — "파지를 위해 물체와 일직선상으로 마주보게").
+        모듈 상단 "depth 기반 접근 자세 계산"·"RGB-depth 패럴랙스 보정" 경고
+        참고. 물체 원시 위치(x_obj=전방, y_obj=좌측)에서 베어링각
+        phi=atan2(y_obj, x_obj)만큼 회전해 물체를 정면으로 마주보고, 그 방향
+        으로 APPROACH_STANDOFF_M만큼 물러난 지점을 반환한다(사용자 지시 —
+        "파지를 위해 물체와 일직선상으로 마주보게"). depth를 못 믿을 상황
+        (프레임/캘리브레이션 없음, 범위 밖)이면 **`None`** — 호출자가 이
+        검출을 후보에서 제외해야 한다는 신호다.
 
-        다음 중 하나라도 해당하면 **`None`** — 호출자가 이 검출을 후보에서
-        제외해야 한다는 신호다("모르면 제외" 관례):
-        - 아직 RGB camera_info를 못 받음(fx/cx 없음)
-        - bbox 면적이 MIN_BBOX_AREA_PX보다 작음(노이즈/0-division 방지)
-        - class_name이 CLASS_DISTANCE_CALIBRATION_SQRT_PX_M에 없거나 그
-          값이 아직 None(미실측) — 이 경우 K_class를 역산할 수 있게
-          bbox_area_px를 경고 로그로 남긴다(모듈 상단 실측 절차 참고)."""
-        if self._rgb_fx is None:
+        ⚠️ 2026-08-22 실측 결론(사용자가 자로 잰 41cm/75cm 물체로 검증):
+        bbox 중심 픽셀 대신 bbox를 좌우로 넓힌 창에서 **최솟값**을 찾는
+        방식으로 한 단계 개선했지만, 그래도 완전히 못 믿는다 — 체스 말·
+        축구공처럼 작고 광택 있는 물체는 거리와 무관하게(41cm든 75cm든)
+        depth 프레임 **전체 행을 훑어도 물체의 진짜 거리값이 어디에도
+        없었다**(구조광 IR이 표면에서 제대로 반사되지 않는 flying-pixel
+        현상 — RGB-depth 정렬 문제가 아니다). 반대로 벽처럼 크고 평평한
+        면은 116cm 실측과 1% 이내로 일치했다 — depth 파이프라인 자체는
+        맞고, 작은 광택 물체에서만 못 믿는다. 그래서 이 함수가 반환하는
+        pose는 **큰 확산 반사 물체(예: 목적지 상자)에는 쓸 만하지만,
+        지금 시연 소품(체스 말·축구공)에는 신뢰하지 말 것** — 오늘 실주행
+        검증은 이 함수를 거치지 않고 사용자가 자로 잰 값을 직접 넣어서
+        했다(같은 phi/standoff 수식을 재사용).
+
+        좌우(y) 각도는 **원래 RGB bbox 중심**의 픽셀 오프셋을 쓴다 — 방향은
+        RGB가 정확하므로 depth 탐색 창의 패럴랙스 오차가 방향 계산까지 새지
+        않게 분리한다."""
+        if self._latest_depth_frame is None or self._depth_fx is None:
             return None
 
+        depth = self._bridge.imgmsg_to_cv2(self._latest_depth_frame, desired_encoding="passthrough")
         x1, y1, x2, y2 = bbox_xyxy
-        bbox_area_px = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-        if bbox_area_px < MIN_BBOX_AREA_PX:
+        u = int(round((x1 + x2) / 2.0))
+        v = int(round((y1 + y2) / 2.0))
+
+        if not (0 <= v < depth.shape[0] and 0 <= u < depth.shape[1]):
             return None
 
-        k_class = CLASS_DISTANCE_CALIBRATION_SQRT_PX_M.get(class_name)
-        if k_class is None:
-            self.get_logger().warn(
-                f"scan_floor: {class_name} 거리 보정 상수 미실측 — 후보에서 제외 "
-                f"(실측하려면: 자로 잰 거리 d0(m)에서 bbox_area_px={bbox_area_px:.1f} "
-                "를 기록하고 K_class = d0 * sqrt(bbox_area_px)를 계산해 모듈 상단 "
-                "CLASS_DISTANCE_CALIBRATION_SQRT_PX_M에 채울 것)"
-            )
+        wx1 = max(0, int(round(x1)) - DEPTH_SEARCH_WINDOW_MARGIN_PX)
+        wx2 = min(depth.shape[1], int(round(x2)) + DEPTH_SEARCH_WINDOW_MARGIN_PX)
+        wy1 = max(0, int(round(y1)))
+        wy2 = min(depth.shape[0], int(round(y2)))
+        window = depth[wy1:wy2, wx1:wx2].astype(np.float64)
+        valid = window[window >= DEPTH_MIN_VALID_MM]
+        if valid.size == 0:
             return None
 
-        z_m = k_class / math.sqrt(bbox_area_px)
-        u = (x1 + x2) / 2.0
+        depth_mm = float(valid.min())
+        z_m = depth_mm / 1000.0
         # 표준 핀홀 역투영: 카메라 광학 좌표계는 x=오른쪽 양수라, base_link의
-        # y=왼쪽 양수로 옮기려면 부호를 뒤집는다.
-        y_obj = -(u - self._rgb_cx) * z_m / self._rgb_fx
+        # y=왼쪽 양수로 옮기려면 부호를 뒤집는다. 방향은 원래 RGB bbox 중심 u를
+        # 쓴다(위 함수 docstring 참고 — 창 탐색은 거리 z_m에만 쓴다).
+        y_obj = -(u - self._depth_cx) * z_m / self._depth_fx
         return _standoff_arrival_pose(z_m, y_obj)
 
     # ---- 서비스 콜백 ----
@@ -495,12 +538,10 @@ class PerceptionNode(Node):
                 continue
 
             bbox_xyxy = tuple(float(v) for v in box.xyxy[0])
-            approach_pose = self._approach_pose_m(class_name, bbox_xyxy)
+            approach_pose = self._approach_pose_m(bbox_xyxy)
             if approach_pose is None:
-                # 구체적인 사유(camera_info 없음/bbox 너무 작음/미실측 클래스)는
-                # _approach_pose_m 내부에서 필요시 별도로 로그를 남긴다.
                 self.get_logger().warn(
-                    f"scan_floor(CPU YOLO): {class_name} 접근 자세 계산 불가 — 후보에서 제외"
+                    f"scan_floor(CPU YOLO): {class_name} depth 무효 — 후보에서 제외"
                 )
                 continue
             x_final, y_final, theta_final = approach_pose
@@ -521,9 +562,8 @@ class PerceptionNode(Node):
     def _make_detection(track_id, object_class, score, pose_m=None, yaw_rad=0.0):
         """Detection 메시지를 만든다.
 
-        `pose_m`을 주면 그걸 쓴다(CPU YOLO — RGB bbox 면적 기반 접근 자세,
-        모듈 상단 "RGB bbox 면적 기반 접근 자세 계산" 경고 참고). 안 주면
-        자리표시자 FAKE_POSE_M을
+        `pose_m`을 주면 그걸 쓴다(CPU YOLO — depth 기반 접근 자세, 모듈 상단
+        "depth 기반 접근 자세 계산" 경고 참고). 안 주면 자리표시자 FAKE_POSE_M을
         쓴다(Hailo — 하드웨어 고장(#189)으로 bbox 좌표계를 실기로 검증할 방법이
         없어 아직 자리표시자에 머문다). `yaw_rad`도 같은 이유로 CPU YOLO는
         _standoff_arrival_pose()가 계산한 값을, Hailo는 기본값 0.0을 쓴다."""

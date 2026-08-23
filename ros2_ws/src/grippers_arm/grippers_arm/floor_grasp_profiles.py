@@ -19,9 +19,6 @@ class FloorGraspProfile:
 
 FLOOR_GRASP_PROFILES = {
     "cube": FloorGraspProfile(40.0, 20.0, 80.0, 30.0),
-    # 형상 자료로 남긴다. `select_horizontal_grasp_plan` 은 이 키를 반환하지
-    # 않는다 — 축구공(46)과 1 mm 차이라 검출 폭으로 구분할 수 없어 같은
-    # `soccer_polyhedron` 프로필로 보낸다(값이 동일하다).
     "star_column": FloorGraspProfile(45.0, 20.0, 80.0, 35.0),
     "soccer_polyhedron": FloorGraspProfile(46.0, 20.0, 80.0, 35.0),
     "chess_knight": FloorGraspProfile(22.0, 60.0, 80.0, 13.0),

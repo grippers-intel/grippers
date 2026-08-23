@@ -21,7 +21,6 @@ ARM_NODE = (
 )
 DOMAIN_STATES = pathlib.Path(__file__).resolve().parent.parent / "domain" / "task" / "states.py"
 GRIPPER_CALIBRATION = ARM_NODE.with_name("gripper_calibration.py")
-FLOOR_GRASP_PROFILES = ARM_NODE.with_name("floor_grasp_profiles.py")
 
 
 def _parse():
@@ -167,16 +166,6 @@ def test_gripper_calibration_matches_measured_safe_contract():
         (168.0, 2000),
     )
     assert domain == {"CLOSED_MM": 9.0, "OPEN_MM": 168.0}
-
-
-def test_min_gripper_clearance_matches_across_modules():
-    """MIN_GRIPPER_CLEARANCE는 states.py(m)와 floor_grasp_profiles.py(mm) 두 곳에
-    같은 실측값을 다른 단위로 들고 있다. #173이 gripper_calibration 쪽에서 이미
-    막은 것과 같은 종류의 드리프트라, 같은 AST 계약 패턴으로 묶는다."""
-    domain = _module_constants(DOMAIN_STATES, {"MIN_GRIPPER_CLEARANCE_M"})
-    floor_profile = _module_constants(FLOOR_GRASP_PROFILES, {"MIN_GRIPPER_CLEARANCE_MM"})
-
-    assert domain["MIN_GRIPPER_CLEARANCE_M"] * 1000 == floor_profile["MIN_GRIPPER_CLEARANCE_MM"]
 
 
 def test_gripper_calibration_interpolates_and_clamps():

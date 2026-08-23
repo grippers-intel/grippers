@@ -1,0 +1,3 @@
+driver_sdk.py 는 여기 두지 않는다 — /third_party/soarm_provided_d/soarm_lab/driver_sdk.py 가 원본이다.
+노트북 쪽(~/grippers-teleop/)에는 그 파일의 사본이 필요하다. 갱신하려면:
+  ssh pi 'docker exec IntelPi cat /third_party/soarm_provided_d/soarm_lab/driver_sdk.py' > ~/grippers-teleop/driver_sdk.py

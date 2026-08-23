@@ -1,15 +1,8 @@
-"""Issue #148 잔여: 도착 근처에서 목표를 등진 채 멀어지는 회귀 테스트.
-
-#166 이 회전 발산을 막았지만 DRIVE 단계 속도가 `KP_LINEAR * dist` 로 **부호가
-없어서**, 재정렬을 하지 않는 근접 구간(`REALIGN_MIN_DIST_M` 안)에서 목표가 등
-뒤로 넘어가면 그대로 전진해 거리가 늘었다.
-"""
+"""Issue #148: 도착 근처 drive_to 회전 발산 회귀 테스트."""
 
 import importlib.util
 import math
 import pathlib
-
-import pytest
 
 CONTROL_MODULE = (
     pathlib.Path(__file__).resolve().parent.parent
@@ -28,50 +21,51 @@ def _load_control():
     return module
 
 
-def _yaw_error(dx, dy, yaw):
-    target_yaw = math.atan2(dy, dx)
-    return math.atan2(math.sin(target_yaw - yaw), math.cos(target_yaw - yaw))
-
-
-def test_issue_148_recorded_point_moves_toward_the_target():
-    """실기에서 기록된 지점. 예전 식은 여기서 목표에서 멀어졌다."""
+def test_issue_148_reproduction_turns_off_rotation_and_reduces_distance():
     control = _load_control()
     dx, dy, yaw = -0.0249, -0.0168, 1.7199
 
-    speed = control.forward_speed(math.hypot(dx, dy), _yaw_error(dx, dy, yaw))
+    command = control.compute_drive_command(dx, dy, yaw)
 
-    assert speed < 0.0, "목표가 뒤에 있으면 후진해야 한다"
-    # 명령 속도 벡터를 목표 방향에 투영하면 양수여야 거리가 줄어든다.
-    assert speed * (dx * math.cos(yaw) + dy * math.sin(yaw)) > 0.0
+    assert not command.arrived
+    assert command.angular_z == 0.0
+    assert command.linear_x < 0.0
 
-
-def test_unsigned_distance_would_have_driven_away():
-    """예전 식(`KP_LINEAR * dist`)이 왜 틀렸는지를 테스트로 남긴다."""
-    control = _load_control()
-    dx, dy, yaw = -0.0249, -0.0168, 1.7199
-    dist = math.hypot(dx, dy)
-
-    old_speed = control.KP_LINEAR * dist
-
-    assert old_speed > 0.0
-    assert old_speed * (dx * math.cos(yaw) + dy * math.sin(yaw)) < 0.0
+    velocity_toward_target = command.linear_x * (dx * math.cos(yaw) + dy * math.sin(yaw))
+    assert velocity_toward_target > 0.0
 
 
-def test_aligned_target_matches_previous_behaviour():
-    """정렬된 상태에서는 cos(0)=1 이라 기존 식과 같은 값이 나온다 (클램프 아래 거리)."""
+def test_arrival_boundary_is_inclusive():
     control = _load_control()
 
-    assert control.forward_speed(0.2, 0.0) == control.KP_LINEAR * 0.2
+    command = control.compute_drive_command(control.ARRIVE_XY_TOL, 0.0, 0.0)
+
+    assert command.arrived
+    assert command.linear_x == 0.0
+    assert command.angular_z == 0.0
 
 
-def test_speed_is_clamped_both_directions():
+def test_deadzone_is_strictly_larger_than_arrival_tolerance():
     control = _load_control()
 
-    assert control.forward_speed(100.0, 0.0) == control.MAX_LINEAR
-    assert control.forward_speed(100.0, math.pi) == -control.MAX_LINEAR
+    assert control.YAW_DEADZONE_XY > control.ARRIVE_XY_TOL
 
 
-def test_perpendicular_target_commands_no_translation():
+def test_far_target_rotates_before_driving_when_facing_away():
     control = _load_control()
 
-    assert control.forward_speed(0.5, math.pi / 2) == pytest.approx(0.0, abs=1e-12)
+    command = control.compute_drive_command(1.0, 0.0, math.pi)
+
+    assert not command.arrived
+    assert command.linear_x == 0.0
+    assert abs(command.angular_z) == control.MAX_ANGULAR
+
+
+def test_far_aligned_target_drives_forward_without_rotation():
+    control = _load_control()
+
+    command = control.compute_drive_command(1.0, 0.0, 0.0)
+
+    assert not command.arrived
+    assert command.linear_x == control.MAX_LINEAR
+    assert command.angular_z == 0.0

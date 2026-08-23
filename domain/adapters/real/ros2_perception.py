@@ -121,18 +121,9 @@ class Ros2Perception(Perception):
 
         ⚠️ 1단계(로깅 전용): `confidence` 는 도메인 계약에 없으므로 여기서
         진단 로그로만 남기고 버린다 — GraspState가 판정에 편입할 임계값을
-        잡을 실측 자료다.
-
-        상한을 `monitor_clearance`와 같은 `SAFETY_TIMEOUT_SEC`(0.5초)로 짧게
-        둔다 (PR #185 리뷰 지적, 2026-08-21) — `GraspState.execute()` 안에서
-        파지 직후 동기 호출되므로, 일반 서비스와 같은 3초를 기다리면 그만큼
-        파지 사이클 전체가 늘어진다."""
+        잡을 실측 자료다."""
         res = call_service(
-            self._node,
-            self._confirm_grasp_client,
-            ConfirmGrasp.Request(),
-            label="confirm_grasp",
-            timeout_sec=SAFETY_TIMEOUT_SEC,
+            self._node, self._confirm_grasp_client, ConfirmGrasp.Request(), label="confirm_grasp"
         )
         if res is None:
             return False

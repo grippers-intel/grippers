@@ -15,21 +15,17 @@ HEF가 바뀌면 `HAILO_CLASS_NAMES`도 같이 바꿀 것.
 # metadata.yaml의 names 순서 — HEF가 바뀌면 같이 바꿀 것.
 HAILO_CLASS_NAMES = ["container", "knight", "queen", "rook", "box", "soccer", "star"]
 
-# knight/queen/rook은 CHESS_PIECE로, box/soccer/star는 GABE(장난감)로 매핑한다
-# (2026-08-23 확정 미션 명세서 — "장난감(박스·축구공·스타)", "toy = box +
-# soccer + star"). "container"만 계속 제외한다 — 목적지 상자(왼쪽/오른쪽
-# 바구니)는 애초에 YOLO로 찾지 않으므로(좌표 하드코딩, domain/values.py의
-# `Destination` 참고) 쓰임이 없는 클래스다. "cube"는 애초에 학습 클래스에
-# 없다(미해결).
+# knight/queen/rook은 CHESS_PIECE로, soccer/star는 GABE로 매핑한다.
+# "container"/"box"는 목적지 상자로 추정해 바닥 스캔 후보에서 제외한다 —
+# 확실하지 않은 매핑을 코드에 박지 않는다. "cube"는 애초에 학습 클래스에
+# 없다(미해결, docs 참고).
 HAILO_CLASS_TO_OBJECT_CLASS = {
     "knight": "CHESS_PIECE",
     "queen": "CHESS_PIECE",
     "rook": "CHESS_PIECE",
-    "box": "GABE",
     "soccer": "GABE",
     "star": "GABE",
-    # "container": 목적지 상자 클래스로 추정 — YOLO로 목적지를 찾지 않으므로
-    # 계속 바닥 스캔 후보에서 제외.
+    # "container", "box": 목적지 상자로 추정 — 바닥 스캔 후보에서 제외.
 }
 
 

@@ -454,7 +454,7 @@ def test_grasp_rechecks_at_145mm_then_folds_to_carry_idle_before_transport(make_
         spec=MissionSpec(
             mode=MissionMode.TIDY,
             target_cls=ObjectClass.GABE,
-            placement_rule={ObjectClass.GABE: Destination.LEFT},
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
             raw_text="",
         )
     )
@@ -493,7 +493,7 @@ def test_failed_lift_releases_object_and_blocks_transport(make_ports):
         spec=MissionSpec(
             mode=MissionMode.TIDY,
             target_cls=ObjectClass.GABE,
-            placement_rule={ObjectClass.GABE: Destination.LEFT},
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
             raw_text="",
         )
     )
@@ -512,7 +512,7 @@ def test_horizontal_mid_lift_load_drop_blocks_safe_lift(make_ports):
         spec=MissionSpec(
             mode=MissionMode.TIDY,
             target_cls=ObjectClass.GABE,
-            placement_rule={ObjectClass.GABE: Destination.LEFT},
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
             raw_text="",
         )
     )
@@ -525,12 +525,7 @@ def test_horizontal_mid_lift_load_drop_blocks_safe_lift(make_ports):
     assert arm.gripper_widths[-1] == states_module.OPEN_MM
 
 
-def test_carry_idle_load_drop_retries_instead_of_estopping(make_ports):
-    """물체를 이미 성공적으로 들어 SAFE_145까지 확인했는데 CARRY_IDLE로 접는
-    도중 로드가 떨어지면(놓침) 미션을 끝내는 게 아니라 놓고 재스캔해서 같은
-    대상을 다시 시도한다 — EstopState는 사람 개입이 필요한 인터럽트고, 이건
-    루프 FSM이 원래 복구하도록 설계된 조건이다(_execute_vertical_fallback이
-    같은 상황에서 이미 이렇게 처리한다)."""
+def test_carry_idle_load_drop_hard_stops_before_base_transport(make_ports):
     target = _detection(track_id=1)
     arm = FakeArm(load_ratio=[0.07, 0.07, 0.03])
     ports = make_ports(arm=arm)
@@ -538,44 +533,15 @@ def test_carry_idle_load_drop_retries_instead_of_estopping(make_ports):
         spec=MissionSpec(
             mode=MissionMode.TIDY,
             target_cls=ObjectClass.GABE,
-            placement_rule={ObjectClass.GABE: Destination.LEFT},
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
             raw_text="",
         )
     )
 
     next_state = GraspState(ctx, target).execute(ports)
 
-    assert next_state.name == "GRASP"
-    assert next_state.ctx.grasp_attempts == 1
+    assert next_state.name == "ESTOP"
     assert arm.floor_pose_calls[-1] == ("soccer_polyhedron", "idle")
-    assert arm.gripper_widths[-1] == states_module.OPEN_MM
-
-
-def test_carry_idle_pose_failure_retries_instead_of_estopping(make_ports):
-    """CARRY_IDLE 자세 자체에 못 닿아도(로드가 아니라 서보 이동 실패) 같은
-    경로 — EstopState가 아니라 재시도다."""
-
-    class FailsIdleStage(FakeArm):
-        def move_to_floor_pose(self, profile, stage):
-            self.floor_pose_calls.append((profile, stage))
-            return stage != "idle"
-
-    target = _detection(track_id=1)
-    arm = FailsIdleStage(load_ratio=0.07)
-    ports = make_ports(arm=arm)
-    ctx = MissionContext(
-        spec=MissionSpec(
-            mode=MissionMode.TIDY,
-            target_cls=ObjectClass.GABE,
-            placement_rule={ObjectClass.GABE: Destination.LEFT},
-            raw_text="",
-        )
-    )
-
-    next_state = GraspState(ctx, target).execute(ports)
-
-    assert next_state.name == "GRASP"
-    assert next_state.ctx.grasp_attempts == 1
 
 
 def test_vertical_fallback_is_used_only_when_horizontal_safe_pose_is_unavailable(make_ports):
@@ -591,7 +557,7 @@ def test_vertical_fallback_is_used_only_when_horizontal_safe_pose_is_unavailable
         spec=MissionSpec(
             mode=MissionMode.TIDY,
             target_cls=ObjectClass.GABE,
-            placement_rule={ObjectClass.GABE: Destination.LEFT},
+            placement_rule={ObjectClass.GABE: BoxColor.RED},
             raw_text="",
         )
     )
@@ -764,59 +730,6 @@ def test_basket_insert_opens_at_drop_195_without_lowering_to_floor(make_ports, r
     ]
     assert arm.gripper_widths[-1] == states_module.OPEN_MM
     assert all(not down for _, down in arm.move_calls)
-
-
-def test_insert_drop_pose_failure_rejects_instead_of_estopping(make_ports):
-    """DROP_195 자세로 못 가면 미션을 끝내는 게 아니라 REJECT다 — 바로 위
-    접촉 위험 분기와 같은 종류의 실패(투입 동작 중 못 감)라 같은 경로를
-    탄다. 물체는 이미 든 채이므로 REJECT가 내려놓고 보류 등록한다."""
-
-    class FailsDropStage(FakeArm):
-        def move_to_floor_pose(self, profile, stage):
-            self.floor_pose_calls.append((profile, stage))
-            return stage != "drop"
-
-    target = _detection(track_id=1)
-    arm = FailsDropStage(load_ratio=0.07)
-    ports = make_ports(arm=arm)
-    ctx = MissionContext(
-        spec=MissionSpec(
-            mode=MissionMode.TIDY,
-            target_cls=ObjectClass.GABE,
-            placement_rule={ObjectClass.GABE: Destination.LEFT},
-            raw_text="",
-        )
-    )
-
-    next_state = InsertState(ctx, target, _box_observation(), phi_rad=0.0).execute(ports)
-
-    assert next_state.name == "REJECT"
-
-
-def test_insert_idle_return_failure_rejects_instead_of_estopping(make_ports):
-    """투하 자체는 성공했는데(DROP_195 도달, 그리퍼 개방) 빈손으로 IDLE 복귀만
-    실패해도 같은 경로 — REJECT다."""
-
-    class FailsIdleStage(FakeArm):
-        def move_to_floor_pose(self, profile, stage):
-            self.floor_pose_calls.append((profile, stage))
-            return stage != "idle"
-
-    target = _detection(track_id=1)
-    arm = FailsIdleStage(load_ratio=0.07)
-    ports = make_ports(arm=arm)
-    ctx = MissionContext(
-        spec=MissionSpec(
-            mode=MissionMode.TIDY,
-            target_cls=ObjectClass.GABE,
-            placement_rule={ObjectClass.GABE: Destination.LEFT},
-            raw_text="",
-        )
-    )
-
-    next_state = InsertState(ctx, target, _box_observation(), phi_rad=0.0).execute(ports)
-
-    assert next_state.name == "REJECT"
 
 
 def test_align_error_beyond_tolerance_holds_the_target(make_ports, run_to_completion):

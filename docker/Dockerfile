@@ -64,17 +64,17 @@ RUN pip3 install --no-cache-dir \
       pytest
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. 카메라 이미지 처리 (cv2)
+# 4. YOLO (CPU 추론) — 2026-08-21 임시 추가
 #
-#    depth_cam_rotate_node · gripper_cam_publisher_node · perception_node의
-#    confirm_grasp · tools/hailo/live_yolo_demo.py가 전부 opencv를 쓴다.
-#
-#    ⚠️ 2026-08-21: PyTorch 기반 YOLO CPU 추론 대비용으로 ultralytics/torch/
-#    torchvision도 잠깐 여기 있었다. Hailo-10H 경로가 실기에서 230 FPS로
-#    검증되고 나서(tools/hailo/README_LIVE_DEMO.md 참고) 안 쓰는 게 확정돼
-#    지웠다 — CPU YOLO로 되돌아갈 일이 생기면 그때 다시 추가할 것.
+#    Hailo HEF 파이프라인(§6)이 준비되기 전까지 PyTorch 기반 YOLO를 CPU로 돌리기
+#    위해 컨테이너에 직접 pip install 했던 패키지들을 재현 가능하게 옮겨온 것.
+#    버전은 그때 라이브 컨테이너에 실제로 설치되어 검증된 값과 맞춤.
+#    Hailo 경로가 자리잡으면 이 블록은 제거될 수 있다 — 지금은 유지만 한다.
 # ─────────────────────────────────────────────────────────────────────────────
 RUN pip3 install --no-cache-dir \
+      ultralytics==8.2.38 \
+      torch==2.3.1 \
+      torchvision==0.18.1 \
       opencv-python-headless==4.10.0.84
 
 # ─────────────────────────────────────────────────────────────────────────────
