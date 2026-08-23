@@ -17,10 +17,19 @@ from nav_msgs.msg import Odometry
 from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
+from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
+from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Trigger
 
 from .drive_control import compute_drive_command
-from .visual_approach_control import compute_approach_command, compute_approach_error
+from .visual_approach_control import (
+    choose_dodge_side,
+    compute_approach_command,
+    compute_approach_error,
+    compute_dodge_command,
+    min_range_in_arc,
+    obstacle_ahead,
+)
 
 ARRIVE_YAW_TOL = 0.05  # rad
 DRIVE_TIMEOUT_SEC = 55.0  # client의 60초 결과 timeout 전에 반드시 정지·응답
@@ -39,6 +48,23 @@ APPROACH_TARGET_DIR = "/grippers/config"  # tools/perception/approach.py TARGET_
 APPROACH_MAX_ITER = 40  # tools/perception/approach.py --max-iter 기본값과 동일
 APPROACH_TIMEOUT_SEC = 45.0  # client의 60초 결과 timeout보다 여유 있게 짧다
 APPROACH_OBSERVE_TIMEOUT_SEC = 1.0
+
+# ── 전방 장애물 회피 (2026-08-23 신설, 실기 미검증) ──────────────────────────
+# 사용자 지적: approach가 회전 없이 순수 이동만 쓰다 보니 불필요하게 지그재그로
+# 움직였다 — 회전+전진으로 바꾸면서, 전진 경로에 실제 장애물이 있을 때의
+# 대비책도 같이 넣는다(회전만으로는 전방 충돌을 못 막는다).
+#
+# ⚠️ 실기 확인(2026-08-23): LD19 라이다는 `/scan_raw`에 발행한다(launch
+# 인자로 `scan` 요청해도 하위 launch가 이렇게 remap함 — peripherals/launch/
+# lidar.launch.py 참고). 장착 높이(base_link 기준 9.25cm)에서는 체스말·
+# 축구공 같은 파지 대상이 전방 스캔에 안 잡힌다(실측: 최근접 반환이 배경
+# 벽까지 뚫려 0.97m) — 즉 이 게이트가 지금 접근 중인 파지 대상 자체를
+# 장애물로 오인할 위험은 낮다. 회전+전진 조합과 마찬가지로 이 값들도
+# 실기 미검증 자리 표시자다.
+SCAN_TOPIC = "/scan_raw"
+OBSTACLE_FRONT_HALF_WIDTH_DEG = 20.0
+OBSTACLE_SIDE_CENTER_DEG = 60.0
+OBSTACLE_SIDE_HALF_WIDTH_DEG = 25.0
 
 # TODO(#148): 아래 세 값은 M3 시연장에서 실측 후 확정한다.
 # PHASE 1 -> 2 진입 허용 yaw 오차. 현재 값은 자리 표시자(약 5.7도).
@@ -65,6 +91,16 @@ class BaseDriverNode(Node):
 
         self._cmd_vel_pub = self.create_publisher(Twist, "cmd_vel", 10)
         self._pose = None  # (x, y, yaw)
+        self._latest_scan = None  # LaserScan — approach_object 장애물 회피용
+
+        # LD19는 신뢰성 있는 배달을 보장 안 하는 BEST_EFFORT로 발행한다
+        # (실기 확인) — RELIABLE로 구독하면 QoS 불일치로 아예 안 들어온다.
+        scan_qos = QoSProfile(
+            depth=5,
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+        )
+        self.create_subscription(LaserScan, SCAN_TOPIC, self._on_scan, scan_qos)
 
         # ⚠️ 2026-08-23: "odom"이 아니라 "odom_raw"를 구독한다 — HANDOFF.md
         # 실기 확인: imu_calib 부재로 EKF를 못 띄워서(grippers_bringup의
@@ -110,6 +146,30 @@ class BaseDriverNode(Node):
         p = msg.pose.pose.position
         yaw = _yaw_from_quat(msg.pose.pose.orientation)
         self._pose = (p.x, p.y, yaw)
+
+    def _on_scan(self, msg: LaserScan):
+        self._latest_scan = msg
+
+    def _read_obstacle_sectors(self):
+        """(전방, 좌측, 우측) 최소 거리(m)를 돌려준다. 라이다 데이터가 아직
+        없으면 셋 다 None — obstacle_ahead(None)이 "모르면 막지 않는다"로
+        처리한다(visual_approach_control.py obstacle_ahead 참고)."""
+        scan = self._latest_scan
+        if scan is None:
+            return None, None, None
+        front = min_range_in_arc(
+            scan.angle_min, scan.angle_increment, scan.ranges,
+            center_deg=0.0, half_width_deg=OBSTACLE_FRONT_HALF_WIDTH_DEG,
+        )
+        left = min_range_in_arc(
+            scan.angle_min, scan.angle_increment, scan.ranges,
+            center_deg=OBSTACLE_SIDE_CENTER_DEG, half_width_deg=OBSTACLE_SIDE_HALF_WIDTH_DEG,
+        )
+        right = min_range_in_arc(
+            scan.angle_min, scan.angle_increment, scan.ranges,
+            center_deg=-OBSTACLE_SIDE_CENTER_DEG, half_width_deg=OBSTACLE_SIDE_HALF_WIDTH_DEG,
+        )
+        return front, left, right
 
     def _execute_drive_to(self, goal_handle):
         target = goal_handle.request.target  # Pose2D(x, y, theta)
@@ -159,13 +219,19 @@ class BaseDriverNode(Node):
 
     def _execute_approach_object(self, goal_handle):
         """물체 앞 파지 위치로 시각 서보 폐루프 접근한다 —
-        tools/perception/approach.py 이식(모듈 상단 경고 참고).
+        원래 tools/perception/approach.py 이식(좌우-이동 방식)이었으나
+        2026-08-23 회전+전진으로 재설계했다(visual_approach_control.py
+        모듈 상단 경고 참고, 이 조합은 실기 미검증).
 
         정지→관측(perception/observe_target)→소이동을 반복한다. 매 반복
         관측이 없거나(물체를 순간적으로 놓침) 오차가 커도 다음 반복이
         다시 잡으므로, 한 번 실패했다고 바로 포기하지 않는다 — 최대
         APPROACH_MAX_ITER회, 또는 APPROACH_TIMEOUT_SEC를 넘기면 실패로
-        끊는다."""
+        끊는다.
+
+        매 반복 전방 라이다도 함께 확인한다 — 전방 안전거리 안에 뭔가
+        있으면(파지 대상 자체는 안 걸린다, obstacle_ahead() 참고) 시각
+        서보 지령 대신 옆으로 비키는 지령을 낸다."""
         raw_cls = goal_handle.request.raw_cls
         result = ApproachObject.Result()
 
@@ -197,7 +263,17 @@ class BaseDriverNode(Node):
             obs_x, obs_h = observed
 
             err_x, err_h = compute_approach_error(obs_x, obs_h, target_x, target_h)
-            command = compute_approach_command(err_x, err_h)
+
+            front, left, right = self._read_obstacle_sectors()
+            if obstacle_ahead(front):
+                side = choose_dodge_side(left, right)
+                self.get_logger().warn(
+                    f"approach_object: 전방 장애물 감지(front={front:.2f}m) — "
+                    f"{'왼쪽' if side > 0 else '오른쪽'}으로 회피"
+                )
+                command = compute_dodge_command(side)
+            else:
+                command = compute_approach_command(err_x, err_h)
 
             fb = ApproachObject.Feedback()
             fb.err_x_px = err_x
@@ -213,6 +289,7 @@ class BaseDriverNode(Node):
             twist = Twist()
             twist.linear.x = command.linear_x
             twist.linear.y = command.linear_y
+            twist.angular.z = command.angular_z
             self._cmd_vel_pub.publish(twist)
             time.sleep(command.burst_s)
             self._cmd_vel_pub.publish(Twist())
