@@ -1,6 +1,6 @@
 """aruco_localization.py 순수 수학 테스트. rclpy/카메라 없이도 돈다 — 마커
 검출 자체가 아니라 "검출된 코너로 좌표를 구하는" 수학만 본다
-(grippers_perception의 multi_frame_consensus.py와 같은 이유).
+(grippers_perception의 hailo_scan_mapping.py와 같은 이유).
 
 `fit_homography_dlt`의 실제 피팅 성공 경로는 cv2가 있어야 검증된다 —
 `pytest.importorskip("cv2")`로 그 한 테스트만 건너뛴다(cv2 없는 이 환경에선

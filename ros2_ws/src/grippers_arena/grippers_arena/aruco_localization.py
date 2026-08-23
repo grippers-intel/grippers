@@ -13,7 +13,7 @@ CLI다(mm 단위·공유 원점 등 좌표 규약은 그 도구의 README를 그
 
 이 파일은 마커 검출(`cv2.aruco`)이나 카메라 입출력을 하지 않는다 — 검출된
 마커 코너 픽셀 좌표를 **입력**으로 받는 순수 함수만 담아 rclpy·카메라 없이
-pytest로 검증한다(grippers_perception의 multi_frame_consensus.py와 같은
+pytest로 검증한다(grippers_perception의 hailo_scan_mapping.py와 같은
 이유). 호모그래피 피팅(`fit_homography_dlt`)만 cv2가 필요해서 지연 import로
 격리했다 — 나머지 함수는 numpy조차 안 쓴다.
 
