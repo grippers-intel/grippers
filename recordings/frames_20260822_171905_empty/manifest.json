@@ -1,0 +1,14 @@
+{
+  "topic": "/ascamera/camera_publisher/rgb0/image",
+  "label": "empty",
+  "rotate": 180,
+  "shape": [
+    480,
+    640,
+    3
+  ],
+  "target_fps": 5.0,
+  "frames": 60,
+  "elapsed_sec": 12.0,
+  "actual_fps": 4.99
+}
