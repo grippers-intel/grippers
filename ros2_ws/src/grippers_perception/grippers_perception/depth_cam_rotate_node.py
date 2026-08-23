@@ -22,7 +22,12 @@ try:
 except ImportError:
     _CV_AVAILABLE = False
 
-INPUT_TOPIC_DEFAULT = "/ascamera_hp60c/camera_publisher/rgb0/image"
+INPUT_TOPIC_DEFAULT = "/ascamera/camera_publisher/rgb0/image"
+# ⚠️ 2026-08-23: 실기 확인(ros2 topic list, depth_camera.launch.py 기동 후) —
+# 이전 값(/ascamera_hp60c/...)은 존재하지 않는 토픽이라 _on_image가 한 번도
+# 안 불렸다. peripherals/launch/include/hp60c.launch.py가 쓰는 "ascamera_hp60c"
+# 네임스페이스는 이 launch 경로에서 실제로 안 쓰인다 — depth_camera.launch.py가
+# 실제로 띄우는 노드는 "ascamera" 네임스페이스로 퍼블리시한다.
 OUTPUT_TOPIC_DEFAULT = "depth_cam/rgb/image_rotated"
 
 

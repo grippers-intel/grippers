@@ -216,7 +216,9 @@ CLASS_DISTANCE_CALIBRATION_SQRT_PX_M = {
 # 이보다 작은 bbox는 너무 멀거나 오검출일 가능성이 높아 거리 추정을 시도하지
 # 않는다 — "모르면 제외"(hailo_scan_mapping.py와 같은 관례).
 MIN_BBOX_AREA_PX = 25.0
-RGB_CAMERA_INFO_TOPIC_DEFAULT = "/ascamera_hp60c/camera_publisher/rgb0/camera_info"
+# 2026-08-23 실기 확인(ros2 topic list) — 실제 네임스페이스는 "ascamera_hp60c"가
+# 아니라 "ascamera"다(depth_cam_rotate_node.py의 같은 날짜 경고 참고).
+RGB_CAMERA_INFO_TOPIC_DEFAULT = "/ascamera/camera_publisher/rgb0/camera_info"
 
 
 def _standoff_arrival_pose(x_obj, y_obj):
@@ -257,12 +259,11 @@ class PerceptionNode(Node):
                 10,
                 callback_group=cb_group,
             )
-            # ⚠️ 미확인 — RGB_CAMERA_INFO_TOPIC_DEFAULT는 실기 ros2 topic list로
-            # 아직 확인 안 됐다. 이 토픽은 회전 보정 전(depth_cam_rotate_node
-            # 이전) intrinsics일 가능성이 높다 — 180도 회전이면 cx/cy가
-            # 뒤집혀야 하는데(cx'=width-cx 등) 그 보정도 아직 안 했다. 좌우(y)
-            # 계산 정확도에 영향을 준다. RGB bbox 면적 자체(z_m 계산)는 이
-            # 값과 무관해 문제없다.
+            # ⚠️ 토픽명은 2026-08-23 실기로 확인됨(ros2 topic list). 다만 이
+            # 토픽은 회전 보정 전(depth_cam_rotate_node 이전) intrinsics다 —
+            # 180도 회전이면 cx/cy가 뒤집혀야 하는데(cx'=width-cx 등) 그
+            # 보정은 아직 안 했다. 좌우(y) 계산 정확도에 영향을 준다. RGB
+            # bbox 면적 자체(z_m 계산)는 이 값과 무관해 문제없다.
             self.create_subscription(
                 CameraInfo,
                 RGB_CAMERA_INFO_TOPIC_DEFAULT,
@@ -404,7 +405,12 @@ class PerceptionNode(Node):
 
     def _on_rgb_camera_info(self, msg):
         self._rgb_fx = msg.k[0]
-        self._rgb_cx = msg.k[2]
+        # 2026-08-23: 이 camera_info는 회전 보정 전(depth_cam_rotate_node
+        # 이전) 원본 스트림의 것인데, bbox_xyxy는 180도 회전된 프레임
+        # (depth_cam/rgb/image_rotated) 기준이다. 180도 회전에서 cx는
+        # width - cx로 뒤집힌다(fx는 회전과 무관해 그대로 둔다). 실기
+        # 확인된 해상도 640×480(ascamera_node 로그, hp60c 기본값) 기준.
+        self._rgb_cx = msg.width - msg.k[2]
 
     def _approach_pose_m(self, class_name, bbox_xyxy):
         """검출 bbox(회전 보정된 RGB 프레임 기준 픽셀)로 최종 도착 자세
