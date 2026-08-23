@@ -201,16 +201,18 @@ APPROACH_STANDOFF_M = 0.18
 # 방식과의 핵심 차이다: depth의 결손은 센서 한계라 고칠 방법이 없지만, 이
 # 상수는 물체 하나 놓고 거리 한 번 재면 바로 채워진다.
 CLASS_DISTANCE_CALIBRATION_SQRT_PX_M = {
-    # TODO: 실측 — 각 클래스 물체를 알려진 거리(예: 0.3m)에 놓고 bbox_area_px를
-    # 로그로 읽어 K = distance_m * sqrt(bbox_area_px)로 역산해 채운다. 하나라도
-    # None으로 남은 클래스는 scan_floor 후보에서 계속 제외된다(아래 경고 로그가
-    # bbox_area_px를 실측용으로 같이 남긴다).
-    "knight": None,
-    "queen": None,
-    "rook": None,
-    "box": None,
-    "soccer": None,
-    "star": None,
+    # 2026-08-23 실측(핫스팟 연결 실기, observe_target 서비스로 단일 프레임
+    # h×w 직접 측정 — scan_floor의 consensus 게이트(MIN_BOTTOM_Y_PX=290)는
+    # 이 거리대(0.66~1.13m)의 물체를 전부 걸러내 우회했다. 줄자 실측:
+    # 축구공 0.66m, 나이트 0.84m, 룩 1.04m, 퀸 1.13m(전방 거리, base_link
+    # 기준 — 좌우 오프셋은 z_m 보정과 무관해 무시). K = distance_m *
+    # sqrt(bbox_area_px), bbox_area_px = h*w(observe_target 응답).
+    "knight": 38.0307,
+    "queen": 31.1632,
+    "rook": 37.3992,
+    "box": None,  # 미실측 — 60프레임 중 0회 검출(floor_consensus.py 경고 참고), 물체 자체를 아직 못 잡음
+    "soccer": 20.6092,
+    "star": None,  # 미실측 — RELIABLE_CLASSES에서도 제외된 상태(floor_consensus.py)
 }
 # 이보다 작은 bbox는 너무 멀거나 오검출일 가능성이 높아 거리 추정을 시도하지
 # 않는다 — "모르면 제외"(hailo_scan_mapping.py와 같은 관례).
