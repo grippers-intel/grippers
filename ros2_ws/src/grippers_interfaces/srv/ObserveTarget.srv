@@ -1,0 +1,6 @@
+string raw_cls
+---
+bool found
+float32 x
+float32 h
+float32 w

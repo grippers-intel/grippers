@@ -3,13 +3,15 @@ controller/odom_publisher_node가 이미 만들어둔 /cmd_vel(안전 클램프)
 /odom(cmd_vel 적분 dead reckoning)을 그대로 재사용. 새 모터 제어는 안 함,
 목표 좌표까지의 proportional 제어 루프 + DriveTo 액션 서버만 얹는다."""
 
+import json
 import math
+import os
 import time
 
 import rclpy
 from geometry_msgs.msg import Twist
-from grippers_interfaces.action import DriveTo
-from grippers_interfaces.srv import AlignToBox
+from grippers_interfaces.action import ApproachObject, DriveTo
+from grippers_interfaces.srv import AlignToBox, ObserveTarget
 from nav_msgs.msg import Odometry
 from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -17,9 +19,25 @@ from rclpy.node import Node
 from std_srvs.srv import Trigger
 
 from .drive_control import compute_drive_command
+from .visual_approach_control import compute_approach_command, compute_approach_error
 
 ARRIVE_YAW_TOL = 0.05  # rad
 DRIVE_TIMEOUT_SEC = 55.0  # client의 60초 결과 timeout 전에 반드시 정지·응답
+
+# ── approach_object (2026-08-23 신설, 실기 미검증) ──────────────────────────
+# tools/perception/approach.py를 액션 서버로 이식한다 — domain/ports/
+# base_driver.py의 `approach()` docstring, HANDOFF.md "왜 제어 루프인가"
+# 참고. 원본과 다르게 튜닝하지 않는다: 여기서 나쁜 결과가 나오면 먼저
+# tools/perception/approach.py로 실기 확인하고 이 상수를 맞출 것.
+#
+# ⚠️ 코드는 구조적으로 완결돼 있지만(perception/observe_target 서비스 +
+# 이 액션 서버 + visual_approach_control.py 순수 제어 수학), 카메라·실기
+# 없이는 끝까지 검증할 수 없다 — 최초 실기 테스트에서 가장 먼저 의심할
+# 지점이다.
+APPROACH_TARGET_DIR = "/grippers/config"  # tools/perception/approach.py TARGET_DIR과 동일
+APPROACH_MAX_ITER = 40  # tools/perception/approach.py --max-iter 기본값과 동일
+APPROACH_TIMEOUT_SEC = 45.0  # client의 60초 결과 timeout보다 여유 있게 짧다
+APPROACH_OBSERVE_TIMEOUT_SEC = 1.0
 
 # TODO(#148): 아래 세 값은 M3 시연장에서 실측 후 확정한다.
 # PHASE 1 -> 2 진입 허용 yaw 오차. 현재 값은 자리 표시자(약 5.7도).
@@ -47,7 +65,14 @@ class BaseDriverNode(Node):
         self._cmd_vel_pub = self.create_publisher(Twist, "cmd_vel", 10)
         self._pose = None  # (x, y, yaw)
 
-        self.create_subscription(Odometry, "odom", self._on_odom, 10)
+        # ⚠️ 2026-08-23: "odom"이 아니라 "odom_raw"를 구독한다 — HANDOFF.md
+        # 실기 확인: imu_calib 부재로 EKF를 못 띄워서(grippers_bringup의
+        # bringup.launch.py 참고) /odom이 계속 비어 있다. 그대로 두면
+        # self._pose가 영원히 None이라 drive_to()가 DRIVE_TIMEOUT_SEC(55초)
+        # 마다 항상 실패한다. /odom_raw(바퀴 오도메트리 원본, EKF 미적용)는
+        # 실기에서 발행되는 게 확인됐다 — tools/perception/approach.py도
+        # 같은 이유로 이 토픽을 쓴다.
+        self.create_subscription(Odometry, "odom_raw", self._on_odom, 10)
 
         self._drive_action_server = ActionServer(
             self,
@@ -55,6 +80,16 @@ class BaseDriverNode(Node):
             "base_driver/drive_to",
             execute_callback=self._execute_drive_to,
             callback_group=cb_group,
+        )
+        self._approach_action_server = ActionServer(
+            self,
+            ApproachObject,
+            "base_driver/approach_object",
+            execute_callback=self._execute_approach_object,
+            callback_group=cb_group,
+        )
+        self._observe_client = self.create_client(
+            ObserveTarget, "perception/observe_target", callback_group=cb_group
         )
         self.create_service(
             AlignToBox,
@@ -120,6 +155,109 @@ class BaseDriverNode(Node):
         self._cmd_vel_pub.publish(Twist())
         result.arrived = False
         return result
+
+    def _execute_approach_object(self, goal_handle):
+        """물체 앞 파지 위치로 시각 서보 폐루프 접근한다 —
+        tools/perception/approach.py 이식(모듈 상단 경고 참고).
+
+        정지→관측(perception/observe_target)→소이동을 반복한다. 매 반복
+        관측이 없거나(물체를 순간적으로 놓침) 오차가 커도 다음 반복이
+        다시 잡으므로, 한 번 실패했다고 바로 포기하지 않는다 — 최대
+        APPROACH_MAX_ITER회, 또는 APPROACH_TIMEOUT_SEC를 넘기면 실패로
+        끊는다."""
+        raw_cls = goal_handle.request.raw_cls
+        result = ApproachObject.Result()
+
+        target = self._load_approach_target(raw_cls)
+        if target is None:
+            self.get_logger().warn(
+                f"approach_object: '{raw_cls}' 교시값 없음 — "
+                "tools/perception/approach.py --teach로 먼저 만들 것"
+            )
+            goal_handle.abort()
+            result.arrived = False
+            return result
+
+        target_x, target_h = target["x"], target["h"]
+        started_at = time.monotonic()
+
+        for _ in range(APPROACH_MAX_ITER):
+            if time.monotonic() - started_at >= APPROACH_TIMEOUT_SEC:
+                break
+            if goal_handle.is_cancel_requested:
+                self._cmd_vel_pub.publish(Twist())
+                goal_handle.canceled()
+                result.arrived = False
+                return result
+
+            observed = self._observe_target_once(raw_cls)
+            if observed is None:
+                continue  # 물체를 순간적으로 놓침 — 다음 반복에서 다시 찾는다
+            obs_x, obs_h = observed
+
+            err_x, err_h = compute_approach_error(obs_x, obs_h, target_x, target_h)
+            command = compute_approach_command(err_x, err_h)
+
+            fb = ApproachObject.Feedback()
+            fb.err_x_px = err_x
+            fb.err_h_px = err_h
+            goal_handle.publish_feedback(fb)
+
+            if command.arrived:
+                self._cmd_vel_pub.publish(Twist())
+                goal_handle.succeed()
+                result.arrived = True
+                return result
+
+            twist = Twist()
+            twist.linear.x = command.linear_x
+            twist.linear.y = command.linear_y
+            self._cmd_vel_pub.publish(twist)
+            time.sleep(command.burst_s)
+            self._cmd_vel_pub.publish(Twist())
+
+        self._cmd_vel_pub.publish(Twist())
+        goal_handle.abort()
+        result.arrived = False
+        return result
+
+    def _observe_target_once(self, raw_cls):
+        """perception/observe_target을 한 번 호출한다. 서비스가 없거나
+        응답이 없거나 물체를 못 찾으면 `None`."""
+        if not self._observe_client.wait_for_service(timeout_sec=APPROACH_OBSERVE_TIMEOUT_SEC):
+            return None
+        future = self._observe_client.call_async(ObserveTarget.Request(raw_cls=raw_cls))
+        rclpy.spin_until_future_complete(
+            self, future, timeout_sec=APPROACH_OBSERVE_TIMEOUT_SEC
+        )
+        if not future.done():
+            future.cancel()
+            return None
+        res = future.result()
+        if res is None or not res.found:
+            return None
+        return res.x, res.h
+
+    @staticmethod
+    def _load_approach_target(raw_cls):
+        """tools/perception/approach.py --teach가 저장한 교시값을 읽는다 —
+        같은 경로(APPROACH_TARGET_DIR)를 그대로 쓴다. 이 노드가 교시를
+        대신하지 않는다 — 교시는 실기에서 사람이 손가락 사이에 물체를
+        놓고 하는 작업이다(approach.py --teach 참고)."""
+        path = os.path.join(APPROACH_TARGET_DIR, f"approach_target_{raw_cls}.json")
+        legacy_path = os.path.join(APPROACH_TARGET_DIR, "approach_target.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        try:
+            with open(legacy_path, encoding="utf-8") as f:
+                legacy = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+        # 이름 없이 저장해 둔 예전 교시본(approach.py load_target()과 동일 규칙).
+        return legacy if legacy.get("class") == raw_cls else None
 
     def _on_align(self, request, response):
         # TODO: request.box(BoxObservation: color/pose/opening_mm/long_axis_rad)를

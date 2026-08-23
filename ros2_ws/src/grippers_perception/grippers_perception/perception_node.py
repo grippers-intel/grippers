@@ -19,6 +19,7 @@ scan_floor는 Hailo-10H YOLO로 실제 검출을 반환할 수 있지만 `scan_f
 """
 
 import math
+import time
 
 import rclpy
 from geometry_msgs.msg import Point, Vector3
@@ -28,6 +29,7 @@ from grippers_interfaces.srv import (
     FindBox,
     MeasureOpening,
     MonitorClearance,
+    ObserveTarget,
     ScanFloor,
 )
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -39,6 +41,7 @@ from rclpy.node import Node
 from grippers_perception.cpu_yolo_scan_mapping import (
     object_class_for_cpu_yolo_class_name,
 )
+from grippers_perception.floor_consensus import CONF_THRESHOLD, confirmed_tracks, track_bbox_xyxy
 from grippers_perception.hailo_scan_mapping import HAILO_CLASS_NAMES, object_class_for_hailo_id
 
 try:
@@ -133,9 +136,16 @@ HAILO_SCORE_THRESHOLD = 0.8
 # 강제 비활성화 참고)으로 임시 대체. 클래스 구성이 Hailo 모델과 다르다(6종,
 # "container" 없음) — cpu_yolo_scan_mapping.py 참고.
 CPU_YOLO_MODEL_PATH_DEFAULT = "/tmp/best_cpu.pt"
-# 위 HAILO_SCORE_THRESHOLD와 같은 이유로 0.8 — 물체 없는 장면에서 0.35~0.48대
-# 오검출 확인됨 (2026-08-22 실기 테스트).
-CPU_YOLO_SCORE_THRESHOLD = 0.8
+# ⚠️ 2026-08-23: 단일 프레임 신뢰도 임계값을 0.8까지 올려 오검출을 억누르던
+# 방식(2026-08-22 시도)을 폐기했다 — 대신 HANDOFF.md가 실기로 검증한 2단계
+# 게이트를 쓴다: 프레임당 admission은 conf 0.45(floor_consensus.CONF_
+# THRESHOLD)로 넉넉하게 열어두고, 여러 프레임에 걸친 다중 프레임 합의
+# (k-of-n·순도·산포·거리 게이트, floor_consensus.py)로 오검출을 거른다.
+# 물체 없는 장면의 오탐 4개(벽 밑동·바구니 주변)는 배경이 정지해 있어
+# 합의 필터로 원리적으로 못 거르므로, 거리 게이트(y≥290)가 대신 막는다
+# (HANDOFF.md "인식 > 한계" 참고).
+CONSENSUS_N_FRAMES = 10  # tools/perception/approach.py --frames 기본값과 동일
+CONSENSUS_COLLECT_TIMEOUT_SEC = 2.5  # SERVICE_TIMEOUT_SEC(3.0s, _ros_call.py)보다 짧게
 
 # 진짜 3D 위치가 아니다 — 위 경고 참고. base_link 앞 임의 고정점.
 # Hailo 경로는 아직 이 자리표시자를 쓴다 — 하드웨어가 고장(#189)이라 bbox 좌표계를
@@ -291,6 +301,12 @@ class PerceptionNode(Node):
             ConfirmGrasp,
             "perception/confirm_grasp",
             self._on_confirm_grasp,
+            callback_group=cb_group,
+        )
+        self.create_service(
+            ObserveTarget,
+            "perception/observe_target",
+            self._on_observe_target,
             callback_group=cb_group,
         )
 
@@ -450,12 +466,15 @@ class PerceptionNode(Node):
             response.detections = DetectionArray(detections=[])
             return response
 
-        frame = self._bridge.imgmsg_to_cv2(self._latest_frame, desired_encoding="bgr8")
-
         if self._hailo_model is not None:
+            frame = self._bridge.imgmsg_to_cv2(self._latest_frame, desired_encoding="bgr8")
             detections = self._scan_floor_detections_hailo(frame)
         elif self._cpu_yolo_model is not None:
-            detections = self._scan_floor_detections_cpu_yolo(frame)
+            # 단일 프레임이 아니라 여러 프레임을 새로 모은다 — 다중 프레임
+            # 합의 필터(아래 _scan_floor_detections_cpu_yolo 참고)의 입력이
+            # 필요해서, 여기서 미리 떠 둔 self._latest_frame 한 장으로는
+            # 부족하다.
+            detections = self._scan_floor_detections_cpu_yolo()
         else:
             self.get_logger().warn("scan_floor: 백엔드 미로드 — 빈 목록 반환")
             detections = []
@@ -491,40 +510,91 @@ class PerceptionNode(Node):
                 )
         return detections
 
-    def _scan_floor_detections_cpu_yolo(self, frame):
-        """ultralytics CPU 추론. Hailo와 달리 레터박스·바인딩을 라이브러리가
-        알아서 처리한다 — `predict()`에 원본 프레임을 그대로 넘긴다."""
+    def _yolo_raw_frame_detections(self, frame):
+        """프레임 한 장의 ultralytics 추론 결과를 합의 필터 입력 형식
+        `[(raw_cls, conf, bbox_xyxy), ...]`으로 바꾼다. domain ObjectClass
+        매핑이나 거리 계산은 하지 않는다 — 합의로 확정된 뒤에만 한다
+        (미확정 검출에 계산을 낭비하지 않는다, floor_consensus.py 참고).
+
+        HANDOFF.md 동작점의 conf 0.45(CONF_THRESHOLD)로 admission을 넉넉하게
+        열어둔다 — 오검출 억제는 여기가 아니라 다중 프레임 합의가 한다."""
         results = self._cpu_yolo_model.predict(frame, verbose=False)[0]
+        raw_detections = []
+        for box in results.boxes:
+            score = float(box.conf[0])
+            if score < CONF_THRESHOLD:
+                continue
+            class_name = results.names[int(box.cls[0])]
+            bbox_xyxy = tuple(float(v) for v in box.xyxy[0])
+            raw_detections.append((class_name, score, bbox_xyxy))
+        return raw_detections
+
+    def _collect_cpu_yolo_frames(self, n_frames, timeout_sec):
+        """정지 상태를 전제로 서로 다른 n_frames개 프레임에 대해 YOLO 추론을
+        돌려 raw 검출 리스트를 모은다(다중 프레임 합의 필터의 입력 형식,
+        floor_consensus.confirmed_tracks 참고).
+
+        카메라 콜백(_on_image)은 MultiThreadedExecutor의 다른 스레드에서
+        계속 돈다 — 여기서 rclpy.spin_once()를 부르면 이 실행기 설정에서는
+        불필요한 중첩 스핀이라 안 쓴다. 대신 짧게 자면서 self._latest_frame
+        이 새 메시지 객체로 바뀌었는지 identity로 확인한다(같은 프레임을
+        두 번 세지 않기 위함)."""
+        frames = []
+        last_msg = None
+        deadline = time.monotonic() + timeout_sec
+        while len(frames) < n_frames and time.monotonic() < deadline:
+            current = self._latest_frame
+            if current is None or current is last_msg:
+                time.sleep(0.01)
+                continue
+            last_msg = current
+            frame = self._bridge.imgmsg_to_cv2(current, desired_encoding="bgr8")
+            frames.append(self._yolo_raw_frame_detections(frame))
+        return frames
+
+    def _scan_floor_detections_cpu_yolo(self):
+        """ultralytics CPU 추론 + 다중 프레임 합의 필터(HANDOFF.md 2026-08-23
+        검증: 산포 0.2~1.1px, 순도 1.00). 단일 프레임 검출을 그대로 쓰지
+        않는다 — 정지 상태에서 CONSENSUS_N_FRAMES장을 새로 모아
+        floor_consensus.confirmed_tracks()로 확정된 물체만 후보로 낸다."""
+        frames = self._collect_cpu_yolo_frames(CONSENSUS_N_FRAMES, CONSENSUS_COLLECT_TIMEOUT_SEC)
+        if len(frames) < CONSENSUS_N_FRAMES:
+            self.get_logger().warn(
+                f"scan_floor(CPU YOLO): {CONSENSUS_COLLECT_TIMEOUT_SEC}s 안에 "
+                f"{len(frames)}/{CONSENSUS_N_FRAMES}프레임만 모임 — 있는 만큼으로 합의 시도"
+            )
+        if not frames:
+            return []
+
+        tracks = confirmed_tracks(frames, CONSENSUS_N_FRAMES)
 
         detections = []
         track_id = 0
-        for box in results.boxes:
-            class_name = results.names[int(box.cls[0])]
-            object_class = object_class_for_cpu_yolo_class_name(class_name)
+        for t in tracks:
+            object_class = object_class_for_cpu_yolo_class_name(t.label)
             if object_class is None:
                 continue  # 매핑 미확정 클래스(box 등) — 바닥 후보에서 제외
-            score = float(box.conf[0])
-            if score < CPU_YOLO_SCORE_THRESHOLD:
-                continue
 
-            bbox_xyxy = tuple(float(v) for v in box.xyxy[0])
-            approach_pose = self._approach_pose_m(class_name, bbox_xyxy)
+            bbox_xyxy = track_bbox_xyxy(t)
+            approach_pose = self._approach_pose_m(t.label, bbox_xyxy)
             if approach_pose is None:
                 # 상세 사유(bbox 너무 작음/보정값 미실측/camera_info 없음)는
-                # _approach_pose_m 내부에서 필요한 경우에만 따로 경고한다 —
-                # 여기서는 결과만 남긴다.
+                # _approach_pose_m 내부에서 필요한 경우에만 따로 경고한다.
                 continue
             x_final, y_final, theta_final = approach_pose
 
             track_id += 1
+            score = max(t.confs)
             detections.append(
                 self._make_detection(
                     track_id, object_class, score, pose_m=(x_final, y_final, 0.0), yaw_rad=theta_final
                 )
             )
             self.get_logger().info(
-                f"scan_floor(CPU YOLO): {class_name}->{object_class} score={score:.2f} "
-                f"x={x_final:.3f} y={y_final:.3f} theta={theta_final:.3f} track_id={track_id}"
+                f"scan_floor(CPU YOLO, 합의 {len(t.frames)}/{CONSENSUS_N_FRAMES}프레임): "
+                f"{t.label}->{object_class} score={score:.2f} purity={t.purity:.2f} "
+                f"spread={t.spread:.1f}px x={x_final:.3f} y={y_final:.3f} "
+                f"theta={theta_final:.3f} track_id={track_id}"
             )
         return detections
 
@@ -546,6 +616,40 @@ class PerceptionNode(Node):
             yaw_rad=yaw_rad,
             confidence=score,
         )
+
+    def _on_observe_target(self, request, response):
+        """base_driver_node의 approach_object 액션(시각 서보 루프)이 매 반복마다
+        부르는 저지연 관측. scan_floor(다중 프레임 합의)와는 목적이 다르다 —
+        이건 SELECT가 이미 고른 특정 raw 클래스 하나를 반복 재관측하며
+        수렴시키는 제어 루프 입력이라, 매 반복의 지연이 곧 루프 주기다.
+        tools/perception/approach.py도 이동마다 다시 관측해 오차를 스스로
+        지우는 폐루프라 여기서도 최신 프레임 1장이면 충분하다 — 노이즈는
+        다음 반복이 알아서 고친다.
+
+        CPU YOLO 백엔드 전용(Hailo는 하드웨어 고장 #189로 다루지 않는다).
+        모델 미로드·프레임 없음·해당 클래스 미검출은 전부 found=False —
+        "모르면 실패" 관례. 여러 후보가 있으면 가장 큰(=가까운) 것을 고른다
+        (tools/perception/approach.py의 pick()과 동일)."""
+        response.found = False
+        response.x = 0.0
+        response.h = 0.0
+        response.w = 0.0
+        if self._cpu_yolo_model is None or self._latest_frame is None:
+            return response
+
+        frame = self._bridge.imgmsg_to_cv2(self._latest_frame, desired_encoding="bgr8")
+        raw_detections = self._yolo_raw_frame_detections(frame)
+        candidates = [d for d in raw_detections if d[0] == request.raw_cls]
+        if not candidates:
+            return response
+
+        _, _, bbox = max(candidates, key=lambda d: d[2][3] - d[2][1])  # 가장 큰 높이
+        x1, y1, x2, y2 = bbox
+        response.found = True
+        response.x = (x1 + x2) / 2.0
+        response.h = y2 - y1
+        response.w = x2 - x1
+        return response
 
     def _on_find_box(self, request, response):
         # request.color는 와이어 필드명이 아직 레거시라 그렇다 — 2026-08-23

@@ -25,6 +25,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/MonitorClearance.srv"
   "srv/ConfirmGrasp.srv"
   "srv/AlignToBox.srv"
+  "srv/ObserveTarget.srv"
   "srv/Parse.srv"
   "srv/ConfirmPhrase.srv"
   "action/DriveTo.action"

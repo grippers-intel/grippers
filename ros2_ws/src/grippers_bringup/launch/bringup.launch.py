@@ -33,13 +33,20 @@ def launch_setup(context):
     use_fake_arm = LaunchConfiguration("use_fake_arm")
     use_fake_perception = LaunchConfiguration("use_fake_perception")
     use_fake_interpreter = LaunchConfiguration("use_fake_interpreter")
+    scan_floor_enabled = LaunchConfiguration("scan_floor_enabled")
     record_bag = LaunchConfiguration("record_bag")
     bag_output = LaunchConfiguration("bag_output")
     arm_port = LaunchConfiguration("arm_port")
 
+    # ⚠️ 2026-08-23: controller.launch.py를 그대로 쓰지 않는다 — HANDOFF.md
+    # 실기 확인: 이 launch가 포함하는 imu_filter.launch.py가 `imu_calib`
+    # 패키지 부재로 SIGINT를 내며 launch 전체를 죽인다. 팀원이 실기로 검증한
+    # 우회로 그대로 odom_publisher.launch.py만 직접 포함한다 — 대신 EKF가
+    # 없어 /odom이 비어 있으므로, base_driver_node도 /odom_raw(바퀴
+    # 오도메트리 원본)를 구독하도록 맞췄다(base_driver_node.py 참고).
     controller_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(controller_package_path, "launch/controller.launch.py")
+            os.path.join(controller_package_path, "launch/odom_publisher.launch.py")
         ),
         condition=UnlessCondition(use_fake_base),
     )
@@ -64,6 +71,7 @@ def launch_setup(context):
         executable="perception_node",
         output="screen",
         condition=UnlessCondition(use_fake_perception),
+        parameters=[{"scan_floor_enabled": scan_floor_enabled}],
     )
     arm_driver_node = Node(
         package="grippers_arm",
@@ -133,6 +141,13 @@ def generate_launch_description():
                 "use_fake_interpreter",
                 default_value="true",
                 description="true면 language 노드 없이 ScriptedInterpreter 사용",
+            ),
+            DeclareLaunchArgument(
+                "scan_floor_enabled",
+                default_value="false",
+                description="true면 perception_node의 scan_floor 안전 게이트를 연다 "
+                "(perception_node.py SCAN_FLOOR_ENABLED_DEFAULT 경고 참고 — "
+                "실기 SCAN→SELECT→APPROACH 경로를 확인할 때만 명시적으로 켤 것)",
             ),
             DeclareLaunchArgument(
                 "arm_port",
