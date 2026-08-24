@@ -151,6 +151,49 @@ def load_baseline():
     return empties[-1] if empties else None
 
 
+def past_distances(raw_cls):
+    """같은 클래스의 지난 성공 실행에서 잰 depth 전방거리 목록(cm).
+
+    "얼마나 가까이 두면 되는가"는 결국 실측으로만 알 수 있는데, 그 실측이
+    이미 이 파일에 쌓여 있다 — 배치할 때 참고하라고 보여준다."""
+    try:
+        with open(DATASET_PATH, encoding="utf-8") as f:
+            rows = [json.loads(line) for line in f if line.strip()]
+    except (OSError, json.JSONDecodeError):
+        return []
+    out = []
+    for r in rows:
+        if r.get("empty") or r.get("raw_cls") != raw_cls or not r.get("ok"):
+            continue
+        depth = r.get("depth") or {}
+        if depth.get("forward_m") is not None:
+            out.append(depth["forward_m"] * 100.0)
+    return out
+
+
+def confirm_placement(depth, raw_cls) -> bool:
+    """팔을 내리기 전에 배치를 사람이 한 번 확인한다.
+
+    ⚠️ 2026-08-24 실기: 물체를 너무 가까이 둬서 내려오는 그리퍼에 걸린 경우가
+    여러 번 있었다(사용자 보고). 관측은 이미 팔이 내려가기 전에 끝나 있으므로,
+    그 숫자를 보여주고 한 번 끊어 주면 손대서 고칠 기회가 생긴다 — 내려간
+    뒤에는 늦다."""
+    if depth is None or depth.get("forward_m") is None:
+        print("\n  ⚠️ 거리 추정 불가 — 눈으로 배치를 확인하세요.")
+    else:
+        print(f"\n  이번 배치: 전방 {depth['forward_m'] * 100:.1f}cm · "
+              f"좌우 {depth['lateral_m'] * 100:+.1f}cm")
+        past = past_distances(raw_cls)
+        if past:
+            print(f"  지난 성공 사례({len(past)}회): "
+                  f"{', '.join(f'{d:.1f}' for d in past)} cm "
+                  f"(최소 {min(past):.1f} · 최대 {max(past):.1f})")
+        else:
+            print("  (이 클래스의 지난 성공 기록이 아직 없습니다)")
+    answer = input("  이대로 팔을 내립니까? Enter=진행, s+Enter=배치 고치고 다시 관측, q=중단: ")
+    return answer.strip().lower()
+
+
 def _delta(label, value, base, unit=""):
     if value is None or base is None:
         return f"  {label:<22} {value if value is not None else '—'}  (기준선 없음)"
@@ -207,6 +250,8 @@ def main():
                     help="물체 없이 돌려 기준선을 만든다 (가장 먼저 할 것)")
     ap.add_argument("--profile", default=None)
     ap.add_argument("--no-drop", action="store_true", help="바구니 투하 단계를 건너뛴다")
+    ap.add_argument("--no-confirm", action="store_true",
+                    help="내리기 전 배치 확인을 건너뛴다(연속 수집용)")
     args = ap.parse_args()
 
     profile = args.profile or CLASS_TO_PROFILE[args.raw_cls]
@@ -240,13 +285,24 @@ def main():
 
         # --- depth 관측: 팔이 내려가기 전에 해야 한다 -------------------
         if not args.empty:
-            print("\n[1] depth 카메라 관측 (팔 내려가기 전)")
-            depth = observe_depth(node, args.raw_cls, log)
-            record["depth"] = depth
-            capture = save_yolo_annotated(node, args.raw_cls)
-            if capture is not None:
-                record["yolo_capture"] = capture.get("path")
-                log.log("yolo_capture", **capture)
+            while True:
+                print("\n[1] depth 카메라 관측 (팔 내려가기 전)")
+                depth = observe_depth(node, args.raw_cls, log)
+                record["depth"] = depth
+                capture = save_yolo_annotated(node, args.raw_cls)
+                if capture is not None:
+                    record["yolo_capture"] = capture.get("path")
+                    log.log("yolo_capture", **capture)
+                if args.no_confirm:
+                    break
+                answer = confirm_placement(depth, args.raw_cls)
+                log.log("placement_confirm", answer=answer)
+                if answer == "q":
+                    print("  중단합니다 — 팔은 움직이지 않았습니다.")
+                    return 1
+                if answer != "s":
+                    break
+                print("  배치를 고치고 다시 관측합니다...")
 
         # --- 팔 내리기: 반드시 열고 내려간다 ----------------------------
         print("\n[2] safe → 그리퍼 열기 → grasp")
