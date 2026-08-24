@@ -134,7 +134,15 @@ HAILO_SCORE_THRESHOLD = 0.8
 # CPU YOLO(ultralytics) 폴백 — 2026-08-22, Hailo-10H 하드웨어 고장(위 _HAILO_AVAILABLE
 # 강제 비활성화 참고)으로 임시 대체. 클래스 구성이 Hailo 모델과 다르다(6종,
 # "container" 없음) — cpu_yolo_scan_mapping.py 참고.
-CPU_YOLO_MODEL_PATH_DEFAULT = "/tmp/best_cpu.pt"
+# ⚠️ 2026-08-24: 기본 경로가 /tmp/best_cpu.pt였다. 그런데 이 파일은 그날까지
+# 컨테이너 /tmp에만 있었고 저장소·호스트 어디에도 백업이 없었다 — 컨테이너를
+# 다시 만들거나 /tmp가 비워지는 순간 인식이 통째로 죽고 복구할 원본도 없는
+# 상태였다. 시연 전에 감당할 위험이 아니라 /grippers/models(호스트
+# ~/docker/shared/grippers/models에 바인드 마운트되어 컨테이너 수명과
+# 무관하게 남는다)로 옮기고 기본값을 그쪽으로 돌린다.
+# sha256 9680cf7d156c32cdc8082214108451aa3e110598c0ce7ee3cf541791d173182c
+# (맥 ~/Downloads/grippers_model_backup/best_cpu.pt에도 같은 파일 보관)
+CPU_YOLO_MODEL_PATH_DEFAULT = "/grippers/models/best_cpu.pt"
 # ⚠️ 2026-08-23: 단일 프레임 신뢰도 임계값을 0.8까지 올려 오검출을 억누르던
 # 방식(2026-08-22 시도)을 폐기했다 — 대신 HANDOFF.md가 실기로 검증한 2단계
 # 게이트를 쓴다: 프레임당 admission은 conf 0.45(floor_consensus.CONF_
