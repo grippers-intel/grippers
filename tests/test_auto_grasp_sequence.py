@@ -235,3 +235,18 @@ def test_turn_only_mode_skips_forward_correction():
     assert "turn_only" in source
     # turn_only일 때는 drive_burst에 도달하기 전에 반환해야 한다.
     assert source.index("if turn_only:") < source.index("drive_burst")
+
+
+def test_gripper_opens_before_the_arm_descends():
+    """⚠️ 사용자 지시(2026-08-24): "GRASP 돌입시 가장 먼저 그리퍼부터 열어."
+
+    닫힌 손가락이 물체가 있는 공간을 통과해 내려가면 물체를 밀어낸다. 열어
+    놓고 내려가야 손가락이 물체 양옆으로 비켜 지나간다."""
+    source = ast.unparse(_function("main"))
+
+    open_at = source.index("set_gripper(preopen_mm)")
+    descend_at = source.index("move_floor_pose(profile, 'grasp')")
+    assert open_at < descend_at
+    # safe로 올라가는 것은 여는 것보다 먼저다 — IDLE에서 벌리면 접힌 팔의
+    # 손가락이 차체에 닿을 수 있고 그건 아직 실측 확인이 안 됐다.
+    assert source.index("move_floor_pose(profile, 'safe')") < open_at

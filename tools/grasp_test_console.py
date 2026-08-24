@@ -179,6 +179,38 @@ CX_PX = CAMERA_WIDTH_PX - 325.3050842285156  # = 314.695 (180도 회전 보정 �
 # 70cm에서 (a)는 bbox 중심 x=290.6px, (b)는 271.8px을 예측했고 실측은
 # 284.0px이었다 — 잔차가 (a) 0.80cm, (b) 1.47cm로 **(a)가 더 잘 맞는다**.
 # 그래서 픽셀이 아니라 미터로 더하는 지금 형태를 유지한다.
+#
+# ⚠️⚠️ 2026-08-24 미해결 — **회전 정렬 후에는 이 보정이 안 맞는다**.
+#
+# auto_grasp_sequence.py --turn-only로 물체를 화면 중앙에 맞춘 직후, 같은
+# 물체의 좌우 위치를 세 가지로 재보면 전부 다르게 나온다:
+#
+#     도구 보고(이 보정 적용 후)  +0.2cm   (즉 "정렬 완료"로 판정)
+#     같은 프레임의 보정 전 원시값 -2.71cm
+#     사용자가 depth 카메라로 확인 -4.5cm
+#     줄자 실측(진짜 값)           -6.5cm   <- 이대로 직진하면 못 잡는다
+#
+# 즉 정렬이 끝났다고 보고한 시점에 물체는 실제로 6.5cm 왼쪽에 있었다.
+# 이 보정값(+2.91cm)은 **차체를 안 돌린 상태**에서 40cm·70cm 두 점으로
+# 잡은 것이라, 회전이 개입한 뒤의 기하는 담고 있지 않다.
+#
+# 같은 실행에 원인을 가리키는 단서가 하나 더 있다: 제자리 회전만 했는데
+# 보고된 전방 거리가 48.0 -> 51.8cm로 3.8cm(7.9%) **늘었다**(총 회전 17.0도).
+# 카메라가 회전축 위에 있다면 제자리 회전은 카메라-물체 거리를 거의 안
+# 바꿔야 한다. 거리가 변했다는 건 **카메라가 회전 중심에서 옆으로 떨어져
+# 장착돼 있다**는 뜻이고, 그 기하에서는 "화면 중앙에 오도록 회전"이 곧
+# "그리퍼 진행선 위에 놓기"가 아니다 — 두 선이 나란히 어긋난 채로 남는다.
+#
+# 후보 원인(아직 어느 것도 확정 안 됨):
+#   1. 카메라가 회전 중심에서 옆으로 떨어져 있어 회전 후 오차가 남는다
+#      (위 거리 변화가 이쪽을 지지한다)
+#   2. 파지 중심 자체가 중심선에서 좌측 20mm다(floor_grasp_profiles.py의
+#      HORIZONTAL_SAFE_145_RAW 실측 주석) — 부호가 반대라 이것만으로는
+#      설명이 안 되지만 일부는 여기서 온다
+#   3. LATERAL_BIAS_M 자체가 회전 없는 조건에서만 맞는 값이다
+#
+# 가르는 방법: 물체를 **처음부터 정중앙**에 두고(회전 불필요) 같은 세 값을
+# 재보면 된다. 그때도 어긋나면 3번, 맞으면 1번/2번이다.
 LATERAL_BIAS_M = 0.0291
 
 # 그리퍼 캠 프레임(640×480)에서 "파지해도 되는" 컨투어 면적 하한. 오늘 두
@@ -808,19 +840,32 @@ def main():
 
             # 3단계 -----------------------------------------------------
             kr.wait_enter("\n[3단계] g + Enter로 GRASP 진입 (파지 전 자세로 이동): ")
-            ok = node.move_floor_pose(profile, "safe") and node.move_floor_pose(profile, "grasp")
+            # _move_floor_stage는 팔 관절(servo 1-5)만 움직인다 — 그리퍼(servo 6)는
+            # 별개라 여기서 직접 열어야 한다.
+            #
+            # ⚠️ 여는 시점이 중요하다(사용자 지시, 2026-08-24). 예전에는
+            # safe -> grasp로 다 내려간 **뒤에** 열었는데, 그러면 닫힌 손가락이
+            # 물체가 있는 공간을 그대로 통과해 내려가면서 물체를 밀어낸다.
+            # 열어 놓고 내려가면 손가락이 물체 양옆으로 비켜 지나간다.
+            #
+            # IDLE이 아니라 safe에서 여는 이유: IDLE은 팔이 차체 위에 접힌
+            # 자세라 거기서 168mm까지 벌리면 손가락이 차체에 닿을 수 있는데
+            # 아직 실측으로 확인된 적이 없다. safe는 차체 전면 185mm 앞·145mm
+            # 높이라 사방이 비어 있고, "내려가기 전에 연다"는 목적은 여기서
+            # 이미 달성된다.
+            preopen_mm = FLOOR_GRASP_PROFILES[profile].preopen_width_mm
+            ok = node.move_floor_pose(profile, "safe")
+            if ok:
+                gripper_resp = node.set_gripper(preopen_mm)
+                log.log("step3_gripper_open", ok=bool(gripper_resp and gripper_resp.ok),
+                        width_mm=preopen_mm)
+                print(f"  그리퍼 열림({preopen_mm}mm) — 내려가기 전에 연다")
+                ok = node.move_floor_pose(profile, "grasp")
             log.log("step3_grasp_entry", ok=ok)
             if not ok:
                 print("  GRASP 진입 실패 — 서보 온도/자세 조건을 arm.log에서 확인 후 재시도할 것")
                 recover_to_idle(node, profile, log, "GRASP 진입 실패")
                 return
-            # _move_floor_stage는 팔 관절(servo 1-5)만 움직인다 — 그리퍼(servo 6)는
-            # 별개라 여기서 직접 열어야 한다. 이걸 빼먹으면 grasp 자세로 내려와도
-            # 손가락이 닫힌 채라 물체가 못 들어간다.
-            preopen_mm = FLOOR_GRASP_PROFILES[profile].preopen_width_mm
-            gripper_resp = node.set_gripper(preopen_mm)
-            log.log("step3_gripper_open", ok=bool(gripper_resp and gripper_resp.ok), width_mm=preopen_mm)
-            print(f"  그리퍼 열림({preopen_mm}mm)")
             # perception_node는 lazy가 아니라 __init__ 시점에 confirm_grasp용 기준
             # 프레임을 찍으려고 /dev/gripper_cam을 무조건 열어서 계속 쥐고 있다
             # (오늘 실기로 재확인 — 예전 "lazy하게 연다"는 가정이 틀렸다). observe_target은

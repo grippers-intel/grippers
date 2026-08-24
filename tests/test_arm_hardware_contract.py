@@ -484,3 +484,15 @@ def test_glide_defaults_to_no_deferral():
     }
 
     assert defaults["defer_joints"] == ()
+
+
+def test_domain_grasp_state_also_opens_before_descending():
+    """FSM도 도구와 같은 순서여야 한다 — safe로 올라간 뒤 그리퍼를 열고,
+    그다음에 grasp로 내려간다(사용자 지시, 2026-08-24). 도구만 고치고 FSM이
+    반대로 남아 있으면 자동 시연에서 같은 사고가 난다."""
+    source = DOMAIN_STATES.read_text(encoding="utf-8")
+    grasp = source[source.index("class GraspState"):source.index("class TransportState")]
+
+    open_at = grasp.index("set_gripper(plan.preopen_width_mm)")
+    descend_at = grasp.index('move_to_floor_pose(plan.profile, "grasp")')
+    assert open_at < descend_at
