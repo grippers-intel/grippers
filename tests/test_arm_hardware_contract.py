@@ -286,3 +286,49 @@ def test_glide_speed_can_finish_the_longest_registered_move_in_time():
     glide_sec = timing["FLOOR_POSE_STEPS"] * timing["FLOOR_POSE_STEP_SEC"]
 
     assert timing["FLOOR_POSE_SPEED_RAW"] >= longest_raw / glide_sec
+
+
+def test_arrival_wait_extends_while_the_arm_is_still_making_progress():
+    """2026-08-24 실기 회귀 — 느린 것과 걸린 것을 구분해야 한다.
+
+    고정 4.0s 상한으로는 servo 2(어깨)가 매번 592 raw를 남기고 실패했는데,
+    타임아웃 뒤에 보니 목표 +5 raw에 도착해 있었다 — 멈춘 게 아니라 느렸을
+    뿐이었다. 어깨는 팔 전체를 중력에 맞서 들어올려 goal_speed를 올려도
+    실측 153 raw/s가 한계였다(같은 거리의 servo 4는 230 raw/s). 잔차가
+    줄고 있는 동안에는 계속 기다려야 한다."""
+    source = ast.unparse(_function("_wait_floor_pose_arrived"))
+
+    assert "FLOOR_POSE_STALL_SEC" in source
+    assert "FLOOR_POSE_PROGRESS_RAW" in source
+    assert "FLOOR_POSE_ARRIVE_MAX_SEC" in source
+
+
+def test_arrival_wait_still_gives_up_on_a_genuinely_stuck_joint():
+    """진전 기준으로 바꿨다고 무한정 매달리면 안 된다 — 최후의 한계선이
+    실제로 정지마찰 대기 시간보다 길되 유한해야 한다."""
+    limits = _module_constants(
+        ARM_NODE, {"FLOOR_POSE_STALL_SEC", "FLOOR_POSE_ARRIVE_MAX_SEC", "FLOOR_POSE_PROGRESS_RAW"}
+    )
+
+    assert 0 < limits["FLOOR_POSE_STALL_SEC"] < limits["FLOOR_POSE_ARRIVE_MAX_SEC"]
+    assert limits["FLOOR_POSE_ARRIVE_MAX_SEC"] < 60
+    assert limits["FLOOR_POSE_PROGRESS_RAW"] > 0
+
+
+def test_recover_idle_skips_the_start_pose_gate_that_normal_idle_enforces():
+    """실패 복구 경로는 등록된 시작 자세 게이트를 건너뛴다(사용자 요청,
+    2026-08-24). 이동이 실패하면 팔은 정의상 등록된 자세들 사이에 멈춰
+    서는데, 그 상태가 "idle"의 게이트에 걸려 거부되기 때문이다 — 정작
+    복구가 필요한 순간에만 복구가 막히는 모순이 생긴다."""
+    source = ast.unparse(_function("_move_floor_stage"))
+
+    assert "recover_idle" in source
+    # 일반 idle 경로의 게이트는 그대로 살아 있어야 한다 — recover_idle은
+    # 기본값이 아니라 예외다.
+    assert "idle 복귀는 safe/drop 자세에서만 시작할 수 있습니다" in source
+
+
+def test_recover_idle_is_an_accepted_stage():
+    source = ast.unparse(_function("_execute_floor_pose"))
+
+    assert "recover_idle" in source

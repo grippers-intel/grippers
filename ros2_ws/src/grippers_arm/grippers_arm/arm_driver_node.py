@@ -89,7 +89,13 @@ FLOOR_POSE_ACCEL_RAW = 30
 # 보간이 끝난 뒤 "실제 도달"을 기다리는 값 — 고정 sleep이 아니라 위치 폴링이다
 # (_wait_floor_pose_arrived 참고, 2026-08-24 실기로 필요성 확인).
 FLOOR_POSE_ARRIVE_POLL_SEC = 0.1
-FLOOR_POSE_ARRIVE_TIMEOUT_SEC = 4.0
+# 진전이 이만큼(raw)도 없이 FLOOR_POSE_STALL_SEC가 지나면 걸린 것으로 본다.
+# 폴링 간격 0.1s에 실측 최저 속도 153 raw/s면 정상 이동 중에는 스텝당 15 raw쯤
+# 줄어드므로, 3 raw는 센서 잡음만 걸러내고 진짜 진전은 놓치지 않는 수준이다.
+FLOOR_POSE_PROGRESS_RAW = 3
+FLOOR_POSE_STALL_SEC = 1.5
+# 어떤 경우에도 여기서 영원히 매달리지 않게 하는 최후의 한계선.
+FLOOR_POSE_ARRIVE_MAX_SEC = 25.0
 MAX_FLOOR_POSE_SERVO2_TEMP_C = 50
 FLOOR_POSE_START_TOLERANCE_RAW = 120
 
@@ -391,7 +397,7 @@ class ArmDriverNode(Node):
         try:
             if req.profile not in HORIZONTAL_GRASP_POSES_DEG:
                 raise ValueError(f"알 수 없는 수평 파지 profile: {req.profile}")
-            if req.stage not in {"idle", "safe", "grasp", "midpoint", "drop"}:
+            if req.stage not in {"idle", "safe", "grasp", "midpoint", "drop", "recover_idle"}:
                 raise ValueError(f"알 수 없는 수평 파지 stage: {req.stage}")
 
             self._require_operational_servos(range(1, 6))
@@ -478,12 +484,28 @@ class ArmDriverNode(Node):
 
         도달 판정 기준은 ``FLOOR_POSE_START_TOLERANCE_RAW``로 다음 단계의
         시작 자세 게이트와 **같은 값을 쓴다** — 이 함수가 통과시킨 자세는
-        정의상 다음 단계가 받아들이는 자세여야 하기 때문이다. 시간 안에
-        못 들어오면 어느 서보가 얼마나 남았는지 담아 예외를 낸다. 그래야
-        중력 처짐인지(특정 서보만 한 방향으로 남음) 통신/토크 문제인지
-        (여러 서보가 제각각) 로그 한 줄로 구분된다.
+        정의상 다음 단계가 받아들이는 자세여야 하기 때문이다.
+
+        ⚠️ 기다리는 방식은 **고정 시간이 아니라 진전 기준**이다. 2026-08-24
+        실기에서 고정 4.0s로 했다가 servo 2만 계속 592 raw를 남기고 실패했는데,
+        타임아웃 뒤에 확인해 보니 목표에서 +5 raw에 도착해 있었다 — 멈춘 게
+        아니라 **느렸을 뿐**이었다. 어깨(servo 2)는 팔 전체를 중력에 맞서
+        들어올리므로 goal_speed를 1200으로 올려도 실측 153 raw/s가 한계였다
+        (같은 거리를 움직이는 servo 4는 230 raw/s로 빨라졌다). 즉 이 관절의
+        속도는 명령이 아니라 토크가 정한다. IDLE->safe의 1663 raw는 그
+        속도로 10.9s가 걸리는데 예산은 7.0s였다.
+
+        고정 상한을 그 10.9s에 맞춰 늘리는 건 답이 아니다 — 배터리 전압이나
+        적재 무게가 달라지면 그 수치도 같이 달라지기 때문이다. 그래서 **잔차가
+        줄고 있는 동안에는 계속 기다리고**, 진전이 FLOOR_POSE_STALL_SEC 동안
+        멈추면 그때 실패로 본다. 진짜로 걸린 경우에는 여전히 빨리 실패하고,
+        느릴 뿐인 경우에는 끝까지 기다린다. FLOOR_POSE_ARRIVE_MAX_SEC는 어떤
+        경우에도 영원히 매달리지 않게 하는 최후의 한계선이다.
         """
-        deadline = time.monotonic() + FLOOR_POSE_ARRIVE_TIMEOUT_SEC
+        started = time.monotonic()
+        stall_deadline = started + FLOOR_POSE_STALL_SEC
+        hard_deadline = started + FLOOR_POSE_ARRIVE_MAX_SEC
+        best_error = None
         residual = {}
         while True:
             actual = {servo_id: backend.drv.get_position(servo_id) for servo_id in range(1, 6)}
@@ -494,13 +516,22 @@ class ArmDriverNode(Node):
             }
             if all(abs(error) <= FLOOR_POSE_START_TOLERANCE_RAW for error in residual.values()):
                 return
-            if time.monotonic() >= deadline:
+
+            now = time.monotonic()
+            worst_error = max(abs(error) for error in residual.values())
+            if best_error is None or best_error - worst_error > FLOOR_POSE_PROGRESS_RAW:
+                # 아직 줄고 있다 — 느린 것이지 걸린 게 아니다. 시계를 다시 준다.
+                best_error = worst_error
+                stall_deadline = now + FLOOR_POSE_STALL_SEC
+            if now >= stall_deadline or now >= hard_deadline:
                 break
             time.sleep(FLOOR_POSE_ARRIVE_POLL_SEC)
 
+        waited = time.monotonic() - started
         worst = max(residual, key=lambda servo_id: abs(residual[servo_id]))
+        reason = "진전이 멈췄습니다" if waited < FLOOR_POSE_ARRIVE_MAX_SEC else "최대 대기 시간을 넘겼습니다"
         raise ArmHardwareUnavailableError(
-            f"{FLOOR_POSE_ARRIVE_TIMEOUT_SEC}s 안에 목표 자세에 도달하지 못했습니다 — "
+            f"{waited:.1f}s 기다렸으나 목표 자세에 도달하지 못했습니다({reason}) — "
             f"잔차(raw) {residual}, 최악 servo {worst} {residual[worst]:+d} "
             f"(허용 ±{FLOOR_POSE_START_TOLERANCE_RAW})"
         )
@@ -555,6 +586,29 @@ class ArmDriverNode(Node):
                 return
             if not (self._near_pose(actual, safe) or self._near_pose(actual, drop)):
                 raise ValueError("idle 복귀는 safe/drop 자세에서만 시작할 수 있습니다")
+            self._glide_to_raw_positions(backend, idle)
+            return
+
+        if stage == "recover_idle":
+            # 실패 복구 전용 경로 — 등록된 시작 자세 게이트를 **일부러**
+            # 건너뛴다(사용자 요청, 2026-08-24: "실패하면 알아서 IDLE로
+            # 돌아가게").
+            #
+            # 왜 "idle" 단계로는 안 되는가: 이동이 실패하면 팔은 정의상
+            # 등록된 자세들 **사이**에 멈춰 선다. 바로 그 상태가 "idle"의
+            # 시작 게이트에 걸려 거부되므로, 정작 복구가 필요한 순간에만
+            # 복구가 막히는 모순이 생긴다.
+            #
+            # 게이트를 건너뛰어도 되는 이유: 실패가 나는 곳은 IDLE<->safe
+            # 경로 위이고, 거기서 IDLE로 가는 것은 방금 지나온 길을 그대로
+            # 되짚는 것이라 새로운 공간을 쓸지 않는다. 되짚는 방향은 팔을
+            # 접는 쪽(중력이 돕는 쪽)이기도 하다.
+            #
+            # ⚠️ 그래도 이건 **사람이 보고 있을 때 쓰는 복구 경로**다. FSM의
+            # 정상 흐름은 계속 "idle"을 써야 한다 — 게이트가 있는 쪽이
+            # 기본값이고 이건 예외다.
+            if self._near_pose(actual, idle):
+                return
             self._glide_to_raw_positions(backend, idle)
             return
 
