@@ -71,8 +71,8 @@ cmd_vel/odom_raw를 직접 쓰고 base_driver 서비스는 호출하지 않는�
     scp pi@10.82.133.189:/tmp/grasp_test_log_<epoch>.jsonl .
 
 키 배치:
-  1단계 — Enter                  : 룩 위치(전방 cm, 좌/우 cm) 1회 관측·출력
-  2단계 — Space/a/d, c(정지)     : 서서히 전진(정렬), a=전진+좌회전, d=전진+우회전
+  1단계 — Enter                  : 룩 위치(전방 cm, 좌/우 cm) 관측 + YOLO 캡처 저장
+  (2단계 정렬 주행은 2026-08-24 제거 — 물체를 사람이 직접 놓고 시작한다)
   3단계 — g                      : GRASP 진입(파지 직전 자세), 그리퍼캠 스트림 시작
   4단계 — Space/a/d, c(정지)     : 미세 전진, 1초마다 그리퍼캠 면적 출력
   5단계 — g                      : 파지(닫기)→들어올리기(midpoint), 부하 확인
@@ -148,12 +148,30 @@ CLASS_TO_PROFILE = {
     "star": "star_column",
 }
 
-# yolov5_ros2/cv_tool.py의 카메라 내참수 K 행렬에서 가져온 fx, cx. 좌우
-# 오프셋은 ObserveTarget이 y(세로) 픽셀을 안 줘서 완전한 px2xy 왜곡보정은
-# 못 하고, 표준 핀홀 근사(X = (u−cx)·Z/fx, 왜곡 무시)만 쓴다 — 참고용
-# 정밀도이지 정밀 측정치가 아니다.
-FX_PX = 602.7175003324863
-CX_PX = 351.305582038406
+# ⚠️ 2026-08-24 정정: 이전 값(fx=602.7175, cx=351.3056)은 벤더 파일
+# yolov5_ros2/cv_tool.py에서 가져온 것이라 **이 카메라 값이 아니었다**.
+# 실제 /ascamera/camera_publisher/rgb0/camera_info 실측값으로 교체한다.
+#
+# depth_cam_rotate_node가 이미지를 180도 회전시키므로 주점 cx도 뒤집어야
+# 한다(cx' = width - cx) — perception_node._on_rgb_camera_info와 같은 보정.
+# fx는 회전과 무관해 그대로 쓴다.
+#
+# 좌우 오프셋은 ObserveTarget이 y(세로) 픽셀을 안 줘서 완전한 왜곡보정은
+# 못 하고 표준 핀홀 근사(X = (u−cx)·Z/fx, 왜곡 무시)만 쓴다.
+CAMERA_WIDTH_PX = 640
+FX_PX = 588.9754638671875
+CX_PX = CAMERA_WIDTH_PX - 325.3050842285156  # = 314.695 (180도 회전 보정 후)
+
+# 실측 내참수를 써도 남는 좌우 잔차. 2026-08-24 실기: rook을 차체 중심선
+# (좌우 0cm)·전방 40cm에 놓았는데 좌측 2.91cm로 관측됐다 — 뎁스카메라가
+# 차체 중심에서 물리적으로 어긋나게 장착된 것으로 보인다(사용자 확인).
+#
+# ⚠️ 측정점이 40cm 하나뿐이라 두 모델을 아직 못 가른다:
+#   (a) 장착 위치가 옆으로 밀림  → 오차가 거리와 무관한 상수(m)
+#   (b) 장착이 yaw로 틀어짐/주점 오차 → 오차가 거리에 비례
+# 지금은 (a)로 보고 상수로 더한다. **다른 거리(예: 70cm)에서 한 번 더
+# 재보면 어느 쪽인지 확정된다** — 그때 이 상수를 다시 잡을 것.
+LATERAL_BIAS_M = 0.0291
 
 # 그리퍼 캠 프레임(640×480)에서 "파지해도 되는" 컨투어 면적 하한. 오늘 두
 # 차례 rook 성공 사례(82,854px²=27.0%로 성공, 172,738px²=56.2%도 성공)에서
@@ -181,6 +199,7 @@ YOLO_CAPTURE_DIR = "/grippers/recordings/yolo_captures"
 YOLO_MODEL_PATH = "/tmp/best_cpu.pt"
 YOLO_CAPTURE_CONF = 0.25  # perception_node의 CONF_THRESHOLD(0.45)보다 낮게 —
                           # "왜 못 잡았나"를 보려면 탈락한 약한 검출도 보여야 한다
+RGB_WAIT_TIMEOUT_S = 5.0  # 1단계 캡처 전 프레임 대기 상한
 
 APPROACH_SPEED_MPS = 0.06  # 오늘 forward_manual.py에서 검증된 속도
 # ⚠️ 2026-08-24 실기: 원래 0.05였는데(apply_axis_floor의 min_speed와 동일 —
@@ -236,6 +255,22 @@ class KeyReader:
 
     def __exit__(self, *exc):
         termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old)
+
+    def ensure_cbreak(self):
+        """cbreak 모드를 다시 걸고, 쌓여 있던 입력을 버린다.
+
+        ⚠️ 2026-08-24 실기: 1단계에 YOLO 캡처(ultralytics import + 추론)를
+        넣은 뒤부터 2·4단계에서 space가 전혀 안 먹혔다(odom 0.000m — 명령
+        자체가 안 나갔다). ultralytics는 import·초기화 과정에서 여러
+        서브프로세스(git/pip 확인 등)를 띄우는데, 그 자식이 stdin을 물려받아
+        터미널 속성을 되돌려 놓으면 이 콘솔의 cbreak가 풀린다. 원인을
+        하나로 특정하는 대신, **주행 루프에 들어가기 직전 항상 다시 건다** —
+        비용이 사실상 0이고 어떤 경로로 풀렸든 복구된다.
+
+        tcflush로 버퍼도 비운다 — 모드가 풀린 동안 눌린 키가 쌓여 있으면
+        주행 시작하자마자 엉뚱한 명령(예: 즉시 정지)으로 소비된다."""
+        tty.setcbreak(self._fd)
+        termios.tcflush(self._fd, termios.TCIFLUSH)
 
     def getch_nonblocking(self) -> str | None:
         r, _, _ = select.select([sys.stdin], [], [], 0)
@@ -456,7 +491,7 @@ def estimate_position(obs: ObserveTarget.Response, raw_cls: str):
     if area_px2 <= 0:
         return None, None
     z_m = k / math.sqrt(area_px2)
-    lateral_m = (obs.x - CX_PX) * z_m / FX_PX
+    lateral_m = (obs.x - CX_PX) * z_m / FX_PX + LATERAL_BIAS_M
     return z_m, lateral_m
 
 
@@ -487,8 +522,18 @@ def save_yolo_annotated(node: GraspTestNode, raw_cls: str, out_dir: str = YOLO_C
     안 쓰는 다른 단계까지 느려지면 안 된다. 실패(모델 없음·프레임 없음)는
     예외를 올리지 않고 None을 돌려준다 — 진단용 부가 기능이 본 테스트를
     중단시키면 안 된다."""
+    # ⚠️ 이 콘솔은 상시 스핀하지 않는다 — 구독 콜백은 node.pump()나
+    # spin_until_future_complete()가 도는 동안에만 처리된다. 1단계에서
+    # observe_target 서비스가 없으면 그 경로마저 거의 안 돌아서 _latest_rgb가
+    # None인 채로 여기 온다(2026-08-24 실기 확인). 프레임이 올 때까지 잠깐
+    # 직접 펌프한다.
+    deadline = time.time() + RGB_WAIT_TIMEOUT_S
+    while node._latest_rgb is None and time.time() < deadline:
+        node.pump()
+        time.sleep(0.05)
     if node._latest_rgb is None:
-        print("  [캡처] RGB 프레임 없음 — depth_cam_rotate_node가 떠 있는지 확인할 것")
+        print(f"  [캡처] {RGB_WAIT_TIMEOUT_S}s 안에 RGB 프레임이 안 옴 — "
+              "depth_cam_rotate_node / ascamera_node가 떠 있는지 확인할 것")
         return None
     try:
         from ultralytics import YOLO
@@ -563,6 +608,7 @@ def drive_phase(
 ):
     """`c`가 눌릴 때까지 `keymap`에 정의된 키로 cmd_vel을 발행한다.
     반환값: (odom 시작좌표, odom 종료좌표) — 둘 다 None이면 오도메트리 미수신."""
+    kr.ensure_cbreak()  # 위 ensure_cbreak docstring 참고 — 키가 안 먹는 사고 방지
     print("  [space]/[a]/[d] 전진, [c] 정지" if "w" not in keymap else
           "  [w]전진 [s]후진 [a]전진+좌회전 [d]전진+우회전, [c] 정지")
     node.pump()
@@ -641,6 +687,22 @@ def main():
     log = RunLog(args.raw_cls, profile)
     print(f"분석용 로그 파일: {log.path}  (끝나면 이 파일을 Claude에게 넘길 것)")
 
+    # ⚠️ 이 콘솔은 3단계에서 그리퍼캠을 넘겨받으려고 perception_node를 죽인다
+    # (아래 subprocess.run(pkill) 참고). 그래서 **한 번 3단계까지 간 뒤 다시
+    # 실행하면** observe_target이 없어 1·2단계가 통째로 무력해진다 —
+    # 2026-08-24 실기에서 실제로 겪었고, 화면상으로는 "물체를 못 찾음"으로만
+    # 보여 원인을 알기 어려웠다. 시작 시점에 미리 확인해 준다.
+    if subprocess.run(
+        ["pgrep", "-f", "grippers_perception/perception_node"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ).returncode != 0:
+        print(
+            "\n⚠️  perception_node가 떠 있지 않습니다 — 1·2단계 관측과 YOLO 캡처가\n"
+            "    전부 실패합니다(이 콘솔이 이전 실행 3단계에서 죽였을 수 있습니다).\n"
+            "    다른 터미널에서 먼저 띄우고 다시 실행하세요:\n"
+            "        ros2 run grippers_perception perception_node > /tmp/perception.log 2>&1 &\n"
+        )
+
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = GraspTestNode()
     cam = None
@@ -655,14 +717,11 @@ def main():
             if capture is not None:
                 log.log("step1_yolo_capture", **capture)
 
-            # 2단계 -----------------------------------------------------
-            print("\n[2단계] Space로 서서히 전진 시작 (정렬)")
-            start2, end2 = drive_phase(node, kr, keymap=SPACE_KEYMAP, speed=APPROACH_SPEED_MPS)
-            d2 = odom_distance_m(start2, end2)
-            print(f"  정지. 이동거리(odom_raw)={'%.3fm' % d2 if d2 is not None else '측정 불가'}"
-                  f"  ⚠️ odom은 명령 적분값이라 실제 이동의 증거가 아니다 — 눈으로 확인할 것")
-            step2_obs = print_position(node, args.raw_cls, "2단계 정지 위치")
-            log.log("step2_stop", distance_m=d2, **step2_obs)
+            # 2단계(정렬 주행)는 2026-08-24 사용자 지시로 제거했다 — 물체를
+            # 사람이 직접 원하는 위치에 놓고 시작하므로 여기서 다시 정렬할
+            # 이유가 없고, 실기에서 이 구간이 매번 문제만 됐다(데드밴드 아래
+            # 속도로 안 움직이거나, odom이 안 움직인 이동을 보고하거나).
+            # 단계 번호는 로그 호환을 위해 그대로 둔다(step3~7).
 
             # 3단계 -----------------------------------------------------
             kr.wait_enter("\n[3단계] g + Enter로 GRASP 진입 (파지 전 자세로 이동): ")
@@ -682,7 +741,10 @@ def main():
             # 프레임을 찍으려고 /dev/gripper_cam을 무조건 열어서 계속 쥐고 있다
             # (오늘 실기로 재확인 — 예전 "lazy하게 연다"는 가정이 틀렸다). observe_target은
             # 1~2단계에서만 쓰고 여기부턴 안 쓰므로, 지금 죽여서 장치를 넘겨받는다.
-            subprocess.run(["pkill", "-f", "grippers_perception/perception_node"])
+            # stdin을 물려주지 않는다 — 자식이 터미널 속성을 되돌리면 이
+            # 콘솔의 cbreak가 풀려 키 입력이 죽는다(ensure_cbreak 참고).
+            subprocess.run(["pkill", "-f", "grippers_perception/perception_node"],
+                           stdin=subprocess.DEVNULL)
             time.sleep(1.0)
             cam = GripperCam()
             url = start_stream_server(cam)
