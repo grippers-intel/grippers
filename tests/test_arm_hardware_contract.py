@@ -252,3 +252,37 @@ def test_startup_hardware_failure_is_caught_by_main():
             caught_names.update(elt.id for elt in typ.elts if isinstance(elt, ast.Name))
 
     assert "ArmHardwareUnavailableError" in caught_names
+
+
+def test_glide_sets_servo_speed_instead_of_inheriting_it():
+    """2026-08-24 실기 회귀 — 서보 속도를 상속하면 안 된다.
+
+    STS3215의 goal_speed는 레지스터에 남는 상태값이라, 이 노드가 안 쓰면
+    마지막으로 쓴 쪽의 값이 그대로 적용된다. 실제로 tools/align_to_idle.py의
+    느린 SPEED_RAW=150이 남아 IDLE->safe 이동(servo 2가 1663 raw)이 글라이드
+    시간 안에 끝나지 못했고(실측 153 raw/s), safe 단계가 통째로 실패했다."""
+    glide_names = [_called_name(call) for call in _calls(_function("_glide_to_raw_positions"))]
+
+    assert "set_speed" in glide_names
+    assert "set_acceleration" in glide_names
+
+
+def test_glide_speed_can_finish_the_longest_registered_move_in_time():
+    """속도 상한이 보간이 요구하는 속도를 막지 않아야 한다.
+
+    상한이 병목이 되면 waypoint를 다 써 넣어도 팔이 못 따라와 다음 단계의
+    시작 자세 게이트에서 떨어진다 — 위 회귀의 실패 방식 그 자체다. 실측
+    단위는 대략 raw/s다(레지스터 150에서 153 raw/s)."""
+    timing = _module_constants(
+        ARM_NODE, {"FLOOR_POSE_STEPS", "FLOOR_POSE_STEP_SEC", "FLOOR_POSE_SPEED_RAW"}
+    )
+    poses = _module_constants(
+        ARM_NODE.with_name("floor_grasp_profiles.py"),
+        {"IDLE_CRADLE_RAW", "HORIZONTAL_SAFE_145_RAW"},
+    )
+    longest_raw = max(
+        abs(a - b) for a, b in zip(poses["IDLE_CRADLE_RAW"], poses["HORIZONTAL_SAFE_145_RAW"])
+    )
+    glide_sec = timing["FLOOR_POSE_STEPS"] * timing["FLOOR_POSE_STEP_SEC"]
+
+    assert timing["FLOOR_POSE_SPEED_RAW"] >= longest_raw / glide_sec

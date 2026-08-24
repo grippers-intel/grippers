@@ -82,8 +82,18 @@ SPEED_RAW = 150
 ACCELERATION_RAW = 20
 
 # 보간이 끝난 뒤 실제 도달을 기다리는 값 (converge_at_targets 참고).
+#
+# 타임아웃은 SPEED_RAW에서 거꾸로 잡는다: 실측 단위가 대략 raw/s라(2026-08-24,
+# 레지스터 150에서 153 raw/s) 이 도구가 감당해야 하는 최대 편차 ~1700 raw는
+# 11s가 넘게 걸린다. 8s로는 모자라서 큰 편차를 정렬할 때 도달 직전에 포기했다.
+#
+# ⚠️ 여기서 SPEED_RAW를 느리게 쓰는 건 의도한 것이다(사람이 지켜보며 도는
+# 정렬이라 느린 편이 안전하다). 다만 이 값은 서보 레지스터에 남아 이후 다른
+# 코드의 이동 속도까지 바꾼다 — arm_driver_node는 그래서 이동마다 자기 속도를
+# 다시 쓴다(_glide_to_raw_positions 주석 참고). 새 도구를 만들 때도 속도를
+# 상속하지 말고 직접 쓸 것.
 CONVERGE_POLL_SEC = 0.2
-CONVERGE_TIMEOUT_SEC = 8.0
+CONVERGE_TIMEOUT_SEC = 20.0
 
 
 class JamDetected(RuntimeError):
