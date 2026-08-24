@@ -47,9 +47,20 @@ DEFAULT_STEPS = 12
 DEFAULT_SETTLE_SEC = 0.6
 DEFAULT_TOLERANCE_RAW = 120
 
-# 이보다 큰 편차의 자동 이동은 위험하다고 본다 — 사람이 손으로 대략 맞춘 뒤
-# 재실행하도록 안내하고 아무것도 쓰지 않는다.
-REJECT_TOLERANCE_RAW = 800
+# ⚠️ 2026-08-24 사용자 지시로 **편차 상한 거부를 껐다**. 예전에는 이 값을
+# 넘으면 아무것도 쓰지 않고 "손으로 대략 맞춘 뒤 재실행하라"고 안내했는데,
+# 실기에서 IDLE 복귀가 필요한 상황은 대개 편차가 클 때라 그 가드가 오히려
+# 매번 걸림돌이었다. 사용자가 현장에서 팔을 보며 "위험 요소 없다"고 판단해
+# 껐다.
+#
+# 이제 이 값은 **거부 기준이 아니라 경고 기준**이다 — 넘으면 알리기만 하고
+# 정렬은 그대로 진행한다. 남아 있는 보호장치는 그대로다:
+#   - 통신 불가 서보가 있으면 여전히 거부한다(위치를 못 읽으면 보간 자체가
+#     불가능하다)
+#   - servo 2 과열(MAX_START_SERVO2_TEMP_C)은 여전히 거부한다
+#   - 이동 중 끼임 감지(JamDetected)는 그대로 살아 있다 — 실제로 뭔가에
+#     걸리면 그 자리에서 멈추고 현재 위치로 goal을 고정한다
+LARGE_OFFSET_WARN_RAW = 800
 MAX_START_SERVO2_TEMP_C = 50
 
 # 끼임 감지: 이만큼 스텝 동안 진전(prior_error - current_error)이 잡음 여유
@@ -89,27 +100,18 @@ def read_positions(driver, servo_ids):
 def check_safe_to_align(
     status,
     targets,
-    reject_tolerance=REJECT_TOLERANCE_RAW,
     max_servo2_temp=MAX_START_SERVO2_TEMP_C,
 ):
     """하나라도 위반하면 사유 문자열 리스트를 돌려준다. 빈 리스트면 안전 — 이
-    함수는 절대 driver에 쓰지 않는다."""
+    함수는 절대 driver에 쓰지 않는다.
+
+    편차 크기는 더 이상 거부 사유가 아니다(위 LARGE_OFFSET_WARN_RAW 주석
+    참고) — 큰 편차는 large_offsets()로 따로 뽑아 경고만 한다."""
     problems = []
 
     offline = sorted(servo_id for servo_id, s in status.items() if not s.online)
     if offline:
         problems.append(f"통신 불가 servo: {offline}")
-
-    for servo_id, target in targets.items():
-        s = status.get(servo_id)
-        if s is None or not s.online or s.position is None:
-            continue
-        offset = s.position - target
-        if abs(offset) > reject_tolerance:
-            problems.append(
-                f"servo {servo_id} 편차 {offset:+d}가 허용치 {reject_tolerance}를 "
-                "초과합니다. 손으로 대략 맞춘 뒤 재실행하세요"
-            )
 
     servo2 = status.get(2)
     if servo2 is not None and servo2.online and servo2.temperature is not None:
@@ -120,6 +122,19 @@ def check_safe_to_align(
             )
 
     return problems
+
+
+def large_offsets(status, targets, warn_tolerance=LARGE_OFFSET_WARN_RAW):
+    """경고만 할 큰 편차 목록(거부하지 않는다). 순수 함수."""
+    found = []
+    for servo_id, target in targets.items():
+        s = status.get(servo_id)
+        if s is None or not s.online or s.position is None:
+            continue
+        offset = s.position - target
+        if abs(offset) > warn_tolerance:
+            found.append(f"servo {servo_id} 편차 {offset:+d} (경고 기준 {warn_tolerance} 초과)")
+    return found
 
 
 def report_offsets(status, targets):
@@ -254,6 +269,9 @@ def main(argv=None):
         return 1
 
     print(report_offsets(status, targets))
+
+    for warning in large_offsets(status, targets):
+        print(f"[align] ⚠️ {warning} — 거부하지 않고 그대로 정렬합니다", file=sys.stderr)
 
     if args.dry_run:
         print("[align] --dry-run — 검사와 리포트만 수행했습니다")
