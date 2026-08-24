@@ -4,10 +4,14 @@
 2026-08-24 사용자 지시(시연 영상 촬영용): 물체 하나(기본 rook)를 대상으로
 사람이 키보드로 몰고, 파지와 투하만 자동으로 한다.
 
-    [1] APPROACH   space=전진, a/d=전진+회전, c=정지
+    [1] APPROACH   space=전진, s=후진, a/d=제자리 회전, x=정지, c=단계 종료
     [2] g          GRASP — 열고 내려가 잡고 CARRY_IDLE까지 복귀
-    [3] 운반       w/s/a/d 주행, c=정지
+    [3] 운반       w=전진, s=후진, a/d=제자리 회전, x=정지, c=단계 종료
     [4] g          바구니 투하 후 IDLE 복귀
+
+x와 c를 나눠 둔 것이 요점이다(사용자 지시, 2026-08-24). x는 그 자리에
+멈추기만 하고 단계 안에 머무르므로 다시 몰 수 있고, c는 그 단계를 끝낸다 —
+"멈춰서 눈으로 확인한 뒤 조금 더 간다"가 시연에서 제일 자주 하는 동작이다.
 
 자동 정렬·자동 전진이 없다는 점에서 auto_grasp_sequence.py와 다르고, 차를
 움직인다는 점에서 grasp_cycle.py와 다르다. 이 도구의 목적은 데이터 수집이
@@ -38,8 +42,6 @@ from rclpy.signals import SignalHandlerOptions
 from grasp_test_console import (
     CLASS_TO_PROFILE,
     GRIPPER_CLOSED_MM,
-    SPACE_KEYMAP,
-    WASD_KEYMAP,
     FINE_SPEED_MPS,
     GraspTestNode,
     KeyReader,
@@ -50,6 +52,44 @@ from grasp_test_console import (
     recover_to_idle,
 )
 from grippers_arm.floor_grasp_profiles import FLOOR_GRASP_PROFILES
+
+# 제자리 회전 각속도(사용자 지시, 2026-08-24: "제자리에서 0.3으로").
+#
+# ⚠️ 이 값을 더 낮추면 안 된다. 순수 제자리 회전에는 정지마찰 문턱이 있어
+# 명령이 나가도 바퀴가 안 도는 구간이 있는데, 2026-08-24 제자리 회전
+# 시험에서 1.2부터 0.3까지는 전부 실제로 돌았고 사용자가 0.3~0.4를
+# 적당하다고 판단했다. 즉 0.3은 실측으로 확인된 하한 근처다. 그리고
+# /odom_raw는 명령을 적분할 뿐이라 안 돌아도 돌았다고 보고하므로, 안 도는
+# 것을 로그로는 알아챌 수 없다.
+#
+# odom_publisher_node가 cmd_vel의 angular.z를 ±0.5로 자르지만 0.3은 그
+# 아래라 그대로 나간다 — 회전만 따로 controller/cmd_vel로 우회할 필요가 없다.
+TURN_IN_PLACE_RAD_S = 0.3
+
+# grasp_test_console의 SPACE_KEYMAP/WASD_KEYMAP을 그대로 쓰지 않는다. 그쪽
+# a/d는 "전진 + 약한 회전 바이어스"(TURN_BIAS_RAD_S=0.15)로, 보정 주행에서
+# 곡선을 그리려고 일부러 그렇게 만든 것이다. 시연에서는 제자리에서 방향만
+# 맞추고 직선으로 들어가는 편이 자연스럽고 거리 판단도 쉽다.
+APPROACH_KEYMAP = {
+    " ": lambda v: (v, 0.0),
+    "s": lambda v: (-v, 0.0),
+    "a": lambda v: (0.0, TURN_IN_PLACE_RAD_S),
+    "d": lambda v: (0.0, -TURN_IN_PLACE_RAD_S),
+    "x": lambda v: (0.0, 0.0),
+}
+
+CARRY_KEYMAP = {
+    "w": lambda v: (v, 0.0),
+    "s": lambda v: (-v, 0.0),
+    "a": lambda v: (0.0, TURN_IN_PLACE_RAD_S),
+    "d": lambda v: (0.0, -TURN_IN_PLACE_RAD_S),
+    "x": lambda v: (0.0, 0.0),
+}
+
+APPROACH_LEGEND = ("  [space]전진 [s]후진 [a]좌회전 [d]우회전(제자리) "
+                   "[x]정지 [c]단계 종료")
+CARRY_LEGEND = ("  [w]전진 [s]후진 [a]좌회전 [d]우회전(제자리) "
+                "[x]정지 [c]단계 종료")
 
 # 닫힘/이동 뒤 load가 정착할 때까지의 여유(grasp_cycle.LOAD_SETTLE_S와 동일 근거).
 LOAD_SETTLE_S = 1.2
@@ -160,7 +200,8 @@ def main():
             # --- [1] APPROACH ------------------------------------------
             print("\n[1] APPROACH — 물체 앞까지 몰고 가세요")
             start, end = drive_phase(
-                node, kr, keymap=SPACE_KEYMAP, speed=FINE_SPEED_MPS,
+                node, kr, keymap=APPROACH_KEYMAP, speed=FINE_SPEED_MPS,
+                legend=APPROACH_LEGEND,
                 report=approach_report(node, raw_cls, log, band),
             )
             travelled = odom_distance_m(start, end)
@@ -212,7 +253,8 @@ def main():
             # --- [3] 운반 ----------------------------------------------
             print("\n[3] 바구니 앞까지 운반하세요")
             start, end = drive_phase(
-                node, kr, keymap=WASD_KEYMAP, speed=FINE_SPEED_MPS)
+                node, kr, keymap=CARRY_KEYMAP, speed=FINE_SPEED_MPS,
+                legend=CARRY_LEGEND)
             travelled = odom_distance_m(start, end)
             if travelled is not None:
                 print(f"  정지 — odom 이동 {travelled:.3f}m")
