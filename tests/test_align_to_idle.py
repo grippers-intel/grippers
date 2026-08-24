@@ -99,11 +99,11 @@ def test_offset_over_800_is_rejected_by_the_pure_check():
 
 def test_hot_servo2_is_rejected_by_the_pure_check():
     targets, positions = _at_target()
-    driver = FakeDriver(positions, temperatures={sid: 25 for sid in positions} | {2: 41})
+    driver = FakeDriver(positions, temperatures={sid: 25 for sid in positions} | {2: 51})
 
     problems = align.check_safe_to_align(driver.get_all_status(), targets)
 
-    assert any("servo 2" in problem and "41" in problem for problem in problems)
+    assert any("servo 2" in problem and "51" in problem for problem in problems)
 
 
 def test_offline_servo_is_rejected_by_the_pure_check():
@@ -128,7 +128,7 @@ def test_large_offset_is_rejected_before_any_write(monkeypatch):
 
 def test_hot_servo2_is_rejected_before_any_write(monkeypatch):
     targets, positions = _at_target()
-    driver = FakeDriver(positions, temperatures={sid: 25 for sid in positions} | {2: 41})
+    driver = FakeDriver(positions, temperatures={sid: 25 for sid in positions} | {2: 51})
     monkeypatch.setattr(align, "_connect", lambda port: driver)
 
     code = align.main(["--port", "/dev/fake"])

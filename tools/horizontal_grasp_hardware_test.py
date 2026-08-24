@@ -31,7 +31,7 @@ LOAD_MAX_RAW = 1023.0
 MIN_HOLD_LOAD_RATIO = 0.04
 SAFE_START_TOLERANCE_RAW = 120
 RETRY_TIGHTEN_MM = 5.0
-MAX_START_SERVO2_TEMP_C = 40
+MAX_START_SERVO2_TEMP_C = 50
 
 # CLOSED는 하드코딩하지 않는다 — align_to_idle.py와 동일하게 gripper_calibration의
 # 실측 보정표에서 그대로 끌어온다.
