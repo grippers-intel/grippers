@@ -142,7 +142,9 @@ def test_horizontal_idle_safe_transition_does_not_use_vertical_waypoints():
 
     assert "VERTICAL_SAFE_OVERHEAD" not in source
     assert "HORIZONTAL_OVERHEAD" not in source
-    assert "self._glide_to_raw_positions(backend, idle)" in source
+    # idle로 가는 이동에는 손목 지연이 붙는다(RETURN_TO_IDLE_DEFERRED_JOINTS
+    # 주석 참고) — 목표 자세 자체는 그대로 idle이다.
+    assert "self._glide_to_raw_positions(backend, idle, defer_joints=" in source
     assert "self._glide_to_raw_positions(backend, safe)" in source
 
 
@@ -401,8 +403,8 @@ def test_wrist_pitch_moves_only_after_every_other_joint_has_stopped():
     처음에는 손목에 부분 지연(진행률 45%까지 정지)만 줬는데 그래도 긁었다 —
     겹치는 구간이 조금이라도 남으면 소용이 없다는 뜻이다. 사용자 지시대로
     아예 분리한다: 나머지가 목표에 도달해 정지한 뒤에야 손목이 움직인다."""
-    deferred = _module_constants(ARM_NODE, {"FLOOR_POSE_DEFERRED_JOINTS"})[
-        "FLOOR_POSE_DEFERRED_JOINTS"
+    deferred = _module_constants(ARM_NODE, {"RETURN_TO_IDLE_DEFERRED_JOINTS"})[
+        "RETURN_TO_IDLE_DEFERRED_JOINTS"
     ]
 
     assert 4 in deferred
@@ -453,3 +455,32 @@ def test_glide_phase_skips_a_leg_with_nothing_to_move():
 
     assert "if not moving:" in source
     assert "FLOOR_POSE_START_TOLERANCE_RAW" in source
+
+
+def test_wrist_deferral_applies_only_when_returning_to_idle():
+    """⚠️ 2026-08-24 실기 — 지연을 전역으로 걸었더니 방향 하나를 새로 깨뜨렸다.
+
+    safe -> idle(차체로 복귀)은 지연으로 고쳐졌지만, 같은 지연이 걸린
+    idle -> safe(차체에서 나감)가 새로 긁기 시작했다. 방향이 반대면 안전한
+    관절 순서도 반대다 — 돌아올 때는 어깨가 먼저 물러난 뒤 손목이 접혀야
+    하고, 나갈 때는 그 반대다. 그래서 지연은 이동마다 호출부가 정한다."""
+    source = ast.unparse(_function("_move_floor_stage"))
+
+    # idle을 목표로 하는 이동에만 붙는다.
+    assert "backend, idle, defer_joints=RETURN_TO_IDLE_DEFERRED_JOINTS" in source
+    # safe/grasp/midpoint/drop으로 가는 이동은 지연 없이 예전 그대로다.
+    for target in ("safe", "drop"):
+        assert f"self._glide_to_raw_positions(backend, {target})" in source
+    assert "defer_joints" not in source.split("if stage == 'safe'")[1].split("if stage == 'drop'")[0]
+
+
+def test_glide_defaults_to_no_deferral():
+    """기본값이 '지연 없음'이어야 한다 — 새 호출부가 실수로 전역 지연을
+    물려받는 일이 없도록."""
+    glide = _function("_glide_to_raw_positions")
+    defaults = {
+        arg.arg: ast.literal_eval(default)
+        for arg, default in zip(glide.args.args[-len(glide.args.defaults):], glide.args.defaults)
+    }
+
+    assert defaults["defer_joints"] == ()
