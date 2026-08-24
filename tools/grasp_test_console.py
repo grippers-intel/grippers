@@ -683,6 +683,34 @@ WASD_KEYMAP = {
 # --- 메인 시퀀스 -----------------------------------------------------------
 
 
+def recover_to_idle(node: "GraspTestNode", profile: str, log: "RunLog", why: str) -> bool:
+    """실패로 중단할 때 팔을 IDLE로 되돌린다(사용자 요청, 2026-08-24).
+
+    "idle"이 아니라 "recover_idle" 단계를 쓴다 — 이동이 실패하면 팔은 정의상
+    등록된 자세들 **사이**에 멈춰 서는데, 바로 그 상태가 "idle"의 시작 자세
+    게이트에 걸려 거부되기 때문이다(arm_driver_node._move_floor_stage의
+    recover_idle 주석 참고). 즉 정작 복구가 필요한 순간에만 복구가 막힌다.
+
+    복구 자체가 실패해도 예외를 올리지 않는다 — 이건 이미 실패한 경로를
+    수습하는 중이라, 여기서 또 터지면 원래 실패 원인이 로그에서 묻힌다.
+    대신 사람이 손으로 처리하도록 분명히 알린다."""
+    print(f"  [복구] {why} — 팔을 IDLE로 되돌립니다...")
+    try:
+        # profile은 recover_idle에서 안 쓰이지만(IDLE로만 간다) 액션이
+        # 유효한 이름을 요구한다.
+        ok = node.move_floor_pose(profile, "recover_idle")
+    except Exception as e:  # 복구 경로는 절대 원래 실패를 덮지 않는다
+        print(f"  [복구 실패] {e}")
+        ok = False
+    log.log("recover_to_idle", ok=ok, why=why)
+    if ok:
+        print("  [복구] IDLE 복귀 완료.")
+    else:
+        print("  [복구 실패] 팔이 중간 자세에 멈춰 있습니다 — "
+              "arm_driver를 끄고 tools/align_to_idle.py로 직접 정렬하세요.")
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument(
@@ -743,6 +771,7 @@ def main():
             log.log("step3_grasp_entry", ok=ok)
             if not ok:
                 print("  GRASP 진입 실패 — 서보 온도/자세 조건을 arm.log에서 확인 후 재시도할 것")
+                recover_to_idle(node, profile, log, "GRASP 진입 실패")
                 return
             # _move_floor_stage는 팔 관절(servo 1-5)만 움직인다 — 그리퍼(servo 6)는
             # 별개라 여기서 직접 열어야 한다. 이걸 빼먹으면 grasp 자세로 내려와도
@@ -788,6 +817,7 @@ def main():
             if resp is None or not resp.ok:
                 print("  그리퍼 닫기 실패")
                 log.log("step5_close", ok=False)
+                recover_to_idle(node, profile, log, "그리퍼 닫기 실패")
                 return
             print(f"  닫힘(폭 {close_width_mm}mm). load_ratio={resp.load_ratio:.4f} (기준 {LOAD_THRESHOLD})")
             close_area = cam.measure_area_px2() if cam is not None else None
@@ -805,6 +835,7 @@ def main():
             if not node.move_floor_pose(profile, "midpoint"):
                 print("  들어올리기(midpoint) 실패")
                 log.log("step5_midpoint", ok=False)
+                recover_to_idle(node, profile, log, "들어올리기 실패")
                 return
             mid_load = node.get_load()
             print(f"  midpoint load_ratio={mid_load:.4f}" if mid_load is not None else "  load 확인 실패")
@@ -817,6 +848,7 @@ def main():
             log.log("step6_carry_idle", ok=ok)
             if not ok:
                 print("  CARRY_IDLE 복귀 실패 — 수동으로 상태 확인할 것")
+                recover_to_idle(node, profile, log, "CARRY_IDLE 복귀 실패")
                 return
             print("\n[6단계] CARRY_IDLE 도달. w/a/s/d로 바구니까지 주행, c로 정지")
             print("  (참고: 오늘 실기에서 순수 제자리 회전은 작동하지 않았다 — a/d는 전진과 결합된 완만한 회전이다)")
@@ -829,6 +861,7 @@ def main():
             if not node.move_floor_pose(profile, "drop"):
                 print("  drop 자세 실패 — 수동으로 상태 확인할 것")
                 log.log("step7_drop", ok=False)
+                recover_to_idle(node, profile, log, "drop 자세 실패")
                 return
             node.set_gripper(168.0)  # domain/task/states.py OPEN_MM
             node.move_floor_pose(profile, "idle")
