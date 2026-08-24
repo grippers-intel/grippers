@@ -127,13 +127,19 @@ from grippers_arm.gripper_calibration import GRIPPER_CLOSED_MM
 # = h*w. None은 미실측 클래스(box, star) — 이 스크립트는 해당 클래스에서
 # 전방/좌우 cm 계산을 건너뛴다.
 K_CLASS = {
-    "knight": 38.0307,
-    "queen": 31.1632,
-    "rook": 37.3992,
+    "knight": 35.9307,
+    "queen": 28.3382,
+    "rook": 34.8340,
     "box": None,
-    "soccer": 20.6092,
+    "soccer": 18.9592,
     "star": None,
 }
+# 2026-08-24: 거리 모델을 z = K/sqrt(hw)에서 z = K/(sqrt(hw) - BBOX_PADDING_PX)로
+# 바꿨다. 룩을 0.40·0.70·1.04m 세 거리에서 재니 역산 K가 35.49 -> 36.78 -> 37.40으로
+# 거리에 따라 단조 증가했는데, 순수 핀홀이라면 상수여야 한다 — 검출 bbox가 물체
+# 실루엣보다 항상 일정 픽셀 크게 잡히기 때문이다. 그 몫을 빼면 세 점이 전부
+# ±0.4cm 안에 들어온다(자세한 근거는 perception_node.py의 같은 날짜 주석).
+BBOX_PADDING_PX = 2.5
 
 # perception/observe_target의 raw_cls 이름 -> arm_driver/move_to_floor_pose의
 # profile 이름. 인식기와 팔 쪽 명명이 서로 다르다(MoveToFloorPose.action 주석
@@ -166,11 +172,12 @@ CX_PX = CAMERA_WIDTH_PX - 325.3050842285156  # = 314.695 (180도 회전 보정 �
 # (좌우 0cm)·전방 40cm에 놓았는데 좌측 2.91cm로 관측됐다 — 뎁스카메라가
 # 차체 중심에서 물리적으로 어긋나게 장착된 것으로 보인다(사용자 확인).
 #
-# ⚠️ 측정점이 40cm 하나뿐이라 두 모델을 아직 못 가른다:
+# 2026-08-24 후속: 70cm 정중앙에서 한 번 더 재서 두 모델을 갈랐다.
 #   (a) 장착 위치가 옆으로 밀림  → 오차가 거리와 무관한 상수(m)
-#   (b) 장착이 yaw로 틀어짐/주점 오차 → 오차가 거리에 비례
-# 지금은 (a)로 보고 상수로 더한다. **다른 거리(예: 70cm)에서 한 번 더
-# 재보면 어느 쪽인지 확정된다** — 그때 이 상수를 다시 잡을 것.
+#   (b) 장착이 yaw로 틀어짐/주점 오차 → 오차가 거리에 비례(= 상수 픽셀)
+# 70cm에서 (a)는 bbox 중심 x=290.6px, (b)는 271.8px을 예측했고 실측은
+# 284.0px이었다 — 잔차가 (a) 0.80cm, (b) 1.47cm로 **(a)가 더 잘 맞는다**.
+# 그래서 픽셀이 아니라 미터로 더하는 지금 형태를 유지한다.
 LATERAL_BIAS_M = 0.0291
 
 # 그리퍼 캠 프레임(640×480)에서 "파지해도 되는" 컨투어 면적 하한. 오늘 두
@@ -494,7 +501,10 @@ def estimate_position(obs: ObserveTarget.Response, raw_cls: str):
     area_px2 = obs.h * obs.w
     if area_px2 <= 0:
         return None, None
-    z_m = k / math.sqrt(area_px2)
+    effective_px = math.sqrt(area_px2) - BBOX_PADDING_PX
+    if effective_px <= 0:
+        return None, None
+    z_m = k / effective_px
     lateral_m = (obs.x - CX_PX) * z_m / FX_PX + LATERAL_BIAS_M
     return z_m, lateral_m
 

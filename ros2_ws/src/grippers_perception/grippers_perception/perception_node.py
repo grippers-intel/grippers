@@ -208,6 +208,22 @@ APPROACH_STANDOFF_M = 0.18
 # 실제 크기에 좌우되는 상수라 **클래스마다 따로 실측**해야 한다 — 이게 depth
 # 방식과의 핵심 차이다: depth의 결손은 센서 한계라 고칠 방법이 없지만, 이
 # 상수는 물체 하나 놓고 거리 한 번 재면 바로 채워진다.
+# ⚠️ 2026-08-24: 모델을 z = K/sqrt(hw)에서 z = K/(sqrt(hw) - PADDING)으로 바꿨다.
+#
+# 룩을 0.40m·0.70m·1.04m 세 거리에서 재면 역산 K가 35.49 → 36.78 → 37.40으로
+# 거리에 따라 단조 증가했다. 순수 핀홀이라면 K는 상수여야 하므로, 이는 검출
+# bbox가 물체 실루엣보다 **항상 일정 픽셀만큼 크게** 잡히기 때문이다(검출기의
+# 성질이지 물체의 성질이 아니다). 그 여유분은 물체가 작아질수록(= 멀수록)
+# 상대적으로 크게 작용해 가까운 거리를 과대평가하게 만든다 — 실제로 1.04m에서
+# 보정한 단일 상수를 0.40m에 쓰면 +2.1cm(+5.4%) 과대였다.
+#
+# sqrt(hw)에서 이 여유분을 빼주면 세 점이 전부 ±0.4cm(RMS 0.32cm) 안에
+# 들어온다. 여유분은 검출기 성질이라 클래스와 무관하다고 보고 룩 3점에서
+# 구한 값을 공통으로 쓰고, 나머지 클래스의 K는 각자의 실측 1점을 그대로
+# 재현하도록 다시 계산했다 — 즉 이 변경은 각 클래스의 보정 거리에서는
+# 이전과 완전히 같은 값을 내고, 그 거리에서 멀어질수록 룩 데이터가 옳다고
+# 말하는 방향으로만 달라진다.
+BBOX_PADDING_PX = 2.5
 CLASS_DISTANCE_CALIBRATION_SQRT_PX_M = {
     # 2026-08-23 실측(핫스팟 연결 실기, observe_target 서비스로 단일 프레임
     # h×w 직접 측정 — scan_floor의 consensus 게이트(MIN_BOTTOM_Y_PX=290)는
@@ -215,11 +231,14 @@ CLASS_DISTANCE_CALIBRATION_SQRT_PX_M = {
     # 축구공 0.66m, 나이트 0.84m, 룩 1.04m, 퀸 1.13m(전방 거리, base_link
     # 기준 — 좌우 오프셋은 z_m 보정과 무관해 무시). K = distance_m *
     # sqrt(bbox_area_px), bbox_area_px = h*w(observe_target 응답).
-    "knight": 38.0307,
-    "queen": 31.1632,
-    "rook": 37.3992,
+    #
+    # 2026-08-24에 K = distance_m * (sqrt(bbox_area_px) - BBOX_PADDING_PX)로
+    # 다시 계산했다(위 주석 참고). 각 클래스의 실측 1점은 그대로 재현된다.
+    "knight": 35.9307,  # 실측 0.84m (이전 상수모델 38.0307)
+    "queen": 28.3382,  # 실측 1.13m (이전 상수모델 31.1632)
+    "rook": 34.8340,  # 0.40 / 0.70 / 1.04m 3점 최소제곱 (이전 상수모델 37.3992)
     "box": None,  # 미실측 — 60프레임 중 0회 검출(floor_consensus.py 경고 참고), 물체 자체를 아직 못 잡음
-    "soccer": 20.6092,
+    "soccer": 18.9592,  # 실측 0.66m (이전 상수모델 20.6092)
     "star": None,  # 미실측 — RELIABLE_CLASSES에서도 제외된 상태(floor_consensus.py)
 }
 # 이보다 작은 bbox는 너무 멀거나 오검출일 가능성이 높아 거리 추정을 시도하지
@@ -476,7 +495,12 @@ class PerceptionNode(Node):
         if self._rgb_fx is None:
             return None
 
-        z_m = k_class / math.sqrt(bbox_area_px)
+        # MIN_BBOX_AREA_PX=25(sqrt=5)가 이미 BBOX_PADDING_PX보다 크게 걸러주지만,
+        # 분모가 0에 붙으면 거리가 발산하므로 명시적으로 막는다.
+        effective_px = math.sqrt(bbox_area_px) - BBOX_PADDING_PX
+        if effective_px <= 0.0:
+            return None
+        z_m = k_class / effective_px
         u = (x1 + x2) / 2.0
         y_obj = -(u - self._rgb_cx) * z_m / self._rgb_fx
         return _standoff_arrival_pose(z_m, y_obj)
