@@ -92,34 +92,39 @@ FLOOR_POSE_STEP_SEC = 0.10
 FLOOR_POSE_SPEED_RAW = 1200
 FLOOR_POSE_ACCEL_RAW = 30
 
-# 나머지 관절이 **완전히 멈춘 뒤** 별도 구간에서 단독으로 움직일 관절.
-# 최종 자세는 바뀌지 않는다 — 경로만 두 구간으로 쪼갠다.
+# **IDLE로 돌아오는 이동에서만** 나머지 관절이 완전히 멈춘 뒤 별도 구간에서
+# 단독으로 움직일 관절. 최종 자세는 바뀌지 않는다 — 경로만 두 구간으로 쪼갠다.
 #
-# ⚠️ 2026-08-24 실기: 룩을 문 채 safe -> idle로 복귀하는데 그리퍼가 차체
-# 전면을 긁어 룩을 놓쳤다. 원인은 선형 보간이 모든 관절을 같은 비율로
-# 동시에 움직인다는 데 있다 — 이 구간의 이동량은
+# ⚠️ 2026-08-24 실기, 세 번에 걸쳐 좁혀 온 값이다.
 #
-#     servo 2(Shoulder)     -1663 raw   팔을 내림
-#     servo 4(Wrist Pitch)  +1618 raw   손목을 접음  <- 142도
-#     servo 3(Elbow)         +579 raw
-#     servo 5(Wrist Roll)     +64 raw   (사실상 안 움직인다)
+# (1) 룩을 문 채 safe -> idle로 복귀하는데 그리퍼가 차체 전면을 긁어 룩을
+#     놓쳤다. 선형 보간이 모든 관절을 같은 비율로 동시에 움직이는 게 원인이다.
+#     이 구간의 이동량은
 #
-# 즉 어깨가 내려가는 **동안** 손목이 같은 비율로 접히니, 물체를 문 그리퍼가
-# 팔이 충분히 물러나기 전에 차체 전면에 닿는다.
+#         servo 2(Shoulder)     -1663 raw   팔을 내림
+#         servo 4(Wrist Pitch)  +1618 raw   손목을 접음  <- 142도
+#         servo 3(Elbow)         +579 raw
+#         servo 5(Wrist Roll)     +64 raw   (사실상 안 움직인다)
 #
-# 처음에는 손목에 부분 지연(진행률 45%까지 정지)만 줬는데 실기에서 **여전히
-# 심하게 긁었다**. 겹치는 구간이 조금이라도 남아 있으면 소용이 없다는 뜻이라,
-# 사용자 지시대로 아예 분리한다: 나머지 관절이 목표에 도달해 정지한 것을
-# 확인한 뒤에야 손목이 움직이기 시작한다.
+#     즉 어깨가 내려가는 **동안** 손목이 같은 비율로 접히니, 물체를 문
+#     그리퍼가 팔이 충분히 물러나기 전에 차체 전면에 닿는다. 사용자가 처음
+#     지목한 servo 5는 64 raw밖에 안 움직여 대상이 아니다 — 물리적 관찰
+#     (손목이 일찍 접힌다)은 정확했고 번호만 어긋났다.
 #
-# 사용자가 처음 지목한 servo 5는 이 구간에서 64 raw밖에 안 움직여 늦춰도
-# 달라지는 게 없다 — 물리적 관찰(손목이 일찍 접힌다)은 정확했고 번호만
-# 어긋났다.
+# (2) 손목에 부분 지연(진행률 45%까지 정지)만 줬더니 **여전히 심하게 긁었다**.
+#     겹치는 구간이 조금이라도 남으면 소용이 없다는 뜻이라, 아예 별도 구간으로
+#     분리했다.
 #
-# 참고: floor_grasp_profiles.HORIZONTAL_OVERHEAD_RAW는 "IDLE_CRADLE과 수평
-# 자세 사이에서 차체 접촉 없이 검증한 중간 waypoint"로 실측돼 있다. 이
-# 분리로도 부족하면 그 waypoint를 safe<->idle 경로에 끼우는 것이 다음 수단이다.
-FLOOR_POSE_DEFERRED_JOINTS = (4,)
+# (3) 그런데 그걸 **모든 이동에 전역으로** 걸었더니 IDLE로 돌아오는 쪽은
+#     고쳐졌는데 IDLE에서 나가는 쪽이 새로 긁기 시작했다. 방향이 반대면
+#     안전한 관절 순서도 반대이기 때문이다 — 돌아올 때는 어깨가 먼저 물러난
+#     뒤 손목이 접혀야 하고, 나갈 때는 그 반대다. 그래서 지연은 전역 설정이
+#     아니라 **이동마다 호출부가 정하는 인자**이고(_glide_to_raw_positions의
+#     defer_joints), IDLE을 목표로 하는 이동에만 건다.
+#
+# 지연이 실제로 의미를 갖는 구간은 safe<->idle뿐이다 — 다른 구간의 servo 4
+# 이동량은 44~87 raw로 FLOOR_POSE_START_TOLERANCE_RAW 이하라 어차피 건너뛴다.
+RETURN_TO_IDLE_DEFERRED_JOINTS = (4,)
 # 보간이 끝난 뒤 "실제 도달"을 기다리는 값 — 고정 sleep이 아니라 위치 폴링이다
 # (_wait_floor_pose_arrived 참고, 2026-08-24 실기로 필요성 확인).
 FLOOR_POSE_ARRIVE_POLL_SEC = 0.1
@@ -478,13 +483,18 @@ class ArmDriverNode(Node):
         }
         self._glide_to_raw_positions(backend, goal)
 
-    def _glide_to_raw_positions(self, backend, goal) -> None:
+    def _glide_to_raw_positions(self, backend, goal, defer_joints=()) -> None:
         """servo 1..5 raw 목표로 이동한다.
 
-        FLOOR_POSE_DEFERRED_JOINTS에 든 관절은 **나머지가 완전히 멈춘 뒤**
-        별도 구간에서 단독으로 움직인다(그 상수의 주석 참고). 지연 대상이
-        없으면 예전과 똑같은 한 번의 선형 보간이다."""
-        deferred = tuple(servo_id for servo_id in FLOOR_POSE_DEFERRED_JOINTS if servo_id in goal)
+        defer_joints에 든 관절은 **나머지가 완전히 멈춘 뒤** 별도 구간에서
+        단독으로 움직인다. 기본값은 빈 튜플 — 즉 아무 데도 안 주면 예전과
+        똑같은 한 번의 선형 보간이다.
+
+        ⚠️ 지연은 **방향마다 다르게** 걸어야 한다. 전역 설정으로 모든 이동에
+        걸었더니 IDLE로 돌아오는 쪽은 고쳐졌는데 IDLE에서 나가는 쪽이 새로
+        긁기 시작했다(2026-08-24 실기). 어느 쪽으로 가느냐에 따라 안전한
+        관절 순서가 반대이기 때문이다 — 그래서 호출부가 정한다."""
+        deferred = tuple(servo_id for servo_id in defer_joints if servo_id in goal)
         if not deferred:
             self._glide_phase(backend, goal)
             return
@@ -686,7 +696,7 @@ class ArmDriverNode(Node):
                 return
             if not (self._near_pose(actual, safe) or self._near_pose(actual, drop)):
                 raise ValueError("idle 복귀는 safe/drop 자세에서만 시작할 수 있습니다")
-            self._glide_to_raw_positions(backend, idle)
+            self._glide_to_raw_positions(backend, idle, defer_joints=RETURN_TO_IDLE_DEFERRED_JOINTS)
             return
 
         if stage == "recover_idle":
@@ -744,7 +754,8 @@ class ArmDriverNode(Node):
                 f"{len(chain)}단계로 들어올려 복귀합니다"
             )
             for waypoint in chain:
-                self._glide_to_raw_positions(backend, waypoint)
+                defer = RETURN_TO_IDLE_DEFERRED_JOINTS if waypoint is idle else ()
+                self._glide_to_raw_positions(backend, waypoint, defer_joints=defer)
             return
 
         if stage == "safe":
