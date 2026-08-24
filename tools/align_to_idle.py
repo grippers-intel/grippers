@@ -81,6 +81,10 @@ STALL_PROGRESS_RAW = 2
 SPEED_RAW = 150
 ACCELERATION_RAW = 20
 
+# 보간이 끝난 뒤 실제 도달을 기다리는 값 (converge_at_targets 참고).
+CONVERGE_POLL_SEC = 0.2
+CONVERGE_TIMEOUT_SEC = 8.0
+
 
 class JamDetected(RuntimeError):
     """보간 이동 중 끼임(진전 없음)을 감지해 중단했을 때 발생한다."""
@@ -226,7 +230,50 @@ def glide_to_targets(
                     "연속 진전이 없습니다. 현재 위치를 goal로 고정했습니다"
                 )
 
-    return read_positions(driver, servo_ids)
+    return converge_at_targets(driver, targets, tolerance=tolerance)
+
+
+def converge_at_targets(
+    driver,
+    targets,
+    tolerance=DEFAULT_TOLERANCE_RAW,
+    timeout=CONVERGE_TIMEOUT_SEC,
+    poll=CONVERGE_POLL_SEC,
+):
+    """보간이 끝난 뒤 서보가 실제로 목표에 도달할 때까지 기다린다.
+
+    ⚠️ 2026-08-24 실기로 확인한 문제: 보간 루프는 마지막 스텝에서 목표값을
+    write한 직후 바로 present를 읽고 끝냈다. write는 "명령을 보냈다"일 뿐
+    "도달했다"가 아니라서, 편차가 클수록(그날은 servo 2가 +1668) 서보가
+    보간 속도를 못 따라가 마지막 스텝에서 수백 raw가 남은 채로 종료됐다
+    (실측 최종 잔차 servo 2 = 593, servo 4 = -534 → 허용치 120 초과로
+    실패 반환). 스텝 수를 늘리는 것보다 **끝에서 도달을 기다리는 쪽**이
+    맞다 — 남은 거리가 얼마든 goal은 이미 목표에 박혀 있으므로 서보는
+    계속 그쪽으로 가고, 우리는 그게 멎기를 기다리기만 하면 된다.
+
+    잔차가 tolerance 안에 들어오면 즉시 반환한다. 시간 안에 못 들어오면
+    **예외를 내지 않고** 마지막 present를 그대로 돌려준다 — 최종 판정과
+    종료 코드는 호출부(main)가 이미 하고 있고, 여기서 예외를 내면 그
+    리포트가 사라지기 때문이다.
+    """
+    servo_ids = list(targets)
+    for servo_id, target in targets.items():
+        driver.set_position(servo_id, target)
+
+    deadline = time.monotonic() + timeout
+    while True:
+        present = read_positions(driver, servo_ids)
+        errors = {
+            servo_id: present[servo_id] - targets[servo_id]
+            for servo_id in servo_ids
+            if present[servo_id] is not None
+        }
+        if errors and all(abs(error) <= tolerance for error in errors.values()):
+            return present
+        if time.monotonic() >= deadline:
+            print(f"[align] 도달 대기 {timeout}s 초과 — 잔차 {errors}", file=sys.stderr)
+            return present
+        time.sleep(poll)
 
 
 def _connect(port):
