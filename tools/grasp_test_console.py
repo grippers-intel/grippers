@@ -92,6 +92,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import math
 import select
 import subprocess
@@ -196,6 +197,10 @@ GRASP_AREA_THRESHOLD_PX2 = {
 LOAD_THRESHOLD = 0.04  # domain/task/states.py GraspState.LOAD_THRESHOLD과 동일
 
 GRIPPER_STREAM_PORT = 8090
+
+# perception_node 재기동을 기다리는 최대 시간 — ultralytics 모델 로드가
+# 오래 걸린다(실측 15s 안팎).
+PERCEPTION_RESTART_TIMEOUT_S = 40.0
 
 # 1단계에서 YOLO 적용 이미지를 남길 곳·모델. perception_node.py의
 # CPU_YOLO_MODEL_PATH_DEFAULT와 같은 파일을 쓴다(같은 추론을 눈으로 보려는
@@ -683,6 +688,41 @@ WASD_KEYMAP = {
 # --- 메인 시퀀스 -----------------------------------------------------------
 
 
+def restart_perception_node() -> bool:
+    """3단계에서 죽였던 perception_node를 다시 띄운다.
+
+    ⚠️ 이 콘솔은 그리퍼캠(/dev/gripper_cam)을 넘겨받으려고 perception_node를
+    일부러 죽인다(3단계 참고). 예전에는 그걸 되살리지 않고 끝냈고, 그래서
+    **다음 실행이 조용히 무력화**됐다 — observe_target이 없어 1단계 관측과
+    YOLO 캡처가 전부 실패하는데 화면에는 "물체를 못 찾음"으로만 보여
+    원인을 알기 어려웠다(2026-08-24 실기에서 두 번 겪음). 죽인 쪽이
+    되살릴 책임을 진다.
+
+    카메라를 놓아준 뒤(GripperCam.close) 불러야 한다 — 안 그러면
+    perception_node가 기동 시 장치를 못 열고 바로 죽는다."""
+    ros_setup = "/ros2_ws/install/setup.bash"
+    if not os.path.exists(ros_setup):
+        print(f"  [경고] {ros_setup}이 없어 perception_node를 되살리지 못했습니다")
+        return False
+    print("  perception_node 재기동 중...")
+    subprocess.Popen(
+        ["setsid", "bash", "-lc",
+         f"source {ros_setup} && exec ros2 run grippers_perception perception_node "
+         "> /tmp/perception.log 2>&1"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    # 모델 로드(ultralytics)까지 시간이 걸린다 — 떴는지 확인될 때까지 기다린다.
+    for _ in range(int(PERCEPTION_RESTART_TIMEOUT_S / 0.5)):
+        time.sleep(0.5)
+        if subprocess.run(["pgrep", "-f", "grippers_perception/perception_node"],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+            print("  perception_node 재기동 완료.")
+            return True
+    print("  [경고] perception_node가 다시 뜨지 않았습니다 — /tmp/perception.log 확인")
+    return False
+
+
 def recover_to_idle(node: "GraspTestNode", profile: str, log: "RunLog", why: str) -> bool:
     """실패로 중단할 때 팔을 IDLE로 되돌린다(사용자 요청, 2026-08-24).
 
@@ -748,6 +788,7 @@ def main():
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = GraspTestNode()
     cam = None
+    perception_was_killed = False
     try:
         with KeyReader() as kr:
             # 1단계 -----------------------------------------------------
@@ -788,6 +829,7 @@ def main():
             # 콘솔의 cbreak가 풀려 키 입력이 죽는다(ensure_cbreak 참고).
             subprocess.run(["pkill", "-f", "grippers_perception/perception_node"],
                            stdin=subprocess.DEVNULL)
+            perception_was_killed = True
             time.sleep(1.0)
             cam = GripperCam()
             url = start_stream_server(cam)
@@ -883,6 +925,9 @@ def main():
         print(f"\n분석용 로그: {log.path}")
         if cam is not None:
             cam.close()
+        # 카메라를 놓아준 뒤에 되살린다 — 순서가 바뀌면 장치 경합으로 죽는다.
+        if perception_was_killed:
+            restart_perception_node()
         node.destroy_node()
         rclpy.shutdown()
 

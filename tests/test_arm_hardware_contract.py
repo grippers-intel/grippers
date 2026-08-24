@@ -391,3 +391,58 @@ def test_gripper_speed_finishes_full_travel_well_inside_the_motion_timeout():
 
     travel_sec = full_travel_raw / limits["GRIPPER_SPEED_RAW"]
     assert travel_sec < limits["GRIPPER_MOTION_TIMEOUT_SEC"] / 2
+
+
+def _lagged_ratio(ratio, lag):
+    """arm_driver_node._lagged_ratio의 동작을 테스트에서 재현한다 — 이 모듈은
+    rclpy 의존 때문에 개발 머신에서 import할 수 없어 AST로만 검사한다."""
+    if lag <= 0.0:
+        return ratio
+    if ratio <= lag:
+        return 0.0
+    return (ratio - lag) / (1.0 - lag)
+
+
+def test_joint_lag_never_changes_the_final_pose():
+    """지연은 **경로만** 바꾸는 장치다 — 어떤 lag 값이든 보간이 끝나는
+    순간에는 정확히 목표에 닿아야 한다. 이게 깨지면 자세 자체가 조용히
+    틀어져 다음 단계의 시작 자세 게이트에서 떨어진다."""
+    for lag in (0.0, 0.25, 0.45, 0.9):
+        assert _lagged_ratio(1.0, lag) == 1.0
+
+
+def test_joint_lag_holds_the_joint_still_for_the_first_part_of_the_move():
+    lag = 0.45
+
+    assert _lagged_ratio(0.1, lag) == 0.0
+    assert _lagged_ratio(0.45, lag) == 0.0
+    assert _lagged_ratio(0.45001, lag) > 0.0
+
+
+def test_wrist_pitch_is_the_lagged_joint_not_wrist_roll():
+    """2026-08-24 실기 — 룩을 문 채 복귀할 때 차체 전면을 긁었다.
+
+    safe -> idle 구간에서 손목 피치(servo 4)는 1618 raw(142도)를 접지만
+    손목 롤(servo 5)은 64 raw밖에 안 움직인다. 즉 늦춰야 하는 건 4다."""
+    lag = _module_constants(ARM_NODE, {"FLOOR_POSE_JOINT_LAG"})["FLOOR_POSE_JOINT_LAG"]
+    poses = _module_constants(
+        ARM_NODE.with_name("floor_grasp_profiles.py"),
+        {"IDLE_CRADLE_RAW", "HORIZONTAL_SAFE_145_RAW"},
+    )
+    travel = {
+        servo_id: abs(poses["IDLE_CRADLE_RAW"][servo_id - 1] - poses["HORIZONTAL_SAFE_145_RAW"][servo_id - 1])
+        for servo_id in range(1, 6)
+    }
+
+    assert 4 in lag and 0.0 < lag[4] < 1.0
+    # 늦춘 관절은 실제로 크게 움직이는 관절이어야 한다 — 안 움직이는 관절을
+    # 늦추는 건 아무것도 안 하는 것과 같다.
+    assert travel[4] > 1000
+    assert travel[5] < 100
+
+
+def test_glide_applies_the_joint_lag():
+    source = ast.unparse(_function("_glide_to_raw_positions"))
+
+    assert "_lagged_ratio" in source
+    assert "FLOOR_POSE_JOINT_LAG" in source
