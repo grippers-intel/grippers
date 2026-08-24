@@ -31,11 +31,10 @@ control = _load()
 
 
 def test_establish_target_h_scales_by_distance_ratio():
-    # 현재 z_m = K/sqrt(h*w). obs_h=100, obs_w=50, K=37.3992 => area=5000,
-    # z_m = 37.3992/sqrt(5000) ≈ 0.5288m. target 0.35m로 스케일하면
-    # target_h = 100 * (0.5288/0.35) ≈ 151.1
+    # 현재 z_m = K/(sqrt(h*w) - BBOX_PADDING_PX) — 2026-08-24에 bbox 여유분을
+    # 빼는 모델로 바뀌었다(scan_track_control.BBOX_PADDING_PX 주석 참고).
     target_h = control.establish_target_h(obs_h=100.0, obs_w=50.0, k_class=37.3992, target_distance_m=0.35)
-    z_now = 37.3992 / math.sqrt(100.0 * 50.0)
+    z_now = 37.3992 / (math.sqrt(100.0 * 50.0) - control.BBOX_PADDING_PX)
     assert target_h == 100.0 * (z_now / 0.35)
 
 
@@ -59,7 +58,14 @@ def test_z_from_established_h_smaller_h_means_farther():
 
 def test_bbox_area_distance_m_matches_perception_node_formula():
     d = control.bbox_area_distance_m(obs_h=100.0, obs_w=50.0, k_class=37.3992)
-    assert d == 37.3992 / math.sqrt(5000.0)
+    assert d == 37.3992 / (math.sqrt(5000.0) - control.BBOX_PADDING_PX)
+
+
+def test_bbox_area_distance_m_none_when_bbox_is_all_padding():
+    """sqrt(h*w)가 여유분 이하로 내려가면 분모가 0 이하가 되어 거리가
+    발산한다 — 그런 검출은 애초에 믿을 게 없으므로 None으로 뺀다."""
+    tiny = control.BBOX_PADDING_PX**2 / 2.0
+    assert control.bbox_area_distance_m(obs_h=tiny, obs_w=2.0, k_class=37.3992) is None
 
 
 def test_bbox_area_distance_m_none_when_k_class_unmeasured():
@@ -174,8 +180,19 @@ def test_compute_return_vector_distance_is_euclidean():
 
 
 def test_lateral_offset_m_matches_pinhole_formula():
-    off = control.lateral_offset_m(obs_x=400.0, z_m=0.5, fx_px=600.0, cx_px=320.0)
+    """bias_m=0이면 순수 핀홀 식 그대로여야 한다."""
+    off = control.lateral_offset_m(obs_x=400.0, z_m=0.5, fx_px=600.0, cx_px=320.0, bias_m=0.0)
     assert off == (400.0 - 320.0) * 0.5 / 600.0
+
+
+def test_lateral_offset_m_adds_the_camera_mount_bias_by_default():
+    """LATERAL_BIAS_M은 카메라 장착 위치 오프셋 보정이라 거리와 무관한
+    상수로 더해진다 — 2026-08-24에 40cm·70cm 두 점으로 확정했다
+    (scan_track_control.LATERAL_BIAS_M 주석 참고)."""
+    near = control.lateral_offset_m(obs_x=400.0, z_m=0.4, fx_px=600.0, cx_px=320.0)
+    far = control.lateral_offset_m(obs_x=400.0, z_m=0.7, fx_px=600.0, cx_px=320.0)
+    assert math.isclose(near - (400.0 - 320.0) * 0.4 / 600.0, control.LATERAL_BIAS_M)
+    assert math.isclose(far - (400.0 - 320.0) * 0.7 / 600.0, control.LATERAL_BIAS_M)
 
 
 def test_find_path_obstacle_ignores_things_outside_corridor():

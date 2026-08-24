@@ -49,18 +49,36 @@ from typing import NamedTuple
 # 같아야 한다 — 여기 따로 둔 이유는 visual_approach_control.py와 같다
 # (카메라 구독 없이 순수 함수로 pytest에서 검증하기 위해서다).
 K_CLASS = {
-    "knight": 38.0307,
-    "queen": 31.1632,
-    "rook": 37.3992,
+    "knight": 35.9307,
+    "queen": 28.3382,
+    "rook": 34.8340,
     "box": None,
-    "soccer": 20.6092,
+    "soccer": 18.9592,
     "star": None,
 }
+# 2026-08-24: 거리 모델이 z = K/sqrt(hw)에서 z = K/(sqrt(hw) - BBOX_PADDING_PX)로
+# 바뀌었다(근거는 perception_node.py의 같은 날짜 주석). K_CLASS도 그에 맞춰 함께
+# 갱신했으므로 둘은 반드시 같이 움직여야 한다 — 한쪽만 베끼면 조용히 어긋난다.
+BBOX_PADDING_PX = 2.5
 
-# yolov5_ros2/cv_tool.py의 카메라 내참수 K 행렬 — 2026-08-23 grasp_test_console.py와
-# 동일한 핀홀 근사(왜곡·세로좌표 무시)로 좌우 오프셋을 구한다.
-FX_PX = 602.7175003324863
-CX_PX = 351.305582038406
+# ⚠️ 2026-08-24 수정: 여기 있던 FX_PX=602.7175 / CX_PX=351.3056은
+# yolov5_ros2/cv_tool.py에서 가져온 값인데, 그건 **이 로봇에 달린 카메라가
+# 아니다**. 실제 /ascamera/camera_publisher/rgb0/camera_info는 fx=588.9755,
+# cx=325.3051이다. 잘못된 값으로 40cm 실측 시 좌우 오차가 5.56cm였고, 실제
+# 내참수로 바꾸자 3.07cm로 줄었다.
+#
+# depth_cam_rotate_node가 영상을 180° 회전시키므로 주점의 가로 좌표도 뒤집힌다:
+# cx' = width - cx. 회전된 영상 위의 좌표(obs_x)를 쓰는 이 파일은 반드시
+# 회전된 주점을 써야 한다.
+FX_PX = 588.9754638671875
+CX_PX = 640 - 325.3050842285156  # = 314.6949 (180° 회전 반영)
+
+# 내참수를 고친 뒤에도 남은 계통 편향 — 카메라가 차체 중심선에서 옆으로
+# 어긋나게 **장착**된 몫이다. 2026-08-24에 룩을 40cm·70cm 정중앙에 놓고
+# 두 모델을 비교해 확정했다: 거리와 무관한 상수 미터 편향(장착 위치 오프셋)
+# 쪽이 잔차 0.80cm로, 거리에 비례하는 픽셀 편향(광축 yaw 틀어짐) 쪽의
+# 1.47cm보다 잘 맞았다. 그래서 픽셀이 아니라 미터로 더한다.
+LATERAL_BIAS_M = 0.0291
 
 
 class ScanTrackCommand(NamedTuple):
@@ -90,8 +108,9 @@ def establish_target_h(obs_h: float, obs_w: float, k_class: float | None, target
     아니다 — 이 함수의 반환값으로 그 사실이 드러난다)."""
     if k_class is None or obs_h <= 0 or obs_w <= 0 or target_distance_m <= 0:
         return None
-    area = obs_h * obs_w
-    current_z_m = k_class / math.sqrt(area)
+    current_z_m = bbox_area_distance_m(obs_h, obs_w, k_class)
+    if current_z_m is None:
+        return None
     return obs_h * (current_z_m / target_distance_m)
 
 
@@ -109,7 +128,12 @@ def bbox_area_distance_m(obs_h: float, obs_w: float, k_class: float | None) -> f
     """화면 면적 기반 거리(m) — h 신호가 못 미더울 때의 폴백."""
     if k_class is None or obs_h <= 0 or obs_w <= 0:
         return None
-    return k_class / math.sqrt(obs_h * obs_w)
+    # z = K / (sqrt(h*w) - BBOX_PADDING_PX) — 검출 bbox가 실루엣보다 항상
+    # 일정 픽셀 크게 잡히는 몫을 빼준다(perception_node.py의 같은 날짜 주석).
+    effective_px = math.sqrt(obs_h * obs_w) - BBOX_PADDING_PX
+    if effective_px <= 0.0:
+        return None
+    return k_class / effective_px
 
 
 def h_signal_reliable(obs_h: float, obs_w: float, ref_aspect_ratio: float, max_relative_deviation: float = 0.4) -> bool:
@@ -260,9 +284,17 @@ class ObstacleObservation(NamedTuple):
     lateral_m: float  # +면 우측(REP103 y축과는 부호가 반대이니 주의)
 
 
-def lateral_offset_m(obs_x: float, z_m: float, fx_px: float = FX_PX, cx_px: float = CX_PX) -> float:
-    """핀홀 근사(왜곡 무시) — grasp_test_console.py estimate_position()과 동일."""
-    return (obs_x - cx_px) * z_m / fx_px
+def lateral_offset_m(
+    obs_x: float,
+    z_m: float,
+    fx_px: float = FX_PX,
+    cx_px: float = CX_PX,
+    bias_m: float = LATERAL_BIAS_M,
+) -> float:
+    """핀홀 근사(왜곡 무시) — grasp_test_console.py estimate_position()과 동일.
+
+    bias_m은 카메라 장착 위치 오프셋 보정이다(LATERAL_BIAS_M 주석 참고)."""
+    return (obs_x - cx_px) * z_m / fx_px + bias_m
 
 
 def find_path_obstacle(
