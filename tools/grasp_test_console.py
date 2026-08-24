@@ -656,9 +656,14 @@ def drive_phase(
     speed: float,
     report_area: GripperCam | None = None,
     on_area_sample=None,
+    report=None,
 ):
     """`c`가 눌릴 때까지 `keymap`에 정의된 키로 cmd_vel을 발행한다.
-    반환값: (odom 시작좌표, odom 종료좌표) — 둘 다 None이면 오도메트리 미수신."""
+    반환값: (odom 시작좌표, odom 종료좌표) — 둘 다 None이면 오도메트리 미수신.
+
+    `report`는 1초에 한 번 불리는 인자 없는 콜백이다 — 운전하는 사람에게
+    "언제 c를 누를지"를 알려주는 용도로, 무엇을 보여줄지는 호출부가 정한다
+    (그리퍼캠 면적은 report_area, depth 거리는 demo_rook_run.py 참고)."""
     kr.ensure_cbreak()  # 위 ensure_cbreak docstring 참고 — 키가 안 먹는 사고 방지
     print("  [space]/[a]/[d] 전진, [c] 정지" if "w" not in keymap else
           "  [w]전진 [s]후진 [a]전진+좌회전 [d]전진+우회전, [c] 정지")
@@ -666,6 +671,7 @@ def drive_phase(
     start_pose = node._pose
     linear_x, angular_z = 0.0, 0.0
     last_area_t = 0.0
+    last_report_t = 0.0
     while True:
         node.pump()
         key = kr.getch_nonblocking()
@@ -687,6 +693,14 @@ def drive_phase(
             if on_area_sample is not None:
                 on_area_sample(area)
             last_area_t = time.time()
+
+        if report is not None and time.time() - last_report_t >= 1.0:
+            report()
+            # report()가 서비스 호출로 수백 ms를 쓸 수 있다 — 그동안 cmd_vel이
+            # 끊기면 base 드라이버 워치독이 차를 세워 주행이 툭툭 끊긴다.
+            # 돌아오자마자 같은 명령을 다시 밀어 공백을 최소화한다.
+            node.cmd_pub.publish(t)
+            last_report_t = time.time()
 
         time.sleep(TICK_S)
 

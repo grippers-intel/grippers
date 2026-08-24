@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""시연용 1회 완주 — 수동 APPROACH -> GRASP -> 바구니 투하 -> IDLE.
+
+2026-08-24 사용자 지시(시연 영상 촬영용): 물체 하나(기본 rook)를 대상으로
+사람이 키보드로 몰고, 파지와 투하만 자동으로 한다.
+
+    [1] APPROACH   space=전진, a/d=전진+회전, c=정지
+    [2] g          GRASP — 열고 내려가 잡고 CARRY_IDLE까지 복귀
+    [3] 운반       w/s/a/d 주행, c=정지
+    [4] g          바구니 투하 후 IDLE 복귀
+
+자동 정렬·자동 전진이 없다는 점에서 auto_grasp_sequence.py와 다르고, 차를
+움직인다는 점에서 grasp_cycle.py와 다르다. 이 도구의 목적은 데이터 수집이
+아니라 **한 번에 끊김 없이 끝까지 가는 그림**을 찍는 것이다 — 그래서 중간에
+Enter로 멈춰 세우는 확인 절차를 두지 않고, 대신 사람이 c로 멈춘 자리에서
+g를 누를 때까지 기다린다.
+
+그리퍼 캠은 쓰지 않는다. 열려면 perception_node를 죽여야 하는데(장치를
+독점한다 — grasp_test_console.GripperCam 참고), 그러면 APPROACH 중에 거리를
+읽어 주는 관측이 함께 죽는다. 시연에서는 거리 표시가 훨씬 쓸모 있고, 파지
+성공 여부는 어차피 load 쪽이 신뢰할 수 있는 신호다 — 2026-08-24 6종 수집에서
+그리퍼캠 면적은 빈 그리퍼(닫힘 165990px²)가 룩을 문 상태(70384px²)보다 커서
+파지 판정에 쓸 수 없다는 것이 확인됐다.
+
+사전 준비: depth_camera · depth_cam_rotate_node · perception_node ·
+arm_driver · odom_publisher(controller)가 떠 있어야 한다. 팔은 IDLE에서
+시작해야 한다(안 그러면 safe 이동이 거부된다).
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+
+import rclpy
+from rclpy.signals import SignalHandlerOptions
+
+from grasp_test_console import (
+    CLASS_TO_PROFILE,
+    GRIPPER_CLOSED_MM,
+    SPACE_KEYMAP,
+    WASD_KEYMAP,
+    FINE_SPEED_MPS,
+    GraspTestNode,
+    KeyReader,
+    RunLog,
+    drive_phase,
+    estimate_position,
+    odom_distance_m,
+    recover_to_idle,
+)
+from grippers_arm.floor_grasp_profiles import FLOOR_GRASP_PROFILES
+
+# 닫힘/이동 뒤 load가 정착할 때까지의 여유(grasp_cycle.LOAD_SETTLE_S와 동일 근거).
+LOAD_SETTLE_S = 1.2
+
+# 빈 그리퍼로 닫았을 때의 load. 2026-08-24 --empty 기준선 실측값이다.
+# 파지 판정은 이 값과의 차이로 한다 — load는 4/1023 = 0.00391 단위로
+# 양자화돼 있어 한 단위 차이는 잡음과 구분이 안 되므로 두 단위를 요구한다.
+EMPTY_CARRY_LOAD = 0.0352
+LOAD_MARGIN = 0.0078
+
+# APPROACH를 멈출 거리. 팔이 그 자리에서 바로 잡을 수 있었던 **실측** 배치
+# 거리다 — 2026-08-24 grasp_cycle 성공 기록의 rook 16.0cm와 18.6cm.
+# 계산으로 고른 값이 아니라서, 다른 클래스에는 그대로 적용되지 않는다.
+STOP_BAND_M = {"rook": (0.155, 0.190)}
+DEFAULT_STOP_BAND_M = (0.150, 0.200)
+LATERAL_OK_M = 0.02
+
+
+def stop_band(raw_cls):
+    return STOP_BAND_M.get(raw_cls, DEFAULT_STOP_BAND_M)
+
+
+def measure_load(node, label, log):
+    time.sleep(LOAD_SETTLE_S)
+    load = node.get_load()
+    if load is None:
+        print(f"  [{label}] load: 읽기 실패")
+    else:
+        print(f"  [{label}] load_ratio: {load:.4f}")
+    log.log("load", where=label, load_ratio=load)
+    return load
+
+
+def approach_report(node, raw_cls, log, band):
+    """APPROACH 중 1초에 한 번, 지금 멈춰야 하는지를 알려준다.
+
+    사용자의 보정 방식 선호(WASD로 사람이 몰고, 멈출 조건은 실시간으로
+    알려준다)를 그대로 따른다 — 여기서 자동으로 브레이크를 잡지는 않는다.
+    시연 중 자동 개입은 영상에서 무슨 일이 일어났는지 알아보기 어렵게 만든다."""
+    lo, hi = band
+
+    def report():
+        obs = node.observe(raw_cls, timeout_sec=0.6)
+        if obs is None or not obs.found:
+            print("    [관측] 물체 안 보임")
+            log.log("approach_sample", found=False)
+            return
+        forward_m, lateral_m = estimate_position(obs, raw_cls)
+        if forward_m is None:
+            print(f"    [관측] x={obs.x:.0f} (거리 보정값 없음)")
+            log.log("approach_sample", found=True, x=obs.x, forward_m=None)
+            return
+        if forward_m < lo:
+            verdict = "⚠️ 너무 가까움 — 후진"
+        elif forward_m > hi:
+            verdict = "계속 전진"
+        elif abs(lateral_m) > LATERAL_OK_M:
+            verdict = f"거리 OK, 좌우 {lateral_m * 100:+.1f}cm — {'d' if lateral_m > 0 else 'a'}로 보정"
+        else:
+            verdict = "★ 지금 c로 정지"
+        print(f"    [관측] 전방 {forward_m * 100:5.1f}cm · 좌우 {lateral_m * 100:+5.1f}cm  → {verdict}")
+        log.log("approach_sample", found=True, x=obs.x,
+                forward_m=forward_m, lateral_m=lateral_m)
+
+    return report
+
+
+def wait_for_key(kr, key, prompt):
+    """`key`가 눌릴 때까지 기다린다. q면 KeyboardInterrupt로 중단."""
+    kr.ensure_cbreak()
+    print(prompt)
+    while True:
+        pressed = kr.getch_nonblocking()
+        if pressed is None:
+            time.sleep(0.05)
+            continue
+        pressed = pressed.lower()
+        if pressed == key:
+            return
+        if pressed == "q":
+            raise KeyboardInterrupt
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--raw-cls", default="rook", choices=sorted(CLASS_TO_PROFILE))
+    ap.add_argument("--profile", default=None)
+    args = ap.parse_args()
+
+    raw_cls = args.raw_cls
+    profile = args.profile or CLASS_TO_PROFILE[raw_cls]
+    close_width_mm = FLOOR_GRASP_PROFILES[profile].close_width_mm
+    preopen_mm = FLOOR_GRASP_PROFILES[profile].preopen_width_mm
+    band = stop_band(raw_cls)
+
+    log = RunLog(raw_cls, profile)
+    print(f"=== 시연 1회 — {raw_cls} ===")
+    print(f"profile={profile}  preopen={preopen_mm}mm  close={close_width_mm}mm")
+    print(f"목표 정지 거리: 전방 {band[0] * 100:.0f}~{band[1] * 100:.0f}cm (실측 성공 범위)")
+    print(f"상세 로그: {log.path}")
+    print("⚠️ 팔이 IDLE에 있어야 시작할 수 있습니다. 언제든 q로 중단(주행은 즉시 정지).")
+
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+    node = GraspTestNode()
+    try:
+        with KeyReader() as kr:
+            # --- [1] APPROACH ------------------------------------------
+            print("\n[1] APPROACH — 물체 앞까지 몰고 가세요")
+            start, end = drive_phase(
+                node, kr, keymap=SPACE_KEYMAP, speed=FINE_SPEED_MPS,
+                report=approach_report(node, raw_cls, log, band),
+            )
+            travelled = odom_distance_m(start, end)
+            if travelled is not None:
+                print(f"  정지 — odom 이동 {travelled:.3f}m "
+                      "(명령 적분값이라 실제 이동과 다를 수 있습니다)")
+            log.log("approach_done", odom_m=travelled)
+
+            # --- [2] GRASP ---------------------------------------------
+            wait_for_key(kr, "g", "\n[2] 준비되면 [g] — 파지 후 CARRY_IDLE까지 갑니다")
+            print("  safe → 그리퍼 열기 → grasp")
+            if not node.move_floor_pose(profile, "safe"):
+                recover_to_idle(node, profile, log, "safe 이동 실패")
+                return 2
+            # 내려가기 전에 연다 — 닫힌 손가락이 물체가 있는 공간을 통과해
+            # 내려가면 물체를 밀어낸다(사용자 지시, 2026-08-24).
+            node.set_gripper(preopen_mm)
+            print(f"  그리퍼 열림({preopen_mm}mm) — 내려가기 전")
+            if not node.move_floor_pose(profile, "grasp"):
+                recover_to_idle(node, profile, log, "grasp 이동 실패")
+                return 2
+
+            print("  그리퍼 닫기")
+            resp = node.set_gripper(close_width_mm)
+            if resp is None or not resp.ok:
+                recover_to_idle(node, profile, log, "그리퍼 닫기 실패")
+                return 3
+            measure_load(node, "닫힘", log)
+
+            # 바닥에서 IDLE로 곧장 가면 그리퍼가 바닥을 쓸어간다 — 검증된
+            # 상승 체인(midpoint → safe → idle)을 그대로 밟는다.
+            print("  midpoint → safe → idle (CARRY_IDLE)")
+            for stage in ("midpoint", "safe", "idle"):
+                if not node.move_floor_pose(profile, stage):
+                    recover_to_idle(node, profile, log, f"{stage} 이동 실패")
+                    return 4
+            carry_load = measure_load(node, "CARRY_IDLE", log)
+
+            if carry_load is None:
+                print("  판정 불가 — load를 못 읽었습니다")
+            elif carry_load - EMPTY_CARRY_LOAD > LOAD_MARGIN:
+                print(f"  ★ 파지 성공 — 빈 상태보다 {carry_load - EMPTY_CARRY_LOAD:+.4f} "
+                      f"({(carry_load - EMPTY_CARRY_LOAD) / 0.00391:+.1f}단위)")
+            else:
+                print(f"  ⚠️ 빈 상태와 구분이 안 됩니다(load {carry_load:.4f}) — "
+                      "물체를 놓쳤을 수 있습니다. 계속할지 눈으로 확인하세요")
+            log.log("grasp_verdict", carry_load=carry_load, empty=EMPTY_CARRY_LOAD)
+
+            # --- [3] 운반 ----------------------------------------------
+            print("\n[3] 바구니 앞까지 운반하세요")
+            start, end = drive_phase(
+                node, kr, keymap=WASD_KEYMAP, speed=FINE_SPEED_MPS)
+            travelled = odom_distance_m(start, end)
+            if travelled is not None:
+                print(f"  정지 — odom 이동 {travelled:.3f}m")
+            log.log("carry_done", odom_m=travelled)
+
+            # --- [4] 투하 ----------------------------------------------
+            wait_for_key(kr, "g", "\n[4] 바구니가 팔 아래 오면 [g] — 투하 후 IDLE 복귀")
+            if not node.move_floor_pose(profile, "drop"):
+                recover_to_idle(node, profile, log, "drop 이동 실패")
+                return 5
+            measure_load(node, "투하 직전", log)
+            node.set_gripper(preopen_mm)
+            measure_load(node, "놓은 뒤", log)
+            if not node.move_floor_pose(profile, "idle"):
+                recover_to_idle(node, profile, log, "투하 후 idle 복귀 실패")
+                return 5
+            node.set_gripper(GRIPPER_CLOSED_MM)
+
+        print("\n완료 — IDLE 복귀")
+        log.log("run_ok")
+        return 0
+
+    except KeyboardInterrupt:
+        print("\n[중단] 주행을 멈춥니다. 팔 상태는 직접 확인하세요(자동 복구 없음).")
+        log.log("aborted")
+        return 130
+    finally:
+        # 어떤 경로로 끝나든 바퀴부터 세운다 — 팔은 자세 게이트가 지켜 주지만
+        # cmd_vel은 마지막 값이 그대로 유지된다.
+        node.stop()
+        log.log("run_end")
+        log.close()
+        node.destroy_node()
+        rclpy.shutdown()
+        print(f"상세 로그: {log.path}")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
