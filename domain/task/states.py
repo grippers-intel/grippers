@@ -441,7 +441,22 @@ class InsertState(State):
         ports.arm.set_gripper(OPEN_MM)
         if not ports.arm.move_to_floor_pose(plan.profile, "idle"):
             return EstopState()
-        return ScanState(self.ctx.complete(self.target.track_id))
+        # 2026-08-24 사용자 결정(시연 범위 축소): 투입에 성공하면 SCAN으로
+        # 돌아가지 않고 **물체 하나로 시연을 끝낸다**. 원래는 여기가
+        # `ScanState(...)`라 바닥이 빌 때까지 반복하는 루프 FSM이었다.
+        #
+        # `IdleState`를 돌려주지 않는 이유: IdleState.execute()는 절대 `None`을
+        # 반환하지 않는다 — ctx가 비면 자기 자신을, raw_text가 남아 있으면
+        # 다시 파싱해 ScanState를 돌려준다. 전자는 MissionTask.run()의
+        # `while state is not None` 루프가 IDLE만 무한히 yield하고, 후자는
+        # 미션이 통째로 재시작된다. `DoneState`가 `None`을 반환해 미션
+        # 제너레이터를 끝내면, mission_orchestrator_node의 FSM 스레드가
+        # `self._command_queue.get()`으로 돌아가 다음 명령을 기다린다 —
+        # 그게 실제로 원하는 "시연 종료 후 대기" 상태다.
+        #
+        # 여러 물체를 이어서 처리하는 원래 동작으로 되돌리려면 이 한 줄을
+        # `ScanState(...)`로 바꾸면 된다(다른 상태는 손댈 필요 없다).
+        return DoneState(self.ctx.complete(self.target.track_id))
 
 
 class DeliverState(State):

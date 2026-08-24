@@ -63,27 +63,25 @@ def _attempts_by_target(states, state_name):
 # ── 1. 정상 완주 ──────────────────────────────────────────────────────────
 
 
-def test_full_mission_completes_multiple_objects(make_ports, run_to_completion):
-    """물체 N(=2)개를 순회해서 전부 처리하고 DONE으로 끝난다.
+def test_mission_ends_after_the_first_successful_insert(make_ports, run_to_completion):
+    """2026-08-24 시연 범위 결정 — 투입에 **한 번** 성공하면 바닥에 물체가
+    남아 있어도 미션을 끝낸다(states.py InsertState 주석 참고).
 
-    상자에 넣은 물체는 바닥에서 사라지는 게 실제 하드웨어 거동이므로,
-    ScriptedPerception.script로 사이클마다 바닥이 바뀌는 걸 흉내낸다.
-
-    정적 장면(detections=)에서도 통과해야 한다 — 그건 아래 §3의
-    test_static_scene_first_grasp_failure_does_not_block_the_rest 가 맡는다.
-    이슈 #131 이전에는 정적 장면이면 SCAN 무변화 감지가 det_b를 처리하기 전에
-    먼저 발동해 버려서, 이 테스트가 script= 를 쓰는 것 말고는 방법이 없었다."""
+    바닥에 물체 2개를 놓지만 처리되는 건 가장 가까운 1번 하나뿐이고,
+    2번은 손도 대지 않은 채 DONE으로 끝나야 한다. 예전 계약(둘 다 처리)으로
+    되돌아가면 INSERT가 2회가 되어 여기서 걸린다."""
     det_a = _detection(track_id=1, cls=ObjectClass.GABE, x=0.2)
     det_b = _detection(track_id=2, cls=ObjectClass.CHESS_PIECE, x=0.4)
-    ports = make_ports(perception=ScriptedPerception(script=[[det_a, det_b], [det_b]]))
+    ports = make_ports(perception=ScriptedPerception(detections=[det_a, det_b]))
 
     states = run_to_completion(ports)
 
     names = [s.name for s in states]
     assert names[0] == "IDLE"
     assert names[-1] == "DONE"
-    assert names.count("INSERT") == 2
-    assert states[-1].ctx.done_ids == {1, 2}
+    assert names.count("INSERT") == 1
+    assert states[-1].ctx.done_ids == {1}, "가장 가까운 물체 하나만 처리돼야 한다"
+    assert 2 not in states[-1].ctx.held_ids, "2번은 실패한 게 아니라 아예 시도되지 않은 것이다"
     assert "ESTOP" not in names
 
 
@@ -122,7 +120,14 @@ def test_static_scene_first_grasp_failure_does_not_block_the_rest(make_ports, ru
     '관측 목록이 줄었는가'가 아니라 'SELECT 후보가 줄었는가'로 봐야 한다.
 
     수정 전 거동: IDLE SCAN SELECT APPROACH GRASP×4 SCAN DONE — 사이클 2의
-    scan_floor() 결과가 사이클 1과 같아 물체 2·3이 한 번도 선택되지 않았다."""
+    scan_floor() 결과가 사이클 1과 같아 물체 2·3이 한 번도 선택되지 않았다.
+
+    ⚠️ 2026-08-24 시연 범위 결정(InsertState 주석)으로 **성공 경로는 한 번만**
+    돈다 — 2번이 투입에 성공한 시점에 미션이 끝나므로 3번은 도달하지 않는다.
+    여기서 고정하는 계약은 '1번이 보류된 뒤 2번이 선택된다'까지다. 물체
+    3개 전부가 시도되는 것은 아래
+    test_static_scene_all_grasps_failing_still_tries_every_object가 맡는다
+    (전부 실패해 INSERT가 없으므로 루프가 끝까지 돈다)."""
     detections = [
         _detection(track_id=1, x=0.2),
         _detection(track_id=2, x=0.4),
@@ -137,14 +142,13 @@ def test_static_scene_first_grasp_failure_does_not_block_the_rest(make_ports, ru
     states = run_to_completion(ports)
     names = [s.name for s in states]
 
-    assert _attempts_by_target(states, "APPROACH") == {1: 1, 2: 1, 3: 1}, (
-        "물체 3개가 각각 한 번씩 선정·접근돼야 한다 — 1번이 보류된 뒤 후보 집합이 "
-        "줄어드는 것이 '진전'이다"
+    assert _attempts_by_target(states, "APPROACH") == {1: 1, 2: 1}, (
+        "1번이 보류된 뒤 2번이 선정·접근돼야 한다 — 후보 집합이 줄어드는 것이 '진전'이다"
     )
-    assert _attempts_by_target(states, "GRASP") == {1: 4, 2: 1, 3: 1}
-    assert names.count("INSERT") == 2
+    assert _attempts_by_target(states, "GRASP") == {1: 4, 2: 1}
+    assert names.count("INSERT") == 1
     assert states[-1].ctx.held_ids == {1}
-    assert states[-1].ctx.done_ids == {2, 3}
+    assert states[-1].ctx.done_ids == {2}
     assert names[-1] == "DONE"
 
 
