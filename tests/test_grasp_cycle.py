@@ -66,7 +66,8 @@ def test_records_every_measurement_the_user_asked_for():
     그리고 그것들을 빈 상태와 비교할 수 있을 것."""
     source = ast.unparse(_function("main"))
 
-    for key in ("area_open", "area_closed", "load_closed", "load_midpoint", "load_safe"):
+    for key in ("area_open", "area_closed", "load_closed", "load_midpoint",
+                "load_safe", "load_carry_idle", "area_carry_idle"):
         assert f"'{key}'" in source, key
     assert "record['depth']" in source
 
@@ -142,3 +143,35 @@ def test_restarts_perception_node_it_killed():
 
     assert "restart_perception_node" in finalbody
     assert finalbody.index("cam.close") < finalbody.index("restart_perception_node")
+
+
+def test_carry_idle_comes_between_the_grasp_and_the_basket_drop():
+    """사용자 지시(2026-08-24): 파지 후 CARRY_IDLE로 움직이고, 그 다음
+    바구니에 떨어뜨린다. CARRY_IDLE은 물체를 문 채의 IDLE 자세로, 실제
+    미션에서 물체를 들고 이동하는 자세가 바로 이것이다."""
+    source = ast.unparse(_function("main"))
+
+    idle_at = source.index("'load_carry_idle'")
+    drop_at = source.index("move_floor_pose(profile, 'drop')")
+    close_at = source.index("set_gripper(close_width_mm)")
+    assert close_at < idle_at < drop_at
+
+
+def test_lift_chain_goes_through_midpoint_and_safe():
+    """바닥에서 IDLE로 곧장 가면 그리퍼가 바닥을 쓸어간다 — 검증된 상승
+    체인을 그대로 밟는다(arm_driver_node의 RETURN_TO_IDLE_DEFERRED_JOINTS
+    주석 참고)."""
+    source = ast.unparse(_function("main"))
+
+    assert "('midpoint', 'load_midpoint')" in source
+    assert "('safe', 'load_safe')" in source
+    assert "('idle', 'load_carry_idle')" in source
+
+
+def test_held_verdict_uses_carry_idle_load_and_respects_quantisation():
+    """load는 4/1023 = 0.00391 단위로 양자화돼 있다 — 한 단위 차이는 잡음과
+    구분이 안 된다. 실측 최소 마진은 queen의 +0.0156(4단위)이었다."""
+    source = ast.unparse(_function("print_comparison"))
+
+    assert "record.get('load_carry_idle')" in source
+    assert "0.0078" in source  # 두 양자 이상만 유의미로 본다

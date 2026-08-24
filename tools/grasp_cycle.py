@@ -21,12 +21,16 @@
       -> 물체마다 "파지 가능한 자리"가 화면에서 어떻게 보이는지의 정답표가 된다
 
   그리퍼 캠 면적
-      열고 내려온 직후(파지 전) · 닫은 직후
-      -> 빈 상태와의 차이가 곧 "물체가 손가락 사이에 있다"는 신호다
+      열고 내려온 직후(파지 전) · 닫은 직후 · CARRY_IDLE · 놓은 뒤
 
   load_ratio
-      닫은 직후 · midpoint(들어올린 뒤) · safe · drop 직전 · 놓은 뒤
+      열림 · 닫은 직후 · midpoint · safe · CARRY_IDLE · 투하 직전 · 놓은 뒤
       -> 빈 상태와의 차이가 곧 "물체를 물고 있다"는 신호다
+
+동선 (사용자 지시 2026-08-24): 파지 후 **CARRY_IDLE까지 복귀**했다가 거기서
+바구니로 투하한다. CARRY_IDLE은 물체를 문 채의 IDLE 자세이고, 실제 미션에서
+물체를 들고 이동하는 자세가 바로 이것이다 — 그래서 "정말 물었는가"의 판정도
+닫은 직후가 아니라 **CARRY_IDLE의 load**로 한다.
 
 ⚠️ 빈 상태 기준선을 먼저 받아야 나머지가 의미를 갖는다. 그리퍼캠 면적은
 밝기 임계(>150) 최대 컨투어라 바닥 재질·조명·손가락 자체가 이미 어느 정도
@@ -163,16 +167,28 @@ def print_comparison(record, baseline):
     for key, label, unit in (
         ("area_open", "그리퍼캠(열림)", "px²"),
         ("area_closed", "그리퍼캠(닫힘)", "px²"),
+        ("area_carry_idle", "그리퍼캠(CARRY_IDLE)", "px²"),
         ("load_closed", "load(닫힘)", ""),
         ("load_midpoint", "load(midpoint)", ""),
         ("load_safe", "load(safe)", ""),
+        ("load_carry_idle", "load(CARRY_IDLE)", ""),
     ):
         print(_delta(label, record.get(key), baseline.get(key), unit))
-    held = record.get("load_midpoint")
-    if held is not None and baseline.get("load_midpoint") is not None:
-        margin = held - baseline["load_midpoint"]
-        verdict = "물체를 들고 있다고 볼 수 있음" if margin > 0.005 else "⚠️ 빈 상태와 구분이 안 됨"
-        print(f"\n  판정: midpoint load가 기준선보다 {margin:+.4f} — {verdict}")
+
+    # 판정은 CARRY_IDLE의 load로 한다 — 실제로 물체를 들고 이동하는 자세이고,
+    # 닫은 직후 값은 아직 손가락이 물체를 밀고 있는 과도값일 수 있다.
+    held = record.get("load_carry_idle")
+    base_held = baseline.get("load_carry_idle")
+    if held is not None and base_held is not None:
+        margin = held - base_held
+        # load는 4/1023 = 0.00391 단위로 양자화돼 있다 — 한 단위 차이는 잡음과
+        # 구분이 안 된다. 두 단위(0.0078) 이상을 유의미한 차이로 본다.
+        verdict = "물체를 들고 있다고 볼 수 있음" if margin > 0.0078 else "⚠️ 빈 상태와 구분이 안 됨"
+        print(f"\n  판정: CARRY_IDLE load가 기준선보다 {margin:+.4f} "
+              f"({margin / 0.003910:+.1f}단위) — {verdict}")
+    elif held is not None:
+        print(f"\n  CARRY_IDLE load = {held:.4f} (기준선에 이 항목이 없어 비교 불가 — "
+              "--empty를 다시 한 번 돌리세요)")
 
 
 def append_dataset(record):
@@ -268,25 +284,27 @@ def main():
         record["area_closed"] = measure_area(cam, "닫힘", log)
         record["load_closed"] = measure_load(node, "닫힘", log)
 
-        # --- 들어올리기 ------------------------------------------------
-        print("\n[5] midpoint → safe (들어올리기)")
-        if not node.move_floor_pose(profile, "midpoint"):
-            print("  midpoint 실패 — arm.log 확인")
-            node.move_floor_pose(profile, "recover_idle")
-            return 4
-        record["load_midpoint"] = measure_load(node, "midpoint", log)
-        if not node.move_floor_pose(profile, "safe"):
-            print("  safe 실패 — arm.log 확인")
-            node.move_floor_pose(profile, "recover_idle")
-            return 4
-        record["load_safe"] = measure_load(node, "safe", log)
+        # --- 들어올려 CARRY_IDLE까지 ------------------------------------
+        # 사용자 지시(2026-08-24): 파지 후 CARRY_IDLE로 돌아왔다가, 거기서
+        # 바구니로 투하한다. CARRY_IDLE은 물체를 문 채의 IDLE 자세다 —
+        # 실제 미션에서 물체를 들고 이동하는 자세가 이것이므로, 여기서
+        # load를 재는 것이 "운반 중에도 놓치지 않는가"의 진짜 시험이다.
+        # midpoint/safe는 그 경로 위의 통과점이라 함께 기록만 한다.
+        print("\n[5] midpoint → safe → idle (CARRY_IDLE 복귀)")
+        for stage, key in (("midpoint", "load_midpoint"), ("safe", "load_safe"),
+                           ("idle", "load_carry_idle")):
+            if not node.move_floor_pose(profile, stage):
+                print(f"  {stage} 실패 — arm.log 확인")
+                node.move_floor_pose(profile, "recover_idle")
+                return 4
+            record[key] = measure_load(node, stage if stage != "idle" else "CARRY_IDLE", log)
+        record["area_carry_idle"] = measure_area(cam, "CARRY_IDLE", log)
 
         # --- 바구니 투하 ------------------------------------------------
         if args.no_drop:
-            print("\n[6] --no-drop — 투하 생략, idle로 복귀합니다")
-            node.move_floor_pose(profile, "idle")
+            print("\n[6] --no-drop — 투하 생략, CARRY_IDLE에서 종료합니다")
         else:
-            input("\n[6] 바구니가 팔 아래 오도록 맞춘 뒤 Enter로 투하: ")
+            input("\n[6] 바구니가 팔 아래 오도록 맞춘 뒤 Enter로 투하 (CARRY_IDLE → drop): ")
             if not node.move_floor_pose(profile, "drop"):
                 print("  drop 실패 — arm.log 확인")
                 node.move_floor_pose(profile, "recover_idle")
