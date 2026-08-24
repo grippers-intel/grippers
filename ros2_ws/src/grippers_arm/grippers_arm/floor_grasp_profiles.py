@@ -6,6 +6,13 @@ that a low GABE pose is not accidentally reused for taller chess pieces.
 
 from dataclasses import dataclass
 
+# 절대 import를 쓴다 — align_to_idle.py 등 tools/*.py의 grippers_arm 참조와
+# 같은 방식이다. 이 파일은 tests/test_floor_grasp_profiles.py에서
+# importlib.util.spec_from_file_location으로 단독 로드되기도 하는데, 그
+# 경로에선 패키지 컨텍스트가 없어 상대 import(`from .gripper_calibration`)가
+# "attempted relative import with no known parent package"로 깨진다.
+from grippers_arm.gripper_calibration import GRIPPER_OPEN_MM
+
 
 @dataclass(frozen=True)
 class FloorGraspProfile:
@@ -17,13 +24,18 @@ class FloorGraspProfile:
     close_width_mm: float
 
 
+# 2026-08-24: preopen_width_mm을 80.0(임의로 잡았던 절반쯤 열기)에서
+# GRIPPER_OPEN_MM(기구적으로 안전하다고 실측된 최대 개구, 168.0)로 올림 —
+# 사용자 지시: "무리가 되지 않는 범위 내에서 최대로" 열 것. GRIPPER_OPEN_MM
+# 자체가 이미 gripper_calibration.py의 안전 clamp 상한이라 별도 여유값을
+# 더 두지 않는다.
 FLOOR_GRASP_PROFILES = {
-    "cube": FloorGraspProfile(40.0, 20.0, 80.0, 30.0),
-    "star_column": FloorGraspProfile(45.0, 20.0, 80.0, 35.0),
-    "soccer_polyhedron": FloorGraspProfile(46.0, 20.0, 80.0, 35.0),
-    "chess_knight": FloorGraspProfile(22.0, 60.0, 80.0, 13.0),
-    "chess_rook": FloorGraspProfile(24.5, 45.0, 80.0, 15.0),
-    "chess_queen": FloorGraspProfile(17.0, 50.0, 80.0, 13.0),
+    "cube": FloorGraspProfile(40.0, 20.0, GRIPPER_OPEN_MM, 30.0),
+    "star_column": FloorGraspProfile(45.0, 20.0, GRIPPER_OPEN_MM, 35.0),
+    "soccer_polyhedron": FloorGraspProfile(46.0, 20.0, GRIPPER_OPEN_MM, 35.0),
+    "chess_knight": FloorGraspProfile(22.0, 60.0, GRIPPER_OPEN_MM, 13.0),
+    "chess_rook": FloorGraspProfile(24.5, 45.0, GRIPPER_OPEN_MM, 15.0),
+    "chess_queen": FloorGraspProfile(17.0, 50.0, GRIPPER_OPEN_MM, 13.0),
 }
 
 # The smallest successful settled load measured while holding an object was

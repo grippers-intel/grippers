@@ -2,15 +2,17 @@
 
 import importlib.util
 import pathlib
+import sys
 
-PROFILE_MODULE = (
-    pathlib.Path(__file__).resolve().parent.parent
-    / "ros2_ws"
-    / "src"
-    / "grippers_arm"
-    / "grippers_arm"
-    / "floor_grasp_profiles.py"
-)
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+GRIPPERS_ARM_SRC = ROOT / "ros2_ws" / "src" / "grippers_arm"
+PROFILE_MODULE = GRIPPERS_ARM_SRC / "grippers_arm" / "floor_grasp_profiles.py"
+
+# floor_grasp_profiles.py가 `from grippers_arm.gripper_calibration import ...`로
+# 절대 import하므로, 단독 로드 전에 grippers_arm의 부모 디렉터리를 sys.path에
+# 얹어야 한다 — tests/test_align_to_idle.py와 같은 이유·같은 방식.
+if str(GRIPPERS_ARM_SRC) not in sys.path:
+    sys.path.insert(0, str(GRIPPERS_ARM_SRC))
 
 
 def _load_profiles():
@@ -35,7 +37,7 @@ def test_floor_grasp_profiles_match_measured_object_geometry():
     assert profiles["soccer_polyhedron"].close_width_mm == 35.0
     assert profiles["chess_rook"].close_width_mm == 15.0
     assert profiles["chess_knight"].close_width_mm == 13.0
-    assert all(profile.preopen_width_mm == 80.0 for profile in profiles.values())
+    assert all(profile.preopen_width_mm == 168.0 for profile in profiles.values())
     assert (
         profiles["chess_knight"].object_width_mm,
         profiles["chess_knight"].grasp_center_height_mm,

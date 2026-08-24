@@ -444,15 +444,29 @@ class ArmDriverNode(Node):
         )
 
     def _move_floor_stage(self, backend, profile, stage) -> None:
-        """검증된 자세 사이에서만 움직인다. 수평 IDLE↔SAFE는 직접 전환한다."""
+        """검증된 자세 사이에서만 움직인다. 수평 IDLE↔SAFE는 직접 전환한다.
+
+        servo1(Base)은 safe/grasp/midpoint 사이를 오가는 동안 절대 움직이지
+        않는다 — APPROACH 단계가 이미 물체를 정면에 맞춰 놨는데, 여기서
+        HORIZONTAL_SAFE_145_RAW/HORIZONTAL_GRASP_POSES_DEG에 박혀 있는
+        servo1 절대값으로 다시 돌리면 그 정렬이 깨진다(사용자 지시,
+        2026-08-24). idle/drop은 그대로 등록된 절대 servo1 값을 쓴다 —
+        idle은 물체를 다 옮기고 나서의 중립 자세(CARRY_IDLE)라 실제로
+        정면 정렬 값(IDLE_CRADLE_RAW)으로 되돌아가야 하고, drop도 별개의
+        고정 전달 자세이기 때문이다."""
         actual = {servo_id: backend.drv.get_position(servo_id) for servo_id in range(1, 6)}
         if any(position is None for position in actual.values()):
             raise ArmHardwareUnavailableError(f"현재 관절 위치 읽기 실패: {actual}")
 
+        frozen_servo1 = actual[1]
+
+        def _freeze_servo1(goals):
+            return {**goals, 1: frozen_servo1}
+
         idle = self._tuple_goals(IDLE_CRADLE_RAW)
-        safe = self._tuple_goals(HORIZONTAL_SAFE_145_RAW)
         drop = self._tuple_goals(BASKET_DROP_195_RAW)
-        grasp = self._raw_goals(backend, HORIZONTAL_GRASP_POSES_DEG[profile])
+        safe = _freeze_servo1(self._tuple_goals(HORIZONTAL_SAFE_145_RAW))
+        grasp = _freeze_servo1(self._raw_goals(backend, HORIZONTAL_GRASP_POSES_DEG[profile]))
         midpoint = {
             servo_id: round((grasp[servo_id] + safe[servo_id]) / 2.0) for servo_id in range(1, 6)
         }

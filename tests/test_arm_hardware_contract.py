@@ -140,6 +140,20 @@ def test_horizontal_idle_safe_transition_does_not_use_vertical_waypoints():
     assert "self._glide_to_raw_positions(backend, safe)" in source
 
 
+def test_floor_stage_freezes_servo1_for_safe_and_grasp_but_not_idle_or_drop():
+    """2026-08-24 사용자 지시: APPROACH가 이미 물체 정면으로 맞춘 servo1을
+    safe/grasp/midpoint 전환 중엔 절대 건드리지 않는다. idle(=CARRY_IDLE로
+    복귀)과 drop은 등록된 절대 servo1 값을 그대로 써야 하므로 freeze하지
+    않는다."""
+    source = ast.unparse(_function("_move_floor_stage"))
+
+    assert "frozen_servo1" in source
+    assert "_freeze_servo1(self._tuple_goals(HORIZONTAL_SAFE_145_RAW))" in source
+    assert "_freeze_servo1(self._raw_goals(backend, HORIZONTAL_GRASP_POSES_DEG[profile]))" in source
+    assert "idle = self._tuple_goals(IDLE_CRADLE_RAW)" in source
+    assert "drop = self._tuple_goals(BASKET_DROP_195_RAW)" in source
+
+
 def test_fold_to_cradle_checks_servos_before_and_after_motion():
     fn = _function("_on_fold_to_cradle")
     names = [_called_name(call) for call in _calls(fn)]

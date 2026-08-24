@@ -9,6 +9,13 @@ from dataclasses import dataclass
 
 from domain.values import Detection, ObjectClass
 
+# ros2_ws/src/grippers_arm/grippers_arm/gripper_calibration.py의 GRIPPER_OPEN_MM
+# 실측값과 같은 수다. domain 계층은 그 ROS 패키지를 import하지 않으므로(계층
+# 분리) 값만 그대로 복제해 둔다 — 그리퍼 기구가 바뀌어 GRIPPER_OPEN_MM이
+# 바뀌면 여기도 같이 바꿔야 한다. 2026-08-24: 사용자 지시로 80.0(임의로 절반쯤
+# 열기)에서 이 안전 최대치로 올림.
+GRIPPER_MAX_SAFE_OPEN_MM = 168.0
+
 
 @dataclass(frozen=True)
 class HorizontalGraspPlan:
@@ -23,9 +30,9 @@ def select_horizontal_grasp_plan(target: Detection) -> HorizontalGraspPlan:
 
     if target.cls is ObjectClass.GABE:
         if wide_mm <= 42.0:
-            return HorizontalGraspPlan("cube", 80.0, 30.0)
+            return HorizontalGraspPlan("cube", GRIPPER_MAX_SAFE_OPEN_MM, 30.0)
         # 별기둥과 축구공은 같은 20 mm 자세와 35 mm 닫힘값으로 검증됐다.
-        return HorizontalGraspPlan("soccer_polyhedron", 80.0, 35.0)
+        return HorizontalGraspPlan("soccer_polyhedron", GRIPPER_MAX_SAFE_OPEN_MM, 35.0)
 
     # 체스말 subtype이 없는 동안 실측 폭에 가장 가까운 프로필을 쓴다.
     chess = (
@@ -34,7 +41,7 @@ def select_horizontal_grasp_plan(target: Detection) -> HorizontalGraspPlan:
         (24.5, "chess_rook", 15.0),
     )
     _, profile, close_mm = min(chess, key=lambda item: abs(narrow_mm - item[0]))
-    return HorizontalGraspPlan(profile, 80.0, close_mm)
+    return HorizontalGraspPlan(profile, GRIPPER_MAX_SAFE_OPEN_MM, close_mm)
 
 
 # HANDOFF.md(2026-08-23)의 시각 서보 접근 루프(tools/perception/approach.py)는
