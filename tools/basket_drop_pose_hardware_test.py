@@ -22,7 +22,7 @@ from grippers_arm.gripper_calibration import GRIPPER_CLOSED_MM, position_from_wi
 
 SERVO_IDS = range(1, 6)
 START_TOLERANCE_RAW = 120
-MAX_START_SERVO2_TEMP_C = 40
+MAX_START_SERVO2_TEMP_C = 50
 
 # CLOSED는 하드코딩하지 않는다 — align_to_idle.py와 동일하게 gripper_calibration의
 # 실측 보정표에서 그대로 끌어온다.

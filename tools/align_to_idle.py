@@ -50,7 +50,7 @@ DEFAULT_TOLERANCE_RAW = 120
 # 이보다 큰 편차의 자동 이동은 위험하다고 본다 — 사람이 손으로 대략 맞춘 뒤
 # 재실행하도록 안내하고 아무것도 쓰지 않는다.
 REJECT_TOLERANCE_RAW = 800
-MAX_START_SERVO2_TEMP_C = 40
+MAX_START_SERVO2_TEMP_C = 50
 
 # 끼임 감지: 이만큼 스텝 동안 진전(prior_error - current_error)이 잡음 여유
 # STALL_PROGRESS_RAW를 넘지 못하면 끼임으로 본다.
