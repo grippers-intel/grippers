@@ -74,6 +74,18 @@ GRIPPER_MOTION_SETTLED_RAW = 3  # 이 폭 안에서만 변하면 멈춘 것으�
 GRIPPER_MOTION_TIMEOUT_SEC = 4.0  # 최대 행정(168mm↔9mm, 약 850raw)보다 넉넉하게
 FLOOR_POSE_STEPS = 30
 FLOOR_POSE_STEP_SEC = 0.10
+# 서보 goal_speed / acceleration — _glide_to_raw_positions가 매 이동마다 다시
+# 쓴다(왜 상속하면 안 되는지는 그 함수의 주석 참고).
+#
+# 단위는 실측으로 확인된 대로 대략 raw/s다(2026-08-24: 레지스터 150에서 실측
+# 153 raw/s). 이 값이 정하는 것은 **궤적의 모양이 아니라 상한**이다 — 실제
+# 움직임은 여전히 FLOOR_POSE_STEPS개의 waypoint를 FLOOR_POSE_STEP_SEC 간격으로
+# 찍는 보간이 만든다. 즉 이 상한은 보간이 요구하는 속도를 막지만 않으면 된다.
+# 가장 긴 이동은 IDLE->safe의 servo 2(1663 raw)로 3.0s 안에 끝내려면 554 raw/s가
+# 필요하다 — 2배 여유를 두고 잡는다. 팔이 검증된 것보다 빨라지는 게 아니라,
+# 원래 의도된 보간 궤적을 따라가지 못하게 막던 병목을 치우는 것이다.
+FLOOR_POSE_SPEED_RAW = 1200
+FLOOR_POSE_ACCEL_RAW = 30
 # 보간이 끝난 뒤 "실제 도달"을 기다리는 값 — 고정 sleep이 아니라 위치 폴링이다
 # (_wait_floor_pose_arrived 참고, 2026-08-24 실기로 필요성 확인).
 FLOOR_POSE_ARRIVE_POLL_SEC = 0.1
@@ -422,6 +434,22 @@ class ArmDriverNode(Node):
         start = {servo_id: backend.drv.get_position(servo_id) for servo_id in range(1, 6)}
         if any(position is None for position in start.values()):
             raise ArmHardwareUnavailableError(f"시작 관절 위치 읽기 실패: {start}")
+
+        # ⚠️ 반드시 매 이동마다 명시적으로 다시 쓴다 — 상속하면 안 된다.
+        # STS3215의 goal_speed는 서보 레지스터에 남는 상태값이라(driver_sdk의
+        # set_position docstring: "Speed/acceleration are set separately and
+        # cached by the controller"), 이 노드가 안 쓰면 **마지막으로 누가
+        # 무슨 값을 썼는지에 따라** 팔 속도가 조용히 달라진다.
+        #
+        # 2026-08-24 실기에서 정확히 이 일이 났다: tools/align_to_idle.py가
+        # 의도적으로 느린 SPEED_RAW=150을 쓰고 그 값이 레지스터에 남아,
+        # 이후 arm_driver의 IDLE->safe 이동(servo 2가 1663 raw)이 3.0s 글라이드
+        # 안에 끝나지 못했다. 실측 속도는 servo 2 = 153 raw/s, servo 4 =
+        # 151 raw/s로 레지스터 값에 정확히 붙어 있었고, 도달 대기 4.0s까지
+        # 다 쓰고도 각각 591 / 564 raw가 남아 safe 단계가 실패했다.
+        for servo_id in range(1, 6):
+            backend.drv.set_speed(servo_id, FLOOR_POSE_SPEED_RAW)
+            backend.drv.set_acceleration(servo_id, FLOOR_POSE_ACCEL_RAW)
 
         for step_index in range(1, FLOOR_POSE_STEPS + 1):
             ratio = step_index / FLOOR_POSE_STEPS
