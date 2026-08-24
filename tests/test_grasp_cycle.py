@@ -175,3 +175,41 @@ def test_held_verdict_uses_carry_idle_load_and_respects_quantisation():
 
     assert "record.get('load_carry_idle')" in source
     assert "0.0078" in source  # 두 양자 이상만 유의미로 본다
+
+
+def test_placement_is_confirmed_before_the_arm_descends():
+    """⚠️ 2026-08-24 실기: 물체를 너무 가까이 둬서 내려오는 그리퍼에 걸린
+    경우가 여러 번 있었다(사용자 보고). 관측은 이미 팔이 내려가기 전에 끝나
+    있으므로, 그 숫자를 보여주고 한 번 끊어 주면 손대서 고칠 기회가 생긴다 —
+    내려간 뒤에는 늦다."""
+    source = ast.unparse(_function("main"))
+
+    confirm_at = source.index("confirm_placement")
+    descend_at = source.index("move_floor_pose(profile, 'grasp')")
+    assert confirm_at < descend_at
+
+
+def test_placement_confirmation_can_reobserve_after_a_fix():
+    """배치를 고쳤으면 그 자리에서 다시 재야 한다 — 도구를 껐다 켜게 만들면
+    아무도 안 고친다."""
+    source = ast.unparse(_function("main"))
+
+    assert "while True:" in source
+    assert "answer != 's'" in source or "answer == 's'" in source
+
+
+def test_placement_confirmation_can_abort_without_moving_the_arm():
+    source = ast.unparse(_function("main"))
+    confirm_block = source[source.index("confirm_placement"):source.index("[2]")]
+
+    assert "'q'" in confirm_block
+    assert "return 1" in confirm_block
+
+
+def test_past_distances_only_counts_successful_runs_of_the_same_class():
+    """참고값은 '그 물체를 그 자리에서 실제로 잡은' 기록이어야 의미가 있다."""
+    source = ast.unparse(_function("past_distances"))
+
+    assert "r.get('empty')" in source
+    assert "r.get('raw_cls') != raw_cls" in source
+    assert "r.get('ok')" in source
