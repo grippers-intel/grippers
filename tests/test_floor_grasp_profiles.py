@@ -28,16 +28,44 @@ def test_floor_grasp_profiles_match_measured_object_geometry():
 
     assert (profiles["cube"].object_width_mm, profiles["cube"].grasp_center_height_mm) == (
         40.0,
-        20.0,
+        26.0,
     )
-    assert profiles["cube"].close_width_mm == 30.0
+    assert profiles["cube"].close_width_mm == 25.0
     assert profiles["star_column"].object_width_mm == 45.0
-    assert profiles["star_column"].close_width_mm == 35.0
+    assert profiles["star_column"].close_width_mm == 30.0
     assert profiles["soccer_polyhedron"].object_width_mm == 46.0
-    assert profiles["soccer_polyhedron"].close_width_mm == 35.0
-    assert profiles["chess_rook"].close_width_mm == 15.0
-    assert profiles["chess_knight"].close_width_mm == 13.0
+    assert profiles["soccer_polyhedron"].close_width_mm == 31.0
+    assert profiles["chess_rook"].close_width_mm == 9.5
+    assert profiles["chess_knight"].close_width_mm == 9.0
     assert all(profile.preopen_width_mm == 168.0 for profile in profiles.values())
+
+
+def test_every_profile_squeezes_by_the_same_margin_unless_the_jaw_bottoms_out():
+    """파지력을 키우는 유일한 수단이 위치 오차이므로(servo 6에는 토크 제한
+    레지스터가 없다), 여유는 물체마다 손으로 고른 값이 아니라 한 상수여야
+    한다 — 사용자 보고 "너무 흔들흔들거려"(2026-08-24)."""
+    module = _load_profiles()
+
+    for name, profile in module.FLOOR_GRASP_PROFILES.items():
+        squeeze = profile.object_width_mm - profile.close_width_mm
+        bottomed_out = profile.close_width_mm == module.GRIPPER_CLOSED_MM
+        assert bottomed_out or squeeze == module.GRIPPER_SQUEEZE_MM, name
+
+
+def test_the_thin_chess_pieces_are_the_ones_that_bottom_out():
+    """queen(17.0mm)·knight(22.0mm)은 기구 하한 9.0mm에 걸려 여유를 다 쓰지
+    못한다. queen의 실측 마진이 늘 가장 얇았던(2026-08-24, 4양자) 이유가
+    이것이고, 더 세게 쥐려면 GRIPPER_CLOSED_MM 재보정이 필요하다."""
+    module = _load_profiles()
+    profiles = module.FLOOR_GRASP_PROFILES
+
+    bottomed = {
+        name
+        for name, profile in profiles.items()
+        if profile.close_width_mm == module.GRIPPER_CLOSED_MM
+    }
+    assert bottomed == {"chess_queen", "chess_knight"}
+    assert profiles["chess_queen"].object_width_mm - profiles["chess_queen"].close_width_mm == 8.0
     assert (
         profiles["chess_knight"].object_width_mm,
         profiles["chess_knight"].grasp_center_height_mm,
@@ -74,8 +102,10 @@ def test_horizontal_arm_poses_keep_gabe_and_chess_heights_separate():
     assert module.HORIZONTAL_SAFE_145_RAW == (2029, 2492, 2513, 1133, 3007)
     assert module.BASKET_DROP_195_RAW == (2029, 2192, 2601, 1345, 3007)
     assert module.HORIZONTAL_CHESS_MID_40_DEG == (-1.67, 96.57, -9.79, -87.29, 84.30)
-    assert module.HORIZONTAL_GABE_LOW_20_DEG == (-1.39, 95.70, -18.16, -68.88, 84.18)
-    assert module.HORIZONTAL_CHESS_MID_40_DEG != module.HORIZONTAL_GABE_LOW_20_DEG
+    assert module.HORIZONTAL_GABE_LOW_26_DEG == (-1.39, 95.70, -18.16, -71.05, 84.18)
+    assert module.HORIZONTAL_CHESS_MID_40_DEG != module.HORIZONTAL_GABE_LOW_26_DEG
+    # 바닥을 긁던 20mm 자세는 되살아나면 안 된다.
+    assert not hasattr(module, "HORIZONTAL_GABE_LOW_20_DEG")
 
 
 def test_every_object_profile_has_a_horizontal_arm_pose():
@@ -99,6 +129,112 @@ def test_idle_cradle_and_transition_waypoints_match_measured_contract():
     assert module.IDLE_CRADLE_RAW == (2066, 829, 3092, 2751, 3071)
     assert module.VERTICAL_SAFE_OVERHEAD_DEG == (0.0, 9.2, 20.8, 55.3, 0.4)
     assert module.HORIZONTAL_OVERHEAD_RAW == (2044, 2712, 2380, 1000, 3006)
+
+
+def _fk():
+    """so101.urdf 순기구학. numpy가 없는 환경에서는 건너뛴다."""
+    import pytest
+
+    pytest.importorskip("numpy")
+    soarm_lab = ROOT / "third_party" / "soarm_provided_d" / "soarm_lab"
+    if not (soarm_lab / "so101.urdf").exists():
+        pytest.skip("so101.urdf 없음")
+    # soarm_lab/__init__.py는 pyserial까지 끌어오므로 패키지가 아니라 모듈을
+    # 직접 얹어 로드한다(같은 디렉터리를 sys.path에 넣는 flat import).
+    if str(soarm_lab) not in sys.path:
+        sys.path.insert(0, str(soarm_lab))
+    from fk_core import FKSo101
+
+    return FKSo101()
+
+
+def _tip(fk, pose_deg):
+    """(파지 중심 높이 mm, 전방 도달 mm, 접근축 pitch deg)."""
+    import math
+
+    import numpy as np
+
+    position, rotation = fk.fk_deg(list(pose_deg))
+    approach = rotation @ np.array([0.0, 0.0, 1.0])
+    pitch = math.degrees(math.asin(max(-1.0, min(1.0, float(approach[2])))))
+    return position[2] * 1000.0 + BASE_ABOVE_FLOOR_MM, position[0] * 1000.0, pitch
+
+
+# base_link 원점의 바닥 위 높이. 아래 테스트가 실측 자세들로부터 이 값을
+# 스스로 검증하므로 여기 적힌 숫자는 가정이 아니라 계약이다.
+BASE_ABOVE_FLOOR_MM = 98.0
+
+
+def test_fk_reproduces_the_measured_grasp_heights_from_a_single_base_offset():
+    """네 자세의 문서화된 파지 중심 높이가 FK z + 98mm와 전부 일치한다 —
+    이게 맞아야 아래 바닥 간섭 계산을 믿을 수 있다."""
+    fk = _fk()
+    module = _load_profiles()
+
+    measured = {
+        145.0: module.HORIZONTAL_SAFE_145_DEG,
+        60.0: module.HORIZONTAL_GRASP_POSES_DEG["chess_knight"],
+        50.0: module.HORIZONTAL_GRASP_POSES_DEG["chess_queen"],
+        45.0: module.HORIZONTAL_GRASP_POSES_DEG["chess_rook"],
+    }
+    for documented_mm, pose in measured.items():
+        height_mm, _, _ = _tip(fk, pose)
+        # SAFE_145는 다른 방식으로 실측돼 8mm 어긋난다. 파지 자세 셋은 1mm 안.
+        tolerance = 10.0 if documented_mm == 145.0 else 1.0
+        assert abs(height_mm - documented_mm) < tolerance, documented_mm
+
+
+def test_low_pose_lifts_the_finger_plates_clear_of_the_floor():
+    """사용자 보고(2026-08-24): cube/soccer에서 팔이 바닥에 약간 닿는다.
+    올린 자세는 파지 중심이 6mm 높고 접근축 기울기도 줄어야 한다 — 두 효과가
+    모두 손가락 판 최저점을 올린다."""
+    fk = _fk()
+    module = _load_profiles()
+
+    scraping = (-1.39, 95.70, -18.16, -68.88, 84.18)  # 폐기된 20mm 자세
+    old_h, old_x, old_pitch = _tip(fk, scraping)
+    new_h, new_x, new_pitch = _tip(fk, module.HORIZONTAL_GABE_LOW_26_DEG)
+
+    assert abs(old_h - 20.0) < 0.5
+    assert abs(new_h - 26.0) < 0.5
+    assert new_pitch > old_pitch  # 덜 숙인다(둘 다 음수)
+    assert abs(new_x - old_x) < 2.0  # 물체 배치 위치는 그대로여야 한다
+
+    for profile_name in ("cube", "star_column", "soccer_polyhedron"):
+        profile = module.FLOOR_GRASP_PROFILES[profile_name]
+        assert abs(profile.grasp_center_height_mm - new_h) < 0.5, profile_name
+
+
+def test_a_level_gripper_cannot_reach_the_low_grasp_height():
+    """기울기를 없애는 대신 높이를 올린 이유의 근거. 접근축을 체스 자세와
+    같은 수평(+0.51도)으로 둔 채 파지 중심 20mm에 닿으려면 shoulder_lift가
+    URDF 한계(±100도)를 넘어야 한다."""
+    import numpy as np
+
+    fk = _fk()
+    module = _load_profiles()
+    base_pose = module.HORIZONTAL_GABE_LOW_26_DEG
+    _, _, level_pitch = _tip(fk, module.HORIZONTAL_GRASP_POSES_DEG["chess_rook"])
+
+    def residual(joints):
+        height, reach, pitch = _tip(fk, (base_pose[0], *joints, base_pose[4]))
+        return np.array([height - 20.0, reach - 370.0, pitch - level_pitch])
+
+    joints = np.array(base_pose[1:4], dtype=float)
+    for _ in range(200):
+        r = residual(joints)
+        jacobian = np.zeros((3, 3))
+        for i in range(3):
+            nudged = joints.copy()
+            nudged[i] += 1e-4
+            jacobian[:, i] = (residual(nudged) - r) / 1e-4
+        joints = joints - np.clip(np.linalg.solve(jacobian, r), -5.0, 5.0)
+        if np.abs(residual(joints)).max() < 1e-5:
+            break
+
+    assert np.abs(residual(joints)).max() < 1e-3  # 해는 존재한다
+    shoulder_lift_limit = fk.limits_deg()["shoulder_lift"][1]
+    assert joints[0] > shoulder_lift_limit  # 다만 관절 한계 밖이다
 
 
 def test_safe_145_degree_and_raw_records_describe_the_same_pose():
