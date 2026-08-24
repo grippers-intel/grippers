@@ -67,6 +67,11 @@ GRIPPER_LOAD_MAX_RAW = 1023.0
 # 1.0s 안정 + 여유로 1.5s. 정착 타이밍은 서보 물리 지식이므로 도메인이 아니라
 # 여기 둔다 — GraspState 에 sleep 을 넣지 않는다.
 GRASP_SETTLE_SEC = 1.5
+# 그리퍼 개폐 "이동이 끝났는가" 판정 — 시간이 아니라 위치 정지로 본다
+# (_wait_gripper_motion_settled 참고, 2026-08-24 실기로 필요성 확인).
+GRIPPER_MOTION_POLL_SEC = 0.1
+GRIPPER_MOTION_SETTLED_RAW = 3  # 이 폭 안에서만 변하면 멈춘 것으로 본다
+GRIPPER_MOTION_TIMEOUT_SEC = 4.0  # 최대 행정(168mm↔9mm, 약 850raw)보다 넉넉하게
 FLOOR_POSE_STEPS = 30
 FLOOR_POSE_STEP_SEC = 0.10
 FLOOR_POSE_SETTLE_SEC = 1.0
@@ -536,6 +541,20 @@ class ArmDriverNode(Node):
             # 개방(OPEN_MM) 명령에도 똑같이 걸린다 — 개폐 판정이 필요 없는
             # 경로에서는 순수 지연이지만, 분기해서 "어떤 호출은 안 기다린다"를
             # 만드는 것보다 한 가지 계약(반환 시점 = 정착 완료)이 낫다.
+            #
+            # ⚠️ 2026-08-24 실기: 고정 sleep만으로는 부족하다. preopen을
+            # 80mm→168mm(GRIPPER_OPEN_MM)로 올리면서 닫힘 행정이 319raw에서
+            # 820raw로 2.6배 길어졌는데, GRASP_SETTLE_SEC(1.5s)은 짧은 행정
+            # 기준으로 잡힌 값이라 **아직 닫히는 중에 반환**됐다. 그 결과
+            # load_ratio가 "물체를 쥔 부하"가 아니라 "이동 중 모터 토크"
+            # (0.0704)로 읽혔고, 호출자(grasp_test_console 5단계·GraspState)가
+            # 곧바로 들어올리기를 시작해 닫힘과 상승이 겹쳤다 — 물체를 놓칠
+            # 확률이 매우 높은 순서다. 실제로 들어올린 뒤 load가 0.0352로
+            # 반토막 났다.
+            #
+            # 행정 길이는 요청 폭에 따라 달라지므로 상수를 다시 튜닝하는 대신
+            # **위치가 멈출 때까지 기다린 뒤** 부하 정착을 기다린다.
+            self._wait_gripper_motion_settled(backend)
             time.sleep(GRASP_SETTLE_SEC)
             response.ok = True
             response.load_ratio = self._read_load()
@@ -544,6 +563,33 @@ class ArmDriverNode(Node):
             response.ok = False
             response.load_ratio = 0.0
         return response
+
+    def _wait_gripper_motion_settled(self, backend) -> None:
+        """servo 6의 위치가 더 이상 변하지 않을 때까지 기다린다(최대
+        GRIPPER_MOTION_TIMEOUT_SEC).
+
+        "닫힘 완료"를 시간이 아니라 **관측**으로 판정하는 게 요점이다 —
+        요청 폭에 따라 행정 길이가 3배 가까이 달라지므로 어떤 고정 sleep도
+        한쪽 경우에는 틀린다(위 _on_set_gripper 주석의 2026-08-24 실기 참고).
+
+        물체를 쥐어 목표 위치까지 못 가고 멈추는 것도 '정착'이다 — 목표
+        도달 여부가 아니라 **정지 여부**를 본다. 위치를 못 읽으면(통신
+        순간 오류) 그 폴링만 건너뛰고, 타임아웃까지도 안 멈추면 조용히
+        빠져나온다 — 여기서 예외를 내면 정상 파지까지 실패로 만든다."""
+        previous = None
+        deadline = time.monotonic() + GRIPPER_MOTION_TIMEOUT_SEC
+        while time.monotonic() < deadline:
+            time.sleep(GRIPPER_MOTION_POLL_SEC)
+            current = backend.drv.get_position(GRIPPER_SERVO_ID)
+            if current is None:
+                continue
+            if previous is not None and abs(current - previous) <= GRIPPER_MOTION_SETTLED_RAW:
+                return
+            previous = current
+        self.get_logger().warn(
+            f"set_gripper: servo 6이 {GRIPPER_MOTION_TIMEOUT_SEC}s 안에 멈추지 않았습니다 "
+            "— 부하 판정이 이동 중 값일 수 있습니다"
+        )
 
     def _on_get_load(self, request, response):
         response.load_ratio = self._read_load()
