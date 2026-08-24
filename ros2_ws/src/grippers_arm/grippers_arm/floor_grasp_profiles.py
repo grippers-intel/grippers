@@ -51,9 +51,9 @@ HORIZONTAL_CHESS_KNIGHT_60_DEG = (-1.67, 86.10, 3.06, -89.67, 84.30)
 # 2026-08-20 실측 저부하 빈손 이동 자세. servo 1..5 raw를 그대로 보존한다.
 # torque를 현재 위치에 latch한 뒤 관절 load가 모두 0인 것을 확인했다.
 #
-# 2026-08-24: servo 1(Base)만 +10raw(약 0.88°) 재보정 — jog_idle_servo1.py로
-# torque 해제 후 손으로 돌려 그리퍼가 정면을 보도록 맞췄다(2045 → 2054).
-IDLE_CRADLE_RAW = (2054, 823, 3099, 2272, 3088)
+# 2026-08-24: servo 1-5 전체를 reteach_idle_pose.py로 손으로 다시 잡음 —
+# torque 해제 후 팔 전체를 원하는 IDLE 자세로 재포즈(그리퍼 정면 정렬 포함).
+IDLE_CRADLE_RAW = (2066, 829, 3092, 2751, 3071)
 
 # IDLE_CRADLE과 수평 자세 사이에서 차체 접촉 없이 검증한 중간 waypoint.
 VERTICAL_SAFE_OVERHEAD_DEG = (0.0, 9.2, 20.8, 55.3, 0.4)
