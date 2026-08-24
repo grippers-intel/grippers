@@ -396,14 +396,29 @@ def main():
 
         # 2단계 -------------------------------------------------------
         print("\n[2단계] GRASP 진입")
-        if not (node.move_floor_pose(profile, "safe") and node.move_floor_pose(profile, "grasp")):
-            print("  GRASP 진입 실패 — arm.log 확인")
-            log.log("grasp_entry", ok=False)
+        # ⚠️ 그리퍼를 **내려가기 전에** 연다(사용자 지시, 2026-08-24). 예전에는
+        # safe -> grasp로 다 내려간 뒤에 열었는데, 그러면 닫힌 손가락이 물체가
+        # 있는 공간을 그대로 통과해 내려가면서 물체를 밀어낸다. 열어 놓고
+        # 내려가면 손가락이 물체 양옆으로 비켜 지나간다.
+        #
+        # IDLE이 아니라 safe에서 여는 이유: IDLE은 팔이 차체 위에 접힌
+        # 자세라 거기서 168mm까지 벌리면 손가락이 차체에 닿을 수 있는데,
+        # 그건 아직 실측으로 확인된 적이 없다. safe는 차체 전면에서 185mm
+        # 앞·145mm 높이라 사방이 비어 있다. 내려가기 전에 연다는 목적은
+        # 여기서 이미 완전히 달성된다.
+        if not node.move_floor_pose(profile, "safe"):
+            print("  safe 자세 실패 — arm.log 확인")
+            log.log("grasp_entry", ok=False, stage="safe")
+            node.move_floor_pose(profile, "recover_idle")
+            return 3
+        node.set_gripper(preopen_mm)
+        print(f"  그리퍼 열림({preopen_mm}mm) — 내려가기 전에 연다")
+        if not node.move_floor_pose(profile, "grasp"):
+            print("  grasp 자세 실패 — arm.log 확인")
+            log.log("grasp_entry", ok=False, stage="grasp")
             node.move_floor_pose(profile, "recover_idle")
             return 3
         log.log("grasp_entry", ok=True)
-        node.set_gripper(preopen_mm)
-        print(f"  그리퍼 열림({preopen_mm}mm)")
 
         # perception_node가 /dev/gripper_cam을 쥐고 있어 넘겨받아야 한다
         # (grasp_test_console.py 3단계와 같은 이유). 끝나면 되살린다.
