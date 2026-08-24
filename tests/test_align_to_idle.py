@@ -200,3 +200,56 @@ def test_jam_stops_after_two_stalled_steps(monkeypatch):
     # a non-jammed servo also stopped short of the full glide, proving the
     # whole motion — not just the stuck joint — was cut off.
     assert driver.positions[1] != targets[1]
+
+
+class LaggingDriver(FakeDriver):
+    """A servo that closes only part of the commanded distance per write.
+
+    This is what the real STS3215s did on 2026-08-24: with servo 2 offset by
+    +1668 raw, the 12-step glide wrote waypoints faster than the joints could
+    follow, so the last waypoint landed while the arm was still 593 raw short.
+    The glide then read that lagging position as its "final" answer and main()
+    reported failure (exit 3) even though nothing was wrong mechanically — the
+    arm just needed a moment more. ``catch_up`` is the fraction of the
+    remaining distance the joint covers per write.
+    """
+
+    def __init__(self, positions, catch_up=0.45, **kwargs):
+        super().__init__(positions, **kwargs)
+        self.catch_up = catch_up
+
+    def set_position(self, servo_id, position):
+        self.calls.append(("set_position", servo_id, position))
+        current = self.positions[servo_id]
+        self.positions[servo_id] = round(current + self.catch_up * (position - current))
+        return True
+
+
+def test_lagging_servos_are_waited_out_instead_of_reported_as_failure(monkeypatch):
+    """2026-08-24 실기 회귀 — 보간 끝 = 도달 아님(converge_at_targets 참고).
+
+    servo 2가 +1668 raw 떨어진 상태에서 12스텝 보간을 돌리면 마지막 스텝
+    시점에는 아직 수백 raw가 남는다. 예전 코드는 그 값을 최종값으로 읽어
+    "허용치 초과"로 3을 반환했다. 이제는 goal이 이미 목표에 박혀 있으므로
+    도달할 때까지 기다렸다가 판정한다."""
+    targets, positions = _at_target({2: 1668, 4: -1602})
+    driver = LaggingDriver(positions)
+    monkeypatch.setattr(align, "_connect", lambda port: driver)
+
+    code = align.main(["--port", "/dev/fake", "--settle", "0"])
+
+    assert code == 0
+    for servo_id, target in targets.items():
+        assert abs(driver.positions[servo_id] - target) <= align.DEFAULT_TOLERANCE_RAW
+
+
+def test_converge_gives_up_after_the_timeout_without_raising(monkeypatch):
+    """도달을 못 해도 예외로 터지지 않고 마지막 present를 돌려준다 — 최종
+    판정과 종료 코드는 main()의 리포트가 담당한다."""
+    targets, positions = _at_target({3: 900})
+    # catch_up=0 → the joint accepts every write but never actually moves.
+    driver = LaggingDriver(positions, catch_up=0.0)
+
+    final = align.converge_at_targets(driver, targets, timeout=0.0, poll=0.0)
+
+    assert final[3] == positions[3]

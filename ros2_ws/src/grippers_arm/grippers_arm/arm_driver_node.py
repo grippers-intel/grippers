@@ -74,7 +74,10 @@ GRIPPER_MOTION_SETTLED_RAW = 3  # 이 폭 안에서만 변하면 멈춘 것으�
 GRIPPER_MOTION_TIMEOUT_SEC = 4.0  # 최대 행정(168mm↔9mm, 약 850raw)보다 넉넉하게
 FLOOR_POSE_STEPS = 30
 FLOOR_POSE_STEP_SEC = 0.10
-FLOOR_POSE_SETTLE_SEC = 1.0
+# 보간이 끝난 뒤 "실제 도달"을 기다리는 값 — 고정 sleep이 아니라 위치 폴링이다
+# (_wait_floor_pose_arrived 참고, 2026-08-24 실기로 필요성 확인).
+FLOOR_POSE_ARRIVE_POLL_SEC = 0.1
+FLOOR_POSE_ARRIVE_TIMEOUT_SEC = 4.0
 MAX_FLOOR_POSE_SERVO2_TEMP_C = 50
 FLOOR_POSE_START_TOLERANCE_RAW = 120
 
@@ -429,7 +432,50 @@ class ArmDriverNode(Node):
                         f"servo {servo_id} write 실패 — step {step_index}/{FLOOR_POSE_STEPS}"
                     )
             time.sleep(FLOOR_POSE_STEP_SEC)
-        time.sleep(FLOOR_POSE_SETTLE_SEC)
+
+        self._wait_floor_pose_arrived(backend, goal)
+
+    def _wait_floor_pose_arrived(self, backend, goal) -> None:
+        """보간이 끝난 뒤 servo 1..5가 실제로 goal에 도달할 때까지 기다린다.
+
+        ⚠️ 2026-08-24 실기에서 확인한 문제: 예전에는 여기서 그냥
+        ``time.sleep(FLOOR_POSE_SETTLE_SEC)``만 하고 끝냈다. 보간 waypoint를
+        다 써 넣었다는 것은 "명령을 다 보냈다"는 뜻일 뿐 "팔이 그 자세에
+        도달했다"는 뜻이 아닌데, 그 상태로 result.reached=True를 돌려주고
+        있었다. 그래서 safe 단계는 성공했다고 보고해 놓고, 곧이어 들어온
+        grasp 단계가 ``_near_pose(actual, safe)``(±120 raw)에서 떨어져
+        "grasp 이동 시작 자세가 등록된 이전 단계가 아닙니다"로 거부됐다
+        (/tmp/arm.log 1787562322). 즉 실패 지점과 실패 원인이 서로 다른
+        단계에 있어 로그만 봐서는 원인을 알 수 없었다.
+
+        도달 판정 기준은 ``FLOOR_POSE_START_TOLERANCE_RAW``로 다음 단계의
+        시작 자세 게이트와 **같은 값을 쓴다** — 이 함수가 통과시킨 자세는
+        정의상 다음 단계가 받아들이는 자세여야 하기 때문이다. 시간 안에
+        못 들어오면 어느 서보가 얼마나 남았는지 담아 예외를 낸다. 그래야
+        중력 처짐인지(특정 서보만 한 방향으로 남음) 통신/토크 문제인지
+        (여러 서보가 제각각) 로그 한 줄로 구분된다.
+        """
+        deadline = time.monotonic() + FLOOR_POSE_ARRIVE_TIMEOUT_SEC
+        residual = {}
+        while True:
+            actual = {servo_id: backend.drv.get_position(servo_id) for servo_id in range(1, 6)}
+            if any(position is None for position in actual.values()):
+                raise ArmHardwareUnavailableError(f"도달 확인 중 위치 읽기 실패: {actual}")
+            residual = {
+                servo_id: actual[servo_id] - goal[servo_id] for servo_id in range(1, 6)
+            }
+            if all(abs(error) <= FLOOR_POSE_START_TOLERANCE_RAW for error in residual.values()):
+                return
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(FLOOR_POSE_ARRIVE_POLL_SEC)
+
+        worst = max(residual, key=lambda servo_id: abs(residual[servo_id]))
+        raise ArmHardwareUnavailableError(
+            f"{FLOOR_POSE_ARRIVE_TIMEOUT_SEC}s 안에 목표 자세에 도달하지 못했습니다 — "
+            f"잔차(raw) {residual}, 최악 servo {worst} {residual[worst]:+d} "
+            f"(허용 ±{FLOOR_POSE_START_TOLERANCE_RAW})"
+        )
 
     def _raw_goals(self, backend, angles_deg):
         return {
