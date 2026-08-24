@@ -34,16 +34,56 @@ def _constants(names):
     }
 
 
-def test_the_four_phases_run_in_the_order_the_user_specified():
-    """사용자 지시(2026-08-24): APPROACH(space/a/d, c) -> g로 GRASP 및
-    CARRY_IDLE -> wasd 운반, c -> g로 바구니 투하 및 IDLE 복귀."""
+def test_the_phases_run_in_the_order_the_user_specified():
+    """사용자 지시(2026-08-24): APPROACH -> g로 팔 내리기 -> 미세 전진 ->
+    g로 파지 및 CARRY_IDLE -> 운반 -> g로 바구니 투하 및 IDLE 복귀."""
     source = ast.unparse(_function("main"))
 
     approach = source.index("APPROACH_KEYMAP")
-    grasp = source.index("move_floor_pose(profile, 'grasp')")
+    descend = source.index("move_floor_pose(profile, 'grasp')")
+    creep = source.index("CREEP_KEYMAP")
+    close = source.index("set_gripper(close_width_mm)")
     carry = source.index("CARRY_KEYMAP")
     drop = source.index("move_floor_pose(profile, 'drop')")
-    assert approach < grasp < carry < drop
+    assert approach < descend < creep < close < carry < drop
+
+
+def test_the_creep_phase_happens_after_the_arm_is_down_and_open():
+    """사용자 지시(2026-08-24): "GRASP 때 그리퍼 닫기 전에 전진 매커니즘".
+    열린 그리퍼가 이미 바닥 높이에 내려와 있어야 밀어 넣는 의미가 있다."""
+    source = ast.unparse(_function("main"))
+
+    assert source.index("set_gripper(preopen_mm)") < source.index("CREEP_KEYMAP")
+    assert source.index("CREEP_KEYMAP") < source.index("set_gripper(close_width_mm)")
+
+
+def test_the_creep_phase_cannot_rotate():
+    """⚠️ 이 단계에서 그리퍼는 바닥 2.6cm 위에 열린 채 떠 있다 — 제자리
+    회전은 그것을 바닥과 물체를 가로질러 옆으로 쓸고 간다. 팔이 바닥
+    높이에서 옆으로 쓸리는 움직임은 이 프로젝트에서 절대 금지다."""
+    keymap = _keymap("CREEP_KEYMAP")
+
+    assert all(angular_z == 0.0 for _, angular_z in keymap.values())
+    assert "a" not in keymap and "d" not in keymap
+
+
+def test_the_creep_phase_can_back_out():
+    """너무 밀고 들어가 물체가 그리퍼 목에 끼었을 때 빠져나올 수단."""
+    keymap = _keymap("CREEP_KEYMAP")
+
+    assert keymap["s"][0] < 0
+    assert keymap[" "][0] > 0
+    assert keymap["x"] == (0.0, 0.0)
+
+
+def test_grasping_waits_for_g_after_the_creep_stops():
+    """c로 멈춘 자리에서 g를 눌러야 닫는다 — 멈추자마자 닫으면 마지막으로
+    한 번 눈으로 확인할 틈이 없다."""
+    source = ast.unparse(_function("main"))
+
+    creep = source.index("CREEP_KEYMAP")
+    close = source.index("set_gripper(close_width_mm)")
+    assert "wait_for_key(kr, 'g'" in source[creep:close]
 
 
 def _keymap(name):
@@ -96,12 +136,14 @@ def test_both_stage_transitions_wait_for_the_g_key():
     """c로 멈춘 자리에서 사람이 g를 누를 때까지 팔은 움직이지 않는다."""
     source = ast.unparse(_function("main"))
 
-    assert source.count("wait_for_key(kr, 'g'") == 2
-    # 첫 g는 GRASP 앞, 두 번째 g는 투하 앞이다.
+    # 팔 내리기 앞 · 파지 앞 · 투하 앞, 세 번.
+    assert source.count("wait_for_key(kr, 'g'") == 3
     first = source.index("wait_for_key(kr, 'g'")
     second = source.index("wait_for_key(kr, 'g'", first + 1)
+    third = source.index("wait_for_key(kr, 'g'", second + 1)
     assert first < source.index("move_floor_pose(profile, 'safe')") < second
-    assert second < source.index("move_floor_pose(profile, 'drop')")
+    assert second < source.index("set_gripper(close_width_mm)") < third
+    assert third < source.index("move_floor_pose(profile, 'drop')")
 
 
 def test_gripper_opens_before_the_arm_descends():

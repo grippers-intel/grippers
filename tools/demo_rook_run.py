@@ -5,9 +5,11 @@
 사람이 키보드로 몰고, 파지와 투하만 자동으로 한다.
 
     [1] APPROACH   space=전진, s=후진, a/d=제자리 회전, x=정지, c=단계 종료
-    [2] g          GRASP — 열고 내려가 잡고 CARRY_IDLE까지 복귀
-    [3] 운반       w=전진, s=후진, a/d=제자리 회전, x=정지, c=단계 종료
-    [4] g          바구니 투하 후 IDLE 복귀
+    [2] g          팔 내리기 — safe -> 그리퍼 열기 -> grasp
+    [3] 미세 전진  space=전진, s=후진, x=정지, c=단계 종료
+        g          파지 -> midpoint -> safe -> CARRY_IDLE
+    [4] 운반       w=전진, s=후진, a/d=제자리 회전, x=정지, c=단계 종료
+    [5] g          바구니 투하 후 IDLE 복귀
 
 x와 c를 나눠 둔 것이 요점이다(사용자 지시, 2026-08-24). x는 그 자리에
 멈추기만 하고 단계 안에 머무르므로 다시 몰 수 있고, c는 그 단계를 끝낸다 —
@@ -86,10 +88,30 @@ CARRY_KEYMAP = {
     "x": lambda v: (0.0, 0.0),
 }
 
+# 팔이 바닥 높이까지 내려간 뒤의 미세 전진(사용자 지시, 2026-08-24).
+#
+# ⚠️ 회전 키를 **일부러** 빼 놓았다. 이 단계에서는 그리퍼가 바닥에서 2.6cm
+# 위에 열린 채 떠 있는데, 제자리 회전은 그 그리퍼를 바닥과 물체를 가로질러
+# 옆으로 쓸고 간다 — 팔이 바닥 높이에서 옆으로 쓸리는 움직임은 절대 안 된다는
+# 것이 이 프로젝트의 확립된 안전 규칙이다(arm_driver_node의
+# RETURN_TO_IDLE_DEFERRED_JOINTS 주석 참고). 좌우 정렬은 팔을 내리기 전
+# 1단계에서 끝내야 한다.
+#
+# 후진(s)은 남겨 둔다 — 너무 밀고 들어가 물체가 그리퍼 목에 끼었을 때
+# 빠져나올 유일한 수단이고, 열린 턱 사이에서 뒤로 빠지는 것 자체는 물체를
+# 건드리지 않는다.
+CREEP_KEYMAP = {
+    " ": lambda v: (v, 0.0),
+    "s": lambda v: (-v, 0.0),
+    "x": lambda v: (0.0, 0.0),
+}
+
 APPROACH_LEGEND = ("  [space]전진 [s]후진 [a]좌회전 [d]우회전(제자리) "
                    "[x]정지 [c]단계 종료")
 CARRY_LEGEND = ("  [w]전진 [s]후진 [a]좌회전 [d]우회전(제자리) "
                 "[x]정지 [c]단계 종료")
+CREEP_LEGEND = ("  [space]전진 [s]후진 [x]정지 [c]단계 종료 "
+                "— 팔이 내려가 있어 회전 키는 없습니다")
 
 # 닫힘/이동 뒤 load가 정착할 때까지의 여유(grasp_cycle.LOAD_SETTLE_S와 동일 근거).
 LOAD_SETTLE_S = 1.2
@@ -210,8 +232,8 @@ def main():
                       "(명령 적분값이라 실제 이동과 다를 수 있습니다)")
             log.log("approach_done", odom_m=travelled)
 
-            # --- [2] GRASP ---------------------------------------------
-            wait_for_key(kr, "g", "\n[2] 준비되면 [g] — 파지 후 CARRY_IDLE까지 갑니다")
+            # --- [2] 팔 내리기 -------------------------------------------
+            wait_for_key(kr, "g", "\n[2] 준비되면 [g] — 팔을 내립니다")
             print("  safe → 그리퍼 열기 → grasp")
             if not node.move_floor_pose(profile, "safe"):
                 recover_to_idle(node, profile, log, "safe 이동 실패")
@@ -224,6 +246,20 @@ def main():
                 recover_to_idle(node, profile, log, "grasp 이동 실패")
                 return 2
 
+            # --- [3] 미세 전진 -------------------------------------------
+            # 사용자 지시(2026-08-24): 닫기 전에 사람이 조금씩 밀어 넣는다.
+            # 팔을 내린 뒤에는 depth 카메라가 팔에 가려 거리 표시가 없다 —
+            # 눈으로 보고 판단해야 한다.
+            print("\n[3] 물체가 그리퍼 안에 들어오도록 전진하세요")
+            start, end = drive_phase(
+                node, kr, keymap=CREEP_KEYMAP, speed=FINE_SPEED_MPS,
+                legend=CREEP_LEGEND)
+            crept = odom_distance_m(start, end)
+            if crept is not None:
+                print(f"  정지 — odom 이동 {crept:.3f}m")
+            log.log("creep_done", odom_m=crept)
+
+            wait_for_key(kr, "g", "  [g] — 파지하고 CARRY_IDLE까지 갑니다")
             print("  그리퍼 닫기")
             resp = node.set_gripper(close_width_mm)
             if resp is None or not resp.ok:
@@ -250,8 +286,8 @@ def main():
                       "물체를 놓쳤을 수 있습니다. 계속할지 눈으로 확인하세요")
             log.log("grasp_verdict", carry_load=carry_load, empty=EMPTY_CARRY_LOAD)
 
-            # --- [3] 운반 ----------------------------------------------
-            print("\n[3] 바구니 앞까지 운반하세요")
+            # --- [4] 운반 ----------------------------------------------
+            print("\n[4] 바구니 앞까지 운반하세요")
             start, end = drive_phase(
                 node, kr, keymap=CARRY_KEYMAP, speed=FINE_SPEED_MPS,
                 legend=CARRY_LEGEND)
@@ -260,8 +296,8 @@ def main():
                 print(f"  정지 — odom 이동 {travelled:.3f}m")
             log.log("carry_done", odom_m=travelled)
 
-            # --- [4] 투하 ----------------------------------------------
-            wait_for_key(kr, "g", "\n[4] 바구니가 팔 아래 오면 [g] — 투하 후 IDLE 복귀")
+            # --- [5] 투하 ----------------------------------------------
+            wait_for_key(kr, "g", "\n[5] 바구니가 팔 아래 오면 [g] — 투하 후 IDLE 복귀")
             if not node.move_floor_pose(profile, "drop"):
                 recover_to_idle(node, profile, log, "drop 이동 실패")
                 return 5
