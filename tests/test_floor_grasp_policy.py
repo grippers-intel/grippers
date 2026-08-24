@@ -19,12 +19,12 @@ def test_gabe_policy_uses_measured_cube_and_wide_object_commands():
 
     assert (cube.profile, cube.preopen_width_mm, cube.close_width_mm) == (
         "cube",
-        80.0,
+        168.0,
         30.0,
     )
     assert (wide.profile, wide.preopen_width_mm, wide.close_width_mm) == (
         "soccer_polyhedron",
-        80.0,
+        168.0,
         35.0,
     )
 
