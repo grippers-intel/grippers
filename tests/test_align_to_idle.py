@@ -87,14 +87,15 @@ def _at_target(offset_by=None):
     return targets, positions
 
 
-def test_offset_over_800_is_rejected_by_the_pure_check():
+def test_large_offset_warns_but_does_not_block(monkeypatch):
+    """2026-08-24 사용자 지시로 편차 상한 거부를 껐다 — 큰 편차는 경고만
+    하고 정렬은 그대로 진행한다(align_to_idle.py LARGE_OFFSET_WARN_RAW 주석)."""
     targets, positions = _at_target({4: 900})
     driver = FakeDriver(positions)
 
-    problems = align.check_safe_to_align(driver.get_all_status(), targets)
-
-    assert any("servo 4" in problem for problem in problems)
-    assert driver.calls == []
+    assert align.check_safe_to_align(driver.get_all_status(), targets) == []
+    warnings = align.large_offsets(driver.get_all_status(), targets)
+    assert any("servo 4" in w for w in warnings)
 
 
 def test_hot_servo2_is_rejected_by_the_pure_check():
@@ -115,15 +116,17 @@ def test_offline_servo_is_rejected_by_the_pure_check():
     assert any("3" in problem for problem in problems)
 
 
-def test_large_offset_is_rejected_before_any_write(monkeypatch):
+def test_large_offset_still_aligns_end_to_end(monkeypatch):
+    """거부 가드를 끈 뒤에도 통신·과열 가드와 끼임 감지는 그대로다 — 여기서
+    고정하는 건 "큰 편차여도 실제로 목표까지 간다"이다."""
     targets, positions = _at_target({4: 900})
     driver = FakeDriver(positions)
     monkeypatch.setattr(align, "_connect", lambda port: driver)
 
-    code = align.main(["--port", "/dev/fake"])
+    code = align.main(["--port", "/dev/fake", "--settle", "0"])
 
-    assert code == 1
-    assert driver.calls == []
+    assert code == 0
+    assert driver.positions[4] == targets[4]
 
 
 def test_hot_servo2_is_rejected_before_any_write(monkeypatch):

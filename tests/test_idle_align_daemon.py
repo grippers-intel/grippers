@@ -139,11 +139,14 @@ def test_staying_online_does_not_realign(monkeypatch, tmp_path):
     assert aligned == []  # already online last tick — no new alignment triggered
 
 
-def test_large_offset_is_rejected_without_moving(monkeypatch, tmp_path):
+def test_offline_servo_is_rejected_without_moving(monkeypatch, tmp_path):
+    """편차 상한 거부는 2026-08-24에 껐지만(align_to_idle.py 참고) 통신 불가
+    서보는 여전히 거부한다 — 위치를 못 읽으면 보간 자체가 불가능하다."""
     _no_owner(monkeypatch)
     targets, positions = _at_target()
-    positions[4] += 900
-    driver = FakeDriver(positions)
+    online = {sid: True for sid in positions}
+    online[3] = False
+    driver = FakeDriver(positions, online=online)
     monkeypatch.setattr(align, "_connect", lambda port: driver)
     monkeypatch.setattr(daemon, "_probe_online", lambda port: True)
     log_path = str(tmp_path / "log.jsonl")
