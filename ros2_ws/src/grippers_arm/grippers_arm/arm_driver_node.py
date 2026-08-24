@@ -72,6 +72,11 @@ GRASP_SETTLE_SEC = 1.5
 GRIPPER_MOTION_POLL_SEC = 0.1
 GRIPPER_MOTION_SETTLED_RAW = 3  # 이 폭 안에서만 변하면 멈춘 것으로 본다
 GRIPPER_MOTION_TIMEOUT_SEC = 4.0  # 최대 행정(168mm↔9mm, 약 850raw)보다 넉넉하게
+# servo 6도 속도를 상속하지 않고 매번 직접 쓴다(_on_set_gripper 주석 참고).
+# 850 raw를 GRIPPER_MOTION_TIMEOUT_SEC의 절반 안에 끝낼 수 있는 값으로 잡는다 —
+# 그래야 위 타임아웃이 "느려서"가 아니라 "정말 뭔가에 물려서"만 걸린다.
+GRIPPER_SPEED_RAW = 600
+GRIPPER_ACCEL_RAW = 30
 FLOOR_POSE_STEPS = 30
 FLOOR_POSE_STEP_SEC = 0.10
 # 서보 goal_speed / acceleration — _glide_to_raw_positions가 매 이동마다 다시
@@ -96,8 +101,17 @@ FLOOR_POSE_PROGRESS_RAW = 3
 FLOOR_POSE_STALL_SEC = 1.5
 # 어떤 경우에도 여기서 영원히 매달리지 않게 하는 최후의 한계선.
 FLOOR_POSE_ARRIVE_MAX_SEC = 25.0
+# 시리얼 패킷 유실 한 번으로 이동이 끊기지 않게 하는 재시도
+# (_read_joint_positions 주석 참고).
+JOINT_READ_ATTEMPTS = 3
+JOINT_READ_RETRY_SEC = 0.05
 MAX_FLOOR_POSE_SERVO2_TEMP_C = 50
 FLOOR_POSE_START_TOLERANCE_RAW = 120
+# recover_idle이 "지금 어느 등록 자세에서 시작하는가"를 판정하는 허용치.
+# 정상 경로의 게이트(120)보다 넉넉하다 — 복구가 필요한 상황은 정의상 팔이
+# 목표에 못 미친 상황이라 120으로는 아무 자세에도 안 붙는다. 대신 이 값을
+# 넘으면 추측해서 움직이지 않고 사람에게 넘긴다(_move_floor_stage 참고).
+RECOVER_MATCH_TOLERANCE_RAW = 500
 
 # 기동 시 IDLE 대비 편차를 로그로만 남기는 임계값 — 절대 자동 이동의 기준이
 # 아니다. tools/align_to_idle.py가 실제 정렬을 담당한다.
@@ -437,9 +451,9 @@ class ArmDriverNode(Node):
 
     def _glide_to_raw_positions(self, backend, goal) -> None:
         """servo 1..5 raw 목표로 선형 보간 이동한다."""
-        start = {servo_id: backend.drv.get_position(servo_id) for servo_id in range(1, 6)}
-        if any(position is None for position in start.values()):
-            raise ArmHardwareUnavailableError(f"시작 관절 위치 읽기 실패: {start}")
+        start = self._read_joint_positions(backend)
+        if start is None:
+            raise ArmHardwareUnavailableError("시작 관절 위치 읽기 실패")
 
         # ⚠️ 반드시 매 이동마다 명시적으로 다시 쓴다 — 상속하면 안 된다.
         # STS3215의 goal_speed는 서보 레지스터에 남는 상태값이라(driver_sdk의
@@ -508,9 +522,16 @@ class ArmDriverNode(Node):
         best_error = None
         residual = {}
         while True:
-            actual = {servo_id: backend.drv.get_position(servo_id) for servo_id in range(1, 6)}
-            if any(position is None for position in actual.values()):
-                raise ArmHardwareUnavailableError(f"도달 확인 중 위치 읽기 실패: {actual}")
+            actual = self._read_joint_positions(backend)
+            if actual is None:
+                # 폴링 중 한 프레임을 놓친 것뿐일 수 있다 — 다음 폴에서 다시
+                # 본다. 정말 통신이 끊겼다면 아래 stall/hard 마감이 잡는다.
+                if time.monotonic() >= hard_deadline:
+                    raise ArmHardwareUnavailableError(
+                        f"{FLOOR_POSE_ARRIVE_MAX_SEC}s 동안 관절 위치를 읽지 못했습니다"
+                    )
+                time.sleep(FLOOR_POSE_ARRIVE_POLL_SEC)
+                continue
             residual = {
                 servo_id: actual[servo_id] - goal[servo_id] for servo_id in range(1, 6)
             }
@@ -535,6 +556,25 @@ class ArmDriverNode(Node):
             f"잔차(raw) {residual}, 최악 servo {worst} {residual[worst]:+d} "
             f"(허용 ±{FLOOR_POSE_START_TOLERANCE_RAW})"
         )
+
+    @staticmethod
+    def _read_joint_positions(backend, attempts=JOINT_READ_ATTEMPTS):
+        """servo 1..5 위치를 읽는다 — 하나라도 못 읽으면 None.
+
+        ⚠️ 2026-08-24 실기: 이동 중 폴링에서 servo 3만 한 번 None이 나와
+        (``{1: 2071, 2: 2488, 3: None, 4: 2598, 5: 3056}``) 복구 이동이
+        **한복판에서** 예외로 끊겼다. 팔은 이미 움직이던 중이라 어중간한
+        자세에 멈춰 섰다 — 즉 한 번의 시리얼 패킷 유실이 팔을 오도가도
+        못하게 만들었다. 읽기 실패는 그 자체로는 하드웨어 고장이 아니므로
+        몇 번 다시 시도하고, 그래도 안 되면 호출부가 판단하게 None을 준다.
+        """
+        for attempt in range(attempts):
+            positions = {servo_id: backend.drv.get_position(servo_id) for servo_id in range(1, 6)}
+            if all(position is not None for position in positions.values()):
+                return positions
+            if attempt + 1 < attempts:
+                time.sleep(JOINT_READ_RETRY_SEC)
+        return None
 
     def _raw_goals(self, backend, angles_deg):
         return {
@@ -564,9 +604,9 @@ class ArmDriverNode(Node):
         idle은 물체를 다 옮기고 나서의 중립 자세(CARRY_IDLE)라 실제로
         정면 정렬 값(IDLE_CRADLE_RAW)으로 되돌아가야 하고, drop도 별개의
         고정 전달 자세이기 때문이다."""
-        actual = {servo_id: backend.drv.get_position(servo_id) for servo_id in range(1, 6)}
-        if any(position is None for position in actual.values()):
-            raise ArmHardwareUnavailableError(f"현재 관절 위치 읽기 실패: {actual}")
+        actual = self._read_joint_positions(backend)
+        if actual is None:
+            raise ArmHardwareUnavailableError("현재 관절 위치 읽기 실패")
 
         frozen_servo1 = actual[1]
 
@@ -599,17 +639,52 @@ class ArmDriverNode(Node):
             # 시작 게이트에 걸려 거부되므로, 정작 복구가 필요한 순간에만
             # 복구가 막히는 모순이 생긴다.
             #
-            # 게이트를 건너뛰어도 되는 이유: 실패가 나는 곳은 IDLE<->safe
-            # 경로 위이고, 거기서 IDLE로 가는 것은 방금 지나온 길을 그대로
-            # 되짚는 것이라 새로운 공간을 쓸지 않는다. 되짚는 방향은 팔을
-            # 접는 쪽(중력이 돕는 쪽)이기도 하다.
+            # ⚠️⚠️ 2026-08-24 실기 사고 — 처음 구현은 여기서 곧장 idle로
+            # 보간했다. 근거로 "실패는 IDLE<->safe 경로 위에서 나니 되짚기만
+            # 하면 된다"고 적었는데 **그 전제가 틀렸다**. 실제 실패는 그리퍼
+            # 닫기 단계, 즉 팔이 **바닥에 내려간 grasp 자세**에서 났고, 거기서
+            # idle로 직선 보간하자 그리퍼가 바닥을 긁으며 쓸려 갔다. 사용자
+            # 지적: "이렇게 움직이는건 절대로 안돼".
             #
-            # ⚠️ 그래도 이건 **사람이 보고 있을 때 쓰는 복구 경로**다. FSM의
-            # 정상 흐름은 계속 "idle"을 써야 한다 — 게이트가 있는 쪽이
-            # 기본값이고 이건 예외다.
+            # 교훈: 팔이 **어느 자세에 도착하는가**만으로는 부족하고 **가는
+            # 경로 자체가 안전 요구사항**이다. 이 로봇의 작업 공간이 곧
+            # 바닥이기 때문이다. 그래서 복구도 정상 경로와 똑같이 **먼저
+            # 들어올린 뒤** 등록된 waypoint를 밟아 올라간다.
+            #
+            # 어느 자세에서 시작하는지 모르므로 가장 가까운 등록 자세를 찾아
+            # 거기서부터 검증된 상승 체인을 탄다. 어느 자세에도 못 붙으면
+            # **아무것도 하지 않는다** — 경로를 추측해 움직이는 것보다
+            # 자동 복구를 포기하고 사람에게 넘기는 쪽이 낫다.
             if self._near_pose(actual, idle):
                 return
-            self._glide_to_raw_positions(backend, idle)
+
+            named = {"grasp": grasp, "midpoint": midpoint, "safe": safe, "drop": drop}
+            distances = {
+                name: max(abs(actual[servo_id] - pose[servo_id]) for servo_id in range(1, 6))
+                for name, pose in named.items()
+            }
+            nearest = min(distances, key=distances.get)
+            if distances[nearest] > RECOVER_MATCH_TOLERANCE_RAW:
+                raise ValueError(
+                    "등록된 자세 어디에도 가깝지 않아 안전한 복구 경로를 정할 수 없습니다 "
+                    f"(현재 {actual}, 가장 가까운 것은 {nearest}로 {distances[nearest]} raw 차이, "
+                    f"허용 {RECOVER_MATCH_TOLERANCE_RAW}). 팔을 직접 보면서 "
+                    "tools/align_to_idle.py로 정렬하세요"
+                )
+
+            # 검증된 상승 체인 — 바닥에서 곧장 idle로 쓸어가지 않는다.
+            chain = {
+                "grasp": (midpoint, safe, idle),
+                "midpoint": (safe, idle),
+                "safe": (idle,),
+                "drop": (idle,),
+            }[nearest]
+            self.get_logger().warn(
+                f"recover_idle: 가장 가까운 등록 자세 '{nearest}'({distances[nearest]} raw)에서 "
+                f"{len(chain)}단계로 들어올려 복귀합니다"
+            )
+            for waypoint in chain:
+                self._glide_to_raw_positions(backend, waypoint)
             return
 
         if stage == "safe":
@@ -650,6 +725,14 @@ class ArmDriverNode(Node):
             # soarm.grip()을 쓰지 않는다 — 항상 SimBackend를 움직이는 함정이 있다
             # (모듈 docstring 참고). 실물 백엔드의 드라이버에 직접 명령한다.
             backend = soarm._backend(real=True)
+            # 관절 이동과 같은 이유로 속도를 상속하지 않고 직접 쓴다
+            # (_glide_to_raw_positions 주석 참고). 2026-08-24 실기에서
+            # align_to_idle의 SPEED_RAW=150이 servo 6에도 남아, 완전 개방
+            # (168mm)에서 파지(15mm)까지의 약 820 raw 행정이 150 raw/s로
+            # 5.5s가 걸렸다 — GRIPPER_MOTION_TIMEOUT_SEC(4.0s)을 넘겨
+            # "그리퍼 닫기 실패"로 끝났다.
+            backend.drv.set_speed(GRIPPER_SERVO_ID, GRIPPER_SPEED_RAW)
+            backend.drv.set_acceleration(GRIPPER_SERVO_ID, GRIPPER_ACCEL_RAW)
             if not backend.drv.set_position(GRIPPER_SERVO_ID, raw_position):
                 self.get_logger().error("set_gripper 실패: servo 6 position write 실패")
                 response.ok = False
