@@ -127,7 +127,13 @@ def test_horizontal_floor_pose_uses_checked_interpolated_joint_writes():
     assert "get_temperature" in execute_names
     assert "_near_pose" in move_stage_names
     assert "_glide_to_raw_positions" in move_stage_names
-    assert "get_position" in glide_names
+    # 위치 읽기는 재시도 헬퍼를 거친다 — 시리얼 패킷 유실 한 번으로 이동이
+    # 한복판에서 끊기지 않게 하기 위해서다(2026-08-24 실기,
+    # _read_joint_positions 주석 참고).
+    assert "_read_joint_positions" in glide_names
+    assert "get_position" in [
+        _called_name(call) for call in _calls(_function("_read_joint_positions"))
+    ]
     assert "set_position" in glide_names
 
 
@@ -332,3 +338,56 @@ def test_recover_idle_is_an_accepted_stage():
     source = ast.unparse(_function("_execute_floor_pose"))
 
     assert "recover_idle" in source
+
+
+def test_recover_idle_lifts_through_registered_waypoints_instead_of_sweeping():
+    """⚠️ 2026-08-24 실기 사고 회귀 — 복구가 바닥을 긁으면 안 된다.
+
+    첫 구현은 recover_idle에서 곧장 idle로 보간했다. 실제 실패는 팔이 바닥에
+    내려간 grasp 자세에서 났고, 거기서 idle로 직선 보간하자 그리퍼가 바닥을
+    긁으며 쓸려 갔다(사용자: "이렇게 움직이는건 절대로 안돼").
+
+    팔이 어느 자세에 **도착하는가**만으로는 부족하고 **가는 경로 자체가**
+    안전 요구사항이다 — 이 로봇의 작업 공간이 곧 바닥이기 때문이다."""
+    source = ast.unparse(_function("_move_floor_stage"))
+    recover = source[source.index("recover_idle"):]
+
+    # grasp에서 시작하면 반드시 midpoint를 거쳐 올라가야 한다.
+    assert "'grasp': (midpoint, safe, idle)" in recover
+    assert "'midpoint': (safe, idle)" in recover
+    # 등록된 자세 어디에도 안 붙으면 추측해서 움직이지 않는다.
+    assert "RECOVER_MATCH_TOLERANCE_RAW" in recover
+
+
+def test_recover_idle_refuses_rather_than_guessing_a_path():
+    source = ast.unparse(_function("_move_floor_stage"))
+
+    assert "안전한 복구 경로를 정할 수 없습니다" in source
+    limits = _module_constants(
+        ARM_NODE, {"RECOVER_MATCH_TOLERANCE_RAW", "FLOOR_POSE_START_TOLERANCE_RAW"}
+    )
+    # 복구 판정은 정상 게이트보다 넉넉해야 한다 — 복구가 필요한 상황은
+    # 정의상 팔이 목표에 못 미친 상황이라 120으로는 아무 자세에도 안 붙는다.
+    assert limits["RECOVER_MATCH_TOLERANCE_RAW"] > limits["FLOOR_POSE_START_TOLERANCE_RAW"]
+
+
+def test_gripper_sets_its_own_speed_instead_of_inheriting_it():
+    """2026-08-24 실기 회귀 — servo 6도 속도를 상속하면 안 된다.
+
+    align_to_idle의 SPEED_RAW=150이 servo 6에 남아, 완전 개방(168mm)에서
+    파지(15mm)까지의 약 820 raw 행정이 5.5s가 걸렸다 —
+    GRIPPER_MOTION_TIMEOUT_SEC(4.0s)을 넘겨 "그리퍼 닫기 실패"로 끝났다."""
+    names = [_called_name(call) for call in _calls(_function("_on_set_gripper"))]
+
+    assert "set_speed" in names
+    assert "set_acceleration" in names
+
+
+def test_gripper_speed_finishes_full_travel_well_inside_the_motion_timeout():
+    limits = _module_constants(
+        ARM_NODE, {"GRIPPER_SPEED_RAW", "GRIPPER_MOTION_TIMEOUT_SEC"}
+    )
+    full_travel_raw = 850  # 168mm <-> 9mm, GRIPPER_MOTION_TIMEOUT_SEC 주석의 실측값
+
+    travel_sec = full_travel_raw / limits["GRIPPER_SPEED_RAW"]
+    assert travel_sec < limits["GRIPPER_MOTION_TIMEOUT_SEC"] / 2
