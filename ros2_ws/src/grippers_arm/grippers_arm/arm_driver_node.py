@@ -92,9 +92,8 @@ FLOOR_POSE_STEP_SEC = 0.10
 FLOOR_POSE_SPEED_RAW = 1200
 FLOOR_POSE_ACCEL_RAW = 30
 
-# 관절별 출발 지연(0.0~1.0) — 보간 진행률의 앞쪽 이 비율만큼은 그 관절이
-# 제자리에 있다가, 남은 구간에서 목표까지 간다(_lagged_ratio 참고).
-# **최종 자세는 바뀌지 않는다. 경로만 바꾼다.**
+# 나머지 관절이 **완전히 멈춘 뒤** 별도 구간에서 단독으로 움직일 관절.
+# 최종 자세는 바뀌지 않는다 — 경로만 두 구간으로 쪼갠다.
 #
 # ⚠️ 2026-08-24 실기: 룩을 문 채 safe -> idle로 복귀하는데 그리퍼가 차체
 # 전면을 긁어 룩을 놓쳤다. 원인은 선형 보간이 모든 관절을 같은 비율로
@@ -106,16 +105,21 @@ FLOOR_POSE_ACCEL_RAW = 30
 #     servo 5(Wrist Roll)     +64 raw   (사실상 안 움직인다)
 #
 # 즉 어깨가 내려가는 **동안** 손목이 같은 비율로 접히니, 물체를 문 그리퍼가
-# 팔이 충분히 물러나기 전에 차체 전면에 닿는다. 사용자 지적: "너무 일찍
-# 굽혀지면서 차체 정면을 긁어".
+# 팔이 충분히 물러나기 전에 차체 전면에 닿는다.
 #
-# 손목(servo 4)을 늦춰 어깨가 먼저 물러난 뒤에 접히게 한다. 사용자가
-# 지목한 servo 5는 이 구간에서 64 raw밖에 안 움직여 늦춰도 달라지는 게
-# 없으므로 대상이 아니다 — 물리적 관찰(손목이 일찍 접힌다)은 정확했고
-# 번호만 어긋났다.
+# 처음에는 손목에 부분 지연(진행률 45%까지 정지)만 줬는데 실기에서 **여전히
+# 심하게 긁었다**. 겹치는 구간이 조금이라도 남아 있으면 소용이 없다는 뜻이라,
+# 사용자 지시대로 아예 분리한다: 나머지 관절이 목표에 도달해 정지한 것을
+# 확인한 뒤에야 손목이 움직이기 시작한다.
 #
-# ⚠️ 이 값은 아직 실기 1회 검증 전이다. 팔을 보면서 조정할 것.
-FLOOR_POSE_JOINT_LAG = {4: 0.45}
+# 사용자가 처음 지목한 servo 5는 이 구간에서 64 raw밖에 안 움직여 늦춰도
+# 달라지는 게 없다 — 물리적 관찰(손목이 일찍 접힌다)은 정확했고 번호만
+# 어긋났다.
+#
+# 참고: floor_grasp_profiles.HORIZONTAL_OVERHEAD_RAW는 "IDLE_CRADLE과 수평
+# 자세 사이에서 차체 접촉 없이 검증한 중간 waypoint"로 실측돼 있다. 이
+# 분리로도 부족하면 그 waypoint를 safe<->idle 경로에 끼우는 것이 다음 수단이다.
+FLOOR_POSE_DEFERRED_JOINTS = (4,)
 # 보간이 끝난 뒤 "실제 도달"을 기다리는 값 — 고정 sleep이 아니라 위치 폴링이다
 # (_wait_floor_pose_arrived 참고, 2026-08-24 실기로 필요성 확인).
 FLOOR_POSE_ARRIVE_POLL_SEC = 0.1
@@ -148,20 +152,6 @@ CRADLE_XYZ_M = [0.15, 0.0, 0.20]  # TODO: INSERT 후 복귀 경로 별도 실측
 # MentorPi 베이스 보드가 잡는 장치. arm_port가 이걸 가리키면 팔 드라이버가
 # 베이스 보드의 시리얼을 열어 버려 주행 명령이 통째로 깨진다.
 BASE_BOARD_DEVICE = "/dev/rrc"
-
-
-def _lagged_ratio(ratio: float, lag: float) -> float:
-    """보간 진행률 ratio를 관절별로 늦춘다 — lag만큼 제자리에 있다가
-    남은 구간에서 목표까지 간다. lag=0이면 기존과 똑같은 선형 보간이다.
-
-    두 성질이 중요하다: (1) 어떤 lag 값이든 ratio=1에서 정확히 1을 돌려주므로
-    최종 목표 자세는 절대 달라지지 않는다 — 이건 **경로만 바꾸는 장치**다.
-    (2) lag 구간 동안 그 관절은 완전히 정지해 있다(0을 돌려준다)."""
-    if lag <= 0.0:
-        return ratio
-    if ratio <= lag:
-        return 0.0
-    return (ratio - lag) / (1.0 - lag)
 
 
 class ArmPortConflictError(RuntimeError):
@@ -489,10 +479,41 @@ class ArmDriverNode(Node):
         self._glide_to_raw_positions(backend, goal)
 
     def _glide_to_raw_positions(self, backend, goal) -> None:
-        """servo 1..5 raw 목표로 선형 보간 이동한다."""
+        """servo 1..5 raw 목표로 이동한다.
+
+        FLOOR_POSE_DEFERRED_JOINTS에 든 관절은 **나머지가 완전히 멈춘 뒤**
+        별도 구간에서 단독으로 움직인다(그 상수의 주석 참고). 지연 대상이
+        없으면 예전과 똑같은 한 번의 선형 보간이다."""
+        deferred = tuple(servo_id for servo_id in FLOOR_POSE_DEFERRED_JOINTS if servo_id in goal)
+        if not deferred:
+            self._glide_phase(backend, goal)
+            return
+
         start = self._read_joint_positions(backend)
         if start is None:
             raise ArmHardwareUnavailableError("시작 관절 위치 읽기 실패")
+
+        # 1구간: 지연 관절은 출발 위치에 **고정**하고 나머지만 목표로.
+        hold_deferred = {**goal, **{servo_id: start[servo_id] for servo_id in deferred}}
+        self._glide_phase(backend, hold_deferred, label="1/2 지연관절 고정")
+        # 2구간: 나머지는 이미 목표에 있으므로 지연 관절만 실제로 움직인다.
+        self._glide_phase(backend, goal, label=f"2/2 servo {list(deferred)} 단독")
+
+    def _glide_phase(self, backend, goal, label=None) -> None:
+        """한 번의 선형 보간 구간 — 목표에 이미 있으면 아무것도 하지 않는다."""
+        start = self._read_joint_positions(backend)
+        if start is None:
+            raise ArmHardwareUnavailableError("시작 관절 위치 읽기 실패")
+
+        moving = {
+            servo_id: goal[servo_id] - start[servo_id]
+            for servo_id in range(1, 6)
+            if abs(goal[servo_id] - start[servo_id]) > FLOOR_POSE_START_TOLERANCE_RAW
+        }
+        if not moving:
+            return  # 이미 도착해 있다 — 빈 구간에 시간을 쓰지 않는다
+        if label is not None:
+            self.get_logger().info(f"glide[{label}]: 이동 관절 {moving}")
 
         # ⚠️ 반드시 매 이동마다 명시적으로 다시 쓴다 — 상속하면 안 된다.
         # STS3215의 goal_speed는 서보 레지스터에 남는 상태값이라(driver_sdk의
@@ -513,8 +534,7 @@ class ArmDriverNode(Node):
         for step_index in range(1, FLOOR_POSE_STEPS + 1):
             ratio = step_index / FLOOR_POSE_STEPS
             for servo_id in range(1, 6):
-                joint_ratio = _lagged_ratio(ratio, FLOOR_POSE_JOINT_LAG.get(servo_id, 0.0))
-                position = round(start[servo_id] + joint_ratio * (goal[servo_id] - start[servo_id]))
+                position = round(start[servo_id] + ratio * (goal[servo_id] - start[servo_id]))
                 if not backend.drv.set_position(servo_id, position):
                     raise ArmHardwareUnavailableError(
                         f"servo {servo_id} write 실패 — step {step_index}/{FLOOR_POSE_STEPS}"
