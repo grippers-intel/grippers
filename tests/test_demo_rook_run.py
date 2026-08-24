@@ -39,11 +39,57 @@ def test_the_four_phases_run_in_the_order_the_user_specified():
     CARRY_IDLE -> wasd 운반, c -> g로 바구니 투하 및 IDLE 복귀."""
     source = ast.unparse(_function("main"))
 
-    approach = source.index("SPACE_KEYMAP")
+    approach = source.index("APPROACH_KEYMAP")
     grasp = source.index("move_floor_pose(profile, 'grasp')")
-    carry = source.index("WASD_KEYMAP")
+    carry = source.index("CARRY_KEYMAP")
     drop = source.index("move_floor_pose(profile, 'drop')")
     assert approach < grasp < carry < drop
+
+
+def _keymap(name):
+    """모듈 상단의 키맵을 {키: (linear_x, angular_z)}로 평가한다.
+
+    람다라 literal_eval이 안 되므로 그 모듈 상수만 골라 실행한다 — 도구
+    전체를 import하면 rclpy가 필요해진다."""
+    module = {}
+    for node in _tree().body:
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+            if node.targets[0].id in ("TURN_IN_PLACE_RAD_S", name):
+                exec(compile(ast.Module([node], []), "<keymap>", "exec"), module)
+    return {key: fn(1.0) for key, fn in module[name].items()}
+
+
+def test_left_and_right_rotate_in_place_at_the_measured_speed():
+    """사용자 지시(2026-08-24): "좌우회전은 제자리에서 0.3으로".
+
+    0.3은 임의의 값이 아니라 제자리 회전 시험에서 실제로 돌아간 하한 근처다 —
+    더 낮추면 정지마찰에 걸려 명령이 나가도 바퀴가 안 돌 수 있고, /odom_raw는
+    명령을 적분할 뿐이라 그 사실이 로그에 드러나지도 않는다."""
+    turn = _constants({"TURN_IN_PLACE_RAD_S"})["TURN_IN_PLACE_RAD_S"]
+    assert turn >= 0.3
+
+    for name in ("APPROACH_KEYMAP", "CARRY_KEYMAP"):
+        keymap = _keymap(name)
+        assert keymap["a"] == (0.0, turn), name
+        assert keymap["d"] == (0.0, -turn), name
+
+
+def test_x_holds_in_place_and_c_ends_the_phase():
+    """x는 멈추기만 하고 단계 안에 머무른다 — "멈춰서 확인한 뒤 조금 더
+    간다"가 시연에서 제일 자주 하는 동작이라 단계를 끝내면 안 된다."""
+    for name in ("APPROACH_KEYMAP", "CARRY_KEYMAP"):
+        keymap = _keymap(name)
+        assert keymap["x"] == (0.0, 0.0), name
+        assert "c" not in keymap, name  # c는 drive_phase가 break로 처리한다
+
+
+def test_the_approach_phase_can_actually_reverse():
+    """관측 안내가 "너무 가까움 — 후진"이라고 말하는 이상, 후진 키가 있어야
+    그 조언이 실행 가능하다."""
+    keymap = _keymap("APPROACH_KEYMAP")
+
+    assert keymap["s"][0] < 0
+    assert keymap[" "][0] > 0
 
 
 def test_both_stage_transitions_wait_for_the_g_key():

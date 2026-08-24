@@ -657,6 +657,7 @@ def drive_phase(
     report_area: GripperCam | None = None,
     on_area_sample=None,
     report=None,
+    legend=None,
 ):
     """`c`가 눌릴 때까지 `keymap`에 정의된 키로 cmd_vel을 발행한다.
     반환값: (odom 시작좌표, odom 종료좌표) — 둘 다 None이면 오도메트리 미수신.
@@ -665,8 +666,10 @@ def drive_phase(
     "언제 c를 누를지"를 알려주는 용도로, 무엇을 보여줄지는 호출부가 정한다
     (그리퍼캠 면적은 report_area, depth 거리는 demo_rook_run.py 참고)."""
     kr.ensure_cbreak()  # 위 ensure_cbreak docstring 참고 — 키가 안 먹는 사고 방지
-    print("  [space]/[a]/[d] 전진, [c] 정지" if "w" not in keymap else
-          "  [w]전진 [s]후진 [a]전진+좌회전 [d]전진+우회전, [c] 정지")
+    if legend is None:
+        legend = ("  [space]/[a]/[d] 전진, [c] 정지" if "w" not in keymap else
+                  "  [w]전진 [s]후진 [a]전진+좌회전 [d]전진+우회전, [c] 정지")
+    print(legend)
     node.pump()
     start_pose = node._pose
     linear_x, angular_z = 0.0, 0.0
