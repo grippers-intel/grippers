@@ -151,3 +151,87 @@ def test_main_restarts_perception_node_it_killed():
     assert "restart_perception_node" in finalbody
     # 카메라를 놓아준 뒤에 되살려야 장치 경합이 안 난다.
     assert finalbody.index("cam.close") < finalbody.index("restart_perception_node")
+
+
+def _turn_burst_seconds(lateral_m, forward_m):
+    """도구의 turn_burst_seconds를 테스트에서 재현한다(rclpy 의존으로 import 불가)."""
+    import math
+
+    c = _constants({
+        "TURN_BURST_GAIN", "TURN_BURST_MIN_S", "TURN_BURST_MAX_S", "ALIGN_TURN_RAD_S",
+    })
+    if forward_m <= 0.0:
+        return c["TURN_BURST_MIN_S"]
+    theta = math.atan2(abs(lateral_m), forward_m)
+    seconds = c["TURN_BURST_GAIN"] * theta / c["ALIGN_TURN_RAD_S"]
+    return max(c["TURN_BURST_MIN_S"], min(c["TURN_BURST_MAX_S"], seconds))
+
+
+def test_turn_burst_shrinks_as_the_error_shrinks():
+    """⚠️ 2026-08-24 실기 회귀 — 고정 0.30s 버스트로는 40회 내내 진동만 했다.
+
+    버스트 1회가 4.30도라 48cm에서 물체가 41px(3.4cm) 움직이는데, 허용
+    오차 ±1cm는 12.3px였다. 한 걸음이 허용폭의 3.4배면 원리적으로 절대
+    수렴할 수 없다 — 로봇은 시킨 대로 정확히 움직였고 틀린 건 제어 법칙이었다."""
+    far = _turn_burst_seconds(0.15, 0.48)
+    near = _turn_burst_seconds(0.02, 0.48)
+
+    assert far > near
+
+
+def test_turn_burst_does_not_overshoot_the_tolerance_band():
+    """허용 오차 언저리의 오차에 대한 한 걸음은 허용폭을 넘지 않아야 한다 —
+    이게 깨지면 진동한다."""
+    import math
+
+    c = _constants({"LATERAL_TOL_M", "ALIGN_TURN_RAD_S"})
+    forward_m = 0.48
+    lateral_m = c["LATERAL_TOL_M"] * 1.5  # 막 허용폭을 벗어난 상태
+
+    seconds = _turn_burst_seconds(lateral_m, forward_m)
+    swept_m = forward_m * math.tan(seconds * c["ALIGN_TURN_RAD_S"])
+
+    assert swept_m < lateral_m + c["LATERAL_TOL_M"]
+
+
+def test_turn_burst_is_clamped_at_both_ends():
+    c = _constants({"TURN_BURST_MIN_S", "TURN_BURST_MAX_S"})
+
+    assert _turn_burst_seconds(0.0001, 0.48) == c["TURN_BURST_MIN_S"]
+    assert _turn_burst_seconds(5.0, 0.10) == c["TURN_BURST_MAX_S"]
+    assert c["TURN_BURST_MIN_S"] < c["TURN_BURST_MAX_S"]
+
+
+def test_turn_burst_gain_approaches_without_overshooting():
+    """계산값 전부를 가면 매번 목표를 정확히 노려 오차/지연에 그대로 노출된다.
+    1보다 작은 이득으로 점근한다."""
+    assert 0.0 < _constants({"TURN_BURST_GAIN"})["TURN_BURST_GAIN"] < 1.0
+
+
+def test_align_rejects_observation_jumps():
+    """2026-08-24 실기 40번째 반복에서 x가 300 -> 616으로 튀며 좌우 오차가
+    +25.5cm로 보고됐다 — 그 값으로 회전하면 로봇이 엉뚱하게 돈다."""
+    source = ast.unparse(_function("align"))
+
+    assert "OBSERVATION_JUMP_PX" in source
+    jump = _constants({"OBSERVATION_JUMP_PX"})["OBSERVATION_JUMP_PX"]
+    # 정상 회전 1회의 최대 이동량(약 41px)보다 충분히 커야 정상 동작을
+    # 오검출로 버리지 않는다.
+    assert jump > 41 * 2
+
+
+def test_align_does_not_call_a_direction_reversal_a_stall():
+    """방향을 바꾼 직후 한 번은 백래시/관성 때문에 거의 안 움직인다 — 실기
+    로그에서 반전 직후 x 변화가 0.3px였다. 끼임으로 오판하면 안 된다."""
+    source = ast.unparse(_function("align"))
+
+    assert "reversed_direction" in source
+
+
+def test_turn_only_mode_skips_forward_correction():
+    """사용자 요청(2026-08-24): 전방은 빼고 회전만 먼저 본다."""
+    source = ast.unparse(_function("align"))
+
+    assert "turn_only" in source
+    # turn_only일 때는 drive_burst에 도달하기 전에 반환해야 한다.
+    assert source.index("if turn_only:") < source.index("drive_burst")
