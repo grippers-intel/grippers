@@ -72,14 +72,35 @@ def set_min_width(node, width_mm) -> bool:
         print("  [경고] 파라미터 설정 응답 없음")
         return False
     results = future.result().results
-    return bool(results) and all(r.successful for r in results)
+    if not results:
+        print("  [경고] 파라미터 설정 결과가 비어 있습니다")
+        return False
+    failed = [r for r in results if not r.successful]
+    if failed:
+        print(f"  [경고] 파라미터 설정 거부됨: {failed[0].reason or '(사유 없음)'}")
+        return False
+    return True
 
 
-def sample(node, log, label, commanded_mm):
-    """한 스텝의 실측. (present_raw, 폭mm, load, temp) 또는 None."""
-    state = node.arm_state()
+def sample(node, log, label, commanded_mm, attempts=3):
+    """한 스텝의 실측. (present_raw, 폭mm, load, temp) 또는 None.
+
+    ⚠️ 한 번 실패했다고 스윕 전체를 접지 않는다(2026-08-25). 이 버스는
+    패킷을 이따금 흘려서 정지 상태에서도 묶음 읽기가 10번에 1번쯤 깨지는데,
+    그때마다 측정을 처음부터 다시 하게 되면 아무것도 잴 수 없다."""
+    state = None
+    for attempt in range(attempts):
+        state = node.arm_state()
+        if state is not None and state.ok:
+            break
+        why = "응답 없음" if state is None else (state.message or "ok=False")
+        print(f"  [{commanded_mm:5.1f}mm] 서보 읽기 실패({why}) — "
+              f"재시도 {attempt + 1}/{attempts}")
+        time.sleep(0.3)
     if state is None or not state.ok:
-        print(f"  [{commanded_mm:5.1f}mm] 서보 상태 읽기 실패")
+        why = "응답 없음" if state is None else (state.message or "ok=False")
+        print(f"  [{commanded_mm:5.1f}mm] 서보 읽기 실패 — {why}")
+        log.log("force_sample_failed", label=label, commanded_mm=commanded_mm, why=why)
         return None
     raw = int(state.position_raw[5])
     width = width_from_position(raw)
@@ -176,6 +197,16 @@ def main():
     node = GraspTestNode()
     lowered = False
     try:
+        # 사전 점검 — 이미 뜨겁거나 버스가 안 읽히면 아무것도 하지 않는다.
+        pre = sample(node, log, f"{label}:사전점검", start_mm)
+        if pre is None:
+            print("[실패] 시작 전 서보 상태를 읽지 못했습니다 — arm_driver를 확인하세요")
+            return 1
+        if pre[3] > MAX_SERVO6_TEMP_C:
+            print(f"[실패] servo 6이 이미 {pre[3]}°C입니다 "
+                  f"(상한 {MAX_SERVO6_TEMP_C}°C) — 식힌 뒤 다시 하세요")
+            return 1
+
         lowered = set_min_width(node, args.min_mm)
         if not lowered:
             print("[실패] 그리퍼 하한을 낮추지 못했습니다 — arm_driver가 최신인지 확인하세요")

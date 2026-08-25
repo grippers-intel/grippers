@@ -668,9 +668,28 @@ def test_arm_state_service_reports_unreadable_servos_instead_of_zeroing_them():
 
     assert "online.append(False)" in source
     assert "response.ok = not offline" in source
-    names = [_called_name(call) for call in _calls(fn)]
+    source_names = ast.unparse(fn)
     for reader in ("get_position", "get_load", "get_temperature", "get_torque"):
-        assert reader in names
+        assert reader in source_names
+
+
+def test_arm_state_retries_each_register_read():
+    """⚠️ 회귀 — get_arm_state는 서보 6개 × 레지스터 4개 = 24회 연속 읽기다.
+    이 버스는 패킷을 이따금 흘리므로, 재시도가 없으면 정지 상태에서도 묶음이
+    10번에 1번꼴로 깨진다(2026-08-25 실측). 파지력 측정 도구가 첫 표본에서
+    그대로 멈췄다."""
+    source = ast.unparse(_function("_on_get_arm_state"))
+
+    # 드라이버를 직접 부르지 않고 반드시 재시도 헬퍼를 거친다.
+    assert "_read_with_retry" in source
+    assert "backend.drv.get_position(servo_id)" not in source
+
+    retry = _function("_read_with_retry")
+    retry_source = ast.unparse(retry)
+    assert "JOINT_READ_ATTEMPTS" in ast.unparse(retry.args)
+    assert "JOINT_READ_RETRY_SEC" in retry_source
+    # 이동 중 폴링과 같은 계약 — 다 실패해야 None이다.
+    assert retry_source.rstrip().endswith("return None")
 
 
 # --- 파지 전용 그리퍼 하한 (2026-08-25) --------------------------------------

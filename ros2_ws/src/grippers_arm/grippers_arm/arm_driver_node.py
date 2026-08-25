@@ -1036,6 +1036,25 @@ class ArmDriverNode(Node):
         residual = {servo_id: final[servo_id] - idle[servo_id] for servo_id in range(1, 6)}
         self.get_logger().info(f"자동 정렬 완료 — 잔차 {residual}")
 
+    @staticmethod
+    def _read_with_retry(reader, servo_id, attempts=JOINT_READ_ATTEMPTS):
+        """레지스터 하나를 읽는다 — 실패하면 몇 번 다시 시도한다.
+
+        ⚠️ 2026-08-25 실기: get_arm_state는 서보 6개 × 레지스터 4개 = **24회
+        연속 읽기**인데 처음엔 재시도를 안 넣었다. 이 버스는 패킷을 이따금
+        흘리므로(_read_joint_positions가 재시도하는 바로 그 이유다) 읽기
+        하나의 실패 확률이 0.5%만 되어도 24회 묶음은 10번에 1번꼴로 깨진다.
+        실측 실패율이 정확히 그랬고, 파지력 측정 도구가 첫 표본에서 그대로
+        멈췄다. 단발 유실은 하드웨어 고장이 아니므로 재시도가 맞는 답이다.
+        """
+        for attempt in range(attempts):
+            value = reader(servo_id)
+            if value is not None:
+                return value
+            if attempt + 1 < attempts:
+                time.sleep(JOINT_READ_RETRY_SEC)
+        return None
+
     def _on_get_arm_state(self, request, response):
         """servo 1..6의 위치·부하·온도·torque를 한 번에 돌려준다.
 
@@ -1052,7 +1071,7 @@ class ArmDriverNode(Node):
 
         online, positions, loads, temperatures, torques = [], [], [], [], []
         for servo_id in ALL_SERVO_IDS:
-            position = backend.drv.get_position(servo_id)
+            position = self._read_with_retry(backend.drv.get_position, servo_id)
             if position is None:
                 online.append(False)
                 positions.append(0)
@@ -1060,13 +1079,13 @@ class ArmDriverNode(Node):
                 temperatures.append(0)
                 torques.append(False)
                 continue
-            raw_load = backend.drv.get_load(servo_id)
-            temperature = backend.drv.get_temperature(servo_id)
+            raw_load = self._read_with_retry(backend.drv.get_load, servo_id)
+            temperature = self._read_with_retry(backend.drv.get_temperature, servo_id)
             online.append(True)
             positions.append(int(position))
             loads.append(0.0 if raw_load is None else abs(raw_load) / GRIPPER_LOAD_MAX_RAW)
             temperatures.append(0 if temperature is None else int(temperature))
-            torques.append(backend.drv.get_torque(servo_id) is True)
+            torques.append(self._read_with_retry(backend.drv.get_torque, servo_id) is True)
 
         response.online = online
         response.position_raw = positions
