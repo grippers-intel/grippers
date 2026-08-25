@@ -11,11 +11,7 @@ from dataclasses import dataclass
 # importlib.util.spec_from_file_location으로 단독 로드되기도 하는데, 그
 # 경로에선 패키지 컨텍스트가 없어 상대 import(`from .gripper_calibration`)가
 # "attempted relative import with no known parent package"로 깨진다.
-from grippers_arm.gripper_calibration import (
-    GRIPPER_CLOSED_MM,
-    GRIPPER_GRASP_MIN_MM,
-    GRIPPER_OPEN_MM,
-)
+from grippers_arm.gripper_calibration import GRIPPER_GRASP_MIN_MM, GRIPPER_OPEN_MM
 
 
 @dataclass(frozen=True)

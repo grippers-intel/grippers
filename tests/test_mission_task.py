@@ -808,3 +808,26 @@ def test_visual_grasp_check_remembers_the_target_before_descending(make_ports, r
     assert perception.remembered_cls == "rook"
     assert perception.remember_target_calls >= 1
     assert perception.confirm_grasp_calls >= 1
+
+
+def test_retry_tighten_clamps_at_the_grasp_floor_not_the_empty_closed_width():
+    """⚠️ 회귀 — 파지 하한을 9.0에서 7.0으로 내리자, 빈 닫힘 폭으로 clamp하던
+    재시도가 얇은 체스말에서 **벌리는 명령**이 됐다. close_width_mm가 이미
+    7.0인데 max(9.0, 2.0) = 9.0을 보내면 더 조이는 게 아니라 2mm 벌린다."""
+    import ast
+    import pathlib
+
+    states = pathlib.Path(__file__).resolve().parent.parent / "domain" / "task" / "states.py"
+    tree = ast.parse(states.read_text(encoding="utf-8"))
+    constants = {
+        node.targets[0].id: ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id in {"CLOSED_MM", "GRASP_MIN_MM"}
+    }
+
+    assert constants["GRASP_MIN_MM"] < constants["CLOSED_MM"]
+    source = states.read_text(encoding="utf-8")
+    assert "retry_width = max(GRASP_MIN_MM," in source
+    assert "retry_width = max(CLOSED_MM," not in source

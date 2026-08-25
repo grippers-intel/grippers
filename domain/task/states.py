@@ -24,6 +24,10 @@ from domain.values import MissionContext, MissionMode, Point3, Pose2D
 # 하드코딩된 값을 이 블록 한 곳에 모아 실측 후 교체한다.
 OPEN_MM = 168.0
 CLOSED_MM = 9.0
+# 파지할 때만 쓰는 하한 — 빈 닫힘(CLOSED_MM)과 다르다. 물체가 턱을 멈춰
+# 주므로 파지에서는 더 좁게 명령해 위치 오차(=힘)를 키울 수 있다.
+# 2026-08-25 실측 포화점(gripper_calibration.GRIPPER_GRASP_MIN_MM와 같은 값).
+GRASP_MIN_MM = 7.0
 GRASP_APPROACH_HEIGHT_M = 0.10  # TODO: 실측 — 파지 하강 전 안전 여유 높이
 MIN_GRIPPER_CLEARANCE_M = 0.14  # 실측 요구 — 베이스 이동 전 바닥부터 파지 중심 높이
 HANDOVER_POINT_M = Point3(x=0.30, y=0.0, z=0.35)  # TODO: 실측 — 사용자 인계 손끝 위치
@@ -260,7 +264,10 @@ class GraspState(State):
         ports.arm.set_gripper(plan.close_width_mm)
         load = ports.arm.get_load()
         if self.RETRY_ELIGIBLE_LOAD < load < self.LOAD_THRESHOLD:
-            retry_width = max(CLOSED_MM, plan.close_width_mm - self.RETRY_TIGHTEN_MM)
+            # ⚠️ CLOSED_MM이 아니라 GRASP_MIN_MM으로 clamp한다. 얇은 체스말은
+            # close_width_mm가 이미 7.0이라, 빈 닫힘 폭 9.0으로 clamp하면
+            # "더 조인다"는 재시도가 오히려 **벌리는** 명령이 된다.
+            retry_width = max(GRASP_MIN_MM, plan.close_width_mm - self.RETRY_TIGHTEN_MM)
             ports.arm.set_gripper(retry_width)
             load = ports.arm.get_load()
 
