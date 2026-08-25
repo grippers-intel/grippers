@@ -53,7 +53,7 @@ from grasp_test_console import (
     odom_distance_m,
     recover_to_idle,
 )
-from grippers_arm.floor_grasp_profiles import FLOOR_GRASP_PROFILES
+from grippers_arm.floor_grasp_profiles import FLOOR_GRASP_PROFILES, GRIPPER_RELEASE_MM
 
 # 제자리 회전 각속도(사용자 지시, 2026-08-24: "제자리에서 0.3으로").
 #
@@ -263,6 +263,7 @@ def main():
     profile = args.profile or CLASS_TO_PROFILE[raw_cls]
     close_width_mm = FLOOR_GRASP_PROFILES[profile].close_width_mm
     preopen_mm = FLOOR_GRASP_PROFILES[profile].preopen_width_mm
+    release_mm = FLOOR_GRASP_PROFILES[profile].release_width_mm
     band = stop_band(raw_cls)
 
     log = RunLog(raw_cls, profile)
@@ -378,12 +379,20 @@ def main():
                 recover_to_idle(node, profile, log, "drop 이동 실패")
                 return 5
             measure_load(node, "투하 직전", log)
-            node.set_gripper(preopen_mm)
+            # 활짝 열지 않는다(사용자 지시, 2026-08-25) — 물체가 턱 사이에서
+            # 빠져나올 만큼만 벌린다. 손가락 판이 바구니 위로 넓게 쓸리는 것을
+            # 막는다.
+            print(f"  그리퍼 열기 {release_mm}mm (투하용 — 물체 폭 +{GRIPPER_RELEASE_MM}mm)")
+            node.set_gripper(release_mm)
             measure_load(node, "놓은 뒤", log)
+            # IDLE로 접기 **전에** 닫는다(사용자 지시, 2026-08-25). 닫힌
+            # 그리퍼가 접기에 알맞은 형상이고, "내려가기 전에 연다"와 같은
+            # 원칙이다 — 다음 동작이 요구하는 형상을 그 동작 전에 만든다.
+            print("  그리퍼 닫기 — IDLE 복귀 전")
+            node.set_gripper(GRIPPER_CLOSED_MM)
             if not node.move_floor_pose(profile, "idle"):
                 recover_to_idle(node, profile, log, "투하 후 idle 복귀 실패")
                 return 5
-            node.set_gripper(GRIPPER_CLOSED_MM)
 
         print("\n완료 — IDLE 복귀")
         log.log("run_ok")

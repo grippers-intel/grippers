@@ -16,12 +16,26 @@ from domain.values import Detection, ObjectClass
 # 열기)에서 이 안전 최대치로 올림.
 GRIPPER_MAX_SAFE_OPEN_MM = 168.0
 
+# 투하 시 물체 폭에 더할 여유 (mm). ros2_ws 쪽 GRIPPER_RELEASE_MM과 같은 수를
+# 계층 분리 때문에 복제해 둔다 — 한쪽을 바꾸면 다른 쪽도 바꿔야 한다.
+#
+# 2026-08-25 사용자 지시: "물체를 놓을 때 완전히 벌리지 말고 물체가 그리퍼
+# 사이에서 나올 정도로만 벌려." GRIPPER_MAX_SAFE_OPEN_MM(168)까지 열면
+# 손가락 판이 바구니 위로 넓게 쓸릴 뿐 얻는 것이 없다.
+GRIPPER_RELEASE_MM = 15.0
+
+
+def _release_width(object_width_mm: float) -> float:
+    """물체가 턱 사이에서 빠져나올 만큼만 벌린 목표 폭."""
+    return min(GRIPPER_MAX_SAFE_OPEN_MM, round(object_width_mm + GRIPPER_RELEASE_MM, 1))
+
 
 @dataclass(frozen=True)
 class HorizontalGraspPlan:
     profile: str
     preopen_width_mm: float
     close_width_mm: float
+    release_width_mm: float
 
 
 def select_horizontal_grasp_plan(target: Detection) -> HorizontalGraspPlan:
@@ -30,9 +44,11 @@ def select_horizontal_grasp_plan(target: Detection) -> HorizontalGraspPlan:
 
     if target.cls is ObjectClass.GABE:
         if wide_mm <= 42.0:
-            return HorizontalGraspPlan("cube", GRIPPER_MAX_SAFE_OPEN_MM, 30.0)
+            return HorizontalGraspPlan(
+                "cube", GRIPPER_MAX_SAFE_OPEN_MM, 30.0, _release_width(40.0))
         # 별기둥과 축구공은 같은 20 mm 자세와 35 mm 닫힘값으로 검증됐다.
-        return HorizontalGraspPlan("soccer_polyhedron", GRIPPER_MAX_SAFE_OPEN_MM, 35.0)
+        return HorizontalGraspPlan(
+            "soccer_polyhedron", GRIPPER_MAX_SAFE_OPEN_MM, 35.0, _release_width(46.0))
 
     # 체스말 subtype이 없는 동안 실측 폭에 가장 가까운 프로필을 쓴다.
     chess = (
@@ -40,8 +56,9 @@ def select_horizontal_grasp_plan(target: Detection) -> HorizontalGraspPlan:
         (22.0, "chess_knight", 13.0),
         (24.5, "chess_rook", 15.0),
     )
-    _, profile, close_mm = min(chess, key=lambda item: abs(narrow_mm - item[0]))
-    return HorizontalGraspPlan(profile, GRIPPER_MAX_SAFE_OPEN_MM, close_mm)
+    width_mm, profile, close_mm = min(chess, key=lambda item: abs(narrow_mm - item[0]))
+    return HorizontalGraspPlan(
+        profile, GRIPPER_MAX_SAFE_OPEN_MM, close_mm, _release_width(width_mm))
 
 
 # HANDOFF.md(2026-08-23)의 시각 서보 접근 루프(tools/perception/approach.py)는

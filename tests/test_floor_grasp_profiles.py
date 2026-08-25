@@ -244,3 +244,26 @@ def test_safe_145_degree_and_raw_records_describe_the_same_pose():
     )
 
     assert converted == module.HORIZONTAL_SAFE_145_RAW
+
+
+def test_release_width_is_object_width_plus_clearance_not_full_open():
+    """투하는 활짝 열지 않는다 (사용자 지시, 2026-08-25).
+
+    물체가 턱 사이에서 빠져나오는 데 필요한 것은 물체 폭보다 조금 더 벌어지는
+    것뿐이다. GRIPPER_OPEN_MM(168)까지 열면 손가락 판이 바구니 위로 넓게
+    쓸릴 뿐 얻는 것이 없다. 닫힘(폭 − 15)과 대칭으로 폭 + 15 를 쓴다.
+    """
+    module = _load_profiles()
+    for name, profile in module.FLOOR_GRASP_PROFILES.items():
+        expected = round(profile.object_width_mm + module.GRIPPER_RELEASE_MM, 1)
+        assert profile.release_width_mm == expected, name
+        # 물체가 빠질 만큼은 벌어져야 하고, 활짝 열어서는 안 된다
+        assert profile.release_width_mm > profile.object_width_mm, name
+        assert profile.release_width_mm < module.GRIPPER_OPEN_MM, name
+        assert profile.release_width_mm > profile.close_width_mm, name
+
+
+def test_release_width_never_exceeds_the_mechanical_limit():
+    """폭이 아주 넓은 물체가 생겨도 기구 상한을 넘지 않는다."""
+    module = _load_profiles()
+    assert module._release_width(1000.0) == module.GRIPPER_OPEN_MM

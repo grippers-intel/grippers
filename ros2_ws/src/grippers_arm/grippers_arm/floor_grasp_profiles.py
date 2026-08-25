@@ -22,6 +22,7 @@ class FloorGraspProfile:
     grasp_center_height_mm: float
     preopen_width_mm: float
     close_width_mm: float
+    release_width_mm: float
 
 
 # 2026-08-24: preopen_width_mm을 80.0(임의로 잡았던 절반쯤 열기)에서
@@ -43,6 +44,27 @@ class FloorGraspProfile:
 # 3양자(0.0117)뿐이라 기존 여유는 성공/실패 경계 위에 놓여 있었다.
 GRIPPER_SQUEEZE_MM = 15.0
 
+# 투하 시 벌릴 여유 — 물체 폭보다 이만큼만 더 연다.
+#
+# 2026-08-25 사용자 지시: "물체를 놓을 때 완전히 벌리지 말고 물체가 그리퍼
+# 사이에서 나올 정도로만 벌려." 예전에는 preopen_width_mm(=GRIPPER_OPEN_MM,
+# 168.0)으로 활짝 열었는데, 손가락 판이 바구니 위로 넓게 쓸릴 뿐 얻는 것이
+# 없다. 물체가 턱 사이에서 빠져나오는 데 필요한 것은 물체 폭보다 조금 더
+# 벌어지는 것뿐이다.
+#
+# GRIPPER_SQUEEZE_MM과 같은 15.0을 쓴다 — 닫을 때 폭에서 15 빼고, 놓을 때
+# 폭에 15 더한다. 대칭이라 기억하기 쉽고, rook(24.5) 기준 39.5mm로 열려
+# 168mm 대비 훨씬 좁다.
+GRIPPER_RELEASE_MM = 15.0
+
+
+def _release_width(object_width_mm: float) -> float:
+    """물체가 턱 사이에서 빠져나올 만큼만 벌린 목표 폭.
+
+    기구 상한(GRIPPER_OPEN_MM)을 넘지 않는다. 넓은 물체
+    (soccer_polyhedron 46.0 -> 61.0)도 상한에 한참 못 미친다."""
+    return min(GRIPPER_OPEN_MM, round(object_width_mm + GRIPPER_RELEASE_MM, 1))
+
 
 def _close_width(object_width_mm: float) -> float:
     """물체 폭에서 GRIPPER_SQUEEZE_MM만큼 더 좁힌 목표 폭.
@@ -59,12 +81,12 @@ def _close_width(object_width_mm: float) -> float:
 # 2026-08-24: 낮은 물체 3종(cube/star_column/soccer_polyhedron)의 파지 중심
 # 높이를 20.0 -> 26.0mm로 올림. 아래 HORIZONTAL_GABE_LOW_26_DEG 주석 참고.
 FLOOR_GRASP_PROFILES = {
-    "cube": FloorGraspProfile(40.0, 26.0, GRIPPER_OPEN_MM, _close_width(40.0)),
-    "star_column": FloorGraspProfile(45.0, 26.0, GRIPPER_OPEN_MM, _close_width(45.0)),
-    "soccer_polyhedron": FloorGraspProfile(46.0, 26.0, GRIPPER_OPEN_MM, _close_width(46.0)),
-    "chess_knight": FloorGraspProfile(22.0, 60.0, GRIPPER_OPEN_MM, _close_width(22.0)),
-    "chess_rook": FloorGraspProfile(24.5, 45.0, GRIPPER_OPEN_MM, _close_width(24.5)),
-    "chess_queen": FloorGraspProfile(17.0, 50.0, GRIPPER_OPEN_MM, _close_width(17.0)),
+    "cube": FloorGraspProfile(40.0, 26.0, GRIPPER_OPEN_MM, _close_width(40.0), _release_width(40.0)),
+    "star_column": FloorGraspProfile(45.0, 26.0, GRIPPER_OPEN_MM, _close_width(45.0), _release_width(45.0)),
+    "soccer_polyhedron": FloorGraspProfile(46.0, 26.0, GRIPPER_OPEN_MM, _close_width(46.0), _release_width(46.0)),
+    "chess_knight": FloorGraspProfile(22.0, 60.0, GRIPPER_OPEN_MM, _close_width(22.0), _release_width(22.0)),
+    "chess_rook": FloorGraspProfile(24.5, 45.0, GRIPPER_OPEN_MM, _close_width(24.5), _release_width(24.5)),
+    "chess_queen": FloorGraspProfile(17.0, 50.0, GRIPPER_OPEN_MM, _close_width(17.0), _release_width(17.0)),
 }
 
 # The smallest successful settled load measured while holding an object was

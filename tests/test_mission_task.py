@@ -20,6 +20,7 @@ from domain.task.states import (
     InsertState,
     PosePlanState,
 )
+from domain.task.floor_grasp_policy import select_horizontal_grasp_plan
 from domain.values import (
     BoxObservation,
     Destination,
@@ -738,7 +739,14 @@ def test_basket_insert_opens_at_drop_195_without_lowering_to_floor(make_ports, r
         ("soccer_polyhedron", "drop"),
         ("soccer_polyhedron", "idle"),
     ]
-    assert arm.gripper_widths[-1] == states_module.OPEN_MM
+    # 2026-08-25 사용자 지시로 투하 동작이 바뀌었다:
+    #   (1) 활짝 열지 않는다 — 물체가 턱 사이에서 빠져나올 만큼만
+    #   (2) IDLE로 접기 **전에** 닫는다 (닫힌 그리퍼가 접기에 알맞은 형상)
+    # 그래서 마지막 그리퍼 명령은 OPEN_MM이 아니라 CLOSED_MM이고, 그 직전이
+    # 물체 폭 + GRIPPER_RELEASE_MM 만큼만 벌린 release 폭이다.
+    plan = select_horizontal_grasp_plan(_detection(track_id=1))
+    assert arm.gripper_widths[-2:] == [plan.release_width_mm, states_module.CLOSED_MM]
+    assert plan.release_width_mm < states_module.OPEN_MM
     assert all(not down for _, down in arm.move_calls)
 
 

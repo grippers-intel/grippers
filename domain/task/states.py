@@ -451,7 +451,14 @@ class InsertState(State):
         plan = select_horizontal_grasp_plan(self.target)
         if not ports.arm.move_to_floor_pose(plan.profile, "drop"):
             return EstopState()
-        ports.arm.set_gripper(OPEN_MM)
+        # 활짝 열지 않는다(사용자 지시, 2026-08-25). 물체가 턱 사이에서
+        # 빠져나오는 데 필요한 것은 물체 폭보다 조금 더 벌어지는 것뿐이고,
+        # OPEN_MM(168)까지 열면 손가락 판이 바구니 위로 넓게 쓸릴 뿐이다.
+        ports.arm.set_gripper(plan.release_width_mm)
+        # IDLE로 접기 **전에** 닫는다(사용자 지시, 2026-08-25). 닫힌 그리퍼가
+        # 접기에 알맞은 형상이고, "내려가기 전에 연다"와 같은 원칙이다 —
+        # 다음 동작이 요구하는 형상을 그 동작이 시작되기 전에 만든다.
+        ports.arm.set_gripper(CLOSED_MM)
         if not ports.arm.move_to_floor_pose(plan.profile, "idle"):
             return EstopState()
         # 2026-08-24 사용자 결정(시연 범위 축소): 투입에 성공하면 SCAN으로
