@@ -1,0 +1,14 @@
+# servo 1..6의 현재 상태를 한 번에 읽는다 — 검증 도구가 자세를 실측하기 위한
+# 유일한 경로다. arm_driver_node가 /dev/soarm을 독점하므로 다른 프로세스가
+# driver_sdk로 직접 붙을 수 없다(붙으면 팔 이동이 통째로 깨진다).
+#
+# 배열은 전부 길이 6, 인덱스 0..5가 servo 1..6이다. 읽기에 실패한 서보는
+# online[i]=false이고 그 서보의 다른 값은 의미가 없다(0으로 채운다).
+---
+bool ok
+string message
+bool[6] online
+int32[6] position_raw
+float32[6] load_ratio
+int32[6] temperature_c
+bool[6] torque_on

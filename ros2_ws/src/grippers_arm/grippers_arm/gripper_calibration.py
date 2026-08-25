@@ -27,3 +27,30 @@ def position_from_width(width_mm: float) -> int:
             return round(raw_lo + fraction * (raw_hi - raw_lo))
 
     return GRIPPER_CALIBRATION_POINTS[-1][1]
+
+
+def width_from_position(raw_position: int) -> float:
+    """position_from_width의 역함수 — 서보 6의 present position을 폭(mm)으로.
+
+    검증 도구가 "명령한 폭"이 아니라 **실제로 도달한 폭**을 읽기 위해 쓴다.
+    같은 구간별 보간표를 반대로 탄다. 보정 구간을 벗어난 raw는 양 끝
+    폭으로 clamp한다 — 표 밖은 외삽할 근거가 없다.
+    """
+    raw = float(raw_position)
+    raw_first = GRIPPER_CALIBRATION_POINTS[0][1]
+    raw_last = GRIPPER_CALIBRATION_POINTS[-1][1]
+    if raw <= raw_first:
+        return GRIPPER_CLOSED_MM
+    if raw >= raw_last:
+        return GRIPPER_OPEN_MM
+
+    for (width_lo, raw_lo), (width_hi, raw_hi) in zip(
+        GRIPPER_CALIBRATION_POINTS,
+        GRIPPER_CALIBRATION_POINTS[1:],
+        strict=True,
+    ):
+        if raw <= raw_hi:
+            fraction = (raw - raw_lo) / (raw_hi - raw_lo)
+            return round(width_lo + fraction * (width_hi - width_lo), 1)
+
+    return GRIPPER_OPEN_MM

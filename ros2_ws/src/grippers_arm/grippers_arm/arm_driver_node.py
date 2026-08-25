@@ -24,7 +24,7 @@ sys.path.insert(0, "/third_party/soarm_provided_d")  # PYTHONPATH 미설정 환�
 import rclpy  # noqa: I001
 import rclpy.logging  # main()이 노드 생성 실패 시 노드 없이 로그를 남긴다
 from grippers_interfaces.action import MoveToCartesian, MoveToFloorPose, ReorientArm
-from grippers_interfaces.srv import GetLoad, SetGripper
+from grippers_interfaces.srv import GetArmState, GetLoad, SetGripper
 from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
@@ -43,6 +43,7 @@ from .gripper_calibration import (
     GRIPPER_CLOSED_MM,
     GRIPPER_OPEN_MM,
     position_from_width,
+    width_from_position,
 )
 from .floor_grasp_profiles import (
     BASKET_DROP_195_RAW,
@@ -152,6 +153,40 @@ RECOVER_MATCH_TOLERANCE_RAW = 500
 IDLE_OFFSET_WARN_RAW = 120
 IDLE_OFFSET_ERROR_RAW = 800
 
+# --- 첫 이동 자동 IDLE 정렬 ----------------------------------------------
+#
+# 2026-08-25 사용자 지시: "맨처음 이동 게이트에서 최초 로봇암의 자세를 파악하고
+# 무조건 자동으로 align_idle을 할 수 있게". 그전까지는 _log_idle_offset이
+# 편차를 로그로만 남기고, 정렬은 사람이 tools/align_to_idle.py를 따로 돌려야
+# 했다 — 그리고 그걸 잊으면 첫 safe 이동이 "등록된 이전 단계가 아닙니다"로
+# 거부되거나, torque가 꺼진 채라 _require_operational_servos에서 막혔다.
+#
+# **기동 시점이 아니라 첫 이동 요청 시점**에 정렬한다. 노드가 뜨자마자 팔이
+# 움직이면 운영자가 손을 대고 있을 수 있고, 정렬이 필요한지 아닌지는 실제로
+# 움직이려는 순간에 판정하는 편이 정확하다.
+#
+# ⚠️ 정렬 경로는 반드시 아래 세 갈래로 나뉜다. 어떤 자세에서든 IDLE로 직선
+# 보간하면 안 된다 — 팔이 바닥 높이에 있을 때 그렇게 하면 그리퍼가 바닥을
+# 쓸고 간다(2026-08-24 실기, RETURN_TO_IDLE_DEFERRED_JOINTS 주석 참고).
+#
+#   (a) 등록 자세 근처(RECOVER_MATCH_TOLERANCE_RAW 이내) -> recover_idle과
+#       똑같이 검증된 상승 체인을 탄다.
+#   (b) 등록 자세 어디에도 안 붙지만 servo 2가 아래로 뻗어 있다
+#       (AUTO_ALIGN_LIFT_VIA_SAFE_SERVO2_RAW 이상) -> 먼저 safe로 **들어올린
+#       뒤** safe -> idle 체인을 탄다. safe로 가는 이동은 정의상 팔을 드는
+#       방향이라 바닥을 쓸지 않는다.
+#   (c) 그 외(이미 접힌 영역) -> IDLE로 직접 보간한다.
+#
+# servo 2 문턱값 근거: IDLE 829, safe 2492, grasp 3027~3136. 2200은 safe보다
+# 조금 아래로, "팔이 앞으로 뻗어 있다"와 "접혀 있다"를 가르는 자리다.
+AUTO_ALIGN_LIFT_VIA_SAFE_SERVO2_RAW = 2200
+# 정렬 이동은 출발 자세가 검증되지 않았으므로 정상 이동의 절반 속도로 간다.
+AUTO_ALIGN_SPEED_RAW = 600
+# 접기 전에 그리퍼를 닫을지 가르는 폭. 실제로 물체를 문 닫힘 폭은 가장 넓은
+# 것이 soccer의 31.0mm라, 그보다 한참 위인 이 값을 넘으면 아무것도 물고 있지
+# 않은 '열린' 상태로 본다(_close_gripper_before_folding 참고).
+AUTO_ALIGN_GRIPPER_CLOSE_ABOVE_MM = 45.0
+
 CRADLE_XYZ_M = [0.15, 0.0, 0.20]  # TODO: INSERT 후 복귀 경로 별도 실측 필요
 
 # MentorPi 베이스 보드가 잡는 장치. arm_port가 이걸 가리키면 팔 드라이버가
@@ -175,9 +210,12 @@ class ArmDriverNode(Node):
 
         self.declare_parameter("arm_port", "/dev/soarm")
         self.declare_parameter("enable_torque_on_start", False)
+        self.declare_parameter("auto_align_on_first_move", True)
 
         arm_port = self.get_parameter("arm_port").value
         enable_torque_on_start = bool(self.get_parameter("enable_torque_on_start").value)
+        # 첫 바닥 자세 이동 요청 때 한 번만 IDLE로 자동 정렬한다.
+        self._auto_align_pending = bool(self.get_parameter("auto_align_on_first_move").value)
 
         # RealBackend(port=...) 는 생성 즉시 시리얼 포트를 연다 — 검사는 반드시
         # 그 앞에 와야 한다. 뒤에 두면 이미 베이스 보드를 열어 버린 뒤가 된다.
@@ -228,6 +266,12 @@ class ArmDriverNode(Node):
             callback_group=cb_group,
         )
         self.create_service(
+            GetArmState,
+            "arm_driver/get_arm_state",
+            self._on_get_arm_state,
+            callback_group=cb_group,
+        )
+        self.create_service(
             Trigger,
             "arm_driver/fold_to_cradle",
             self._on_fold_to_cradle,
@@ -239,7 +283,10 @@ class ArmDriverNode(Node):
             self._on_hold_position,
             callback_group=cb_group,
         )
-        self.get_logger().info("arm_driver_node ready")
+        self.get_logger().info(
+            "arm_driver_node ready — "
+            f"auto_align_on_first_move={self._auto_align_pending}"
+        )
 
     def _check_startup_torque(
         self,
@@ -294,7 +341,13 @@ class ArmDriverNode(Node):
 
     def _log_idle_offset(self, backend) -> None:
         """기동 시 현재 자세와 IDLE 사이 편차를 로그로만 남긴다 — 절대 서보를
-        움직이지 않는다. 정렬은 사람이 tools/align_to_idle.py로 실행한다.
+        움직이지 않는다.
+
+        ⚠️ 여기서 움직이지 않는 것은 여전히 의도다. 실제 정렬은 **첫 이동
+        요청 시점**에 _auto_align_to_idle이 한다(2026-08-25). 노드가 뜨자마자
+        팔이 움직이면 운영자가 아직 팔에 손을 대고 있을 수 있어서, 정렬은
+        누군가 실제로 움직이라고 요청한 순간으로 미룬다. 이 로그는 그 전에
+        "지금 얼마나 벗어나 있는지"를 남기는 기록이다.
 
         use_fake_arm 파라미터가 로그가 없어 며칠간 묻힌 사고(#128)의 재발
         방지책이다: 안전 관련 상태는 반드시 실제 값을 로그로 남긴다."""
@@ -330,12 +383,13 @@ class ArmDriverNode(Node):
             if abs(offset) > IDLE_OFFSET_ERROR_RAW:
                 self.get_logger().error(
                     f"ERROR: s{servo_id} offset {offset:+d} exceeds {IDLE_OFFSET_ERROR_RAW}. "
-                    "Run tools/align_to_idle.py before motion tests."
+                    "첫 이동 요청 때 자동 정렬이 시도됩니다"
+                    "(auto_align_on_first_move=False면 tools/align_to_idle.py를 먼저 돌리세요)."
                 )
             else:
                 self.get_logger().warn(
                     f"WARN: s{servo_id} offset {offset:+d} exceeds {IDLE_OFFSET_WARN_RAW}. "
-                    "Run tools/align_to_idle.py before motion tests."
+                    "첫 이동 요청 때 자동 정렬이 시도됩니다."
                 )
 
     def _require_operational_servos(self, servo_ids=ALL_SERVO_IDS) -> None:
@@ -448,6 +502,19 @@ class ArmDriverNode(Node):
             if req.stage not in {"idle", "safe", "grasp", "midpoint", "drop", "recover_idle"}:
                 raise ValueError(f"알 수 없는 수평 파지 stage: {req.stage}")
 
+            # 세션 첫 이동이면 여기서 IDLE로 자동 정렬한다(사용자 지시,
+            # 2026-08-25). _require_operational_servos보다 **앞**에 와야
+            # 한다 — 정렬이 필요한 전형적 상황이 전원 투입 직후 torque OFF
+            # 상태이고, 그건 정확히 저 검사가 막는 상태다. 정렬 자체가
+            # goal<-present latch로 torque를 켜므로 순서를 뒤집으면 자동
+            # 정렬이 영영 불려 오지 못한다.
+            #
+            # recover_idle은 제외한다 — 그쪽은 이미 같은 일을 하는 복구
+            # 경로라, 앞에 정렬을 한 번 더 붙이면 같은 이동을 두 번 한다.
+            if self._auto_align_pending and req.stage != "recover_idle":
+                self._auto_align_to_idle()
+                self._auto_align_pending = False
+
             self._require_operational_servos(range(1, 6))
             backend = soarm._backend(real=True)
             # 내려가기 직전에만 온도 상한을 적용한다. 물체를 든 뒤 온도가
@@ -483,7 +550,9 @@ class ArmDriverNode(Node):
         }
         self._glide_to_raw_positions(backend, goal)
 
-    def _glide_to_raw_positions(self, backend, goal, defer_joints=()) -> None:
+    def _glide_to_raw_positions(
+        self, backend, goal, defer_joints=(), speed_raw=FLOOR_POSE_SPEED_RAW
+    ) -> None:
         """servo 1..5 raw 목표로 이동한다.
 
         defer_joints에 든 관절은 **나머지가 완전히 멈춘 뒤** 별도 구간에서
@@ -496,7 +565,7 @@ class ArmDriverNode(Node):
         관절 순서가 반대이기 때문이다 — 그래서 호출부가 정한다."""
         deferred = tuple(servo_id for servo_id in defer_joints if servo_id in goal)
         if not deferred:
-            self._glide_phase(backend, goal)
+            self._glide_phase(backend, goal, speed_raw=speed_raw)
             return
 
         start = self._read_joint_positions(backend)
@@ -505,11 +574,13 @@ class ArmDriverNode(Node):
 
         # 1구간: 지연 관절은 출발 위치에 **고정**하고 나머지만 목표로.
         hold_deferred = {**goal, **{servo_id: start[servo_id] for servo_id in deferred}}
-        self._glide_phase(backend, hold_deferred, label="1/2 지연관절 고정")
+        self._glide_phase(backend, hold_deferred, label="1/2 지연관절 고정", speed_raw=speed_raw)
         # 2구간: 나머지는 이미 목표에 있으므로 지연 관절만 실제로 움직인다.
-        self._glide_phase(backend, goal, label=f"2/2 servo {list(deferred)} 단독")
+        self._glide_phase(
+            backend, goal, label=f"2/2 servo {list(deferred)} 단독", speed_raw=speed_raw
+        )
 
-    def _glide_phase(self, backend, goal, label=None) -> None:
+    def _glide_phase(self, backend, goal, label=None, speed_raw=FLOOR_POSE_SPEED_RAW) -> None:
         """한 번의 선형 보간 구간 — 목표에 이미 있으면 아무것도 하지 않는다."""
         start = self._read_joint_positions(backend)
         if start is None:
@@ -538,7 +609,7 @@ class ArmDriverNode(Node):
         # 151 raw/s로 레지스터 값에 정확히 붙어 있었고, 도달 대기 4.0s까지
         # 다 쓰고도 각각 591 / 564 raw가 남아 safe 단계가 실패했다.
         for servo_id in range(1, 6):
-            backend.drv.set_speed(servo_id, FLOOR_POSE_SPEED_RAW)
+            backend.drv.set_speed(servo_id, speed_raw)
             backend.drv.set_acceleration(servo_id, FLOOR_POSE_ACCEL_RAW)
 
         for step_index in range(1, FLOOR_POSE_STEPS + 1):
@@ -786,6 +857,216 @@ class ArmDriverNode(Node):
         if not self._near_pose(actual, expected_start):
             raise ValueError(f"{stage} 이동 시작 자세가 등록된 이전 단계가 아닙니다")
         self._glide_to_raw_positions(backend, grasp if stage == "grasp" else midpoint)
+
+    # --- 첫 이동 자동 IDLE 정렬 -------------------------------------------
+
+    def _latch_torque_at_present(self, backend) -> dict:
+        """servo 1..6의 goal에 자기 present 값을 그대로 write한다.
+
+        ⚠️ STS3215는 goal_position write에 torque를 **자동으로 켠다**(펌웨어
+        레벨 거동이라 driver_sdk 소스에는 안 나온다 — 2026-08-21 Pi 실기로
+        확인). 즉 늘어져 있는 관절에 목표 자세를 곧장 write하면, write가
+        도달하는 순간 torque가 켜지면서 그 목표를 향해 급하게 움직인다.
+        goal == present로 먼저 한 번 써 두면 torque만 켜지고 이동량은 0이다.
+
+        tools/align_to_idle.py의 latch_torque_at_present와 같은 계약이다 —
+        그쪽은 사람이 돌리는 도구이고 이쪽은 노드 안에서 자동으로 도는
+        경로라 코드를 공유하지 않는다(그 도구는 driver_sdk에 직접 붙는데,
+        이 노드가 포트를 쥐고 있는 동안에는 그럴 수 없다).
+        """
+        present = {}
+        for servo_id in ALL_SERVO_IDS:
+            position = backend.drv.get_position(servo_id)
+            if position is None:
+                raise ArmHardwareUnavailableError(
+                    f"servo {servo_id} present position 읽기 실패 — torque latch 중단"
+                )
+            if not backend.drv.set_position(servo_id, position):
+                raise ArmHardwareUnavailableError(
+                    f"servo {servo_id} goal<-present write 실패 — torque latch 중단"
+                )
+            present[servo_id] = position
+
+        still_off = [
+            servo_id for servo_id in ALL_SERVO_IDS if backend.drv.get_torque(servo_id) is not True
+        ]
+        for servo_id in still_off:
+            backend.drv.set_torque(servo_id, True)
+        failed = [
+            servo_id for servo_id in still_off if backend.drv.get_torque(servo_id) is not True
+        ]
+        if failed:
+            raise ArmHardwareUnavailableError(f"torque latch 후에도 OFF인 servo IDs: {failed}")
+
+        self.get_logger().info(f"자동 정렬: goal<-present latch 완료(이동 없음) — {present}")
+        return present
+
+    def _align_named_poses(self, backend, frozen_servo1):
+        """정렬이 현재 자세를 대볼 등록 자세들.
+
+        어느 profile로 파지하다 멈췄는지 모르므로 **여섯 profile의 grasp/
+        midpoint를 전부** 후보에 넣는다. 정상 경로(_move_floor_stage)는
+        요청에 profile이 들어 있어 하나만 보면 되지만, 정렬은 아무 정보
+        없이 불려 온다."""
+        safe = {**self._tuple_goals(HORIZONTAL_SAFE_145_RAW), 1: frozen_servo1}
+        named = {"safe": safe, "drop": self._tuple_goals(BASKET_DROP_195_RAW)}
+        for profile, angles in HORIZONTAL_GRASP_POSES_DEG.items():
+            grasp = {**self._raw_goals(backend, angles), 1: frozen_servo1}
+            named[f"grasp:{profile}"] = grasp
+            named[f"midpoint:{profile}"] = {
+                servo_id: round((grasp[servo_id] + safe[servo_id]) / 2.0)
+                for servo_id in range(1, 6)
+            }
+        return safe, named
+
+    def _close_gripper_before_folding(self, backend) -> None:
+        """접기 전에 활짝 열린 그리퍼만 닫는다.
+
+        "다음 동작이 요구하는 형상을 그 동작 전에 만든다"는 이 프로젝트의
+        규칙(사용자 지시 2026-08-25)을 정렬에도 적용한다 — 벌어진 손가락 판을
+        단 채 IDLE로 접으면 차체에 닿는다.
+
+        ⚠️ 다만 **무조건 닫지는 않는다**. 정렬이 불려 오는 시점에 그리퍼가
+        물체를 문 채일 수 있고, 그때 GRIPPER_CLOSED_MM(9.0)을 명령하면 물체를
+        으깬다 — servo 6에는 토크 제한 레지스터가 없어 위치 오차가 곧 힘이다.
+        기준은 폭 하나로 충분하다: 실제로 무언가를 쥐고 있는 닫힘 폭은 가장
+        넓은 것이 soccer의 31.0mm이므로, 그보다 한참 위인 45mm를 넘는 폭은
+        정의상 아무것도 물고 있지 않은 '열린' 상태다.
+        """
+        present = backend.drv.get_position(GRIPPER_SERVO_ID)
+        if present is None:
+            self.get_logger().warn("자동 정렬: servo 6 위치를 못 읽어 그리퍼를 건드리지 않습니다")
+            return
+        width_mm = width_from_position(present)
+        if width_mm <= AUTO_ALIGN_GRIPPER_CLOSE_ABOVE_MM:
+            self.get_logger().info(
+                f"자동 정렬: 그리퍼 {width_mm:.1f}mm — 이미 접기에 알맞아 그대로 둡니다"
+            )
+            return
+        self.get_logger().warn(
+            f"자동 정렬: 그리퍼가 {width_mm:.1f}mm로 열려 있습니다 — "
+            f"접기 전에 {GRIPPER_CLOSED_MM}mm로 닫습니다"
+        )
+        backend.drv.set_speed(GRIPPER_SERVO_ID, GRIPPER_SPEED_RAW)
+        backend.drv.set_acceleration(GRIPPER_SERVO_ID, GRIPPER_ACCEL_RAW)
+        backend.drv.set_position(GRIPPER_SERVO_ID, position_from_width(GRIPPER_CLOSED_MM))
+        self._wait_gripper_motion_settled(backend)
+
+    def _auto_align_to_idle(self) -> None:
+        """세션 첫 이동 직전에 팔을 IDLE로 자동 정렬한다.
+
+        2026-08-25 사용자 지시. 예전에는 _log_idle_offset이 편차를 로그로만
+        남기고 정렬은 사람이 tools/align_to_idle.py로 따로 돌려야 했는데,
+        그걸 잊으면 첫 safe 이동이 자세 게이트에서 거부되거나 torque OFF로
+        막혔다. 이제 이 함수가 그 자리를 대신한다 — align_to_idle.py는 노드를
+        띄우지 않은 상태에서 쓰는 수동 경로로 남는다.
+
+        ⚠️ 경로 선택이 이 함수의 전부다. 어디서 시작하든 IDLE로 직선 보간하는
+        것은 절대 안 된다 — 팔이 바닥 높이에 있을 때 그렇게 하면 그리퍼가
+        바닥을 쓸고 간다(AUTO_ALIGN_LIFT_VIA_SAFE_SERVO2_RAW 주석 참고).
+        """
+        backend = soarm._backend(real=True)
+        actual = self._read_joint_positions(backend)
+        if actual is None:
+            raise ArmHardwareUnavailableError("자동 정렬 전 관절 위치 읽기 실패")
+
+        idle = self._tuple_goals(IDLE_CRADLE_RAW)
+        offsets = {servo_id: actual[servo_id] - idle[servo_id] for servo_id in range(1, 6)}
+        summary = " ".join(f"s{servo_id}={offsets[servo_id]:+d}" for servo_id in sorted(offsets))
+
+        # 어떤 목표를 쓰기 전에 반드시 먼저 온다.
+        self._latch_torque_at_present(backend)
+
+        if self._near_pose(actual, idle):
+            self.get_logger().info(f"자동 정렬: 이미 IDLE입니다({summary}) — 이동 없음")
+            return
+
+        safe, named = self._align_named_poses(backend, actual[1])
+        distances = {
+            name: max(abs(actual[servo_id] - pose[servo_id]) for servo_id in range(1, 6))
+            for name, pose in named.items()
+        }
+        nearest = min(distances, key=distances.get)
+
+        if distances[nearest] <= RECOVER_MATCH_TOLERANCE_RAW:
+            kind = nearest.split(":")[0]
+            chain = {
+                "grasp": (named[nearest.replace("grasp:", "midpoint:")], safe, idle),
+                "midpoint": (safe, idle),
+                "safe": (idle,),
+                "drop": (idle,),
+            }[kind]
+            route = f"등록 자세 '{nearest}'({distances[nearest]} raw)에서 상승 체인"
+        elif actual[2] >= AUTO_ALIGN_LIFT_VIA_SAFE_SERVO2_RAW:
+            # 등록 자세 어디에도 안 붙는데 팔이 앞·아래로 뻗어 있다. IDLE로
+            # 곧장 가면 바닥을 쓴다 — safe로 먼저 **들어올린** 뒤 접는다.
+            chain = (safe, idle)
+            route = (
+                f"미등록 자세이나 servo2={actual[2]}가 "
+                f"{AUTO_ALIGN_LIFT_VIA_SAFE_SERVO2_RAW} 이상 — safe로 먼저 들어올림"
+            )
+        else:
+            chain = (idle,)
+            route = f"미등록 자세이나 servo2={actual[2]}로 이미 접힌 영역 — IDLE 직행"
+
+        self.get_logger().warn(f"자동 정렬 시작 — IDLE 편차 {summary} / {route}")
+        self._close_gripper_before_folding(backend)
+        for waypoint in chain:
+            defer = RETURN_TO_IDLE_DEFERRED_JOINTS if waypoint is idle else ()
+            self._glide_to_raw_positions(
+                backend, waypoint, defer_joints=defer, speed_raw=AUTO_ALIGN_SPEED_RAW
+            )
+
+        final = self._read_joint_positions(backend)
+        if final is None or not self._near_pose(final, idle):
+            raise ArmHardwareUnavailableError(
+                f"자동 정렬 후에도 IDLE에 도달하지 못했습니다 — 현재 {final}. "
+                "팔을 직접 보면서 tools/align_to_idle.py로 정렬하세요"
+            )
+        residual = {servo_id: final[servo_id] - idle[servo_id] for servo_id in range(1, 6)}
+        self.get_logger().info(f"자동 정렬 완료 — 잔차 {residual}")
+
+    def _on_get_arm_state(self, request, response):
+        """servo 1..6의 위치·부하·온도·torque를 한 번에 돌려준다.
+
+        이 노드가 /dev/soarm을 독점하므로 검증 도구가 서보를 실측할 수 있는
+        유일한 경로다. 읽기에 실패한 서보는 online=False로 표시하고 나머지
+        값은 0으로 둔다 — 못 읽은 것을 0으로 보고하면 '부하 없음'과 구분되지
+        않기 때문이다."""
+        try:
+            backend = soarm._backend(real=True)
+        except Exception as e:  # 포트가 끊긴 경우
+            response.ok = False
+            response.message = f"백엔드 접근 실패: {e}"
+            return response
+
+        online, positions, loads, temperatures, torques = [], [], [], [], []
+        for servo_id in ALL_SERVO_IDS:
+            position = backend.drv.get_position(servo_id)
+            if position is None:
+                online.append(False)
+                positions.append(0)
+                loads.append(0.0)
+                temperatures.append(0)
+                torques.append(False)
+                continue
+            raw_load = backend.drv.get_load(servo_id)
+            temperature = backend.drv.get_temperature(servo_id)
+            online.append(True)
+            positions.append(int(position))
+            loads.append(0.0 if raw_load is None else abs(raw_load) / GRIPPER_LOAD_MAX_RAW)
+            temperatures.append(0 if temperature is None else int(temperature))
+            torques.append(backend.drv.get_torque(servo_id) is True)
+
+        response.online = online
+        response.position_raw = positions
+        response.load_ratio = loads
+        response.temperature_c = temperatures
+        response.torque_on = torques
+        offline = [servo_id for servo_id, ok in zip(ALL_SERVO_IDS, online, strict=True) if not ok]
+        response.ok = not offline
+        response.message = "" if not offline else f"읽기 실패 servo IDs: {offline}"
+        return response
 
     def _on_set_gripper(self, request, response):
         width_mm = max(GRIPPER_CLOSED_MM, min(GRIPPER_OPEN_MM, request.width_mm))

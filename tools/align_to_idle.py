@@ -3,10 +3,15 @@
 
 전원 투입 후 servo torque가 꺼진 상태에서는 팔이 중력으로 처진다. 이 도구는
 현재 자세를 읽어 registered IDLE 자세(IDLE_CRADLE_RAW, servo 6은 CLOSED)로
-천천히 정렬한다. arm_driver_node는 기동 시 IDLE 편차를 로그로만 남기고 절대
-자동으로 움직이지 않으므로(안전 계약 — arm_driver_node.py의
-``_log_idle_offset`` 참고), 사람이 이 도구를 확인하며 실행하는 것이 유일한
-정렬 경로다.
+천천히 정렬한다.
+
+2026-08-25부터 arm_driver_node가 **첫 바닥 자세 이동 요청 때 같은 정렬을
+자동으로** 수행한다(``_auto_align_to_idle``). 그래도 이 도구는 남는다 —
+노드를 띄우지 않은 상태(포트가 비어 있을 때)에서 쓸 수 있는 유일한 경로이고,
+``auto_align_on_first_move:=false``로 자동 정렬을 껐을 때의 수동 경로이기도
+하다. 두 구현은 같은 안전 순서(goal<-present latch 후 이동)를 지키지만
+코드를 공유하지 않는다: 이 도구는 driver_sdk에 직접 붙고, 노드 쪽은
+자기가 이미 쥔 백엔드를 쓴다.
 
 ⚠️ 반드시 알아야 할 하드웨어 거동 (2026-08-21 Pi 실기에서 확인, driver_sdk
 소스에는 이 동작이 없다 — 펌웨어 레벨이라 코드만 읽어서는 알 수 없다):

@@ -114,7 +114,7 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Image
 from grippers_interfaces.action import MoveToFloorPose
-from grippers_interfaces.srv import GetLoad, ObserveTarget, SetGripper
+from grippers_interfaces.srv import GetArmState, GetLoad, ObserveTarget, SetGripper
 
 # arm_driver_node와 같은 소스에서 직접 가져온다 — close_width_mm 등을 이
 # 파일에 따로 베껴 적으면 profile 값이 바뀔 때 조용히 어긋난다.
@@ -462,6 +462,7 @@ class GraspTestNode(Node):
         self._observe_client = self.create_client(ObserveTarget, "perception/observe_target")
         self._gripper_client = self.create_client(SetGripper, "arm_driver/set_gripper")
         self._load_client = self.create_client(GetLoad, "arm_driver/get_load")
+        self._arm_state_client = self.create_client(GetArmState, "arm_driver/get_arm_state")
         self._floor_pose_client = ActionClient(self, MoveToFloorPose, "arm_driver/move_to_floor_pose")
 
     def _on_odom(self, msg: Odometry):
@@ -501,6 +502,18 @@ class GraspTestNode(Node):
         future = self._load_client.call_async(GetLoad.Request())
         rclpy.spin_until_future_complete(self, future, timeout_sec=timeout_sec)
         return future.result().load_ratio if future.done() else None
+
+    def arm_state(self, timeout_sec=3.0):
+        """servo 1..6의 위치·부하·온도·torque를 한 번에 읽는다.
+
+        arm_driver_node가 /dev/soarm을 독점하므로 도구가 서보를 실측할 수
+        있는 유일한 경로다 — driver_sdk로 직접 붙으면 팔 이동이 깨진다."""
+        if not self._arm_state_client.wait_for_service(timeout_sec=timeout_sec):
+            print("  [경고] arm_driver/get_arm_state 서비스 없음")
+            return None
+        future = self._arm_state_client.call_async(GetArmState.Request())
+        rclpy.spin_until_future_complete(self, future, timeout_sec=timeout_sec)
+        return future.result() if future.done() else None
 
     def move_floor_pose(self, profile: str, stage: str, timeout_sec=30.0) -> bool:
         if not self._floor_pose_client.wait_for_server(timeout_sec=5.0):

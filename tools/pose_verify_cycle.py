@@ -1,0 +1,455 @@
+#!/usr/bin/env python3
+"""물체별 팔 자세·파지 판정 검증 — 주행 없음.
+
+2026-08-25 사용자 지시: "비어있을 때를 baseline으로 보고 각 물체별로
+IDLE -> SAFE_145 -> 파지 -> CARRY_IDLE -> BASKET_DROP -> IDLE을 한번씩
+돌면서 그리퍼 값, depth camera 값, 서보 값을 검증하는 코드".
+
+이 도구가 하는 일과 하지 않는 일:
+
+    한다   — 등록 자세마다 servo 1..6의 실제 위치·부하·온도·torque를 읽어
+             기대 자세와의 잔차를 표로 남긴다.
+           — 같은 체크포인트에서 depth 카메라 관측(found/h/w/x)을 남긴다.
+           — 빈 회차를 먼저 돌아 **그 세션의 기준선**을 만들고, 이후 물체
+             회차를 전부 그 기준선과 비교한다.
+    안 한다 — 주행. cmd_vel을 단 한 번도 발행하지 않는다. 물체는 사람이
+             팔 앞에 놓고, 필요하면 손으로 턱 사이에 밀어 넣는다.
+
+왜 빈 회차가 먼저인가: load 기준선(demo_rook_run의 EMPTY_CARRY_LOAD=0.0352)은
+2026-08-24에 한 번 잰 상수인데, 빈 그리퍼의 부하는 배터리 전압과 서보 온도에
+따라 움직인다. 같은 세션에서 방금 잰 값과 비교하면 그 변동이 상쇄된다.
+
+servo 6 잔차는 **실패가 아니라 측정값**이다. servo 6에는 토크 제한 레지스터가
+없어 파지력이 곧 위치 오차이므로, 물체를 문 상태에서 명령 폭에 도달하지 못하는
+것이 정상이고 오히려 그 오차 크기가 "얼마나 세게 쥐고 있는가"다.
+
+사전 준비:
+  - depth_camera · depth_cam_rotate_node · perception_node · arm_driver
+  - 팔 아래에 바구니나 완충재를 둘 것 — 투하 단계에서 물체가 195mm 높이에서
+    떨어진다.
+  - odom_publisher는 필요 없다(주행하지 않는다).
+
+사용:
+  python3 tools/pose_verify_cycle.py                      # 빈 회차 + 6종 전부
+  python3 tools/pose_verify_cycle.py --classes rook,queen # 빈 회차 + 2종
+  python3 tools/pose_verify_cycle.py --baseline-only      # 빈 회차만
+  python3 tools/pose_verify_cycle.py --skip-baseline --classes rook
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+
+import rclpy
+from grasp_test_console import (
+    CLASS_TO_PROFILE,
+    GRIPPER_CLOSED_MM,
+    GraspTestNode,
+    RunLog,
+    estimate_position,
+)
+from grippers_arm.floor_grasp_profiles import FLOOR_GRASP_PROFILES
+from grippers_arm.gripper_calibration import width_from_position
+from pose_verify_expectations import (
+    CYCLE_CHECKPOINTS,
+    POSE_TOLERANCE_RAW,
+    expected_gripper_mm,
+    expected_poses,
+    load_verdict,
+    pose_ok,
+    pose_residuals,
+    vision_verdict,
+)
+from rclpy.signals import SignalHandlerOptions
+
+# demo_rook_run과 같은 값을 쓴다 — 두 도구의 판정을 나란히 놓고 볼 수 있어야
+# 한다. 근거는 그쪽 파일의 STILL_THERE_H_RATIO / LOAD_MARGIN 주석 참고.
+STILL_THERE_H_RATIO = 0.8
+LOAD_MARGIN = 0.0078
+# 그리퍼 개폐와 관절 이동 뒤 부하가 정착할 때까지의 여유(GRASP_SETTLE_SEC과
+# 같은 실측 근거 — 1.0s 안정 + 여유).
+SETTLE_S = 1.2
+
+# 빈 회차에서 쓸 profile. 팔 자세는 회차마다 물체별로 달라지므로 빈 회차는
+# 자세 기준선이 아니라 **부하·관측 기준선**을 만드는 것이 목적인데, 그래도
+# 어떤 자세로든 한 바퀴 돌아야 하므로 하나를 골라야 한다. rook은 지금까지
+# 실기 회차가 가장 많아 비교할 과거 데이터가 제일 많다.
+BASELINE_PROFILE = "chess_rook"
+BASELINE_RAW_CLS = "rook"
+
+
+def _prompt(text: str) -> None:
+    """Enter를 기다린다. q면 중단."""
+    if input(text).strip().lower() == "q":
+        raise KeyboardInterrupt
+
+
+def read_state(node, log, checkpoint):
+    """servo 1..6 실측. 실패하면 None."""
+    state = node.arm_state()
+    if state is None or not state.ok:
+        message = "응답 없음" if state is None else state.message
+        print(f"    [서보] 읽기 실패 — {message}")
+        log.log("arm_state", checkpoint=checkpoint, ok=False, message=message)
+        return None
+    log.log(
+        "arm_state",
+        checkpoint=checkpoint,
+        ok=True,
+        position_raw=list(state.position_raw),
+        load_ratio=[round(v, 4) for v in state.load_ratio],
+        temperature_c=list(state.temperature_c),
+        torque_on=list(state.torque_on),
+    )
+    return state
+
+
+def observe(node, log, checkpoint, raw_cls):
+    """depth 카메라 관측 한 번. (found, h, w, x) 또는 None."""
+    obs = node.observe(raw_cls, timeout_sec=1.5)
+    if obs is None:
+        print("    [관측] 응답 없음")
+        log.log("observe", checkpoint=checkpoint, ok=False)
+        return None
+    if not obs.found:
+        print(f"    [관측] {raw_cls} 안 보임")
+        log.log("observe", checkpoint=checkpoint, ok=True, found=False)
+        return obs
+    forward_m, lateral_m = estimate_position(obs, raw_cls)
+    where = ""
+    if forward_m is not None:
+        where = f" · 전방 {forward_m * 100:.1f}cm 좌우 {lateral_m * 100:+.1f}cm"
+    print(f"    [관측] {raw_cls} h={obs.h:.1f}px w={obs.w:.1f}px x={obs.x:.1f}px{where}")
+    log.log(
+        "observe",
+        checkpoint=checkpoint,
+        ok=True,
+        found=True,
+        h=float(obs.h),
+        w=float(obs.w),
+        x=float(obs.x),
+        forward_m=forward_m,
+        lateral_m=lateral_m,
+    )
+    return obs
+
+
+def report_checkpoint(state, expected_pose, expected_mm, baseline):
+    """한 체크포인트의 표 한 줄들을 출력하고, 나중에 비교할 요약을 돌려준다."""
+    if state is None:
+        return None
+
+    actual = list(state.position_raw)
+    residuals = pose_residuals(expected_pose, actual[:5])
+    ok = pose_ok(residuals)
+    joints = " ".join(
+        f"s{i + 1}={actual[i]}({residuals[i]:+d})" for i in range(5)
+    )
+    print(f"    [서보] {joints}  → {'OK' if ok else '⚠️ 허용치 초과'}")
+
+    gripper_raw = actual[5]
+    gripper_mm = width_from_position(gripper_raw)
+    if expected_mm is None:
+        print(f"    [그리퍼] {gripper_mm:.1f}mm (raw {gripper_raw}) — 명령 없음")
+        width_error = None
+    else:
+        width_error = gripper_mm - expected_mm
+        # 이 오차는 실패가 아니라 파지력의 대리 측정값이다(모듈 docstring 참고).
+        print(
+            f"    [그리퍼] 명령 {expected_mm:.1f}mm → 실제 {gripper_mm:.1f}mm "
+            f"({width_error:+.1f}mm, raw {gripper_raw}) = 파지력 대리값"
+        )
+
+    load = state.load_ratio[5]
+    delta = "" if baseline is None else f"  (빈 기준선 대비 {load - baseline:+.4f})"
+    print(f"    [부하] servo6 {load:.4f}{delta}")
+
+    hot = [
+        f"s{i + 1}={state.temperature_c[i]}°C"
+        for i in range(6)
+        if state.temperature_c[i] >= 45
+    ]
+    if hot:
+        print(f"    [온도] ⚠️ {' '.join(hot)}")
+    torque_off = [i + 1 for i in range(6) if not state.torque_on[i]]
+    if torque_off:
+        print(f"    [torque] ⚠️ OFF: {torque_off}")
+
+    return {
+        "pose_ok": ok,
+        "residuals": residuals,
+        "gripper_mm": gripper_mm,
+        "width_error": width_error,
+        "load": load,
+        "worst_joint": max(range(5), key=lambda i: abs(residuals[i])) + 1,
+        "worst_raw": max(residuals, key=abs),
+    }
+
+
+def run_cycle(node, log, *, raw_cls, profile, empty, baseline, interactive):
+    """한 회차를 끝까지 돈다. 체크포인트별 요약 dict를 돌려준다.
+
+    실패하면 (요약, 실패사유)에서 사유가 채워진다 — 팔은 그 자리에 남으므로
+    호출부가 recover를 결정한다."""
+    label = "빈 회차(기준선)" if empty else raw_cls
+    spec = FLOOR_GRASP_PROFILES[profile]
+    print(f"\n{'=' * 68}\n=== {label} — profile={profile}")
+    print(f"    preopen={spec.preopen_width_mm}mm  close={spec.close_width_mm}mm  "
+          f"release={spec.release_width_mm}mm  파지중심={spec.grasp_center_height_mm}mm")
+    log.log("cycle_start", raw_cls=raw_cls, profile=profile, empty=empty)
+
+    results = {}
+
+    # servo1은 safe/grasp/midpoint 동안 얼어 있다 — arm_driver가 이동을 시작할
+    # 때 읽은 값이 그대로 기대값이 되므로, 우리도 같은 시점에 읽어 둔다.
+    start_state = read_state(node, log, "idle_start")
+    if start_state is None:
+        return results, "시작 시 서보 상태를 읽지 못했습니다"
+    frozen_servo1 = start_state.position_raw[0]
+    poses = expected_poses(profile, frozen_servo1)
+    print(f"    servo1 동결값 = {frozen_servo1} (safe/grasp/midpoint 기대값에 사용)")
+
+    def checkpoint(name, state=None):
+        pose_key, width_key = next(
+            (p, w) for n, p, w in CYCLE_CHECKPOINTS if n == name
+        )
+        print(f"  [{name}]")
+        state = state if state is not None else read_state(node, log, name)
+        summary = report_checkpoint(
+            state,
+            poses[pose_key],
+            expected_gripper_mm(profile, width_key),
+            None if baseline is None else baseline.get(name, {}).get("load"),
+        )
+        if summary is not None:
+            results[name] = summary
+            log.log("checkpoint", name=name, **{
+                k: v for k, v in summary.items() if k != "residuals"
+            }, residuals=summary["residuals"])
+        return summary
+
+    checkpoint("idle_start", start_state)
+
+    if not empty and interactive:
+        _prompt("\n  물체를 팔 앞 파지 위치에 놓고 Enter (q=중단): ")
+
+    # 내려가면 팔이 depth 카메라를 가린다 — 정면을 볼 수 있는 마지막 순간이다.
+    before = observe(node, log, "before_descend", raw_cls)
+    h_before = float(before.h) if before is not None and before.found else None
+
+    print("\n  safe로 이동")
+    if not node.move_floor_pose(profile, "safe"):
+        return results, "safe 이동 실패"
+    time.sleep(SETTLE_S)
+    checkpoint("safe_down")
+
+    # 내려가기 전에 연다 — 닫힌 손가락이 물체 자리를 통과하며 밀어내지 않게.
+    print(f"\n  그리퍼 열기 {spec.preopen_width_mm}mm (내려가기 전)")
+    node.set_gripper(spec.preopen_width_mm)
+    time.sleep(SETTLE_S)
+    checkpoint("preopen")
+
+    print("\n  grasp로 이동")
+    if not node.move_floor_pose(profile, "grasp"):
+        return results, "grasp 이동 실패"
+    time.sleep(SETTLE_S)
+    checkpoint("grasp")
+
+    if not empty and interactive:
+        _prompt("\n  물체가 열린 턱 사이에 있는지 확인하고 Enter — "
+                "필요하면 손으로 밀어 넣으세요 (q=중단): ")
+
+    print(f"\n  그리퍼 닫기 {spec.close_width_mm}mm")
+    resp = node.set_gripper(spec.close_width_mm)
+    if resp is None or not resp.ok:
+        return results, "그리퍼 닫기 실패"
+    time.sleep(SETTLE_S)
+    checkpoint("closed")
+
+    # 바닥에서 IDLE로 곧장 가면 그리퍼가 바닥을 쓸어간다 — 검증된 상승 체인.
+    for stage, name in (("midpoint", "midpoint_up"), ("safe", "safe_up"), ("idle", "carry_idle")):
+        print(f"\n  {stage}로 이동")
+        if not node.move_floor_pose(profile, stage):
+            return results, f"{stage} 이동 실패"
+        time.sleep(SETTLE_S)
+        checkpoint(name)
+
+    after = observe(node, log, "carry_idle", raw_cls)
+    h_after = float(after.h) if after is not None and after.found else None
+    found_after = None if after is None else bool(after.found)
+
+    carry = results.get("carry_idle", {}).get("load")
+    baseline_carry = None if baseline is None else baseline.get("carry_idle", {}).get("load")
+    verdicts = {
+        "load": load_verdict(carry, baseline_carry, LOAD_MARGIN),
+        "vision": vision_verdict(h_before, found_after, h_after, STILL_THERE_H_RATIO),
+    }
+    print_verdicts(label, carry, baseline_carry, h_before, h_after, verdicts, empty)
+    log.log("verdict", raw_cls=raw_cls, empty=empty, carry_load=carry,
+            baseline_carry=baseline_carry, h_before=h_before, h_after=h_after, **verdicts)
+    results["_verdicts"] = verdicts
+
+    print("\n  drop으로 이동")
+    if not node.move_floor_pose(profile, "drop"):
+        return results, "drop 이동 실패"
+    time.sleep(SETTLE_S)
+    checkpoint("drop")
+
+    # 활짝 열지 않는다 — 물체가 턱 사이에서 빠져나올 만큼만.
+    print(f"\n  그리퍼 열기 {spec.release_width_mm}mm (투하)")
+    node.set_gripper(spec.release_width_mm)
+    time.sleep(SETTLE_S)
+    checkpoint("released")
+
+    # 접기 **전에** 닫는다 — 다음 동작이 요구하는 형상을 그 동작 전에 만든다.
+    print(f"\n  그리퍼 닫기 {GRIPPER_CLOSED_MM}mm (IDLE 복귀 전)")
+    node.set_gripper(GRIPPER_CLOSED_MM)
+    time.sleep(SETTLE_S)
+    checkpoint("closed_to_fold")
+
+    print("\n  idle로 복귀")
+    if not node.move_floor_pose(profile, "idle"):
+        return results, "idle 복귀 실패"
+    time.sleep(SETTLE_S)
+    checkpoint("idle_end")
+
+    log.log("cycle_ok", raw_cls=raw_cls, profile=profile, empty=empty)
+    return results, None
+
+
+def print_verdicts(label, carry, baseline_carry, h_before, h_after, verdicts, empty):
+    print(f"\n  --- {label} 파지 판정 ---")
+    if empty:
+        print("    빈 회차 — 판정하지 않고 기준선으로만 씁니다"
+              f" (CARRY_IDLE load = {carry if carry is None else round(carry, 4)})")
+        return
+    load_ok = verdicts["load"]
+    if load_ok is None:
+        print("    [load] 판정 불가")
+    else:
+        margin = carry - baseline_carry
+        print(f"    [load] {carry:.4f} vs 빈 {baseline_carry:.4f} = {margin:+.4f} "
+              f"({margin / 0.00391:+.1f}양자) → {'성공' if load_ok else '실패'}")
+    vision = verdicts["vision"]
+    if vision is None:
+        print("    [시각] 판정 불가(기준 관측 또는 응답 없음)")
+    else:
+        seen = "사라짐" if vision else "아직 그 자리"
+        after = "없음" if h_after is None else f"{h_after:.1f}px"
+        print(f"    [시각] 기준 h={h_before:.1f}px → 지금 {after} → {seen}"
+              f" → {'성공' if vision else '실패'}")
+    if load_ok is not None and vision is not None:
+        if load_ok and vision:
+            print("    ★★ 두 신호 모두 성공")
+        elif not load_ok and not vision:
+            print("    ⚠️⚠️ 두 신호 모두 실패")
+        elif load_ok:
+            print("    ❓ 엇갈림: load는 잡혔다는데 물체가 그 자리에 있습니다")
+        else:
+            print("    ❓ 엇갈림: 물체는 사라졌는데 load가 없습니다")
+
+
+def print_summary(all_results):
+    print(f"\n{'=' * 68}\n=== 전체 요약")
+    header = f"{'회차':<10}{'자세 최악':<22}{'닫힘 폭오차':<14}{'CARRY load':<12}{'판정'}"
+    print(header)
+    print("-" * 68)
+    for label, results in all_results.items():
+        checkpoints = [(n, r) for n, r in (results or {}).items() if n != "_verdicts"]
+        if not checkpoints:
+            print(f"{label:<10}(기록 없음 — 회차가 첫 체크포인트 전에 끊겼습니다)")
+            continue
+        worst_name, worst = max(checkpoints, key=lambda item: abs(item[1]["worst_raw"]))
+        pose_cell = f"{worst_name} s{worst['worst_joint']} {worst['worst_raw']:+d}"
+        closed = results.get("closed", {})
+        width_cell = (
+            "-" if closed.get("width_error") is None else f"{closed['width_error']:+.1f}mm"
+        )
+        carry = results.get("carry_idle", {}).get("load")
+        load_cell = "-" if carry is None else f"{carry:.4f}"
+        verdicts = results.get("_verdicts", {})
+        verdict_cell = " / ".join(
+            f"{key}={'성공' if value else ('실패' if value is False else '불가')}"
+            for key, value in verdicts.items()
+        ) or "-"
+        print(f"{label:<10}{pose_cell:<22}{width_cell:<14}{load_cell:<12}{verdict_cell}")
+    print(f"\n자세 허용치 ±{POSE_TOLERANCE_RAW} raw. 그리퍼 폭오차는 실패가 아니라 "
+          "파지력 대리값입니다.")
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--classes", default="all",
+                    help=f"쉼표 구분. all = {','.join(sorted(CLASS_TO_PROFILE))}")
+    ap.add_argument("--baseline-only", action="store_true", help="빈 회차만 돌고 끝낸다")
+    ap.add_argument("--skip-baseline", action="store_true",
+                    help="빈 회차를 건너뛴다(기준선 비교가 없어진다)")
+    ap.add_argument("--no-prompt", action="store_true",
+                    help="물체 배치 확인 프롬프트를 띄우지 않는다(빈 회차 자동화용)")
+    args = ap.parse_args()
+
+    if args.classes == "all":
+        classes = sorted(CLASS_TO_PROFILE)
+    else:
+        classes = [c.strip() for c in args.classes.split(",") if c.strip()]
+    unknown = [c for c in classes if c not in CLASS_TO_PROFILE]
+    if unknown:
+        print(f"알 수 없는 클래스: {unknown} — 가능: {sorted(CLASS_TO_PROFILE)}", file=sys.stderr)
+        return 2
+    if args.baseline_only:
+        classes = []
+
+    log = RunLog(",".join(classes) or "empty", "pose_verify_cycle")
+    print("=== 자세·파지 검증 회차 (주행 없음) ===")
+    print(f"상세 로그: {log.path}")
+    print("⚠️ 팔 아래에 바구니나 완충재를 두세요 — 투하 단계에서 물체가 떨어집니다.")
+    print("⚠️ 팔은 IDLE에서 시작합니다. 벗어나 있으면 arm_driver가 첫 이동 때 자동 정렬합니다.")
+
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+    node = GraspTestNode()
+    all_results = {}
+    exit_code = 0
+    try:
+        baseline = None
+        if not args.skip_baseline:
+            baseline, why = run_cycle(
+                node, log, raw_cls=BASELINE_RAW_CLS, profile=BASELINE_PROFILE,
+                empty=True, baseline=None, interactive=False)
+            all_results["빈 회차"] = baseline
+            if why:
+                print(f"\n[중단] 빈 회차 실패: {why}")
+                log.log("cycle_failed", raw_cls="empty", why=why)
+                return 3
+
+        for raw_cls in classes:
+            results, why = run_cycle(
+                node, log, raw_cls=raw_cls, profile=CLASS_TO_PROFILE[raw_cls],
+                empty=False, baseline=baseline, interactive=not args.no_prompt)
+            all_results[raw_cls] = results
+            if why:
+                print(f"\n[중단] {raw_cls} 실패: {why} — 팔은 그 자리에 있습니다.")
+                print("  arm_driver의 recover_idle로 복귀시킨 뒤 다시 실행하세요.")
+                log.log("cycle_failed", raw_cls=raw_cls, why=why)
+                exit_code = 4
+                break
+
+        print_summary(all_results)
+        return exit_code
+
+    except KeyboardInterrupt:
+        print("\n[중단] 운영자 중단 — 팔 상태는 직접 확인하세요(자동 복구 없음).")
+        log.log("aborted")
+        print_summary(all_results)
+        return 130
+    finally:
+        log.log("run_end")
+        log.close()
+        node.destroy_node()
+        rclpy.shutdown()
+        print(f"상세 로그: {log.path}")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

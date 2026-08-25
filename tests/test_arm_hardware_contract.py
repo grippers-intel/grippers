@@ -478,12 +478,18 @@ def test_glide_defaults_to_no_deferral():
     """기본값이 '지연 없음'이어야 한다 — 새 호출부가 실수로 전역 지연을
     물려받는 일이 없도록."""
     glide = _function("_glide_to_raw_positions")
-    defaults = {
-        arg.arg: ast.literal_eval(default)
-        for arg, default in zip(glide.args.args[-len(glide.args.defaults):], glide.args.defaults)
-    }
+    # 상수 이름을 기본값으로 쓰는 인자(speed_raw=FLOOR_POSE_SPEED_RAW)도 있어
+    # literal_eval이 통하지 않는다 — 리터럴인 것만 골라 본다.
+    defaults = {}
+    for arg, default in zip(glide.args.args[-len(glide.args.defaults):], glide.args.defaults):
+        try:
+            defaults[arg.arg] = ast.literal_eval(default)
+        except ValueError:
+            defaults[arg.arg] = ast.unparse(default)
 
     assert defaults["defer_joints"] == ()
+    # 속도도 기본은 정상 이동 속도다 — 정렬 경로만 명시적으로 낮춰 부른다.
+    assert defaults["speed_raw"] == "FLOOR_POSE_SPEED_RAW"
 
 
 def test_domain_grasp_state_also_opens_before_descending():
@@ -496,3 +502,172 @@ def test_domain_grasp_state_also_opens_before_descending():
     open_at = grasp.index("set_gripper(plan.preopen_width_mm)")
     descend_at = grasp.index('move_to_floor_pose(plan.profile, "grasp")')
     assert open_at < descend_at
+
+
+# --- 첫 이동 자동 IDLE 정렬 (2026-08-25 사용자 지시) -----------------------
+
+
+def test_auto_align_on_first_move_is_on_by_default():
+    """사용자 지시: "맨처음 이동 게이트에서 최초 로봇암의 자세를 파악하고
+    무조건 자동으로 align_idle을 할 수 있게". 기본값이 True여야 그 지시가
+    실제로 지켜진다 — 파라미터는 끄기 위한 탈출구일 뿐이다."""
+    init = _function("__init__")
+
+    declarations = [
+        call
+        for call in _calls(init)
+        if _called_name(call) == "declare_parameter"
+        and call.args
+        and isinstance(call.args[0], ast.Constant)
+        and call.args[0].value == "auto_align_on_first_move"
+    ]
+
+    assert len(declarations) == 1
+    assert declarations[0].args[1].value is True
+
+
+def test_auto_align_runs_before_the_torque_gate_that_would_block_it():
+    """정렬이 필요한 전형적 상황이 전원 투입 직후 torque OFF이고, 그건 정확히
+    _require_operational_servos가 막는 상태다. 순서를 뒤집으면 자동 정렬이
+    영영 불려 오지 못한다."""
+    source = ast.unparse(_function("_execute_floor_pose"))
+
+    assert source.index("_auto_align_to_idle()") < source.index(
+        "_require_operational_servos"
+    )
+
+
+def test_auto_align_happens_once_per_session():
+    """매 이동마다 정렬하면 팔이 단계마다 IDLE로 되돌아간다 — 첫 이동
+    한 번만이어야 한다."""
+    execute = ast.unparse(_function("_execute_floor_pose"))
+
+    assert "self._auto_align_pending and req.stage != 'recover_idle'" in execute
+    assert "self._auto_align_pending = False" in execute
+
+
+def test_auto_align_skips_recover_idle_which_already_does_the_same_work():
+    execute = ast.unparse(_function("_execute_floor_pose"))
+
+    assert "req.stage != 'recover_idle'" in execute
+
+
+def test_auto_align_latches_torque_before_writing_any_target():
+    """⚠️ STS3215는 goal_position write에 torque를 자동으로 켠다. 늘어져 있는
+    관절에 목표를 곧장 쓰면 그 순간 급하게 움직인다 — goal<-present를 먼저
+    써서 torque만 켜고 이동량을 0으로 만든 뒤에야 목표를 쓴다."""
+    align = ast.unparse(_function("_auto_align_to_idle"))
+
+    assert align.index("_latch_torque_at_present") < align.index("_glide_to_raw_positions")
+
+    latch = _function("_latch_torque_at_present")
+    names = [_called_name(call) for call in _calls(latch)]
+    # present를 읽고 그대로 되쓴다 — 이 순서가 계약의 전부다.
+    assert names.index("get_position") < names.index("set_position")
+
+
+def test_auto_align_never_interpolates_straight_to_idle_from_a_low_pose():
+    """확립된 안전 규칙 — 바닥 높이에서 IDLE로 직선 보간하면 그리퍼가 바닥을
+    쓸고 간다(2026-08-24 실기, 사용자: "이렇게 움직이는건 절대로 안돼").
+    정렬도 recover_idle과 똑같이 등록 waypoint를 밟아 올라가야 한다."""
+    align = ast.unparse(_function("_auto_align_to_idle"))
+
+    # 등록 자세에 붙으면 검증된 상승 체인.
+    assert "'grasp': (named[nearest.replace('grasp:', 'midpoint:')], safe, idle)" in align
+    assert "'midpoint': (safe, idle)" in align
+    # 어디에도 안 붙는데 팔이 앞·아래로 뻗어 있으면 safe로 먼저 들어올린다.
+    assert "AUTO_ALIGN_LIFT_VIA_SAFE_SERVO2_RAW" in align
+    assert "chain = (safe, idle)" in align
+
+
+def test_auto_align_lift_threshold_sits_between_idle_and_the_grasp_poses():
+    """문턱값이 '접혀 있다'와 '앞으로 뻗어 있다'를 실제로 가르는지 본다.
+    IDLE servo2는 이 아래, 모든 grasp 자세의 servo2는 이 위여야 한다."""
+    threshold = _module_constants(ARM_NODE, {"AUTO_ALIGN_LIFT_VIA_SAFE_SERVO2_RAW"})[
+        "AUTO_ALIGN_LIFT_VIA_SAFE_SERVO2_RAW"
+    ]
+    profiles = ARM_NODE.with_name("floor_grasp_profiles.py")
+    poses = _module_constants(profiles, {"IDLE_CRADLE_RAW", "HORIZONTAL_SAFE_145_RAW"})
+    grasp_degs = _module_constants(
+        profiles,
+        {
+            "HORIZONTAL_GABE_LOW_26_DEG",
+            "HORIZONTAL_CHESS_ROOK_45_DEG",
+            "HORIZONTAL_CHESS_QUEEN_50_DEG",
+            "HORIZONTAL_CHESS_KNIGHT_60_DEG",
+        },
+    )
+
+    assert poses["IDLE_CRADLE_RAW"][1] < threshold
+    assert threshold < poses["HORIZONTAL_SAFE_145_RAW"][1]
+    for name, angles in grasp_degs.items():
+        servo2_raw = int(2048 + (angles[1] / 360.0) * 4095)
+        assert servo2_raw > threshold, name
+
+
+def test_auto_align_considers_every_profiles_grasp_pose():
+    """정렬은 어느 profile로 파지하다 멈췄는지 모르는 채 불려 온다 — 정상
+    경로와 달리 요청에 profile이 없으므로 여섯 자세를 전부 대봐야 한다."""
+    named = ast.unparse(_function("_align_named_poses"))
+
+    assert "HORIZONTAL_GRASP_POSES_DEG.items()" in named
+    assert "midpoint:" in named
+
+
+def test_auto_align_verifies_it_actually_reached_idle():
+    """도달을 확인하지 않으면 '정렬했다'고 보고해 놓고 다음 단계가 시작
+    자세 게이트에서 거부되는, 원인과 증상이 어긋난 실패가 난다."""
+    align = ast.unparse(_function("_auto_align_to_idle"))
+    tail = align[align.index("for waypoint in chain"):]
+
+    assert "_read_joint_positions" in tail
+    assert "_near_pose" in tail
+    assert "ArmHardwareUnavailableError" in tail
+
+
+def test_auto_align_only_closes_a_gripper_that_is_clearly_empty():
+    """활짝 열린 손가락 판을 단 채 IDLE로 접으면 차체에 닿는다. 그렇다고
+    무조건 닫으면, 물체를 문 채 정렬이 불려 왔을 때 그 물체를 으깬다 —
+    servo 6에는 토크 제한 레지스터가 없어 위치 오차가 곧 힘이다."""
+    threshold = _module_constants(ARM_NODE, {"AUTO_ALIGN_GRIPPER_CLOSE_ABOVE_MM"})[
+        "AUTO_ALIGN_GRIPPER_CLOSE_ABOVE_MM"
+    ]
+    profiles_src = ARM_NODE.with_name("floor_grasp_profiles.py").read_text(encoding="utf-8")
+    squeeze = next(
+        ast.literal_eval(node.value)
+        for node in ast.parse(profiles_src).body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "GRIPPER_SQUEEZE_MM"
+    )
+    calibration = _load_gripper_calibration()
+    widest_object_mm = 46.0  # soccer_polyhedron — FLOOR_GRASP_PROFILES 최대 폭
+    widest_close_mm = max(calibration.GRIPPER_CLOSED_MM, widest_object_mm - squeeze)
+
+    assert threshold > widest_close_mm
+
+    fn = ast.unparse(_function("_close_gripper_before_folding"))
+    assert "width_from_position" in fn
+    assert "AUTO_ALIGN_GRIPPER_CLOSE_ABOVE_MM" in fn
+
+
+def test_auto_align_moves_more_slowly_than_a_verified_transition():
+    """정렬은 출발 자세가 검증되지 않은 유일한 이동이다."""
+    speeds = _module_constants(ARM_NODE, {"AUTO_ALIGN_SPEED_RAW", "FLOOR_POSE_SPEED_RAW"})
+
+    assert speeds["AUTO_ALIGN_SPEED_RAW"] < speeds["FLOOR_POSE_SPEED_RAW"]
+    align = ast.unparse(_function("_auto_align_to_idle"))
+    assert "speed_raw=AUTO_ALIGN_SPEED_RAW" in align
+
+
+def test_arm_state_service_reports_unreadable_servos_instead_of_zeroing_them():
+    """못 읽은 것을 0으로 보고하면 '부하 없음'과 구분되지 않는다 — 검증
+    도구가 통신 실패를 정상 측정값으로 착각한다."""
+    fn = _function("_on_get_arm_state")
+    source = ast.unparse(fn)
+
+    assert "online.append(False)" in source
+    assert "response.ok = not offline" in source
+    names = [_called_name(call) for call in _calls(fn)]
+    for reader in ("get_position", "get_load", "get_temperature", "get_torque"):
+        assert reader in names

@@ -19,6 +19,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MissionSpec.msg"
   "srv/SetGripper.srv"
   "srv/GetLoad.srv"
+  "srv/GetArmState.srv"
   "srv/ScanFloor.srv"
   "srv/FindBox.srv"
   "srv/MeasureOpening.srv"
