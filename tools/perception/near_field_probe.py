@@ -37,6 +37,28 @@ from rclpy.node import Node
 from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import Image
 
+# --- 2026-08-25 이 도구로 얻은 카메라 기하 ---------------------------------
+#
+# 큐브(폭 40mm)를 네 거리에 놓고 찍은 프레임에서, bbox 폭으로 거리를 역산하고
+# bbox 바닥 행(= 물체가 바닥에 닿는 지점)을 짝지어 카메라 높이와 피치를 함께
+# 최소제곱으로 풀었다. 네 점 RMS 7.2px로 맞는다:
+#
+#     접촉행 261 / 폭 68px -> 34.6cm      접촉행 303 / 폭 91px  -> 25.9cm
+#     접촉행 371 / 폭 118px -> 20.0cm     접촉행 367 / 폭 126px -> 18.7cm
+#
+#     => 카메라 높이 8.8cm, 아래로 12.75도
+#
+# 여기서 나오는 결론이 이 파일의 존재 이유였다: **프레임 하단(480행)이 보는
+# 바닥은 12.8cm**다. 즉 파지 위치(전방 18~19cm)의 물체는 시야에 넉넉히 들어와
+# 있고, 거기서 안 보이는 것은 시야 문제가 아니라 인식 문제다. 실제로 그 거리의
+# 큐브는 rook으로 오분류됐고 box는 conf 0.10까지 낮춰도 나오지 않았다.
+#
+# ⚠️ 카메라를 다시 장착하면 이 수치는 전부 무효다. 그때는 같은 방법으로 다시
+# 재면 된다 — 물체 하나를 서너 거리에 놓고 이 도구로 찍는 것이 전부다.
+CAMERA_HEIGHT_M = 0.088
+CAMERA_PITCH_DEG = 12.75
+NEAR_FIELD_CUTOFF_M = 0.128
+
 RGB_TOPIC = "depth_cam/rgb/image_rotated"
 MODEL_PATH = "/grippers/models/best_cpu.pt"
 OUT_DIR = "/grippers/recordings/near_field"
@@ -170,6 +192,8 @@ def main():
 
         print(f"\n저장: {stem}_raw.png  {stem}_yolo.png")
         print("주석: 초록=게이트 통과, 빨강=게이트 미만, 하늘색 선=프레임 하단")
+        print(f"참고: 이 카메라의 근거리 컷오프는 {NEAR_FIELD_CUTOFF_M * 100:.0f}cm다 "
+              "— 그보다 먼 물체가 안 보이면 시야가 아니라 인식 문제다")
         return 0
     finally:
         node.destroy_node()
