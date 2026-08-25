@@ -13,9 +13,9 @@ E-STOP은 이 전이 그래프에 없다 — `MissionTask.run()` 이 다음 `exe
 `EstopState` 로 갈아치우는 인터럽트이지 정상 전이가 아니다 (state_machine.md §2)."""
 
 from dataclasses import replace
+from enum import Enum, auto
 
-from domain.task.floor_grasp_policy import (approach_target_key,
-                                            select_horizontal_grasp_plan)
+from domain.task.floor_grasp_policy import approach_target_key, select_horizontal_grasp_plan
 from domain.task.state import State
 from domain.values import MissionContext, MissionMode, Point3, Pose2D
 
@@ -285,7 +285,7 @@ class GraspState(State):
             if not ports.arm.move_to_floor_pose(plan.profile, "idle"):
                 return EstopState()
             if ports.arm.get_load() < self.LOAD_THRESHOLD:
-                return EstopState()
+                return self._request_host_replan(ports)
             # CARRY_IDLE 에서는 팔이 프레임 밖이라 정면 바닥이 그대로 보인다
             # (2026-08-25 실기 확인). load 와 **독립적인 두 번째 근거**로,
             # 목표가 있던 자리에서 사라졌는지 확인한다 — load 는 "무언가를
@@ -332,6 +332,47 @@ class GraspState(State):
         # 이전 pose를 재사용하지 않는다. 들어 올리지 못한 상태로 베이스가 움직이는
         # 것보다 대상을 보류하고 재스캔하는 편이 안전하다.
         return self._retry_after_release(ports)
+
+    def _request_host_replan(self, ports):
+        """CARRY_IDLE에서 빈손으로 확인됐다 — Host에 재계획을 요청하고 멈춘다.
+
+        2026-08-25 사용자 지시로 바뀐 경로다. 이전에는 여기서 곧장
+        `EstopState`(미션 종료)로 갔는데, 실은 **재시도 여건이 가장 좋은
+        지점**이다: 베이스가 아직 안 움직였고, 팔은 IDLE 크래들이라 안전
+        자세이며, 팔이 프레임 밖이라 정면 바닥이 그대로 보인다(2026-08-25
+        실기 확인). Host가 경로를 소유하므로 Pi는 "무엇을 다시 해달라"만
+        말하고 그 다음은 Host가 정한다.
+
+        두 갈래를 `confirm_grasp()`로 가른다 — 정면을 다시 보고 목표가
+        **아직 거기 있는가**를 묻는 관측이다(부재가 증거다).
+
+        - 아직 보인다 → 물체는 제자리다. 같은 목표로 경로만 다시 받아
+          재시도한다(`RETRY_SAME_TARGET`).
+        - 사라졌다 → 파지 실패가 물체를 예측 불가한 자리로 밀어냈고 정면
+          카메라에도 안 잡힌다. 같은 목표를 고집할 근거가 없으므로 같은
+          클래스 중 최근접으로 교체를 요청한다(`RETARGET_SAME_CLASS`).
+
+        ⚠️ `confirm_grasp()`의 `False`는 "아직 있다"와 "판정 불가"(기준
+        관측 없음·응답 없음)를 함께 뜻한다. 둘 다 재시도로 보내는 것은
+        의도적이다 — 모를 때 목표를 버리는 것보다 한 번 더 해보는 쪽이
+        정보를 덜 잃고, 재시도 예산이 있어 저절로 멈춘다.
+
+        재시도 예산을 다 쓰면 목표를 보류하고 교체를 요청한다.
+        ⚠️ 목표 선정은 이제 Host가 하므로 이 보류(`hold`)는 Pi 안에서만
+        유효하다 — Host가 같은 물체를 다시 고르지 않게 하려면 Host 쪽에도
+        제외 목록이 필요하다. 아직 배선 안 된 부분이다."""
+        ports.base.stop()
+        vanished = ports.perception.confirm_grasp()
+        if vanished:
+            return HostReplanState(
+                self.ctx.hold(self.target.track_id), self.target,
+                ReplanRequest.RETARGET_SAME_CLASS)
+        if self.ctx.grasp_attempts >= self.MAX_GRASP_RETRY:
+            return HostReplanState(
+                self.ctx.hold(self.target.track_id), self.target,
+                ReplanRequest.RETARGET_SAME_CLASS)
+        return HostReplanState(
+            self.ctx.retry(), self.target, ReplanRequest.RETRY_SAME_TARGET)
 
     def _retry_after_release(self, ports):
         ports.arm.set_gripper(OPEN_MM)
@@ -544,6 +585,41 @@ class DoneState(State):
         self.ctx = ctx
 
     def execute(self, ports):
+        return None
+
+
+class ReplanRequest(Enum):
+    """Host에 무엇을 다시 해달라고 할지."""
+
+    RETRY_SAME_TARGET = auto()
+    RETARGET_SAME_CLASS = auto()
+
+
+class HostReplanState(State):
+    """파지에 실패해 Host의 재계획을 기다린다 (사용자 지시, 2026-08-25).
+
+    `None`을 반환해 미션 제너레이터를 끝낸다 — `DoneState`와 같은 방식이고,
+    오케스트레이터의 FSM 스레드가 다음 명령을 기다리는 자리로 돌아간다.
+    Host가 새 경로와 함께 다시 GRASP를 보내면 그때 새 미션으로 시작된다.
+
+    요청 종류를 **상태 이름**으로 실어 보낸다 — `MissionState.msg`가 이미
+    `string state`를 퍼블리시하므로 인터페이스를 안 고쳐도 Host까지 닿는다.
+    어느 클래스였는지는 Host가 자기가 보낸 `target_label`로 알고 있으므로
+    Pi가 다시 말할 필요가 없다."""
+
+    def __init__(self, ctx, target, request):
+        self.ctx = ctx
+        self.target = target
+        self.request = request
+
+    @property
+    def name(self):
+        if self.request is ReplanRequest.RETRY_SAME_TARGET:
+            return "HOST_REPLAN_RETRY"
+        return "HOST_REPLAN_RETARGET"
+
+    def execute(self, ports):
+        ports.arm.hold_position()
         return None
 
 

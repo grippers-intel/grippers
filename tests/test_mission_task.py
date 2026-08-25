@@ -6,21 +6,21 @@ domain/adapters/fake/* 만 쓴다."""
 
 import threading
 from collections import Counter
+from dataclasses import replace
 
 from domain.adapters.fake.fake_arm import LOAD_EMPTY, LOAD_HOLDING, FakeArm
 from domain.adapters.fake.fake_base import FakeBase
 from domain.adapters.fake.scripted_interpreter import ScriptedInterpreter
 from domain.adapters.fake.scripted_perception import ScriptedPerception
 from domain.task import states as states_module
+from domain.task.floor_grasp_policy import select_horizontal_grasp_plan
 from domain.task.mission_task import MissionTask
 from domain.task.states import (
     ALIGN_TOLERANCE_RAD,
     SCAN_NO_CHANGE_LIMIT,
     GraspState,
-    InsertState,
     PosePlanState,
 )
-from domain.task.floor_grasp_policy import select_horizontal_grasp_plan
 from domain.values import (
     BoxObservation,
     Destination,
@@ -536,11 +536,8 @@ def test_horizontal_mid_lift_load_drop_blocks_safe_lift(make_ports):
     assert arm.gripper_widths[-1] == states_module.OPEN_MM
 
 
-def test_carry_idle_load_drop_hard_stops_before_base_transport(make_ports):
-    target = _detection(track_id=1)
-    arm = FakeArm(load_ratio=[0.07, 0.07, 0.03])
-    ports = make_ports(arm=arm)
-    ctx = MissionContext(
+def _grasp_ctx():
+    return MissionContext(
         spec=MissionSpec(
             mode=MissionMode.TIDY,
             target_cls=ObjectClass.GABE,
@@ -549,10 +546,78 @@ def test_carry_idle_load_drop_hard_stops_before_base_transport(make_ports):
         )
     )
 
-    next_state = GraspState(ctx, target).execute(ports)
 
-    assert next_state.name == "ESTOP"
+def _carry_idle_drop_ports(make_ports, grasp_confirmed):
+    """CARRY_IDLE까지 갔다가 거기서 빈손으로 확인되는 시나리오.
+
+    load [0.07, 0.07, 0.03] — 바닥과 midpoint는 통과하고 CARRY_IDLE에서 떨어진다."""
+    arm = FakeArm(load_ratio=[0.07, 0.07, 0.03])
+    perception = ScriptedPerception(grasp_confirmed=grasp_confirmed)
+    return arm, perception, make_ports(arm=arm, perception=perception)
+
+
+def test_carry_idle_drop_retries_same_target_when_object_is_still_there(make_ports):
+    """물체가 정면에 그대로 보인다 — 같은 목표로 경로만 다시 받는다
+    (사용자 지시 2026-08-25). 이전에는 여기서 ESTOP으로 미션이 끝났다."""
+    arm, perception, ports = _carry_idle_drop_ports(make_ports, grasp_confirmed=False)
+
+    next_state = GraspState(_grasp_ctx(), _detection(track_id=1)).execute(ports)
+
+    assert next_state.name == "HOST_REPLAN_RETRY"
+    assert next_state.request is states_module.ReplanRequest.RETRY_SAME_TARGET
+    assert perception.confirm_grasp_calls == 1
     assert arm.floor_pose_calls[-1] == ("soccer_polyhedron", "idle")
+
+
+def test_carry_idle_drop_retargets_when_object_vanished(make_ports):
+    """파지 실패가 물체를 예측 불가한 자리로 밀어냈고 정면에도 안 잡힌다 —
+    같은 클래스 중 최근접으로 교체를 요청한다."""
+    arm, perception, ports = _carry_idle_drop_ports(make_ports, grasp_confirmed=True)
+
+    next_state = GraspState(_grasp_ctx(), _detection(track_id=1)).execute(ports)
+
+    assert next_state.name == "HOST_REPLAN_RETARGET"
+    assert next_state.request is states_module.ReplanRequest.RETARGET_SAME_CLASS
+    assert perception.confirm_grasp_calls == 1
+
+
+def test_carry_idle_drop_never_transports_with_an_empty_gripper(make_ports):
+    """어느 갈래로 가든 베이스가 상자로 출발하면 안 된다 — 빈손 운반은
+    실패를 성공처럼 흘려보내는 것이다."""
+    for confirmed in (True, False):
+        arm, _perception, ports = _carry_idle_drop_ports(make_ports, grasp_confirmed=confirmed)
+        next_state = GraspState(_grasp_ctx(), _detection(track_id=1)).execute(ports)
+        assert next_state.name.startswith("HOST_REPLAN")
+        assert ("soccer_polyhedron", "drop") not in arm.floor_pose_calls
+
+
+def test_carry_idle_drop_retargets_once_the_retry_budget_is_spent(make_ports):
+    """물체가 그대로 보여도 예산을 다 썼으면 붙잡고 있지 않는다."""
+    _arm, _perception, ports = _carry_idle_drop_ports(make_ports, grasp_confirmed=False)
+    spent = replace(_grasp_ctx(), grasp_attempts=GraspState.MAX_GRASP_RETRY)
+
+    next_state = GraspState(spent, _detection(track_id=1)).execute(ports)
+
+    assert next_state.name == "HOST_REPLAN_RETARGET"
+
+
+def test_carry_idle_retry_spends_one_unit_of_budget(make_ports):
+    _arm, _perception, ports = _carry_idle_drop_ports(make_ports, grasp_confirmed=False)
+
+    next_state = GraspState(_grasp_ctx(), _detection(track_id=1)).execute(ports)
+
+    assert next_state.ctx.grasp_attempts == 1
+
+
+def test_host_replan_state_ends_the_mission_generator(make_ports):
+    """`None`을 반환해 오케스트레이터가 다음 Host 명령을 기다리게 한다 —
+    DoneState와 같은 방식이다."""
+    ports = make_ports()
+    state = states_module.HostReplanState(
+        _grasp_ctx(), _detection(track_id=1),
+        states_module.ReplanRequest.RETRY_SAME_TARGET,
+    )
+    assert state.execute(ports) is None
 
 
 def test_vertical_fallback_is_used_only_when_horizontal_safe_pose_is_unavailable(make_ports):
