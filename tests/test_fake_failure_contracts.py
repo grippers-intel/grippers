@@ -115,6 +115,16 @@ FAILURE_CONTRACTS = [
     ),
     (
         Perception,
+        "remember_target",
+        # 기준 관측을 못 잡으면 False — 그 뒤 confirm_grasp 는 비교 기준이
+        # 없으므로 판정을 포기한다. 테스트 더블은 happy path 가 기본이라
+        # 실패 경로를 real 어댑터 계약으로만 표현한다.
+        lambda: ScriptedPerception(target_remembered=False).remember_target("rook"),
+        False,
+        "`False`",
+    ),
+    (
+        Perception,
         "confirm_grasp",
         lambda: ScriptedPerception(grasp_confirmed=False).confirm_grasp(),
         False,

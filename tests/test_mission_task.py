@@ -474,9 +474,15 @@ def test_grasp_rechecks_at_145mm_then_folds_to_carry_idle_before_transport(make_
     ]
     assert arm.gripper_widths == [168.0, 35.0]
     assert next_state.name == "TRANSPORT"
-    # 1단계(로깅 전용): confirm_grasp가 실제로 호출되는지만 검증한다 — 판정에는
+    # 로깅 전용: confirm_grasp가 실제로 호출되는지만 검증한다 — 판정에는
     # 아직 안 쓰이므로 next_state는 confirm_grasp 결과와 무관하게 TRANSPORT다.
     assert perception.confirm_grasp_calls == 1
+    # 이 대상은 soccer_polyhedron 프로필이라 raw 클래스를 가릴 수 없다
+    # (star/soccer 가 폭으로 겹친다 — _PROFILE_TO_RAW_CLASS 참고). 그래서
+    # 기억 단계를 건너뛴다. 기준 없이 확인만 하면 어댑터가 False 를 내므로
+    # 잘못된 성공 판정으로 이어지지 않는다.
+    assert perception.remember_target_calls == 0
+    assert perception.remembered_cls is None
 
 
 def test_failed_lift_releases_object_and_blocks_transport(make_ports):
@@ -765,3 +771,32 @@ def test_align_error_sign_does_not_change_the_verdict(make_ports, run_to_complet
 
     assert "INSERT" not in [s.name for s in states]
     assert states[-1].ctx.held_ids == {1}
+
+
+def test_visual_grasp_check_remembers_the_target_before_descending(make_ports, run_to_completion):
+    """시각 파지 확인은 두 관측의 짝이다.
+
+    내려가기 **전에** 기억해야 한다 — grasp 자세로 내려가면 팔이 depth
+    카메라를 가려서 그때는 정면을 볼 수 없다(2026-08-25 실기 확인). 그리고
+    확인은 CARRY_IDLE 에서 한다. 순서가 어긋나면 비교 기준이 없어 판정이
+    늘 실패한다.
+
+    raw 클래스를 가릴 수 있는 체스말로 확인한다 — GABE(star/soccer)는 폭이
+    겹쳐 매핑이 없다(_PROFILE_TO_RAW_CLASS 참고).
+    """
+    # 폭 24.5mm -> chess_rook 프로필 -> raw 클래스 "rook"
+    rook = Detection(
+        track_id=1,
+        cls=ObjectClass.CHESS_PIECE,
+        pose_m=Point3(x=0.2, y=0.0, z=0.0),
+        dims_m=Point3(x=0.0245, y=0.0245, z=0.045),
+        yaw_rad=0.0,
+        confidence=0.95,
+    )
+    perception = ScriptedPerception(detections=[rook])
+    ports = make_ports(perception=perception)
+    run_to_completion(ports)
+
+    assert perception.remembered_cls == "rook"
+    assert perception.remember_target_calls >= 1
+    assert perception.confirm_grasp_calls >= 1

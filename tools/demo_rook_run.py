@@ -113,6 +113,63 @@ CARRY_LEGEND = ("  [w]전진 [s]후진 [a]좌회전 [d]우회전(제자리) "
 CREEP_LEGEND = ("  [space]전진 [s]후진 [x]정지 [c]단계 종료 "
                 "— 팔이 내려가 있어 회전 키는 없습니다")
 
+# 시각 파지 확인 — "그 자리에 있던 것이 사라졌는가"
+#
+# 원리: 파지에 성공했으면 물체는 바닥에서 사라져 그리퍼에 있다. 실패했으면
+# 여전히 바닥에 있다. 그리퍼캠으로 "손끝에 물려 있는가"를 보려던 방식은
+# 실측으로 무효였다(빈 그리퍼 닫힘 165990px²가 룩을 문 상태 70384px²보다
+# 컸다) — 물체가 있던 자리를 보는 쪽이 훨씬 다루기 쉬운 신호다.
+#
+# CARRY_IDLE에서 팔이 depth 카메라를 가리지 않는다는 것은 2026-08-25 실기로
+# 확인했다: 팔은 프레임 밖이고 바닥이 그대로 보인다.
+#
+# 두 관측 사이에 로봇은 미세 전진으로 몇 cm 앞으로 간다 — 물체가 그대로라면
+# 더 **가까워져** bbox 높이가 오히려 커진다. 그래서 "아직 있다"는
+# h_after >= h_before * 이 비율로 잡는다. 1.0이 아니라 0.8인 것은 관측 잡음과
+# 살짝 밀린 경우까지 실패로 보기 위해서다 — 이 방향의 오판(성공인데 실패라고
+# 함)은 사람이 눈으로 확인하게 만들 뿐이지만, 반대 방향은 빈 그리퍼로 미션을
+# 계속하게 한다.
+#
+# ⚠️ 이것만으로 성공을 단정하면 안 된다. 내려오는 그리퍼가 물체를 쳐서 시야
+# 밖으로 밀어낸 경우에도 "사라짐"으로 보인다. load와 **독립적인 두 번째
+# 근거**로 쓴다 — load는 "무언가를 쥐었다"를, 이쪽은 "목표가 그 자리에서
+# 없어졌다"를 말하므로 실패 양상이 서로 겹치지 않는다.
+STILL_THERE_H_RATIO = 0.8
+
+
+def remember_target(node, raw_cls, log):
+    """내려가기 직전의 기준 관측. 실패하면 None — 확인 단계가 판정을 접는다."""
+    obs = node.observe(raw_cls, timeout_sec=1.5)
+    if obs is None or not obs.found or obs.h <= 0.0:
+        print("  [시각확인] 기준 관측 실패 — CARRY_IDLE 확인을 건너뜁니다")
+        log.log("remember_target", found=False)
+        return None
+    print(f"  [시각확인] 기준 관측: {raw_cls} h={obs.h:.1f}px x={obs.x:.1f}px")
+    log.log("remember_target", found=True, h=float(obs.h), x=float(obs.x))
+    return float(obs.h)
+
+
+def confirm_by_absence(node, raw_cls, h_before, log):
+    """CARRY_IDLE에서 정면을 다시 본다. True=사라짐(성공 쪽), False=아직 있음."""
+    if h_before is None:
+        return None
+    obs = node.observe(raw_cls, timeout_sec=1.5)
+    if obs is None:
+        print("  [시각확인] 관측 응답 없음 — 판정 불가")
+        log.log("confirm_by_absence", result="no_response")
+        return None
+    if not obs.found:
+        print(f"  [시각확인] ★ {raw_cls}가 정면에서 사라졌습니다 (기준 h={h_before:.1f}px)")
+        log.log("confirm_by_absence", result="gone", h_before=h_before)
+        return True
+    still = obs.h >= h_before * STILL_THERE_H_RATIO
+    print(f"  [시각확인] {raw_cls} h={obs.h:.1f}px (기준 {h_before:.1f}px) → "
+          + ("⚠️ 아직 그 자리에 있습니다" if still else "멀리 있는 다른 개체로 보입니다"))
+    log.log("confirm_by_absence", result="still_there" if still else "other_instance",
+            h_before=h_before, h_after=float(obs.h))
+    return not still
+
+
 # 닫힘/이동 뒤 load가 정착할 때까지의 여유(grasp_cycle.LOAD_SETTLE_S와 동일 근거).
 LOAD_SETTLE_S = 1.2
 
@@ -234,6 +291,9 @@ def main():
 
             # --- [2] 팔 내리기 -------------------------------------------
             wait_for_key(kr, "g", "\n[2] 준비되면 [g] — 팔을 내립니다")
+            # 지금이 정면을 볼 수 있는 마지막 순간이다 — grasp 자세로 내려가면
+            # 팔이 depth 카메라를 가린다.
+            h_before = remember_target(node, raw_cls, log)
             print("  safe → 그리퍼 열기 → grasp")
             if not node.move_floor_pose(profile, "safe"):
                 recover_to_idle(node, profile, log, "safe 이동 실패")
@@ -285,6 +345,22 @@ def main():
                 print(f"  ⚠️ 빈 상태와 구분이 안 됩니다(load {carry_load:.4f}) — "
                       "물체를 놓쳤을 수 있습니다. 계속할지 눈으로 확인하세요")
             log.log("grasp_verdict", carry_load=carry_load, empty=EMPTY_CARRY_LOAD)
+
+            # load와 독립적인 두 번째 근거. 둘이 엇갈리면 사람이 눈으로 가른다.
+            vanished = confirm_by_absence(node, raw_cls, h_before, log)
+            if carry_load is not None and vanished is not None:
+                load_ok = carry_load - EMPTY_CARRY_LOAD > LOAD_MARGIN
+                if load_ok and vanished:
+                    print("  ★★ 두 신호 모두 성공 — load 있음 + 물체 사라짐")
+                elif not load_ok and not vanished:
+                    print("  ⚠️⚠️ 두 신호 모두 실패 — load 없음 + 물체 그대로")
+                elif load_ok and not vanished:
+                    print("  ❓ 엇갈림: load는 잡혔다는데 물체가 그 자리에 있습니다 —\n"
+                          "     다른 것을 쥐었거나 같은 클래스가 하나 더 있을 수 있습니다")
+                else:
+                    print("  ❓ 엇갈림: 물체는 사라졌는데 load가 없습니다 —\n"
+                          "     그리퍼가 물체를 쳐서 밀어냈을 수 있습니다")
+                log.log("combined_verdict", load_ok=load_ok, vanished=vanished)
 
             # --- [4] 운반 ----------------------------------------------
             print("\n[4] 바구니 앞까지 운반하세요")

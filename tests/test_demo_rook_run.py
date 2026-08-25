@@ -244,3 +244,92 @@ def test_drive_loop_republishes_after_a_slow_report():
 
     report_at = source.index("report()")
     assert "node.cmd_pub.publish(t)" in source[report_at:]
+
+
+# --- 시각 파지 확인 (depth 카메라 '부재 확인') --------------------------------
+#
+# rclpy 의존이라 모듈을 import할 수 없다. 두 함수는 node.observe()와 log만
+# 쓰는 순수 로직이므로, AST에서 함수 정의만 꺼내 격리 실행해 동작을 본다
+# (파일 상단 관례: "순수 계산인 정지 밴드 로직만 따로 검증한다").
+
+
+def _isolated(*names):
+    """demo_rook_run에서 함수 정의만 꺼내 실행 가능한 네임스페이스로 만든다."""
+    src = TOOL.read_text(encoding="utf-8")
+    ns = {"STILL_THERE_H_RATIO": _constants(["STILL_THERE_H_RATIO"])["STILL_THERE_H_RATIO"]}
+    for name in names:
+        exec(compile(ast.Module(body=[_function(name)], type_ignores=[]),
+                     "<demo>", "exec"), ns)
+    return ns
+
+
+DEMO = _isolated("remember_target", "confirm_by_absence")
+
+
+class _Obs:
+    def __init__(self, found, h=0.0, x=320.0):
+        self.found, self.h, self.x, self.w = found, h, x, 0.0
+
+
+class _ObsNode:
+    """observe()만 흉내내는 최소 노드. 호출마다 다음 관측을 돌려준다."""
+
+    def __init__(self, *observations):
+        self._queue = list(observations)
+        self.calls = []
+
+    def observe(self, raw_cls, timeout_sec=None):
+        self.calls.append(raw_cls)
+        return self._queue.pop(0) if self._queue else None
+
+
+class _Log:
+    def __init__(self):
+        self.rows = []
+
+    def log(self, event, **fields):
+        self.rows.append((event, fields))
+
+
+def test_remembering_the_target_needs_a_real_observation():
+    """기준을 못 잡으면 None — 확인 단계가 판정을 접는다. 없는 기준으로
+    비교하면 늘 '사라졌다'가 되어 빈 그리퍼를 성공으로 읽는다."""
+    remember = DEMO["remember_target"]
+    assert remember(_ObsNode(_Obs(False)), "rook", _Log()) is None
+    assert remember(_ObsNode(None), "rook", _Log()) is None
+    # h=0인 관측도 기준이 될 수 없다 — 비율 비교가 무의미해진다
+    assert remember(_ObsNode(_Obs(True, h=0.0)), "rook", _Log()) is None
+
+
+def test_remembering_returns_the_baseline_height():
+    remember = DEMO["remember_target"]
+    assert remember(_ObsNode(_Obs(True, h=158.0)), "rook", _Log()) == 158.0
+
+
+def test_absence_is_read_as_a_successful_grasp():
+    node = _ObsNode(_Obs(False))
+    assert DEMO["confirm_by_absence"](node, "rook", 158.0, _Log()) is True
+    assert node.calls == ["rook"]
+
+
+def test_object_still_there_is_read_as_a_failed_grasp():
+    """미세 전진 때문에 물체가 그대로면 오히려 더 커진다 — 같거나 커도 실패다."""
+    confirm = DEMO["confirm_by_absence"]
+    assert confirm(_ObsNode(_Obs(True, h=158.0)), "rook", 158.0, _Log()) is False
+    assert confirm(_ObsNode(_Obs(True, h=190.0)), "rook", 158.0, _Log()) is False
+
+
+def test_a_much_smaller_detection_is_a_different_farther_instance():
+    """같은 클래스가 멀리 하나 더 있어도 목표가 사라진 것은 사라진 것이다."""
+    ratio = DEMO["STILL_THERE_H_RATIO"] if "STILL_THERE_H_RATIO" in DEMO else 0.8
+    small = 158.0 * ratio - 1.0
+    assert DEMO["confirm_by_absence"](_ObsNode(_Obs(True, h=small)), "rook", 158.0, _Log()) is True
+
+
+def test_no_baseline_means_no_verdict_not_a_success():
+    """기준이 없으면 None(판정 불가)이지 True가 아니다 — 모르면 성공은 위험하다."""
+    assert DEMO["confirm_by_absence"](_ObsNode(_Obs(False)), "rook", None, _Log()) is None
+
+
+def test_missing_response_gives_no_verdict():
+    assert DEMO["confirm_by_absence"](_ObsNode(None), "rook", 158.0, _Log()) is None

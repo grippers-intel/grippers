@@ -14,7 +14,8 @@ E-STOP은 이 전이 그래프에 없다 — `MissionTask.run()` 이 다음 `exe
 
 from dataclasses import replace
 
-from domain.task.floor_grasp_policy import select_horizontal_grasp_plan
+from domain.task.floor_grasp_policy import (approach_target_key,
+                                            select_horizontal_grasp_plan)
 from domain.task.state import State
 from domain.values import MissionContext, MissionMode, Point3, Pose2D
 
@@ -245,6 +246,14 @@ class GraspState(State):
         if not ports.arm.move_to_floor_pose(plan.profile, "safe"):
             return self._execute_vertical_fallback(ports)
         ports.arm.set_gripper(plan.preopen_width_mm)
+        # 내려가기 직전이 정면을 볼 수 있는 마지막 순간이다 — grasp 자세로
+        # 내려가면 팔이 depth 카메라를 가린다. 여기서 목표를 기억해 두면
+        # CARRY_IDLE 에서 "그 자리에 있던 것이 사라졌는가"를 물을 수 있다.
+        # star/soccer 처럼 폭이 겹쳐 raw 클래스를 못 가르는 경우는 None 이다 —
+        # 그때는 기억하지 않고, confirm_grasp 도 기준이 없어 False 를 낸다.
+        raw_cls = approach_target_key(self.target)
+        if raw_cls is not None:
+            ports.perception.remember_target(raw_cls)
         if not ports.arm.move_to_floor_pose(plan.profile, "grasp"):
             return self._retry_after_release(ports)
 
@@ -261,12 +270,6 @@ class GraspState(State):
             plan.profile, "midpoint"
         )
         held = lifted and ports.arm.get_load() >= self.LOAD_THRESHOLD
-        # 1단계(로깅 전용, 이슈 그리퍼캠 파지 확인): confirm_grasp는 아직 판정에
-        # 안 쓴다. 반환값은 버리고 호출만 한다 — 실제 로그는 어댑터가 남긴다
-        # (Ros2Perception.confirm_grasp 참고). load 기반 판정과 비교할 실측
-        # 자료가 쌓이면 그때 이 결과를 held에 편입한다 (Perception.confirm_grasp
-        # 포트 계약 참고).
-        ports.perception.confirm_grasp()
         cleared = held and ports.arm.move_to_floor_pose(plan.profile, "safe")
         if cleared:
             # 물체를 든 채 SAFE_145 → IDLE 관절 자세로 직접 접는 경로를 큐브로
@@ -276,6 +279,16 @@ class GraspState(State):
                 return EstopState()
             if ports.arm.get_load() < self.LOAD_THRESHOLD:
                 return EstopState()
+            # CARRY_IDLE 에서는 팔이 프레임 밖이라 정면 바닥이 그대로 보인다
+            # (2026-08-25 실기 확인). load 와 **독립적인 두 번째 근거**로,
+            # 목표가 있던 자리에서 사라졌는지 확인한다 — load 는 "무언가를
+            # 쥐었다"를, 이쪽은 "목표가 없어졌다"를 말한다.
+            #
+            # ⚠️ 아직 판정에 쓰지 않는다(로깅 전용). 내려오는 그리퍼가 물체를
+            # 쳐서 시야 밖으로 밀어낸 경우에도 "사라짐"으로 보이므로, load
+            # 임계값을 n=25 실측으로 잡았던 것과 같은 절차를 거친 뒤에만
+            # 판정에 편입한다.
+            ports.perception.confirm_grasp()
             if self.ctx.spec.mode is MissionMode.TIDY:
                 return TransportState(self.ctx, self.target)
             return DeliverState(self.ctx, self.target)
