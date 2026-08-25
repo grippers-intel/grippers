@@ -267,6 +267,29 @@ TICK_S = 0.05  # cmd_vel 발행 주기 (20Hz)
 # --- 구조화 로그(사람이 읽는 용도가 아니라, 나중에 분석하기 위한 기록) ----
 
 
+def _json_default(value):
+    """numpy 스칼라·배열을 파이썬 기본형으로 바꾼다.
+
+    ROS 메시지의 고정 길이 배열 필드는 numpy dtype(int32/float32)으로
+    들어온다. list()로 감싸도 **원소는 그대로 numpy 스칼라**라서
+    json.dumps가 "Object of type int32 is not JSON serializable"로 죽는다 —
+    2026-08-25 pose_verify_cycle 첫 실행이 정확히 여기서 끊겼다.
+
+    호출부마다 int()/float()를 뿌리는 대신 여기서 한 번 막는다. RunLog를
+    쓰는 도구가 여럿이고, 새 ROS 필드를 로그에 넣을 때마다 같은 함정을
+    다시 밟게 되기 때문이다."""
+    item = getattr(value, "item", None)
+    if item is not None:
+        try:
+            return item()  # numpy 스칼라, 그리고 크기 1인 배열
+        except (TypeError, ValueError):
+            pass
+    tolist = getattr(value, "tolist", None)
+    if tolist is not None:
+        return tolist()  # numpy 배열
+    raise TypeError(f"JSON으로 바꿀 수 없는 값: {type(value).__name__}")
+
+
 class RunLog:
     """터미널 출력과 별개로, 측정값을 JSON Lines 한 줄씩 파일에 남긴다.
     사용자가 직접 읽으라는 로그가 아니라 — 실기 세션 뒤에 이 파일 하나만
@@ -281,7 +304,7 @@ class RunLog:
 
     def log(self, event: str, **fields):
         record = {"t": round(time.time(), 3), "event": event, **fields}
-        self._f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self._f.write(json.dumps(record, ensure_ascii=False, default=_json_default) + "\n")
         self._f.flush()  # 매 줄 flush — 비정상 종료에도 그때까지는 남는다
 
     def close(self):

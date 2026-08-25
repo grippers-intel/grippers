@@ -85,22 +85,41 @@ def _prompt(text: str) -> None:
         raise KeyboardInterrupt
 
 
+class ArmSnapshot:
+    """GetArmState 응답을 파이썬 기본형으로 옮긴 것.
+
+    ⚠️ ROS 메시지의 고정 길이 배열 필드는 numpy 배열이고, list()로 감싸도
+    원소는 numpy 스칼라로 남는다. 그대로 두면 json.dumps가 죽고(2026-08-25
+    첫 실행이 여기서 끊겼다) 산술 결과도 numpy 타입으로 전파된다. 읽자마자
+    한 번 변환해 두면 아래로 흐르는 코드가 전부 평범한 int/float만 다룬다.
+    """
+
+    __slots__ = ("position_raw", "load_ratio", "temperature_c", "torque_on")
+
+    def __init__(self, response):
+        self.position_raw = [int(v) for v in response.position_raw]
+        self.load_ratio = [float(v) for v in response.load_ratio]
+        self.temperature_c = [int(v) for v in response.temperature_c]
+        self.torque_on = [bool(v) for v in response.torque_on]
+
+
 def read_state(node, log, checkpoint):
     """servo 1..6 실측. 실패하면 None."""
-    state = node.arm_state()
-    if state is None or not state.ok:
-        message = "응답 없음" if state is None else state.message
+    response = node.arm_state()
+    if response is None or not response.ok:
+        message = "응답 없음" if response is None else response.message
         print(f"    [서보] 읽기 실패 — {message}")
         log.log("arm_state", checkpoint=checkpoint, ok=False, message=message)
         return None
+    state = ArmSnapshot(response)
     log.log(
         "arm_state",
         checkpoint=checkpoint,
         ok=True,
-        position_raw=list(state.position_raw),
+        position_raw=state.position_raw,
         load_ratio=[round(v, 4) for v in state.load_ratio],
-        temperature_c=list(state.temperature_c),
-        torque_on=list(state.torque_on),
+        temperature_c=state.temperature_c,
+        torque_on=state.torque_on,
     )
     return state
 
@@ -117,6 +136,10 @@ def observe(node, log, checkpoint, raw_cls):
         log.log("observe", checkpoint=checkpoint, ok=True, found=False)
         return obs
     forward_m, lateral_m = estimate_position(obs, raw_cls)
+    # estimate_position은 obs.h/obs.w(numpy float32)에서 계산하므로 결과도
+    # numpy다 — ArmSnapshot과 같은 이유로 여기서 기본형으로 내린다.
+    forward_m = None if forward_m is None else float(forward_m)
+    lateral_m = None if lateral_m is None else float(lateral_m)
     where = ""
     if forward_m is not None:
         where = f" · 전방 {forward_m * 100:.1f}cm 좌우 {lateral_m * 100:+.1f}cm"

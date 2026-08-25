@@ -241,3 +241,94 @@ def test_the_gripper_width_error_is_reported_not_failed():
     # 폭 오차로 pose_ok를 뒤집지 않는다.
     assert "width_error" in source
     assert source.index("ok = pose_ok(residuals)") < source.index("width_error")
+
+
+# --- numpy 직렬화 회귀 (2026-08-25 첫 실행이 여기서 끊겼다) ----------------
+
+
+def _exec_isolated(path, name):
+    """rclpy를 import하는 파일에서 함수 하나만 떼어 실행한다.
+
+    모듈 전체는 개발 머신에서 import할 수 없지만, 순수 함수는 소스만 있으면
+    그대로 돌려 볼 수 있다 — AST 검사보다 실제 동작을 본다."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    fn = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+    namespace = {}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), str(path), "exec"), namespace)
+    return namespace[name]
+
+
+def test_run_log_can_serialise_the_numpy_types_ros_messages_carry():
+    """⚠️ 회귀 — GetArmState의 고정 길이 배열은 numpy dtype이라 list()로
+    감싸도 원소가 numpy 스칼라로 남고, json.dumps가 "Object of type int32 is
+    not JSON serializable"로 죽는다. 2026-08-25 pose_verify_cycle 첫 실행이
+    정확히 첫 체크포인트에서 이렇게 끊겼다."""
+    import json
+
+    import numpy as np
+
+    default = _exec_isolated(ROOT / "tools" / "grasp_test_console.py", "_json_default")
+
+    payload = {
+        "position_raw": [np.int32(2064), np.int32(834)],
+        "load_ratio": [np.float32(0.0195), np.float32(0.0)],
+        "array": np.array([1, 2, 3], dtype=np.int32),
+        "scalar_array": np.array([7], dtype=np.int32),
+        "plain": [1, 2.5, True, None, "ok"],
+    }
+    decoded = json.loads(json.dumps(payload, ensure_ascii=False, default=default))
+
+    assert decoded["position_raw"] == [2064, 834]
+    assert decoded["load_ratio"][1] == 0.0
+    assert decoded["array"] == [1, 2, 3]
+    assert decoded["scalar_array"] == 7
+    assert decoded["plain"] == [1, 2.5, True, None, "ok"]
+
+
+def test_run_log_default_still_refuses_genuinely_unserialisable_values():
+    """모르는 타입을 조용히 삼키면 로그에 쓰레기가 남는다."""
+    import pytest
+
+    default = _exec_isolated(ROOT / "tools" / "grasp_test_console.py", "_json_default")
+
+    with pytest.raises(TypeError):
+        default(object())
+
+
+def test_arm_snapshot_converts_every_field_to_plain_python_types():
+    """읽자마자 한 번 변환해 두면 아래로 흐르는 코드가 numpy를 만나지 않는다 —
+    json뿐 아니라 잔차 산술 결과까지 numpy로 전파되는 것을 막는다."""
+    import numpy as np
+
+    tree = _tree()
+    cls = next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "ArmSnapshot"
+    )
+    namespace = {}
+    exec(compile(ast.Module(body=[cls], type_ignores=[]), str(TOOL), "exec"), namespace)
+
+    class FakeResponse:
+        position_raw = np.array([2064, 834, 3095, 2751, 3070, 1155], dtype=np.int32)
+        load_ratio = np.array([0.0195, 0.0313, 0.0, 0.0, 0.0, 0.0235], dtype=np.float32)
+        temperature_c = np.array([34, 37, 34, 34, 34, 38], dtype=np.int32)
+        torque_on = [np.True_] * 6
+
+    snapshot = namespace["ArmSnapshot"](FakeResponse())
+
+    assert all(type(v) is int for v in snapshot.position_raw)
+    assert all(type(v) is float for v in snapshot.load_ratio)
+    assert all(type(v) is int for v in snapshot.temperature_c)
+    assert all(type(v) is bool for v in snapshot.torque_on)
+    assert snapshot.position_raw[0] == 2064
+    # 잔차 산술도 기본형으로 남는다.
+    assert type(pv.pose_residuals((2029,) * 5, snapshot.position_raw[:5])[0]) is int
+
+
+def test_read_state_returns_a_snapshot_not_the_raw_response():
+    source = ast.unparse(_function("read_state"))
+    assert "ArmSnapshot(response)" in source
