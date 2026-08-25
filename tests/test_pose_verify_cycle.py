@@ -332,3 +332,58 @@ def test_arm_snapshot_converts_every_field_to_plain_python_types():
 def test_read_state_returns_a_snapshot_not_the_raw_response():
     source = ast.unparse(_function("read_state"))
     assert "ArmSnapshot(response)" in source
+
+
+# --- 클래스 순서 (2026-08-25) ----------------------------------------------
+
+
+def test_the_default_sweep_does_not_start_with_the_unreliable_box_class():
+    """box(큐브)는 검출이 가장 불안정한 클래스다(사용자 확인, 2026-08-25).
+    알파벳 순으로 두면 맨 앞에 와서, 첫 회차 실패가 도구 고장처럼 보인다."""
+    order = _exec_isolated_names(TOOL, ["DEFAULT_CLASS_ORDER"])["DEFAULT_CLASS_ORDER"]
+
+    assert order[0] == "rook"
+    assert order.index("box") > order.index("rook")
+    assert order.index("star") > order.index("rook")
+
+
+def test_the_default_order_never_silently_drops_a_class():
+    """순서는 손으로 관리하지만 누락은 막는다 — 새 클래스가 생겨도 뒤에 붙는다."""
+    namespace = _exec_isolated_names(
+        TOOL, ["DEFAULT_CLASS_ORDER", "default_class_order"]
+    )
+    namespace["CLASS_TO_PROFILE"] = {
+        "rook": "chess_rook", "box": "cube", "newthing": "whatever",
+    }
+    ordered = namespace["default_class_order"]()
+
+    assert set(ordered) == {"rook", "box", "newthing"}
+    assert ordered[0] == "rook"
+    assert ordered.index("newthing") > ordered.index("box")
+
+
+def _exec_isolated_names(path, names):
+    """모듈에서 이름 몇 개만 떼어 한 네임스페이스에 실행한다.
+
+    rclpy를 import하는 파일이라 모듈 전체는 개발 머신에서 못 올린다.
+    돌려주는 네임스페이스는 그대로 쓰기 가능해서, 테스트가 의존 이름을
+    (예: CLASS_TO_PROFILE) 대신 꽂아 넣을 수 있다."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    wanted = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in names:
+            wanted.append(node)
+        elif (
+            isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in names
+        ):
+            wanted.append(node)
+    found = {
+        node.name if isinstance(node, ast.FunctionDef) else node.targets[0].id
+        for node in wanted
+    }
+    assert found == set(names), f"찾지 못한 이름: {set(names) - found}"
+    namespace = {}
+    exec(compile(ast.Module(body=wanted, type_ignores=[]), str(path), "exec"), namespace)
+    return namespace

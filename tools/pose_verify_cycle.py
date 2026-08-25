@@ -79,6 +79,25 @@ BASELINE_PROFILE = "chess_rook"
 BASELINE_RAW_CLS = "rook"
 
 
+# --classes all의 순서. **알파벳 순이 아니다** — 그러면 box가 맨 앞에 오는데,
+# box(큐브)는 검출이 가장 불안정한 클래스라(사용자 확인, 2026-08-25: "이전
+# 세션에서도 cube(box) 검출이 잘 안되었으니까") 첫 회차가 실패하면 도구가
+# 고장난 것처럼 보인다. 실측 이력이 가장 많고 거리 보정값 K가 있는 rook을
+# 먼저 돌려 파이프라인이 멀쩡하다는 것을 확인한 뒤 어려운 것으로 넘어간다.
+#
+# 거리 보정값이 없는 둘(box, star — K_CLASS가 None)을 뒤로 보낸 것도 같은
+# 이유다. 그쪽은 전방 거리 표시 자체가 안 나온다.
+DEFAULT_CLASS_ORDER = ("rook", "knight", "queen", "soccer", "box", "star")
+
+
+def default_class_order():
+    """DEFAULT_CLASS_ORDER 중 실제로 존재하는 클래스만. 새 클래스가 생기면
+    빠뜨리지 않고 뒤에 붙인다 — 순서를 손으로 관리하되 누락은 막는다."""
+    known = list(CLASS_TO_PROFILE)
+    ordered = [c for c in DEFAULT_CLASS_ORDER if c in known]
+    return ordered + [c for c in sorted(known) if c not in ordered]
+
+
 def _prompt(text: str) -> None:
     """Enter를 기다린다. q면 중단."""
     if input(text).strip().lower() == "q":
@@ -414,7 +433,7 @@ def main():
     args = ap.parse_args()
 
     if args.classes == "all":
-        classes = sorted(CLASS_TO_PROFILE)
+        classes = default_class_order()
     else:
         classes = [c.strip() for c in args.classes.split(",") if c.strip()]
     unknown = [c for c in classes if c not in CLASS_TO_PROFILE]
