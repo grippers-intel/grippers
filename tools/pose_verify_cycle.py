@@ -54,19 +54,32 @@ from grippers_arm.gripper_calibration import width_from_position
 from pose_verify_expectations import (
     CYCLE_CHECKPOINTS,
     POSE_TOLERANCE_RAW,
+    SLIP_CLOSURE_MM,
     expected_gripper_mm,
     expected_poses,
     load_verdict,
     pose_ok,
     pose_residuals,
-    vision_verdict,
+    slip_verdict,
+    vision_verdict_no_drive,
 )
 from rclpy.signals import SignalHandlerOptions
 
-# demo_rook_run과 같은 값을 쓴다 — 두 도구의 판정을 나란히 놓고 볼 수 있어야
-# 한다. 근거는 그쪽 파일의 STILL_THERE_H_RATIO / LOAD_MARGIN 주석 참고.
-STILL_THERE_H_RATIO = 0.8
-LOAD_MARGIN = 0.0078
+# load 판정 여유. 단위는 양자 하나 = 4/1023 = 0.00391.
+#
+# ⚠️ 2026-08-25에 2양자(0.0078)에서 4양자로 올렸다. knight를 CARRY_IDLE로
+# 접다가 놓쳤는데 load가 빈 기준선보다 정확히 **2양자** 높아 성공으로
+# 판정됐다 — 즉 예전 값은 놓친 상태와 문 상태의 경계 바로 위에 있었다.
+#
+# 4양자가 안전한 이유는 같은 회차 실측이 보여준다. 실제로 물고 있던 다섯
+# 물체의 여유는 7 / 14 / 19 / 20 / 29양자였고, 놓친 knight만 2양자였다.
+# 4는 그 사이에서 아래쪽(queen의 7)에 3양자를 남긴다.
+#
+# 애초에 2양자가 부족했던 근본 이유: **빈 그리퍼의 load 자체가 자세마다
+# 6~11양자로 흔들린다**(같은 빈 회차 안에서 관측된 폭이다). 한 지점에서
+# 잰 기준선과 2양자 차이를 다투는 것은 그 흔들림보다 작은 값을 다투는
+# 것이었다.
+LOAD_MARGIN = 0.0156
 # 그리퍼 개폐와 관절 이동 뒤 부하가 정착할 때까지의 여유(GRASP_SETTLE_SEC과
 # 같은 실측 근거 — 1.0s 안정 + 여유).
 SETTLE_S = 1.2
@@ -323,13 +336,19 @@ def run_cycle(node, log, *, raw_cls, profile, empty, baseline, interactive):
 
     carry = results.get("carry_idle", {}).get("load")
     baseline_carry = None if baseline is None else baseline.get("carry_idle", {}).get("load")
+    width_closed = results.get("closed", {}).get("gripper_mm")
+    width_carry = results.get("carry_idle", {}).get("gripper_mm")
     verdicts = {
+        # 순서가 곧 신뢰도 순이다 — slip이 가장 직접적인 기계적 증거다.
+        "slip": slip_verdict(width_closed, width_carry),
         "load": load_verdict(carry, baseline_carry, LOAD_MARGIN),
-        "vision": vision_verdict(h_before, found_after, h_after, STILL_THERE_H_RATIO),
+        "vision": vision_verdict_no_drive(h_before, found_after),
     }
-    print_verdicts(label, carry, baseline_carry, h_before, h_after, verdicts, empty)
+    print_verdicts(label, carry, baseline_carry, h_before, h_after,
+                   width_closed, width_carry, verdicts, empty)
     log.log("verdict", raw_cls=raw_cls, empty=empty, carry_load=carry,
-            baseline_carry=baseline_carry, h_before=h_before, h_after=h_after, **verdicts)
+            baseline_carry=baseline_carry, h_before=h_before, h_after=h_after,
+            width_closed_mm=width_closed, width_carry_mm=width_carry, **verdicts)
     results["_verdicts"] = verdicts
 
     print("\n  drop으로 이동")
@@ -360,36 +379,63 @@ def run_cycle(node, log, *, raw_cls, profile, empty, baseline, interactive):
     return results, None
 
 
-def print_verdicts(label, carry, baseline_carry, h_before, h_after, verdicts, empty):
+def print_verdicts(label, carry, baseline_carry, h_before, h_after,
+                   width_closed, width_carry, verdicts, empty):
     print(f"\n  --- {label} 파지 판정 ---")
     if empty:
         print("    빈 회차 — 판정하지 않고 기준선으로만 씁니다"
               f" (CARRY_IDLE load = {carry if carry is None else round(carry, 4)})")
         return
+
+    # [1] 미끄러짐 — 가장 직접적인 기계적 증거다. 물체가 빠지면 그것을 막던
+    # 것이 없어지므로 턱이 그만큼 더 닫힌다.
+    slipped = verdicts["slip"]
+    if slipped is None:
+        print("    [미끄러짐] 판정 불가(그리퍼 폭을 못 읽었습니다)")
+    else:
+        closure = width_closed - width_carry
+        print(f"    [미끄러짐] 파지 직후 {width_closed:.1f}mm → CARRY {width_carry:.1f}mm "
+              f"= 턱이 {closure:+.1f}mm 더 닫힘 (상한 {SLIP_CLOSURE_MM}mm) → "
+              f"{'⚠️ 운반 중 놓침' if slipped else '유지'}")
+
     load_ok = verdicts["load"]
     if load_ok is None:
         print("    [load] 판정 불가")
     else:
         margin = carry - baseline_carry
         print(f"    [load] {carry:.4f} vs 빈 {baseline_carry:.4f} = {margin:+.4f} "
-              f"({margin / 0.00391:+.1f}양자) → {'성공' if load_ok else '실패'}")
+              f"({margin / 0.00391:+.1f}양자, 요구 {LOAD_MARGIN / 0.00391:.0f}양자) → "
+              f"{'성공' if load_ok else '실패'}")
+
     vision = verdicts["vision"]
     if vision is None:
         print("    [시각] 판정 불가(기준 관측 또는 응답 없음)")
     else:
-        seen = "사라짐" if vision else "아직 그 자리"
-        after = "없음" if h_after is None else f"{h_after:.1f}px"
-        print(f"    [시각] 기준 h={h_before:.1f}px → 지금 {after} → {seen}"
-              f" → {'성공' if vision else '실패'}")
-    if load_ok is not None and vision is not None:
-        if load_ok and vision:
-            print("    ★★ 두 신호 모두 성공")
-        elif not load_ok and not vision:
-            print("    ⚠️⚠️ 두 신호 모두 실패")
-        elif load_ok:
-            print("    ❓ 엇갈림: load는 잡혔다는데 물체가 그 자리에 있습니다")
-        else:
-            print("    ❓ 엇갈림: 물체는 사라졌는데 load가 없습니다")
+        after = "안 보임" if h_after is None else f"h={h_after:.1f}px로 보임"
+        print(f"    [시각] 기준 h={h_before:.1f}px → 지금 {after} → "
+              f"{'성공(사라짐)' if vision else '⚠️ 실패(아직 바닥에 있습니다)'}")
+
+    # ⚠️ slip은 극성이 반대다 — True가 "놓쳤다"(나쁨)이고, load/vision은
+    # True가 "성공"이다. 실패 신호가 하나라도 있으면 실패로 본다: 이쪽
+    # 방향의 오판은 사람이 눈으로 확인하게 만들 뿐이지만, 반대 방향은
+    # 빈 그리퍼로 미션을 계속하게 한다.
+    failures = []
+    if verdicts["slip"] is True:
+        failures.append("미끄러짐")
+    if verdicts["load"] is False:
+        failures.append("load")
+    if verdicts["vision"] is False:
+        failures.append("시각")
+    undecided = [key for key, value in verdicts.items() if value is None]
+
+    if len(undecided) == len(verdicts):
+        print("    판정 불가 — 어떤 신호도 읽지 못했습니다")
+    elif failures:
+        print(f"    ⚠️⚠️ 파지 실패 — 근거: {', '.join(failures)}")
+    elif not undecided:
+        print("    ★★ 세 신호 모두 성공")
+    else:
+        print(f"    ★ 성공 — 읽은 신호 모두 성공 (판정 불가: {', '.join(undecided)})")
 
 
 def print_summary(all_results):
@@ -411,10 +457,14 @@ def print_summary(all_results):
         carry = results.get("carry_idle", {}).get("load")
         load_cell = "-" if carry is None else f"{carry:.4f}"
         verdicts = results.get("_verdicts", {})
-        verdict_cell = " / ".join(
-            f"{key}={'성공' if value else ('실패' if value is False else '불가')}"
-            for key, value in verdicts.items()
-        ) or "-"
+        # slip만 극성이 반대다(True=놓침). 표에서는 전부 "성공/실패"로
+        # 통일해 읽는 사람이 신호마다 방향을 되새기지 않게 한다.
+        labels = []
+        for key, value in verdicts.items():
+            good = (value is False) if key == "slip" else (value is True)
+            bad = (value is True) if key == "slip" else (value is False)
+            labels.append(f"{key}={'성공' if good else ('실패' if bad else '불가')}")
+        verdict_cell = " / ".join(labels) or "-"
         print(f"{label:<10}{pose_cell:<22}{width_cell:<14}{load_cell:<12}{verdict_cell}")
     print(f"\n자세 허용치 ±{POSE_TOLERANCE_RAW} raw. 그리퍼 폭오차는 실패가 아니라 "
           "파지력 대리값입니다.")

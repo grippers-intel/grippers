@@ -112,6 +112,49 @@ def load_verdict(carry_load, baseline_load, margin):
     return (carry_load - baseline_load) > margin
 
 
+# 파지 직후(closed)와 CARRY_IDLE 사이에 턱이 **더 닫힌 양**의 상한.
+#
+# ⚠️ 2026-08-25 knight 회차가 이 신호를 만들게 했다. 말이 CARRY_IDLE로
+# 접히는 도중 빠졌는데 **load와 시각 두 신호가 모두 "성공"이라고 했다** —
+# 도구가 존재하는 이유를 정면으로 깨는 오판이었다. 그런데 그리퍼 폭에는
+# 사고가 그대로 찍혀 있었다: 13.1mm로 물고 있다가 CARRY_IDLE에서 10.0mm,
+# 즉 **빈 그리퍼 폭까지** 닫혔다. 물체가 빠졌으니 턱을 막을 것이 없어진
+# 것이다.
+#
+# 같은 회차 여섯 물체의 실측 닫힘량: 0.0 / 0.2 / 0.2 / 0.4 / 0.4 / 0.6mm,
+# 그리고 놓친 knight만 3.1mm. 1.0mm는 그 사이 어디에 둬도 되는 자리다.
+#
+# 이 신호가 load보다 나은 이유는 **상대량**이라서다. load의 빈 기준선은
+# 자세마다 6~11양자로 흔들리지만, 턱이 얼마나 더 닫혔는지는 같은 회차
+# 안에서 자기 자신과 비교하므로 그 흔들림이 상쇄된다.
+SLIP_CLOSURE_MM = 1.0
+
+
+def slip_verdict(width_at_closed_mm, width_at_carry_mm, tolerance_mm=SLIP_CLOSURE_MM):
+    """운반 중 물체를 놓쳤는가. True=놓침, False=유지, None=판정 불가."""
+    if width_at_closed_mm is None or width_at_carry_mm is None:
+        return None
+    return (width_at_closed_mm - width_at_carry_mm) > tolerance_mm
+
+
+def vision_verdict_no_drive(h_before, found):
+    """주행하지 않는 회차의 시각 판정. True=사라짐(성공 쪽).
+
+    ⚠️ 아래 vision_verdict의 h 비율 규칙을 여기에 쓰면 안 된다. 그 규칙은
+    "두 관측 사이에 차가 앞으로 가므로 물체가 그대로면 더 커진다"는 전제
+    위에 서 있는데, 이 도구는 차를 전혀 움직이지 않는다.
+
+    2026-08-25 knight 회차가 그 차이를 보여줬다. 떨어진 말이 앞으로 굴러가
+    46.4cm에 있었고 h가 263.5 -> 61.0px로 줄었는데, 비율 규칙은 그걸 "멀리
+    있는 다른 개체"로 보고 **성공**이라고 판정했다. 로봇이 안 움직였으므로
+    목표 클래스가 조금이라도 보이면 그것은 아직 바닥에 있는 것이다 —
+    거리는 판정에 넣지 않고 사람이 보라고 표시만 한다.
+    """
+    if h_before is None or found is None:
+        return None
+    return not found
+
+
 def vision_verdict(h_before, found, h_after, ratio):
     """정면에서 목표가 사라졌는가. True=사라짐(성공 쪽), False=아직 있음.
 

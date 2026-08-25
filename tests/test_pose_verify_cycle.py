@@ -143,6 +143,115 @@ def test_load_verdict_is_undecided_when_either_reading_is_missing():
     assert pv.load_verdict(0.0821, None, 0.0078) is None
 
 
+# --- 2026-08-25 knight 회차 회귀 --------------------------------------------
+#
+# knight를 CARRY_IDLE로 접다가 놓쳤는데 load와 시각 두 신호가 **모두 성공**을
+# 냈다. 이 도구의 존재 이유를 정면으로 깨는 오판이라, 그날의 실측값을 그대로
+# 넣어 다시는 통과하지 못하게 못박는다.
+
+# (회차, 파지 직후 폭, CARRY 폭, CARRY load) — 2026-08-25 실측
+MEASURED_2026_08_25 = {
+    "empty": (10.2, 10.0, 0.0235),
+    "rook": (13.1, 12.9, 0.0782),
+    "knight": (13.1, 10.0, 0.0313),   # ← 운반 중 놓침
+    "queen": (11.6, 11.0, 0.0508),
+    "soccer": (35.6, 35.6, 0.1017),
+    "box": (32.0, 31.6, 0.1369),
+    "star": (34.8, 34.4, 0.0978),
+}
+EMPTY_CARRY_LOAD_2026_08_25 = 0.0235
+
+
+def _cycle_constant(name):
+    tree = _tree()
+    return next(
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == name
+    )
+
+
+def test_the_dropped_knight_is_caught_by_the_slip_signal():
+    """물체가 빠지면 그것을 막던 것이 없어지므로 턱이 그만큼 더 닫힌다.
+    knight는 13.1 -> 10.0mm(빈 그리퍼 폭)로 3.1mm 닫혔다."""
+    closed, carry, _ = MEASURED_2026_08_25["knight"]
+
+    assert pv.slip_verdict(closed, carry) is True
+
+
+def test_the_slip_signal_separates_the_dropped_knight_from_every_held_object():
+    """같은 회차의 나머지 실측이 전부 반대편에 있어야 임계가 의미를 갖는다."""
+    slipped = {
+        name: pv.slip_verdict(closed, carry)
+        for name, (closed, carry, _) in MEASURED_2026_08_25.items()
+    }
+
+    assert slipped["knight"] is True
+    assert [name for name, value in slipped.items() if value] == ["knight"]
+
+
+def test_the_load_margin_no_longer_passes_the_dropped_knight():
+    """⚠️ 회귀 — 놓친 knight의 load 여유가 정확히 2양자였고, 예전 임계가
+    2양자여서 성공으로 통과했다. 임계는 그 위에 있어야 한다."""
+    margin = _cycle_constant("LOAD_MARGIN")
+    quantum = 4 / 1023
+
+    assert margin > 2 * quantum
+
+    verdicts = {
+        name: pv.load_verdict(load, EMPTY_CARRY_LOAD_2026_08_25, margin)
+        for name, (_, _, load) in MEASURED_2026_08_25.items()
+        if name != "empty"
+    }
+    assert verdicts["knight"] is False
+    assert all(value for name, value in verdicts.items() if name != "knight")
+
+
+def test_the_load_margin_keeps_the_thinnest_real_grasp():
+    """queen이 실측 중 가장 얇았다(7양자). 임계를 올리다 이걸 잘라내면
+    안 된다 — 그러면 진짜 파지를 실패로 보고하게 된다."""
+    margin = _cycle_constant("LOAD_MARGIN")
+    quantum = 4 / 1023
+    _, _, queen_load = MEASURED_2026_08_25["queen"]
+
+    assert pv.load_verdict(queen_load, EMPTY_CARRY_LOAD_2026_08_25, margin) is True
+    assert margin < queen_load - EMPTY_CARRY_LOAD_2026_08_25 - quantum
+
+
+def test_the_no_drive_vision_rule_does_not_excuse_a_shrunken_bbox():
+    """⚠️ 회귀 — 떨어진 knight가 46.4cm로 굴러가 h가 263.5 -> 61.0px로 줄었다.
+    비율 규칙은 그걸 "멀리 있는 다른 개체"로 보고 성공이라고 했다. 주행이
+    없는 회차에서는 보이면 그냥 바닥에 있는 것이다."""
+    assert pv.vision_verdict(263.5, True, 61.0, 0.8) is True  # 예전 규칙의 오판
+    assert pv.vision_verdict_no_drive(263.5, found=True) is False
+
+
+def test_the_no_drive_vision_rule_still_reports_a_real_disappearance():
+    assert pv.vision_verdict_no_drive(268.4, found=False) is True
+    assert pv.vision_verdict_no_drive(None, found=False) is None
+    assert pv.vision_verdict_no_drive(268.4, found=None) is None
+
+
+def test_the_cycle_uses_the_no_drive_vision_rule_not_the_ratio_one():
+    source = ast.unparse(_function("run_cycle"))
+
+    assert "vision_verdict_no_drive" in source
+    assert "STILL_THERE_H_RATIO" not in source
+
+
+def test_a_slip_makes_the_combined_verdict_a_failure():
+    """slip은 극성이 반대다(True=놓침). 그 극성을 놓치면 놓친 회차가
+    "세 신호 모두 성공"으로 찍힌다 — 바로 그 사고가 났었다."""
+    source = ast.unparse(_function("print_verdicts"))
+
+    assert "if verdicts['slip'] is True:" in source
+    assert "if verdicts['load'] is False:" in source
+    assert "if verdicts['vision'] is False:" in source
+    assert source.index("failures") < source.index("파지 실패")
+
+
 def test_vision_verdict_says_gone_only_when_the_object_is_absent_or_much_smaller():
     assert pv.vision_verdict(120.0, found=False, h_after=None, ratio=0.8) is True
     # 문턱은 h_before * ratio = 96.0px다.
