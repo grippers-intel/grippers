@@ -3,6 +3,27 @@
 GRIPPER_CLOSED_MM = 9.0
 GRIPPER_OPEN_MM = 168.0
 
+# 파지할 때만 쓰는 하한 — 빈 닫힘 폭(GRIPPER_CLOSED_MM)과 **일부러 분리했다**.
+#
+# 2026-08-25 사용자 지시: "최대한 세게 잡자". servo 6에는 토크 제한
+# 레지스터가 없어 파지력은 오직 **명령 폭을 물체보다 얼마나 좁게 잡느냐**로만
+# 만들어진다. 그런데 얇은 체스말은 이미 GRIPPER_CLOSED_MM(9.0)을 명령받고
+# 있다 — queen(17mm)도 knight(22mm)도 _close_width가 하한에 clamp되므로,
+# 하한 자체를 내리는 것 말고는 더 조일 방법이 없다.
+#
+# 두 하한을 나눈 이유는 안전이다. 물체가 턱 사이에 있으면 그 물체가 턱을
+# 멈춰 주므로 더 좁게 명령해도 위치 오차(=힘)만 커진다. 하지만 **빈 채로**
+# 턱이 맞닿는 지점보다 좁게 명령하면 턱이 서로를 밀어 서보가 계속 정지
+# 토크를 낸다 — IDLE로 접기 전 닫기가 정확히 그 경우다. 그래서 빈 닫힘은
+# 계속 GRIPPER_CLOSED_MM을 쓰고, 파지만 이 값을 쓴다.
+#
+# ⚠️ 지금은 9.0이라 **동작이 바뀌지 않는다**. 얼마나 내릴 수 있는지는
+# tools/gripper_force_probe.py로 재야 한다 — 빈 턱이 실제로 멈추는 지점과,
+# 물체를 문 채 과주행 1mm당 부하가 얼마나 붙는지를 함께 본다. 참고로 빈 채
+# 9.0mm(raw 1150)를 명령하면 서보는 1155에서 멈춘다. 즉 1150은 이미 도달
+# 불가능한 목표이고, 보정표 첫 점은 하드스톱이 아니다.
+GRIPPER_GRASP_MIN_MM = 9.0
+
 # 2026-08-20, 핑거 안쪽 면 사이 거리. 링크 구조가 비선형이라 endpoint 두 점의
 # 단일 선형 보간은 90 mm 요청에서 약 96 mm를 만들었다. 실측 중간점을 보존해
 # 구간별 선형 보간한다.
@@ -13,9 +34,26 @@ GRIPPER_CALIBRATION_POINTS = (
 )
 
 
-def position_from_width(width_mm: float) -> int:
-    """요청 폭을 안전 범위로 clamp하고 piecewise-linear goal count로 바꾼다."""
-    width = max(GRIPPER_CLOSED_MM, min(GRIPPER_OPEN_MM, float(width_mm)))
+def position_from_width(width_mm: float, min_width_mm: float = GRIPPER_CLOSED_MM) -> int:
+    """요청 폭을 안전 범위로 clamp하고 piecewise-linear goal count로 바꾼다.
+
+    min_width_mm는 **파지 전용 하한**을 내려 주기 위한 것이다
+    (GRIPPER_GRASP_MIN_MM 주석 참고). 기본값이 기존과 같은
+    GRIPPER_CLOSED_MM이라, 인자를 안 주면 동작이 예전 그대로다.
+
+    ⚠️ min_width_mm가 보정표 첫 점(9.0mm)보다 낮으면 첫 구간의 기울기를
+    **외삽**한다. 그 아래는 실측점이 없으므로 돌아오는 raw는 "이만큼 좁게
+    명령한다"는 뜻일 뿐 실제 개구 폭의 예측이 아니다 — 파지에서는 그것으로
+    충분하다. 힘을 만드는 것은 도달할 폭이 아니라 **도달하지 못하는 거리**이기
+    때문이다.
+    """
+    width = max(float(min_width_mm), min(GRIPPER_OPEN_MM, float(width_mm)))
+
+    first_width, first_raw = GRIPPER_CALIBRATION_POINTS[0]
+    if width < first_width:
+        second_width, second_raw = GRIPPER_CALIBRATION_POINTS[1]
+        slope = (second_raw - first_raw) / (second_width - first_width)
+        return round(first_raw + (width - first_width) * slope)
 
     for (width_lo, raw_lo), (width_hi, raw_hi) in zip(
         GRIPPER_CALIBRATION_POINTS,

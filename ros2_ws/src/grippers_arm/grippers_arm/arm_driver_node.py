@@ -41,6 +41,7 @@ from real import RealBackend
 
 from .gripper_calibration import (
     GRIPPER_CLOSED_MM,
+    GRIPPER_GRASP_MIN_MM,
     GRIPPER_OPEN_MM,
     position_from_width,
     width_from_position,
@@ -211,6 +212,15 @@ class ArmDriverNode(Node):
         self.declare_parameter("arm_port", "/dev/soarm")
         self.declare_parameter("enable_torque_on_start", False)
         self.declare_parameter("auto_align_on_first_move", True)
+        # 그리퍼 명령 폭의 하한. 기본값은 파지 전용 하한이고, 지금은 그것이
+        # GRIPPER_CLOSED_MM과 같아 동작이 바뀌지 않는다
+        # (gripper_calibration.GRIPPER_GRASP_MIN_MM 주석 참고).
+        #
+        # 파라미터로 뺀 이유는 tools/gripper_force_probe.py가 "턱이 실제로
+        # 어디서 멈추는가"를 재려면 이 하한 아래로 명령해 봐야 하기 때문이다.
+        # 런타임에 ros2 param set으로만 내릴 수 있게 해서, 평소 경로에서는
+        # 실수로 낮은 값이 쓰이지 않는다.
+        self.declare_parameter("min_gripper_width_mm", GRIPPER_GRASP_MIN_MM)
 
         arm_port = self.get_parameter("arm_port").value
         enable_torque_on_start = bool(self.get_parameter("enable_torque_on_start").value)
@@ -1069,8 +1079,14 @@ class ArmDriverNode(Node):
         return response
 
     def _on_set_gripper(self, request, response):
-        width_mm = max(GRIPPER_CLOSED_MM, min(GRIPPER_OPEN_MM, request.width_mm))
-        raw_position = position_from_width(width_mm)
+        min_width_mm = float(self.get_parameter("min_gripper_width_mm").value)
+        width_mm = max(min_width_mm, min(GRIPPER_OPEN_MM, request.width_mm))
+        raw_position = position_from_width(width_mm, min_width_mm=min_width_mm)
+        if width_mm < GRIPPER_CLOSED_MM:
+            self.get_logger().warn(
+                f"set_gripper: {width_mm:.1f}mm — 빈 닫힘 하한 {GRIPPER_CLOSED_MM}mm보다 "
+                "좁습니다. 턱 사이에 물체가 있을 때만 안전합니다"
+            )
         try:
             self._require_operational_servos((GRIPPER_SERVO_ID,))
 

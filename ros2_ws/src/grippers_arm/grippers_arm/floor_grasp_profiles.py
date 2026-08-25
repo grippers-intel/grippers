@@ -89,6 +89,23 @@ FLOOR_GRASP_PROFILES = {
     "chess_queen": FloorGraspProfile(17.0, 50.0, GRIPPER_OPEN_MM, _close_width(17.0), _release_width(17.0)),
 }
 
+# GRASP 단계의 물체 배치 전제 — 차체 전면에서 물체 **중심**까지, 정면으로.
+#
+# 2026-08-25 사용자 지시: "GRASP 시 물체의 중심은 모두 19cm 앞(정면)에 있는
+# 것을 전제로 하자."
+#
+# 왜 180이 아니라 190인가: 같은 날 여섯 물체를 전부 차체 전면 180mm에 놓고
+# 돌렸는데, star_column이 **내려오는 그리퍼 위로 올라탔다**(사용자 관찰).
+# cube/star/soccer가 쓰는 GABE 저자세는 접근축이 6.49도 아래를 향해 손가락
+# 판이 파지 중심보다 앞·아래로 뻗는다 — 180mm에서는 그 판이 낮은 물체를
+# 감싸는 대신 그 위에 내려앉는다. 10mm가 그 여유를 만든다.
+#
+# ⚠️ 이 값은 depth 카메라가 보고하는 전방 거리와 **같지 않다**. 같은 날
+# 물리적으로 같은 180mm에 놓인 물체들이 카메라 기준 14.4(queen) /
+# 18.3(rook) / 18.7(knight) / 25.6cm(soccer)로 읽혔다 — 클래스별 K_CLASS
+# 보정값에 실제 오차가 있어서, 카메라 숫자로 배치를 확인할 수 없다.
+GRASP_OBJECT_CENTER_FORWARD_MM = 190.0
+
 # The smallest successful settled load measured while holding an object was
 # 0.0704.  Keep the existing domain threshold lower than that value; load alone
 # is not sufficient validation, so hardware tests also require lift and hold.

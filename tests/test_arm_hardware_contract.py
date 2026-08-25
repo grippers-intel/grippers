@@ -671,3 +671,61 @@ def test_arm_state_service_reports_unreadable_servos_instead_of_zeroing_them():
     names = [_called_name(call) for call in _calls(fn)]
     for reader in ("get_position", "get_load", "get_temperature", "get_torque"):
         assert reader in names
+
+
+# --- 파지 전용 그리퍼 하한 (2026-08-25) --------------------------------------
+
+
+def test_the_grasp_floor_starts_equal_to_the_empty_closed_floor():
+    """기구를 넣되 동작은 아직 바꾸지 않는다 — 실제로 얼마나 내릴 수 있는지는
+    tools/gripper_force_probe.py로 재고 나서 정한다."""
+    calibration = _load_gripper_calibration()
+
+    assert calibration.GRIPPER_GRASP_MIN_MM == calibration.GRIPPER_CLOSED_MM
+
+
+def test_position_from_width_is_unchanged_when_no_floor_is_given():
+    """기본 인자로 부르는 기존 호출부의 동작이 한 raw도 달라지면 안 된다."""
+    calibration = _load_gripper_calibration()
+
+    assert calibration.position_from_width(9.0) == 1150
+    assert calibration.position_from_width(96.0) == 1578
+    assert calibration.position_from_width(168.0) == 2000
+    # 하한 아래 요청은 여전히 하한으로 clamp된다.
+    assert calibration.position_from_width(4.0) == calibration.position_from_width(9.0)
+
+
+def test_a_lowered_floor_extrapolates_the_first_calibration_segment():
+    """보정표 아래는 실측점이 없다 — 첫 구간 기울기를 외삽하고, 그 사실을
+    docstring이 분명히 말한다(돌아오는 raw는 실제 개구 폭의 예측이 아니다)."""
+    calibration = _load_gripper_calibration()
+    slope = (1578 - 1150) / (96.0 - 9.0)
+
+    assert calibration.position_from_width(4.0, min_width_mm=2.0) == round(
+        1150 + (4.0 - 9.0) * slope
+    )
+    assert calibration.position_from_width(4.0, min_width_mm=2.0) < 1150
+    assert "외삽" in calibration.position_from_width.__doc__
+
+
+def test_the_gripper_floor_is_a_runtime_parameter_defaulting_to_the_grasp_floor():
+    """평소 경로에서 실수로 낮은 값이 쓰이지 않도록 기본값은 파지 하한이고,
+    낮추려면 런타임에 명시적으로 바꿔야 한다."""
+    init = _function("__init__")
+    declarations = [
+        call
+        for call in _calls(init)
+        if _called_name(call) == "declare_parameter"
+        and call.args
+        and isinstance(call.args[0], ast.Constant)
+        and call.args[0].value == "min_gripper_width_mm"
+    ]
+
+    assert len(declarations) == 1
+    assert declarations[0].args[1].id == "GRIPPER_GRASP_MIN_MM"
+
+    source = ast.unparse(_function("_on_set_gripper"))
+    assert "get_parameter('min_gripper_width_mm')" in source
+    assert "min_width_mm=min_width_mm" in source
+    # 빈 닫힘 하한보다 좁게 명령하면 반드시 경고를 남긴다.
+    assert "GRIPPER_CLOSED_MM" in source

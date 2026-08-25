@@ -49,12 +49,17 @@ from grasp_test_console import (
     RunLog,
     estimate_position,
 )
-from grippers_arm.floor_grasp_profiles import FLOOR_GRASP_PROFILES
+from grippers_arm.floor_grasp_profiles import (
+    FLOOR_GRASP_PROFILES,
+    GRASP_OBJECT_CENTER_FORWARD_MM,
+)
 from grippers_arm.gripper_calibration import width_from_position
 from pose_verify_expectations import (
     CYCLE_CHECKPOINTS,
+    EMPTY_CLOSE_WIDTH_ERROR_MM,
     POSE_TOLERANCE_RAW,
     SLIP_CLOSURE_MM,
+    empty_cycle_is_contaminated,
     expected_gripper_mm,
     expected_poses,
     load_verdict,
@@ -286,8 +291,16 @@ def run_cycle(node, log, *, raw_cls, profile, empty, baseline, interactive):
 
     checkpoint("idle_start", start_state)
 
-    if not empty and interactive:
-        _prompt("\n  물체를 팔 앞 파지 위치에 놓고 Enter (q=중단): ")
+    if interactive:
+        if empty:
+            # ⚠️ 2026-08-25: 이 확인이 없어 빈 회차가 앞에 놓인 물체를 집어
+            # 올렸고, 오염된 기준선으로 이후 회차를 전부 비교했다.
+            _prompt("\n  빈 회차입니다 — 팔 앞에 아무것도 없어야 합니다. "
+                    "확인하고 Enter (q=중단): ")
+        else:
+            _prompt(f"\n  물체 **중심**을 차체 전면에서 "
+                    f"{GRASP_OBJECT_CENTER_FORWARD_MM / 10:.0f}cm 앞, 정면에 놓고 Enter "
+                    "(q=중단): ")
 
     # 내려가면 팔이 depth 카메라를 가린다 — 정면을 볼 수 있는 마지막 순간이다.
     before = observe(node, log, "before_descend", raw_cls)
@@ -320,7 +333,20 @@ def run_cycle(node, log, *, raw_cls, profile, empty, baseline, interactive):
     if resp is None or not resp.ok:
         return results, "그리퍼 닫기 실패"
     time.sleep(SETTLE_S)
-    checkpoint("closed")
+    closed_summary = checkpoint("closed")
+
+    # 빈 회차가 정말 비었는지는 여기서만 알 수 있다. 여기서 멈추지는 않는다 —
+    # 물고 있는 채로 중단하면 팔이 바닥 높이에 물체를 든 채 남는다. 회차는
+    # 끝까지 돌려 바구니에 놓고 IDLE로 돌아온 뒤, main이 기준선을 버린다.
+    if empty and closed_summary is not None:
+        contaminated = empty_cycle_is_contaminated(closed_summary["width_error"])
+        results["_contaminated"] = bool(contaminated)
+        if contaminated:
+            print(f"\n  ⚠️⚠️ 빈 회차인데 그리퍼가 무언가를 물었습니다 "
+                  f"(폭 오차 {closed_summary['width_error']:+.1f}mm, "
+                  f"상한 {EMPTY_CLOSE_WIDTH_ERROR_MM}mm).")
+            print("     이 기준선은 쓸 수 없습니다 — 회차는 끝까지 돌려 "
+                  "물체를 내려놓고 IDLE로 복귀합니다.")
 
     # 바닥에서 IDLE로 곧장 가면 그리퍼가 바닥을 쓸어간다 — 검증된 상승 체인.
     for stage, name in (("midpoint", "midpoint_up"), ("safe", "safe_up"), ("idle", "carry_idle")):
@@ -444,7 +470,9 @@ def print_summary(all_results):
     print(header)
     print("-" * 68)
     for label, results in all_results.items():
-        checkpoints = [(n, r) for n, r in (results or {}).items() if n != "_verdicts"]
+        checkpoints = [
+            (n, r) for n, r in (results or {}).items() if not n.startswith("_")
+        ]
         if not checkpoints:
             print(f"{label:<10}(기록 없음 — 회차가 첫 체크포인트 전에 끊겼습니다)")
             continue
@@ -465,6 +493,8 @@ def print_summary(all_results):
             bad = (value is True) if key == "slip" else (value is False)
             labels.append(f"{key}={'성공' if good else ('실패' if bad else '불가')}")
         verdict_cell = " / ".join(labels) or "-"
+        if results.get("_contaminated"):
+            verdict_cell = "⚠️ 오염 — 빈 회차가 물체를 물었습니다"
         print(f"{label:<10}{pose_cell:<22}{width_cell:<14}{load_cell:<12}{verdict_cell}")
     print(f"\n자세 허용치 ±{POSE_TOLERANCE_RAW} raw. 그리퍼 폭오차는 실패가 아니라 "
           "파지력 대리값입니다.")
@@ -496,6 +526,8 @@ def main():
     log = RunLog(",".join(classes) or "empty", "pose_verify_cycle")
     print("=== 자세·파지 검증 회차 (주행 없음) ===")
     print(f"상세 로그: {log.path}")
+    print(f"⚠️ 물체 배치 전제: 중심이 차체 전면에서 "
+          f"{GRASP_OBJECT_CENTER_FORWARD_MM / 10:.0f}cm 앞, 정면입니다.")
     print("⚠️ 팔 아래에 바구니나 완충재를 두세요 — 투하 단계에서 물체가 떨어집니다.")
     print("⚠️ 팔은 IDLE에서 시작합니다. 벗어나 있으면 arm_driver가 첫 이동 때 자동 정렬합니다.")
 
@@ -508,11 +540,18 @@ def main():
         if not args.skip_baseline:
             baseline, why = run_cycle(
                 node, log, raw_cls=BASELINE_RAW_CLS, profile=BASELINE_PROFILE,
-                empty=True, baseline=None, interactive=False)
+                empty=True, baseline=None, interactive=not args.no_prompt)
             all_results["빈 회차"] = baseline
             if why:
                 print(f"\n[중단] 빈 회차 실패: {why}")
                 log.log("cycle_failed", raw_cls="empty", why=why)
+                return 3
+            if baseline.get("_contaminated"):
+                print("\n[중단] 빈 기준선이 오염됐습니다 — 팔 앞의 물체를 모두 치우고 "
+                      "다시 실행하세요.")
+                print("  (기준선 없이 자세만 보려면 --skip-baseline)")
+                log.log("cycle_failed", raw_cls="empty", why="contaminated_baseline")
+                print_summary(all_results)
                 return 3
 
         for raw_cls in classes:

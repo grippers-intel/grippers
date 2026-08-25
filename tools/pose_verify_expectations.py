@@ -129,6 +129,25 @@ def load_verdict(carry_load, baseline_load, margin):
 # 안에서 자기 자신과 비교하므로 그 흔들림이 상쇄된다.
 SLIP_CLOSURE_MM = 1.0
 
+# 빈 회차의 `closed` 체크포인트에서 허용하는 그리퍼 폭 오차 상한.
+#
+# ⚠️ 2026-08-25에 빈 회차가 **비어 있지 않은 채로** 돌았다. 사용자가 여섯
+# 물체를 전부 팔 앞에 늘어놓은 상태였는데, 빈 회차는 프롬프트 없이 자동으로
+# 도므로 그중 하나를 그대로 집어 올렸다. 그렇게 오염된 기준선(CARRY_IDLE
+# load 0.0821, 진짜 빈 값의 세 배 넘음)으로 이후 회차를 전부 비교하면
+# 진짜 파지가 실패로 보고된다 — 조용히 틀리는 종류의 사고다.
+#
+# 판정은 폭으로 한다. 빈 그리퍼는 명령 폭에 거의 도달하고(실측 +0.5~+1.2mm),
+# 무언가를 물면 못 간다(오염된 그 회차는 +4.4mm였다). 2.0mm는 그 사이다.
+EMPTY_CLOSE_WIDTH_ERROR_MM = 2.0
+
+
+def empty_cycle_is_contaminated(width_error_mm, tolerance_mm=EMPTY_CLOSE_WIDTH_ERROR_MM):
+    """빈 회차인데 무언가를 물었는가. None이면 판정 불가."""
+    if width_error_mm is None:
+        return None
+    return width_error_mm > tolerance_mm
+
 
 def slip_verdict(width_at_closed_mm, width_at_carry_mm, tolerance_mm=SLIP_CLOSURE_MM):
     """운반 중 물체를 놓쳤는가. True=놓침, False=유지, None=판정 불가."""

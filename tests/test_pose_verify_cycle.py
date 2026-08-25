@@ -496,3 +496,59 @@ def _exec_isolated_names(path, names):
     namespace = {}
     exec(compile(ast.Module(body=wanted, type_ignores=[]), str(path), "exec"), namespace)
     return namespace
+
+
+# --- 오염된 빈 기준선 (2026-08-25) ------------------------------------------
+
+
+def test_a_contaminated_empty_cycle_is_detected_by_gripper_width():
+    """⚠️ 회귀 — 물체 여섯 개를 팔 앞에 늘어놓은 채 빈 회차를 돌렸더니 그중
+    하나를 집어 올렸고, 그 오염된 기준선(CARRY load 0.0821)으로 이후 회차를
+    전부 비교했다. 진짜 파지를 실패로 보고하게 만드는, 조용히 틀리는 사고다."""
+    assert pv.empty_cycle_is_contaminated(4.4) is True    # 그날 물었던 회차
+    assert pv.empty_cycle_is_contaminated(1.2) is False   # 진짜 빈 회차 실측 최대
+    assert pv.empty_cycle_is_contaminated(0.7) is False
+    assert pv.empty_cycle_is_contaminated(None) is None
+
+
+def test_the_contamination_threshold_sits_above_every_measured_empty_close():
+    """빈 회차 실측 폭 오차는 +0.5~+1.2mm였다. 임계는 그 위, 오염(+4.4) 아래."""
+    assert 1.2 < pv.EMPTY_CLOSE_WIDTH_ERROR_MM < 4.4
+
+
+def test_the_run_refuses_to_use_a_contaminated_baseline():
+    source = ast.unparse(_function("main"))
+
+    assert "_contaminated" in source
+    assert source.index("_contaminated") < source.index("empty=False")
+
+
+def test_the_contaminated_cycle_still_finishes_instead_of_stranding_the_arm():
+    """물고 있는 채로 중단하면 팔이 바닥 높이에 물체를 든 채 남는다 —
+    회차는 끝까지 돌려 바구니에 놓고 IDLE로 복귀해야 한다."""
+    source = ast.unparse(_function("run_cycle"))
+
+    detect = source.index("empty_cycle_is_contaminated")
+    drop = source.index("move_floor_pose(profile, 'drop')")
+    fold = source.index("move_floor_pose(profile, 'idle')")
+    assert detect < drop < fold
+    # 감지 지점에서 회차를 끊지 않는다.
+    tail = source[detect:drop]
+    assert "return results" not in tail
+
+
+def test_the_operator_is_told_the_placement_distance_not_just_the_place():
+    """사용자 지시(2026-08-25): GRASP는 물체 중심이 차체 전면 19cm 앞에
+    있다고 전제한다. 프롬프트가 그 숫자를 말해야 전제가 실제로 지켜진다."""
+    source = ast.unparse(_function("run_cycle"))
+
+    assert "GRASP_OBJECT_CENTER_FORWARD_MM" in source
+    assert "빈 회차입니다" in source  # 빈 회차는 반대로 '비워 두라'고 말한다
+
+
+def test_the_placement_premise_comes_from_the_profiles_not_a_local_copy():
+    """수치를 도구에 베껴 적으면 프로파일이 바뀔 때 조용히 어긋난다."""
+    source = TOOL.read_text(encoding="utf-8")
+
+    assert "GRASP_OBJECT_CENTER_FORWARD_MM," in source
+    assert "190" not in ast.unparse(_function("run_cycle"))
