@@ -301,10 +301,12 @@ def test_미실측_상수_목록이_비어_있지_않다():
     }
 
 
-def test_핸드오프와_미세전진이_교시자세와_어긋나_있다():
-    """⚠️ 이 테스트가 실패하면 셋 중 하나를 고친 것이다 — 나머지도 맞춰라.
+def test_턱이_닫히는_지점이_실측_대상으로_남아_있다():
+    """19cm 정렬 -> 10cm 전진이면 턱은 차체 전면 90mm 앞에서 닫힌다.
 
-    190mm에 정렬한 뒤 100mm를 더 전진하면 물체는 차체 전면 90mm 앞에 오는데,
-    교시 파지 자세는 190mm를 전제로 실측됐다. BASELINE_MISSION_TODO.md 1번."""
-    assert bc.creep_end_forward_mm() == 90.0
-    assert bc.grasp_alignment_conflict_mm() == -100.0
+    이건 결함이 아니라 설계다 — 팔이 열린 채 내려온 뒤 차체가 전진해서
+    물체를 턱 사이로 밀어 넣는다(사용자 설명 2026-08-26). 다만 전진 거리가
+    매우 예민해 여러 번 실측해야 하고 50mm로 바뀔 수 있다. 값이 바뀌면 이
+    테스트가 실패하니 BASELINE_MISSION_TODO.md도 같이 갱신하게 된다."""
+    assert bc.jaw_close_forward_mm() == 90.0
+    assert bc.GRASP_CREEP_FORWARD_MM in (100.0, 50.0), "실측으로 확정되면 후보를 좁혀라"
