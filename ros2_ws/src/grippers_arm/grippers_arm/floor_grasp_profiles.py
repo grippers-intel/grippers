@@ -11,7 +11,11 @@ from dataclasses import dataclass
 # importlib.util.spec_from_file_location으로 단독 로드되기도 하는데, 그
 # 경로에선 패키지 컨텍스트가 없어 상대 import(`from .gripper_calibration`)가
 # "attempted relative import with no known parent package"로 깨진다.
-from grippers_arm.gripper_calibration import GRIPPER_CLOSED_MM, GRIPPER_OPEN_MM
+from grippers_arm.gripper_calibration import (
+    GRIPPER_CLOSED_MM,
+    GRIPPER_GRASP_MIN_MM,
+    GRIPPER_OPEN_MM,
+)
 
 
 @dataclass(frozen=True)
@@ -69,13 +73,16 @@ def _release_width(object_width_mm: float) -> float:
 def _close_width(object_width_mm: float) -> float:
     """물체 폭에서 GRIPPER_SQUEEZE_MM만큼 더 좁힌 목표 폭.
 
-    기구 하한(GRIPPER_CLOSED_MM) 아래로는 내려가지 않는다. 얇은 체스말은
-    이 하한에 걸려 여유를 다 못 쓴다 — queen(17.0mm)은 8.0mm, knight
-    (22.0mm)은 13.0mm까지만 조일 수 있다. queen의 파지가 늘 가장 약했던
-    (2026-08-24 실측 최소 마진 4양자) 진짜 이유가 이것이다: 더 세게 쥐려면
-    GRIPPER_CLOSED_MM 자체를 재보정해야 한다.
+    **파지 전용** 하한(GRIPPER_GRASP_MIN_MM) 아래로는 내려가지 않는다 —
+    빈 닫힘 폭(GRIPPER_CLOSED_MM)이 아니다. 물체가 턱을 멈춰 주므로 파지
+    때는 더 좁게 명령해 위치 오차(=힘)를 키울 수 있기 때문이다.
+
+    2026-08-25 실측으로 하한을 9.0에서 7.0으로 내렸다(사용자 지시 "최대한
+    세게 잡자"). 얇은 체스말 둘이 이 하한에 걸려 있었고, 이제 knight 기준
+    파지 부하가 0.0235에서 0.0626으로 2.7배가 된다. 7.0 아래로는 부하가
+    포화해 더 얻을 것이 없다 — 근거는 GRIPPER_GRASP_MIN_MM 주석 참고.
     """
-    return max(GRIPPER_CLOSED_MM, round(object_width_mm - GRIPPER_SQUEEZE_MM, 1))
+    return max(GRIPPER_GRASP_MIN_MM, round(object_width_mm - GRIPPER_SQUEEZE_MM, 1))
 
 
 # 2026-08-24: 낮은 물체 3종(cube/star_column/soccer_polyhedron)의 파지 중심

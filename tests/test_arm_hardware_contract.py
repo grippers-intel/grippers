@@ -695,12 +695,17 @@ def test_arm_state_retries_each_register_read():
 # --- 파지 전용 그리퍼 하한 (2026-08-25) --------------------------------------
 
 
-def test_the_grasp_floor_starts_equal_to_the_empty_closed_floor():
-    """기구를 넣되 동작은 아직 바꾸지 않는다 — 실제로 얼마나 내릴 수 있는지는
-    tools/gripper_force_probe.py로 재고 나서 정한다."""
+def test_the_grasp_floor_is_the_measured_saturation_point():
+    """2026-08-25 gripper_force_probe 실측: knight을 문 채 부하가
+    9.0mm 0.0235 / 8.0mm 0.0430 / 7.0mm 0.0626이고 그 아래는 전부 0.0626이다.
+    7.0이 포화점이라 더 내려도 얻을 것이 없고, 그 위는 힘을 버리는 것이다."""
     calibration = _load_gripper_calibration()
 
-    assert calibration.GRIPPER_GRASP_MIN_MM == calibration.GRIPPER_CLOSED_MM
+    assert calibration.GRIPPER_GRASP_MIN_MM == 7.0
+    # 빈 닫힘 하한은 건드리지 않는다 — 얻을 것이 없다(빈 턱은 raw 1144에서
+    # 멈추고 그 아래로 명령해도 부하가 안 는다).
+    assert calibration.GRIPPER_CLOSED_MM == 9.0
+    assert calibration.GRIPPER_GRASP_MIN_MM < calibration.GRIPPER_CLOSED_MM
 
 
 def test_position_from_width_is_unchanged_when_no_floor_is_given():
