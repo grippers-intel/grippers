@@ -15,6 +15,7 @@ soarm_lab.arm을 그대로 감싼다. 새 IK/서보 로직은 없음.
    채워 둬야 한다 — __init__ 에서 그렇게 한다.
 """
 
+import fcntl
 import os
 import sys
 import time
@@ -62,6 +63,8 @@ ALL_SERVO_IDS = range(1, 7)
 # 도메인 계층은 0~1 비율만 안다 — 서보 각도 변환과 같은 이유로 원시값 →
 # 비율 변환은 이 노드가 담당한다 (class_diagram.md §2).
 GRIPPER_LOAD_MAX_RAW = 1023.0
+# STS3215 위치 레지스터의 정의역. 이 밖의 값은 읽기가 깨진 것이다.
+POSITION_RAW_MAX = 4095
 
 # 그리퍼 닫힘 명령 후 부하가 정착할 때까지의 대기 시간.
 # 실측(2026-08-18): 0.26~0.51s 는 이동 중 포화(±500)라 빈 채와 물체가 구분되지
@@ -233,6 +236,7 @@ class ArmDriverNode(Node):
         soarm._real = RealBackend(port=arm_port)
         if not soarm._real.drv.is_connected():
             raise ArmHardwareUnavailableError(f"SO-ARM101 serial connection failed: {arm_port}")
+        self._claim_serial_port(soarm._real, arm_port)
 
         self.get_logger().info(f"arm_port={arm_port}")
 
@@ -297,6 +301,44 @@ class ArmDriverNode(Node):
             "arm_driver_node ready — "
             f"auto_align_on_first_move={self._auto_align_pending}"
         )
+
+    def _claim_serial_port(self, backend, arm_port: str) -> None:
+        """이 포트를 쓰는 arm_driver가 하나뿐이도록 배타 잠금을 건다.
+
+        ⚠️ 2026-08-25 실기에서 이것 없이 하루를 태웠다. 재기동 스크립트의
+        pkill 패턴이 `ros2 run` 래퍼만 잡고 설치된 노드 실행 파일은 놓쳐서,
+        arm_driver 세 개가 동시에 같은 시리얼 포트를 읽고 쓰고 있었다.
+        증상이 하드웨어 고장과 구분되지 않는다는 것이 문제였다:
+
+            - get_arm_state가 10~80%씩 무작위로 실패한다
+            - 실패 서보 목록이 호출마다 바뀐다([6] → [2,4,5,6] → [1,2,4,5])
+            - **깨진 값이 정상인 척 통과한다** — servo 3 위치가 55841로
+              돌아온 적이 있다. 다른 서보의 응답 바이트가 섞인 것이다.
+            - 드라이버는 "multiple access on port?"라고 정확히 말해 주는데,
+              그 로그는 노드 stdout에 묻혀 아무도 안 본다
+
+        flock은 권고적 잠금이라 파일을 여는 것 자체를 막지는 않지만, 같은
+        규칙을 지키는 두 번째 arm_driver는 여기서 즉시 멈춘다. 프로세스가
+        죽으면 커널이 알아서 놓아 주므로 남은 잠금을 치울 일이 없다.
+
+        잠금 파일 핸들은 노드 수명 동안 살아 있어야 한다 — 지역 변수로 두면
+        GC가 닫아 버려 잠금이 조용히 풀린다.
+        """
+        serial_handle = getattr(backend.drv, "serial", None)
+        if serial_handle is None:
+            self.get_logger().warn("시리얼 핸들을 찾지 못해 포트 배타 잠금을 걸지 못했습니다")
+            return
+        self._port_lock_file = serial_handle
+        try:
+            fcntl.flock(serial_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
+            raise ArmPortConflictError(
+                f"{arm_port}를 이미 다른 프로세스가 쓰고 있습니다 ({e}). "
+                "arm_driver가 두 개 이상 떠 있으면 시리얼 응답이 서로 섞여 "
+                "위치·부하 값이 무작위로 깨집니다. 기존 프로세스를 먼저 종료하세요: "
+                "ps -eo pid,args | grep arm_driver | grep -v grep"
+            ) from e
+        self.get_logger().info(f"{arm_port} 배타 잠금 확보")
 
     def _check_startup_torque(
         self,
@@ -1040,12 +1082,17 @@ class ArmDriverNode(Node):
     def _read_with_retry(reader, servo_id, attempts=JOINT_READ_ATTEMPTS):
         """레지스터 하나를 읽는다 — 실패하면 몇 번 다시 시도한다.
 
-        ⚠️ 2026-08-25 실기: get_arm_state는 서보 6개 × 레지스터 4개 = **24회
-        연속 읽기**인데 처음엔 재시도를 안 넣었다. 이 버스는 패킷을 이따금
-        흘리므로(_read_joint_positions가 재시도하는 바로 그 이유다) 읽기
-        하나의 실패 확률이 0.5%만 되어도 24회 묶음은 10번에 1번꼴로 깨진다.
-        실측 실패율이 정확히 그랬고, 파지력 측정 도구가 첫 표본에서 그대로
-        멈췄다. 단발 유실은 하드웨어 고장이 아니므로 재시도가 맞는 답이다.
+        get_arm_state는 서보 6개 × 레지스터 4개 = 24회 연속 읽기라, 읽기
+        하나의 실패 확률이 낮아도 묶음 전체가 깨질 확률은 그만큼 쌓인다.
+        _read_joint_positions가 이동 중 폴링에 재시도를 두는 것과 같은 이유다.
+
+        ⚠️ 2026-08-25에 이 재시도를 **잘못된 진단으로** 넣었다는 것을 남겨
+        둔다. 그날 관측된 10~80%의 실패는 패킷 유실이 아니라 arm_driver가
+        세 개 떠서 같은 시리얼 포트를 동시에 쓰고 있었기 때문이었고, 진짜
+        해결은 _claim_serial_port의 배타 잠금이다. 프로세스를 하나로 정리한
+        뒤 실패율은 30회 중 0이었다. 재시도는 그대로 두되(묶음 읽기에 맞는
+        대비이긴 하다) **재시도가 늘면 경합을 의심할 것** — 재시도로 덮이는
+        실패는 원인이 따로 있다는 신호다.
         """
         for attempt in range(attempts):
             value = reader(servo_id)
@@ -1072,6 +1119,16 @@ class ArmDriverNode(Node):
         online, positions, loads, temperatures, torques = [], [], [], [], []
         for servo_id in ALL_SERVO_IDS:
             position = self._read_with_retry(backend.drv.get_position, servo_id)
+            # ⚠️ 범위 밖 값은 실패로 본다. 2026-08-25에 servo 3 위치가
+            # 55841로 돌아온 적이 있다 — 다른 서보의 응답 바이트가 섞인
+            # 것인데, 그대로 통과시키면 호출부가 그 숫자를 믿는다.
+            # STS3215의 위치는 정의상 0..4095다.
+            if position is not None and not 0 <= int(position) <= POSITION_RAW_MAX:
+                self.get_logger().warn(
+                    f"servo {servo_id} 위치 {position} — "
+                    f"0..{POSITION_RAW_MAX} 밖이라 버립니다(응답이 섞인 것으로 봅니다)"
+                )
+                position = None
             if position is None:
                 online.append(False)
                 positions.append(0)

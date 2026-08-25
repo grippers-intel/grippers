@@ -748,3 +748,45 @@ def test_the_gripper_floor_is_a_runtime_parameter_defaulting_to_the_grasp_floor(
     assert "min_width_mm=min_width_mm" in source
     # 빈 닫힘 하한보다 좁게 명령하면 반드시 경고를 남긴다.
     assert "GRIPPER_CLOSED_MM" in source
+
+
+# --- 시리얼 포트 배타 잠금 (2026-08-25) --------------------------------------
+
+
+def test_the_serial_port_is_claimed_exclusively_at_startup():
+    """⚠️ 회귀 — 재기동 스크립트의 pkill 패턴이 설치된 노드 실행 파일을 놓쳐
+    arm_driver 세 개가 같은 포트를 동시에 쓰고 있었다. 증상이 하드웨어 고장과
+    구분되지 않는다: 실패율이 호출마다 달라지고, 실패 서보 목록이 바뀌고,
+    깨진 값(servo 3 = 55841)이 정상인 척 통과한다."""
+    init = ast.unparse(_function("__init__"))
+    assert "_claim_serial_port" in init
+    # 포트를 연 직후여야 한다 — 그 전에는 잠글 핸들이 없다.
+    assert init.index("RealBackend(port=arm_port)") < init.index("_claim_serial_port")
+
+    claim = ast.unparse(_function("_claim_serial_port"))
+    assert "LOCK_EX" in claim and "LOCK_NB" in claim
+    assert "ArmPortConflictError" in claim
+    # 핸들을 인스턴스에 붙들어야 GC가 닫아 잠금이 풀리지 않는다.
+    assert "self._port_lock_file" in claim
+
+
+def test_a_port_conflict_stops_the_node_instead_of_running_degraded():
+    """두 번째 인스턴스가 조용히 함께 도는 것이 최악이다 — 그 상태에서
+    나오는 값은 틀린 줄도 모르고 쓰인다. main이 이미 이 예외를 잡아 노드를
+    띄우지 않고 종료한다."""
+    main_source = ast.unparse(_function("main"))
+
+    assert "ArmPortConflictError" in main_source
+    assert "fatal" in main_source
+
+
+def test_out_of_range_positions_are_discarded_not_reported_as_valid():
+    """STS3215 위치는 정의상 0..4095다. 그 밖의 값은 응답 바이트가 섞인
+    것이므로 online=True로 보고하면 안 된다."""
+    constants = _module_constants(ARM_NODE, {"POSITION_RAW_MAX"})
+    assert constants["POSITION_RAW_MAX"] == 4095
+
+    source = ast.unparse(_function("_on_get_arm_state"))
+    assert "POSITION_RAW_MAX" in source
+    # 범위 검사가 online 판정보다 먼저 와야 버려진다.
+    assert source.index("POSITION_RAW_MAX") < source.index("online.append(True)")
