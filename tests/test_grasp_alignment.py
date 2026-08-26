@@ -250,3 +250,16 @@ def test_같은_물리_자리를_클래스마다_다르게_읽는다():
 
     assert knight > rook
     assert 0.06 < knight / rook - 1.0 < 0.08
+
+
+def test_queen_턱_선이_실측값이다():
+    """닫음 0.0821 -> 들어올림 0.0626 -> CARRY 0.0626. 닫는 순간 대비로는
+    떨어졌지만 들어올린 뒤로는 흔들리지 않았다 — 닫는 순간의 부하에는
+    눌러 들어가는 동적 성분이 섞여 있다."""
+    assert bc.JAW_LINE_DEPTH_FORWARD_M["queen"] == 0.1421
+
+
+def test_세_체스말_턱_선이_모두_실측됐다():
+    for label in ("rook", "knight", "queen"):
+        assert label in bc.JAW_LINE_DEPTH_FORWARD_M
+        assert label in bc.DEPTH_LATERAL_TO_JAW_CENTER_M

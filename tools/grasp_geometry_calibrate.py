@@ -96,7 +96,8 @@ from grippers_arm.floor_grasp_profiles import FLOOR_GRASP_PROFILES
 BANNER = "=" * 68
 SAMPLES = 7                # 턱 선 관측 표본 수 — 중앙값을 쓴다
 
-# 들어올리며 부하가 이만큼 떨어지면 턱 끝 파지로 본다.
+# 들어올린 **뒤에도** 부하가 이만큼 더 떨어지면 미끄러지는 중으로 본다.
+# 닫는 순간과 비교하지 않는다 — 위 판정부 주석 참고.
 LOAD_SLIP_DROP = 0.010
 # 턱 목의 깊이(실측 2026-08-26). 턱 끝에 걸렸을 때 얼마나 더 가까이
 # 놓아야 하는지 안내하는 데 쓴다.
@@ -532,9 +533,19 @@ def mode_jaw_line(node, label):
     # 순서가 중요하다. "애초에 못 물었다"와 "물었다가 미끄러졌다"는 원인도
     # 대처도 다르다 — 2026-08-26에 queen이 미끄러졌는데 도구가 "턱 밖"이라고
     # 잘못 말했다.
+    # 판정 기준은 "닫음 대비 낙폭"이 아니라 **들어올린 뒤에도 계속
+    # 흘러내리는가**다. 2026-08-26 실측 세 건이 그걸 말한다:
+    #
+    #   knight 성공  0.0782 -> 0.0782 -> 0.0782   들기->CARRY  0.0000
+    #   queen  성공  0.0821 -> 0.0626 -> 0.0626   들기->CARRY  0.0000
+    #   queen  실패  0.0821 -> 0.0391 -> 0.0274   들기->CARRY -0.0117
+    #
+    # 닫음 대비 낙폭은 성공(-0.0195)과 실패(-0.0547) 둘 다 크다 — 닫는
+    # 순간의 부하에는 눌러 들어가는 동적 성분이 섞여 있어 들어올리면
+    # 어차피 내려앉는다. 그걸 실패로 보면 멀쩡한 파지를 버린다.
     gripped = closed >= 0.05
     held = carried >= 0.05
-    weakened = held and carried < closed - LOAD_SLIP_DROP
+    weakened = held and carried < lifted - LOAD_SLIP_DROP
 
     print()
     print(BANNER)
@@ -546,7 +557,7 @@ def mode_jaw_line(node, label):
         print("  ⚠️ 물었다가 **들어올리며 놓쳤습니다** — 턱 끝 파지입니다.")
         print(f"     이 값({forward:.4f})은 턱 선이 아닙니다.")
     elif weakened:
-        print("  ⚠️ 물고는 있지만 들어올리며 부하가 떨어졌습니다 — 턱 끝에 가깝습니다.")
+        print("  ⚠️ 들어올린 뒤에도 부하가 계속 흘러내립니다 — 미끄러지는 중입니다.")
         print(f"     이 값({forward:.4f})은 턱 선으로 쓰기에 위험합니다.")
     if not held or weakened:
         print(f"     물체를 **자로 재서 약 {JAW_THROAT_DEPTH_M * 1000:.0f}mm 앞으로**"
