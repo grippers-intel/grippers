@@ -267,7 +267,7 @@ def test_미세_전진_실패는_파지를_중단시킨다():
         estop=threading.Event(), watchdog=LinkWatchdog(),
     )
 
-    nxt = BaselineGraspState("queen").execute(ports)
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
     assert Report.GRASP_FAILED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)

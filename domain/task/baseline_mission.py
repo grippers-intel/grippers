@@ -273,9 +273,11 @@ class BaselineApproachState(State):
         verdict = ga.judge(observation, object_width_mm(label))
 
         if verdict.action == ga.READY:
-            ports.host.report(Report.GRASP_READY, self.name,
-                              f"{label} {verdict.reason}")
-            return BaselineGraspState(label, self.retries)
+            creep_m = ga.creep_distance_m(observation)
+            ports.host.report(
+                Report.GRASP_READY, self.name,
+                f"{label} {verdict.reason} · 전진 {creep_m * 1000:.0f}mm")
+            return BaselineGraspState(label, creep_m, self.retries)
 
         if verdict.action == ga.PI_CENTER:
             if ports.arm.offset_base_yaw(verdict.servo1_offset_rad):
@@ -304,8 +306,9 @@ class BaselineGraspState(State):
 
     name = MissionState.GRASP
 
-    def __init__(self, label, retries: int = 0):
+    def __init__(self, label, creep_m, retries: int = 0):
         self.label = label
+        self.creep_m = creep_m
         self.retries = retries
 
     def execute(self, ports):
@@ -313,7 +316,11 @@ class BaselineGraspState(State):
         gp = plan_for_label(self.label)
         ports.base.stop()
 
-        if not ports.base.creep_forward(bc.GRASP_CREEP_FORWARD_MM / 1000.0):
+        # 전진 거리는 관측에서 나온다 — 상수를 그대로 밀면 이미 가까운 물체를
+        # 턱 안쪽으로 처박는다(grasp_alignment.creep_distance_m 참고).
+        if self.creep_m is None:
+            return self._failed(ports, "전진 거리를 모른다 — 관측 실패")
+        if not ports.base.creep_forward(self.creep_m):
             return self._failed(ports, "미세 전진 실패")
 
         if not ports.arm.move_to_floor_pose(gp.profile, "safe"):

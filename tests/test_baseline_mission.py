@@ -178,6 +178,7 @@ def test_조건이_충족되면_GRASP_READY를_보고하고_넘어간다():
     assert Report.GRASP_READY in host.reported_kinds
     assert isinstance(nxt, BaselineGraspState)
     assert nxt.label == "queen"
+    assert nxt.creep_m == pytest.approx(0.02)   # 관측 전방거리 - 턱 선
 
 
 def test_그리퍼가_비어있지_않으면_GRASP를_막고_제자리에_머문다():
@@ -229,7 +230,7 @@ def test_파지에_성공하면_CARRY로_가고_완료를_보고한다():
     arm = FakeArm(load_ratio=HOLDING_LOAD)
     ports = _ports(host=host, arm=arm)
 
-    nxt = BaselineGraspState("queen").execute(ports)
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
     assert Report.GRASP_DONE in host.reported_kinds
     assert isinstance(nxt, BaselineCarryState)
@@ -240,7 +241,7 @@ def test_파지_후_IDLE이_아니라_CARRY로_접는다():
     arm = FakeArm(load_ratio=HOLDING_LOAD)
     ports = _ports(arm=arm)
 
-    BaselineGraspState("queen").execute(ports)
+    BaselineGraspState("queen", 0.02).execute(ports)
 
     stages = [stage for _profile, stage in arm.floor_pose_calls]
     assert "carry" in stages
@@ -251,7 +252,7 @@ def test_파지에_실패하면_APPROACH로_돌아가고_스스로_재시도하�
     host = FakeHostLink()
     ports = _ports(host=host, arm=FakeArm(load_ratio=0.0))
 
-    nxt = BaselineGraspState("queen").execute(ports)
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
     assert Report.GRASP_FAILED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
@@ -464,7 +465,7 @@ def test_부하만_높고_목표가_남아있으면_실패로_본다():
     perception = ScriptedPerception(grasp_confirmed=False)
     ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), perception=perception)
 
-    nxt = BaselineGraspState("queen").execute(ports)
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
     assert Report.GRASP_FAILED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
@@ -476,7 +477,7 @@ def test_목표는_사라졌는데_부하가_없으면_실패로_본다():
     ports = _ports(host=host, arm=FakeArm(load_ratio=0.0),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
-    nxt = BaselineGraspState("queen").execute(ports)
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
     assert Report.GRASP_FAILED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
@@ -487,7 +488,7 @@ def test_두_신호가_모두_있어야_성공이다():
     ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
-    nxt = BaselineGraspState("queen").execute(ports)
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
     assert Report.GRASP_DONE in host.reported_kinds
     assert isinstance(nxt, BaselineCarryState)

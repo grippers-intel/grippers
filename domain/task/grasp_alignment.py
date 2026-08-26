@@ -95,6 +95,30 @@ def servo1_offset_for(lateral_error_m: float, reach_mm=None):
     return math.atan2(lateral_error_m, reach_mm / 1000.0)
 
 
+def creep_distance_m(observation, jaw_line_m=None,
+                     max_creep_mm: float = bc.GRASP_CREEP_FORWARD_MM):
+    """이번 파지에 실제로 필요한 미세 전진 거리. 모르면 **None**.
+
+    고정 상수를 쓰지 않는 이유: 전진의 목적은 "물체를 턱 선까지 데려오는
+    것"이라 필요한 거리가 매번 다르다. 물체가 이미 턱 선 20mm 앞에 있는데
+    상수 100mm를 그대로 밀면 80mm를 더 밀어 물체를 턱 안쪽으로 처박거나
+    넘어뜨린다 — 2026-08-26 통주행에서 조작자가 손으로 멈춘 값이 24mm였던
+    것도 같은 이야기다.
+
+    이제 뎁스 카메라가 전방 거리를 주므로 그 차이를 그대로 쓰면 된다.
+    상한은 남겨 둔다 — 관측이 튀었을 때 크게 밀고 나가지 않게 하는
+    안전장치다."""
+    if observation is None or not observation.metric_ok:
+        return None
+    jaw = bc.JAW_LINE_DEPTH_FORWARD_M if jaw_line_m is None else jaw_line_m
+    if jaw is None:
+        return None
+    needed = observation.forward_m - jaw
+    if needed <= 0.0:
+        return None
+    return min(needed, max_creep_mm / 1000.0)
+
+
 def judge(observation, object_width_mm: float,
           centering_tolerance_m=None) -> AlignmentVerdict:
     """GRASP로 내려가도 되는지 판정한다.

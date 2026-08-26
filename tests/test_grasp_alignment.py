@@ -130,3 +130,26 @@ def test_카메라_광축_어긋남을_먼저_지운다(monkeypatch):
     monkeypatch.setattr(bc, "DEPTH_LATERAL_TO_JAW_CENTER_M", 0.040)
 
     assert ga.judge(_obs(lateral_m=0.040), 17.0).action == ga.READY
+
+
+# ── 미세 전진 거리 ─────────────────────────────────────────────────────────
+
+
+def test_전진_거리는_관측에서_나온다():
+    """상수를 그대로 밀면 이미 가까운 물체를 턱 안쪽으로 처박는다."""
+    assert ga.creep_distance_m(_obs(forward_m=JAW_LINE_M + 0.024)) == pytest.approx(0.024)
+
+
+def test_전진_거리에_상한이_걸린다():
+    """관측이 튀었을 때 크게 밀고 나가지 않게 한다."""
+    far = JAW_LINE_M + 5.0
+    assert ga.creep_distance_m(_obs(forward_m=far)) == pytest.approx(
+        bc.GRASP_CREEP_FORWARD_MM / 1000.0)
+
+
+def test_이미_턱_선_안쪽이면_전진하지_않는다():
+    assert ga.creep_distance_m(_obs(forward_m=JAW_LINE_M - 0.01)) is None
+
+
+def test_환산_실패면_전진_거리를_내지_않는다():
+    assert ga.creep_distance_m(_obs(metric_ok=False)) is None
