@@ -113,16 +113,43 @@ OBSERVE_CACHE_SEC = 3.0
 GATE_SAMPLES = 4
 SERVO1_PROBE_DEG = 12.0    # 서비스 한계(15도) 안쪽에서 최대한 크게
 
-# 빈 부하를 재는 자세 순회. 파지 판정이 실제로 부하를 읽는 자세를 전부 지난다.
-# 순서는 arm_driver_node의 전이 제약을 따른다 — grasp는 safe에서만,
-# midpoint는 grasp에서만, drop은 idle/safe/carry에서만 시작할 수 있다.
+# 빈 부하를 재는 자세 순회. 순서는 arm_driver_node의 전이 제약을 따른다 —
+# grasp는 safe에서만, midpoint는 grasp에서만, drop은 idle/safe/carry에서만
+# 시작할 수 있다.
+#
+# ⚠️ 2026-08-26 실측으로 **자세는 빈 부하에 영향이 없다는 것이 확인됐다.**
+# 7개 자세 × 2개 폭 = 14회 측정에서 자세 간 편차가 0.0000이었다(열림 전부
+# 0.0352, 닫힘 전부 0.0391). 그리퍼는 손목 끝단이라 팔 자세가 만드는 중력
+# 성분을 안 탄다. 그래도 순회를 남겨 두는 것은 이게 **가정이 아니라 실측으로
+# 뒤집힌 것**임을 다시 확인할 수 있게 하기 위해서다 — 팔이나 그리퍼를 바꾸면
+# 다시 성립하지 않을 수 있다.
 LOAD_STAGE_TOUR = ("safe", "grasp", "midpoint", "safe", "carry", "drop", "carry")
-LOAD_SAMPLES = 5           # 자세당 표본 수 — 최대값을 쓴다(최악을 봐야 한다)
+LOAD_SAMPLES = 5           # 표본 수 — 최대값을 쓴다(최악을 봐야 한다)
 LOAD_SAMPLE_GAP_S = 0.3
+
+# 빈 부하를 실제로 움직이는 변수는 **닫힘 목표 폭**이다.
+#
+# 빈손일 때는 턱이 서로 맞닿아 멈추므로, 접촉점보다 더 좁게 명령할수록
+# 위치 오차가 커지고 정지 토크가 올라간다. servo 6에는 토크 제한 레지스터가
+# 없어서 "위치 오차 = 힘"이 유일한 조절 수단이라는 것과 같은 이야기다.
+#
+# 그런데 닫힘 목표 폭은 **물체마다 다르다**(물체 폭 - GRIPPER_SQUEEZE_MM,
+# 하한 GRIPPER_GRASP_MIN_MM=7.0으로 clamp). 그래서 한 라벨만 재면 그 라벨의
+# 폭에서의 빈 부하만 알게 된다 — 2026-08-26에 rook(9.5mm)만 재서 0.0391을
+# 얻었지만, 최악은 7.0mm를 쓰는 queen/knight 쪽이다.
+#
+# LOAD_THRESHOLD는 **모든 라벨이 공유하는 하나의 상수**이므로 가장 좁은
+# 폭에서의 값으로 잡아야 한다. 그래서 여기서 여섯 프로필의 닫힘 폭을 전부
+# 훑는다.
+LOAD_WIDTH_SWEEP_MM = (7.0, 9.5, 25.0, 30.0, 31.0)
+
 # 지금 코드에 박혀 있는 값. 실측이 이걸 넘는지 보는 것이 이 모드의 목적이다.
 LOAD_THRESHOLD_NOW = 0.04
 # 2026-08-26 실측된 파지 부하의 최소 — queen/knight CARRY 0.0626.
 GRIPPED_LOAD_MIN = 0.0626
+# 판독 양자. 관측값이 전부 이 배수다(0.0235=6, 0.0391=10, 0.0430=11).
+# 여유를 양자 단위로 말해야 "한 칸 차이"인지 "여러 칸 차이"인지 드러난다.
+LOAD_QUANTUM = 1.0 / 256.0
 
 # perception_node가 YOLO를 돌리는 스트림. depth_cam_rotate_node가 낸다.
 ROTATED_RGB_TOPIC = "/depth_cam/rgb/image_rotated"
@@ -632,92 +659,131 @@ def mode_servo1(node, profile):
 
 
 def mode_load(node, label):
-    """빈 그리퍼 부하를 **자세마다** 재서 LOAD_THRESHOLD를 정한다.
+    """빈 그리퍼 부하를 재서 LOAD_THRESHOLD를 정한다.
 
     지금 남은 상수 중 가장 위험한 값이다. 임계는 0.04인데 2026-08-25
-    재실측에서 자세별 빈 부하가 0.0235~0.0430으로 흔들렸다 — **상한 자세에서는
-    빈손을 파지 성공으로 읽는다.** 그 자세가 어디였는지 기록이 없어서 지금은
-    올릴 수도 내릴 수도 없다.
+    재실측에서 빈 부하가 0.0235~0.0430으로 흔들렸다 — 상한이 임계를 넘으므로
+    **그 조건에서는 빈손을 파지 성공으로 읽는다.** 무엇이 그 흔들림을 만드는지
+    몰라서 올릴 수도 내릴 수도 없었다.
 
-    부하가 자세를 타는 이유는 servo 6이 재는 것이 순수한 파지력이 아니라
-    **정지 토크**이기 때문이다. 팔이 접힌 자세와 뻗은 자세에서 손목이 받는
-    중력 성분이 다르면 같은 빈손이라도 다르게 읽힌다.
+    ## 무엇이 빈 부하를 움직이는가
 
-    그래서 파지 판정이 실제로 부하를 읽는 자세를 **전부** 돌면서 잰다.
-    한 자세라도 빠뜨리면 그 자세가 곧 오판이 나는 자세가 된다.
+    2026-08-26에 자세를 먼저 의심해서 7개 자세를 돌았는데 **편차가 0.0000**
+    이었다. 자세는 아니다. 그리퍼는 손목 끝단이라 팔이 만드는 중력 성분을
+    안 탄다.
 
-    그리퍼 상태를 둘로 나눠 두 바퀴 돈다:
+    남은 변수는 **닫힘 목표 폭**이다. 빈손일 때는 턱이 서로 맞닿아 멈추므로,
+    접촉점보다 더 좁게 명령할수록 위치 오차가 커지고 정지 토크가 올라간다.
+    그리고 닫힘 폭은 물체마다 다르다 — rook은 9.5mm, queen/knight는 하한인
+    7.0mm다. 한 라벨만 재면 최악을 놓친다.
 
-        열림  — GRASP 직전. 여기서 임계를 넘으면 물기도 전에 성공이 된다.
-        닫힘  — **결정적인 쪽.** 물체 없이 닫혔을 때의 값이다. 파지 실패를
-                성공으로 읽는 사고는 정확히 이 값이 임계를 넘을 때 난다.
+    LOAD_THRESHOLD는 모든 라벨이 공유하는 하나의 상수이므로 **가장 좁은
+    폭에서의 값**으로 잡아야 한다. 그래서 폭을 훑는 것이 이 모드의 본체이고,
+    자세 순회는 위 결론이 아직 성립하는지 재확인하는 부수 검사다.
     """
     profile = PROFILE_BY_LABEL[label]
     geometry = FLOOR_GRASP_PROFILES[profile]
 
     print(BANNER)
-    print(f"모드 L · 빈 그리퍼 부하 자세별 실측  (LOAD_THRESHOLD)")
+    print("모드 L · 빈 그리퍼 부하 실측  (LOAD_THRESHOLD)")
     print(BANNER)
-    print(f"  자세 프로필: {profile}")
     print("  ⛔ **그리퍼를 반드시 비우고, 앞도 치워 주세요.**")
     print("     물체가 물려 있으면 이 측정 전체가 무의미해집니다.")
-    print("     팔이 바닥 자세까지 내려갔다 옵니다.")
     input("  준비되면 Enter > ")
 
     node.hold()
 
-    readings = {}
-    for width_mm, grip in ((geometry.preopen_width_mm, "열림"),
-                           (geometry.close_width_mm, "닫힘")):
-        print()
-        print(f"  ── 그리퍼 {grip} ({width_mm:.1f} mm) " + "─" * 30)
-        node.set_gripper(width_mm)
-        for stage in LOAD_STAGE_TOUR:
-            node.stage(profile, stage)
-            samples = []
-            for _ in range(LOAD_SAMPLES):
-                time.sleep(LOAD_SAMPLE_GAP_S)
-                samples.append(float(node.arm_state().load_ratio[5]))
-            worst = max(samples)
-            readings[(grip, stage)] = samples
-            spread = worst - min(samples)
-            flag = "  ⛔ 임계 초과" if worst >= LOAD_THRESHOLD_NOW else ""
-            print(f"    {stage:<9} 중앙 {statistics.median(samples):.4f}  "
-                  f"최대 {worst:.4f}  폭 {spread:.4f}{flag}")
-        # 다음 바퀴/종료를 위해 idle까지 되돌린다.
-        node.stage(profile, "safe")
-        node.stage(profile, "idle")
+    def sample():
+        values = []
+        for _ in range(LOAD_SAMPLES):
+            time.sleep(LOAD_SAMPLE_GAP_S)
+            values.append(float(node.arm_state().load_ratio[5]))
+        return values
 
+    # ── 1부 · 닫힘 폭 훑기 (본체) ────────────────────────────────────────
+    # 팔을 파지 자세로 내려서 잰다. 자세가 영향이 없다는 것은 2부에서
+    # 확인하지만, 실제로 판정이 일어나는 자세에서 재 두는 편이 낫다.
+    print()
+    print("  ── 1부 · 닫힘 목표 폭별 빈 부하 " + "─" * 26)
+    node.set_gripper(geometry.preopen_width_mm)
+    node.stage(profile, "safe")
+    node.stage(profile, "grasp")
+
+    by_width = {}
+    open_values = sample()
+    print(f"    열림 {geometry.preopen_width_mm:5.1f} mm   "
+          f"최대 {max(open_values):.4f}")
+    for width_mm in LOAD_WIDTH_SWEEP_MM:
+        node.set_gripper(width_mm)
+        values = sample()
+        by_width[width_mm] = values
+        users = sorted(name for name, geom in FLOOR_GRASP_PROFILES.items()
+                       if abs(geom.close_width_mm - width_mm) < 0.05)
+        flag = "  ⛔ 임계 초과" if max(values) >= LOAD_THRESHOLD_NOW else ""
+        print(f"    닫힘 {width_mm:5.1f} mm   최대 {max(values):.4f}  "
+              f"폭 {max(values) - min(values):.4f}  "
+              f"[{', '.join(users) or '미사용'}]{flag}")
+
+    # ── 2부 · 자세 무관성 재확인 ─────────────────────────────────────────
+    # 가장 좁은 폭으로 고정하고 자세만 바꾼다. 여기서 편차가 나오면 위
+    # 결론이 깨진 것이므로 1부의 값을 그대로 믿으면 안 된다.
+    print()
+    print("  ── 2부 · 자세를 바꿔도 같은지 재확인 " + "─" * 21)
+    node.set_gripper(LOAD_WIDTH_SWEEP_MM[0])
+    node.stage(profile, "midpoint")
+    by_stage = {}
+    for stage in LOAD_STAGE_TOUR[3:]:  # 이미 safe/grasp/midpoint를 지났다
+        node.stage(profile, stage)
+        by_stage[stage] = sample()
+        print(f"    {stage:<9} 최대 {max(by_stage[stage]):.4f}")
+    node.set_gripper(geometry.preopen_width_mm)
+    node.stage(profile, "safe")
+    node.stage(profile, "idle")
+
+    stage_values = [value for values in by_stage.values() for value in values]
+    stage_spread = max(stage_values) - min(stage_values)
+
+    # ── 결론 ─────────────────────────────────────────────────────────────
     print()
     print(BANNER)
-    ceiling = max(max(values) for values in readings.values())
-    worst_key = max(readings, key=lambda key: max(readings[key]))
-    closed_ceiling = max(max(values) for key, values in readings.items()
-                         if key[0] == "닫힘")
+    if stage_spread <= 1e-9:
+        print("  ✅ 자세 간 편차 0.0000 — 폭만 보면 된다는 결론이 유지됩니다.")
+    else:
+        print(f"  ⚠️ 자세 간 편차 {stage_spread:.4f} — **자세도 영향이 있습니다.**")
+        print("     아래 권장값은 자세 최악을 반영하지 못할 수 있습니다.")
 
-    print(f"  빈 그리퍼 최대 부하 = {ceiling:.4f}"
-          f"  ({worst_key[0]} · {worst_key[1]} 자세)")
-    print(f"  그중 닫힘 최대      = {closed_ceiling:.4f}   <- 판정에 쓰이는 쪽")
+    ceiling = max(max(values) for values in by_width.values())
+    worst_width = max(by_width, key=lambda key: max(by_width[key]))
     print()
-    print(f"  실측된 파지 부하 최소 = {GRIPPED_LOAD_MIN:.4f} (2026-08-26 rook/knight/queen)")
+    print(f"  빈 그리퍼 최대 부하 = {ceiling:.4f}  (닫힘 {worst_width:.1f} mm)")
+    print(f"  실측 파지 부하 최소 = {GRIPPED_LOAD_MIN:.4f} "
+          f"(2026-08-26 rook/knight/queen)")
 
-    if closed_ceiling >= GRIPPED_LOAD_MIN:
+    if ceiling >= GRIPPED_LOAD_MIN:
         print()
         print("  ⛔ **빈손과 파지가 겹칩니다.** 부하 하나로는 못 가릅니다 —")
         print("     뎁스 카메라 확인(confirm_grasp)이 유일한 판정이 됩니다.")
-        print("     그리퍼 파지력이나 CARRY 자세를 손봐야 합니다.")
+        print("     파지력이나 닫힘 폭을 손봐야 합니다.")
+        return by_width
+
+    # 두 무리 사이 한가운데. 어느 쪽으로도 같은 여유를 둔다 — 낮으면 빈손을
+    # 성공으로 읽고, 높으면 진짜 파지를 놓친다.
+    recommended = (ceiling + GRIPPED_LOAD_MIN) / 2.0
+    margin = (GRIPPED_LOAD_MIN - ceiling) / 2.0
+    print()
+    print(f"  ✅ 권장  LOAD_THRESHOLD = {recommended:.4f}")
+    print(f"          EMPTY_LOAD_CEILING = {recommended:.4f}")
+    print(f"     양쪽 여유 각각 {margin:.4f} = {margin / LOAD_QUANTUM:.1f} 양자")
+    if margin < 2 * LOAD_QUANTUM:
+        print("     ⚠️ 두 양자 미만입니다 — 판독 한 칸만 틀려도 뒤집힙니다.")
+    if LOAD_THRESHOLD_NOW <= ceiling:
+        print(f"     ⛔ 현재 {LOAD_THRESHOLD_NOW:.4f}는 **빈손을 성공으로 읽습니다.**"
+              " 반드시 올리세요.")
     else:
-        # 두 무리 사이 한가운데를 권한다. 어느 쪽으로도 같은 여유를 둔다 —
-        # 낮으면 빈손을 성공으로 읽고, 높으면 진짜 파지를 놓친다.
-        recommended = (closed_ceiling + GRIPPED_LOAD_MIN) / 2.0
-        margin = (GRIPPED_LOAD_MIN - closed_ceiling) / 2.0
-        print()
-        print(f"  ✅ 권장  LOAD_THRESHOLD = {recommended:.4f}")
-        print(f"     EMPTY_LOAD_CEILING = {recommended:.4f}")
-        print(f"     (양쪽으로 각각 {margin:.4f} 여유 — 현재 0.0400은 "
-              f"{'안전' if LOAD_THRESHOLD_NOW > closed_ceiling else '**위험**'})")
+        print(f"     (현재 {LOAD_THRESHOLD_NOW:.4f}도 빈손 위이긴 하나 여유가 "
+              f"{(LOAD_THRESHOLD_NOW - ceiling) / LOAD_QUANTUM:.1f} 양자뿐입니다)")
     print(BANNER)
-    return readings
+    return by_width
 
 
 def main():
