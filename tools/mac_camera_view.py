@@ -65,7 +65,52 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 
-TOPIC, FRAMES, MARKER = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+TOPIC, FRAMES, MARKER, YOLO = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4] == "1"
+
+# perception_node의 게이트와 **같은 값이어야 한다.** 이 도구의 요점은 YOLO가
+# 무엇을 봤는지가 아니라, 그중 무엇이 파이프라인에 실제로 들어가는지다.
+MODEL_PATH = "/grippers/models/best_cpu.pt"
+CONF_GATE = 0.70
+MIN_BOTTOM_Y = 290.0
+
+model = None
+if YOLO:
+    from ultralytics import YOLO as _Y
+    model = _Y(MODEL_PATH)
+    print("MODEL " + MODEL_PATH, file=sys.stderr, flush=True)
+
+
+def draw_detections(img):
+    """검출을 그리고 게이트 통과 여부를 색으로 구분한다.
+
+    통과(초록)와 탈락(빨강)을 나눠 그리는 이유는, 배경 오검출이 신뢰도만으로는
+    안 걸러진다는 것이 실측으로 드러났기 때문이다 - 노트북을 rook으로 0.80에
+    잡은 적이 있고 그때 막은 것은 화면위치 게이트뿐이었다. 그 선을 눈으로
+    보게 해 두면 왜 걸렀는지가 그림에 나온다."""
+    result = model(img, verbose=False, conf=0.25)[0]
+    names = result.names
+    passed = 0
+    # 화면위치 게이트 선. 이 아래에 bbox 아래끝이 있어야 통과한다.
+    cv2.line(img, (0, int(MIN_BOTTOM_Y)), (img.shape[1], int(MIN_BOTTOM_Y)),
+             (90, 90, 90), 1, cv2.LINE_AA)
+    cv2.putText(img, "y=%d gate" % MIN_BOTTOM_Y, (6, int(MIN_BOTTOM_Y) - 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.36, (140, 140, 140), 1, cv2.LINE_AA)
+
+    for box in result.boxes:
+        x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
+        conf = float(box.conf[0])
+        label = names[int(box.cls[0])]
+        conf_ok, y_ok = conf >= CONF_GATE, y2 >= MIN_BOTTOM_Y
+        ok = conf_ok and y_ok
+        passed += int(ok)
+        color = (90, 220, 90) if ok else (70, 70, 235)
+        cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
+        why = "" if ok else ("  conf<%.2f" % CONF_GATE if not conf_ok else "  too high")
+        text = "%s %.2f%s" % (label, conf, why)
+        ty = int(y1) - 6 if y1 > 18 else int(y2) + 14
+        cv2.putText(img, text, (int(x1), ty), cv2.FONT_HERSHEY_SIMPLEX, 0.44,
+                    color, 1, cv2.LINE_AA)
+    return "%d/%d pass gates" % (passed, len(result.boxes))
 
 
 def to_bgr(msg):
@@ -119,6 +164,11 @@ class Grab(Node):
         except Exception as exc:
             print("ERR " + str(exc), file=sys.stderr, flush=True)
             return
+        if model is not None:
+            try:
+                note = (note + "  " if note else "") + draw_detections(img)
+            except Exception as exc:
+                note = "YOLO 실패: " + str(exc)[:60]
         label = "%s  %dx%d  %s  %s" % (
             TOPIC.rsplit("/", 1)[-1], msg.width, msg.height, msg.encoding, note)
         cv2.rectangle(img, (0, 0), (img.shape[1], 22), (0, 0, 0), -1)
@@ -166,13 +216,13 @@ VIEWER_HTML = """<!doctype html><meta charset=utf-8><title>grippers camera</titl
 """
 
 
-def run_grabber(topic, frames):
+def run_grabber(topic, frames, yolo=False):
     """Pi에서 grabber를 돌리고 stdout을 그대로 넘겨준다."""
     inner = (
         "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
         "source /ros2_ws/install/setup.bash >/dev/null 2>&1; "
         "export ROS_DOMAIN_ID=21; "
-        f"python3 - {topic} {frames} {MARKER}"
+        f"python3 - {topic} {frames} {MARKER} {'1' if yolo else '0'}"
     )
     return subprocess.Popen(
         ["ssh", "-o", "BatchMode=yes", PI,
@@ -216,6 +266,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--topic", default="rotated", choices=sorted(TOPICS))
     parser.add_argument("--watch", action="store_true", help="브라우저에서 실시간")
+    parser.add_argument("--yolo", action="store_true",
+                        help="배포된 가중치로 검출을 그리고 게이트 통과 여부를 표시")
     parser.add_argument("--seconds", type=int, default=60, help="--watch 지속 시간")
     args = parser.parse_args()
 
@@ -223,7 +275,7 @@ def main():
     OUT_DIR.mkdir(exist_ok=True)
 
     if not args.watch:
-        process = feed(run_grabber(topic, 1))
+        process = feed(run_grabber(topic, 1, args.yolo))
         for data in frames_from(process):
             path = OUT_DIR / f"{args.topic}.png"
             path.write_bytes(data)
@@ -243,7 +295,7 @@ def main():
     # 새로 여는 것보다 훨씬 빠르다 — 노드 기동에만 1~2초가 든다.
     frame_path = OUT_DIR / "frame.png"
     (OUT_DIR / "index.html").write_text(VIEWER_HTML.format(topic=topic), encoding="utf-8")
-    process = feed(run_grabber(topic, args.seconds * 10))
+    process = feed(run_grabber(topic, args.seconds * 10, args.yolo))
 
     count = 0
     started = time.time()
