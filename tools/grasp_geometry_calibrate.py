@@ -118,9 +118,22 @@ SCALE_SAMPLES = 3
 # 이 안이면 척도가 유지된 것으로 본다. 줄자 200mm에 1mm 오차가 0.5%이므로
 # 사람이 재는 정밀도를 넘지 않는 선에서 잡는다.
 SCALE_TOLERANCE = 0.05
+# 밀 수 있는 최대 거리. 거리 게이트가 약 0.3m 너머를 거부하므로, 파지
+# 거리대(0.18m)에서 출발하면 이 정도가 한계다 — 2026-08-26 실측에서
+# 0.2889m는 잡히고 약 0.39m는 통째로 미검출이었다.
+#
+# ⚠️ 이 상한이 이 검사의 정밀도를 묶는다. 판독 잡음이 차이에 약 2mm 실리므로
+# 100mm를 밀면 척도 불확실도가 약 2%다. 즉 이 검사는 **5% 넘는 어긋남만
+# 잡아낼 수 있고**, 그보다 작은 차이는 있는지 없는지 못 가린다.
+SCALE_MAX_PUSH_MM = 120.0
+# perception_node.OBSERVE_MIN_BOTTOM_Y_PX와 같은 값이어야 한다.
+OBSERVE_MIN_BOTTOM_Y_PX = 290.0
 # perception_node.CLASS_DISTANCE_CALIBRATION_SQRT_PX_M의 현재 값.
 # 척도가 어긋났을 때 보정값을 바로 낼 수 있게 여기 적어 둔다 —
 # 도메인 계층이 ROS 패키지를 import하지 않는 것과 같은 이유로 복사한다.
+# baseline_constants.JAW_LINE_DEPTH_FORWARD_M의 사본. 척도 어긋남이 전진량에
+# 얼마나 실리는지 그 자리에서 보여주는 데만 쓴다.
+JAW_LINE_FOR_HINT = {"rook": 0.1757, "knight": 0.1881, "queen": 0.1421}
 CURRENT_K = {
     "knight": 35.9307, "queen": 28.3382, "rook": 34.8340,
     "soccer": 18.9592, "box": None, "star": None,
@@ -824,7 +837,10 @@ def mode_scale(node, label):
     print("  한 번 더 읽습니다. 기준점은 몰라도 됩니다 — 차이만 씁니다.")
     print()
     print("  ⚠️ 좌우로 흔들리면 안 됩니다. 앞뒤로만 미세요.")
-    print("     파지 거리대(약 0.18m)에서 시작해 200mm 정도 미는 것을 권합니다.")
+    print(f"     파지 거리대(약 0.18m)에서 시작해 {SCALE_MAX_PUSH_MM:.0f}mm 정도 미세요.")
+    print("     ⚠️ 더 멀리 밀면 거리 게이트(bbox 아래끝 >= "
+          f"{OBSERVE_MIN_BOTTOM_Y_PX:.0f}px)에 걸려")
+    print("        원거리 자리가 통째로 미검출이 됩니다 — 2026-08-26에 200mm에서 겪었습니다.")
     print()
 
     def read():
@@ -840,7 +856,14 @@ def mode_scale(node, label):
             values.append(response.forward_m)
             print(f"      {i + 1}/{SCALE_SAMPLES}  전방 {response.forward_m:.4f} m")
         if len(values) < 2:
-            raise RuntimeError("유효 검출이 부족합니다 — 물체를 다시 놓고 시도하세요")
+            raise RuntimeError(
+                "유효 검출이 부족합니다.\n"
+                "    원거리 자리에서 이렇게 되면 대개 **거리 게이트**입니다 —\n"
+                f"    observe_target은 bbox 아래끝이 {OBSERVE_MIN_BOTTOM_Y_PX:.0f}px\n"
+                "    아래에 있어야 통과시키는데, 멀어질수록 물체가 화면 위로\n"
+                "    올라가 약 0.3m 너머는 통째로 거부됩니다(배경 오검출을\n"
+                "    막는 그 게이트라 풀 수 없습니다).\n"
+                f"    -> 미는 거리를 {SCALE_MAX_PUSH_MM:.0f}mm 이하로 줄이세요.")
         return statistics.median(values)
 
     input("  가까운 자리에 놓고 Enter > ")
@@ -888,9 +911,18 @@ def mode_scale(node, label):
         else:
             print(f"     '{label}'은 K가 아직 없습니다 — --mode k로 먼저 잡으세요.")
     print()
-    print("  참고: 이동량이 작을수록 줄자 오차가 척도에 크게 실립니다.")
-    print(f"        지금 {moved_mm:.0f}mm면 줄자 1mm 오차가 척도 "
-          f"{100.0 / moved_mm:.2f}%에 해당합니다.")
+    print("  ⚠️ 이 검사의 분해능:")
+    print(f"     줄자 1mm 오차 -> 척도 {100.0 / moved_mm:.2f}%")
+    print(f"     판독 잡음(약 2mm) -> 척도 {200.0 / moved_mm:.1f}%")
+    print("     즉 이 검사가 '유지됐다'고 해도 그 폭 안의 어긋남은 못 가립니다.")
+    if current_k:
+        jaw = JAW_LINE_FOR_HINT.get(label)
+        if jaw:
+            offset_mm = jaw * (scale - 1.0) * 1000.0
+            print()
+            print(f"     참고: 척도가 {(scale - 1.0) * 100:+.1f}%면 턱 선 {jaw:.4f}m 위치가")
+            print(f"     {offset_mm:+.1f}mm 어긋나 읽힙니다 — 전진량에 그만큼 상시 오프셋이")
+            print("     얹힙니다. 전진량 자체가 20~30mm라 무시할 크기가 아닙니다.")
     print(BANNER)
     return scale
 
