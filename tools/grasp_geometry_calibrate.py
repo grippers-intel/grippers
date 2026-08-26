@@ -80,6 +80,7 @@ import argparse
 import math
 import statistics
 import sys
+import time
 
 import rclpy
 from rclpy.action import ActionClient
@@ -103,6 +104,11 @@ JAW_THROAT_DEPTH_M = 0.023
 # Ros2Perception.STILL_THERE_H_RATIO와 같은 값이어야 한다 — 이 도구가
 # 실제 판정을 재현하는 것이 목적이므로 다르면 거짓 안심/거짓 경고가 된다.
 STILL_THERE_H_RATIO = 0.8
+# perception_node.OBSERVE_CACHE_SEC와 같은 값이어야 한다 — 게이트 시험이
+# 서로 독립적인 관측을 쓰려면 표본 사이에 이만큼은 기다려야 한다.
+OBSERVE_CACHE_SEC = 3.0
+# 게이트 시험 표본 수. 하나에 캐시 대기 + 수집이 붙어 약 5초씩 든다.
+GATE_SAMPLES = 4
 SERVO1_PROBE_DEG = 12.0    # 서비스 한계(15도) 안쪽에서 최대한 크게
 
 # perception_node가 YOLO를 돌리는 스트림. depth_cam_rotate_node가 낸다.
@@ -213,28 +219,34 @@ def mode_gate(node, label):
     print("  (차체 전면에서 약 166mm, 정면 중앙)")
     input("  준비되면 Enter > ")
 
+    # ⚠️ 표본 사이에 캐시가 만료되도록 기다린다. 안 그러면 노드가 같은
+    # 표본을 계속 돌려줘서 "7번 다 통과"가 사실은 한 번의 관측이 된다 —
+    # 2026-08-26에 실제로 그렇게 나왔다.
     results = []
-    for i in range(SAMPLES):
+    for i in range(GATE_SAMPLES):
+        if i:
+            time.sleep(OBSERVE_CACHE_SEC + 0.3)
         response = node.observe(label)
         results.append(response)
         if response.found:
-            print(f"    {i + 1}/{SAMPLES}  found  bbox 아래끝 추정 불가(서비스는 중앙·폭·높이만 준다)  "
-                  f"h={response.h:.1f}px w={response.w:.1f}px  전방 {response.forward_m:.3f}m")
+            print(f"    {i + 1}/{GATE_SAMPLES}  통과  h={response.h:.1f}px "
+                  f"w={response.w:.1f}px  전방 {response.forward_m:.3f}m")
         else:
-            print(f"    {i + 1}/{SAMPLES}  **검출 없음**")
+            print(f"    {i + 1}/{GATE_SAMPLES}  **게이트 탈락 또는 미검출**")
 
     hits = sum(1 for r in results if r.found)
     print()
     print(BANNER)
-    if hits == SAMPLES:
-        print(f"  ✅ {hits}/{SAMPLES} 전부 통과 — 게이트가 진짜 물체를 막지 않습니다.")
+    if hits == GATE_SAMPLES:
+        print(f"  ✅ {hits}/{GATE_SAMPLES} 전부 통과 — 게이트가 진짜 물체를 막지 않습니다.")
+        print("     (표본마다 캐시를 비웠으므로 서로 독립적인 관측입니다)")
     elif hits == 0:
-        print(f"  ⛔ {SAMPLES}회 모두 검출 없음 — **게이트가 너무 빡빡합니다.**")
+        print(f"  ⛔ {GATE_SAMPLES}회 모두 탈락 — **게이트가 너무 빡빡합니다.**")
         print("     perception_node 로그의 '[observe] 게이트 탈락' 줄을 보세요.")
         print("     신뢰도 때문인지 화면 위치 때문인지 거기 찍힙니다.")
         print("     ros2 run ... 로그: docker exec ... tail /tmp/p.log")
     else:
-        print(f"  ⚠️ {hits}/{SAMPLES}만 통과 — 경계에 걸쳐 있습니다.")
+        print(f"  ⚠️ {hits}/{GATE_SAMPLES}만 통과 — 경계에 걸쳐 있습니다.")
         print("     합의(5중 3)는 넘겼더라도 여유가 없습니다. 로그를 보고")
         print("     OBSERVE_CONF_THRESHOLD 또는 OBSERVE_MIN_BOTTOM_Y_PX를 조정하세요.")
     print(BANNER)
