@@ -16,11 +16,13 @@ class FakeArm(ArmDriver):
     def __init__(
         self,
         move_ok: bool = True,
+        yaw_offset_ok: bool = True,
         reorient_ok: bool = True,
         fold_ok: bool = True,
         load_ratio: float | list[float] = LOAD_HOLDING,
     ):
         self._move_ok = move_ok
+        self._yaw_offset_ok = yaw_offset_ok
         self._reorient_ok = reorient_ok
         self._fold_ok = fold_ok
         # get_load()는 GRASP(높을수록 성공)과 HANDOVER(낮을수록 성공)가 정반대
@@ -34,6 +36,7 @@ class FakeArm(ArmDriver):
         self.move_calls = []
         self.floor_pose_calls = []
         self.gripper_widths = []
+        self.yaw_offsets = []
 
     def move_to_floor_pose(self, profile: str, stage: str) -> bool:
         self.floor_pose_calls.append((profile, stage))
@@ -56,6 +59,11 @@ class FakeArm(ArmDriver):
 
     def fold_to_cradle(self) -> bool:
         return self._fold_ok
+
+    def offset_base_yaw(self, offset_rad: float) -> bool:
+        """`yaw_offset_ok=False`로 한계각 초과·관절 범위 밖 거부를 주입한다."""
+        self.yaw_offsets.append(offset_rad)
+        return self._yaw_offset_ok
 
     def hold_position(self) -> None:
         pass

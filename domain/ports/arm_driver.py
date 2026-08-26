@@ -59,6 +59,18 @@ class ArmDriver(ABC):
         """팔을 이동용 거치 자세로 접는다. **실패는 `False`.**"""
 
     @abstractmethod
+    def offset_base_yaw(self, offset_rad: float) -> bool:
+        """servo 1(팔 베이스 요)을 현재 위치에서 offset_rad만큼 돌린다.
+
+        GRASP 하강 **전에** 부르는 좌우 보정이다 — 물체가 턱이 쓸고 갈 영역
+        안에 있지만 가운데가 아닐 때 Pi가 스스로 고치는 수단이다(사용자 지시
+        2026-08-26). 메카넘 옆걸음이 아니라 이 관절을 쓰는 이유는 베이스의
+        속도 데드밴드 때문에 최소 옆걸음이 15mm로 고치려는 오차보다 커서다.
+
+        **한계각을 넘거나 관절 범위를 벗어나면 움직이지 않고 `False`.**
+        무리하게 돌리는 것보다 Host에 다시 세워 달라고 하는 편이 싸다."""
+
+    @abstractmethod
     def hold_position(self) -> None:
         """현재 관절 자세를 그대로 유지한다 (E-STOP 시 파지물 낙하 방지용).
 

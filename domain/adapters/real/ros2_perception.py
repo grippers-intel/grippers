@@ -12,7 +12,7 @@ from grippers_interfaces.srv import MonitorClearance, ObserveTarget
 
 from domain.adapters.real._ros_call import SAFETY_TIMEOUT_SEC, call_service
 from domain.ports.perception import Perception
-from domain.values import Clearance
+from domain.values import Clearance, TargetObservation
 
 
 def _blind_clearance() -> Clearance:
@@ -39,7 +39,7 @@ class Ros2Perception(Perception):
     # 앞쪽을 고른다.
     KNOWN_LABELS = ("queen", "knight", "rook", "box", "star", "soccer")
 
-    def identify_target(self) -> str | None:
+    def identify_target(self):
         """정면 물체의 raw 라벨. 못 찾으면 **None**.
 
         `ObserveTarget`은 "이 클래스가 보이나"를 묻는 서비스라 클래스를
@@ -50,7 +50,7 @@ class Ros2Perception(Perception):
         여러 개가 동시에 보이면 **가장 큰 것**을 고른다. 파지하러 내려가는
         거리에서는 목표가 화면에서 가장 크고, 배경에 걸친 다른 물체는 작게
         잡히기 때문이다."""
-        best_label, best_area = None, 0.0
+        best, best_area = None, 0.0
         for label in self.KNOWN_LABELS:
             res = call_service(
                 self._node, self._observe_client,
@@ -59,8 +59,14 @@ class Ros2Perception(Perception):
                 continue
             area = float(res.h) * float(res.w)
             if area > best_area:
-                best_label, best_area = label, area
-        return best_label
+                best_area = area
+                best = TargetObservation(
+                    label=label,
+                    forward_m=float(res.forward_m),
+                    lateral_m=float(res.lateral_m),
+                    metric_ok=bool(res.metric_ok),
+                )
+        return best
 
     def monitor_clearance(self) -> Clearance:
         """여유 공간. 서비스가 없거나 응답이 없으면 **`contact_risk=True`** —

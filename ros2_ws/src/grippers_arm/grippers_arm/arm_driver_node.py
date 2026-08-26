@@ -25,7 +25,7 @@ sys.path.insert(0, "/third_party/soarm_provided_d")  # PYTHONPATH 미설정 환�
 import rclpy  # noqa: I001
 import rclpy.logging  # main()이 노드 생성 실패 시 노드 없이 로그를 남긴다
 from grippers_interfaces.action import MoveToCartesian, MoveToFloorPose, ReorientArm
-from grippers_interfaces.srv import GetArmState, GetLoad, SetGripper
+from grippers_interfaces.srv import GetArmState, GetLoad, OffsetBaseYaw, SetGripper
 from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
@@ -296,6 +296,12 @@ class ArmDriverNode(Node):
             Trigger,
             "arm_driver/hold_position",
             self._on_hold_position,
+            callback_group=cb_group,
+        )
+        self.create_service(
+            OffsetBaseYaw,
+            "arm_driver/offset_base_yaw",
+            self._on_offset_base_yaw,
             callback_group=cb_group,
         )
         self.get_logger().info(
@@ -1289,6 +1295,67 @@ class ArmDriverNode(Node):
             self.get_logger().error(f"fold_to_cradle 실패: {e}")
             response.success = False
             response.message = str(e)
+        return response
+
+    # servo 1 좌우 보정의 한계각. 이보다 크게 돌려야 할 만큼 어긋났다면
+    # 그건 차량이 잘못 선 것이라 Host가 다시 세워야 한다(사용자 지시
+    # 2026-08-26의 "영역 밖" 갈래). 팔 길이 240mm 기준 15도면 약 64mm다.
+    MAX_BASE_YAW_OFFSET_RAD = math.radians(15.0)
+
+    # STS3215는 한 바퀴가 4096 카운트다.
+    RAW_PER_RADIAN = 4096.0 / (2.0 * math.pi)
+
+    def _on_offset_base_yaw(self, request, response):
+        """servo 1만 현재 위치에서 offset_rad만큼 돌린다.
+
+        GRASP 하강 **전에** 부른다. servo 1은 safe/grasp/midpoint 사이를
+        오가는 동안 `_freeze_servo1`이 현재값을 그대로 물려주므로, 여기서
+        한 번 돌려 두면 그 뒤 하강 경로가 그 각도를 이어받는다 — 교시 자세의
+        servo 1 절대값으로 되돌아가지 않는다.
+
+        한계각을 넘거나 관절 범위를 벗어나면 **움직이지 않고 거부한다.**
+        여기서 무리하게 돌리면 팔이 차체 옆을 치거나, 하강 경로가 교시된
+        평면에서 벗어난다."""
+        response.ok = False
+        response.position_raw = 0
+        offset = float(request.offset_rad)
+        if not math.isfinite(offset):
+            response.message = "offset_rad가 수치가 아닙니다"
+            return response
+        if abs(offset) > self.MAX_BASE_YAW_OFFSET_RAD:
+            response.message = (
+                f"보정각 {math.degrees(offset):+.1f}도가 한계 "
+                f"±{math.degrees(self.MAX_BASE_YAW_OFFSET_RAD):.0f}도를 넘습니다 — "
+                "차량을 다시 세워야 합니다")
+            return response
+
+        try:
+            backend = soarm._backend(real=True)
+            actual = self._read_joint_positions(backend)
+            if actual is None:
+                response.message = "현재 관절 위치 읽기 실패"
+                return response
+
+            target = int(round(actual[1] + offset * self.RAW_PER_RADIAN))
+            if not (0 <= target <= POSITION_RAW_MAX):
+                response.message = (
+                    f"servo 1 목표 {target}가 관절 범위(0~{POSITION_RAW_MAX}) 밖입니다")
+                return response
+
+            goal = {servo_id: actual[servo_id] for servo_id in range(1, 6)}
+            goal[1] = target
+            self._glide_to_raw_positions(backend, goal)
+
+            settled = self._read_joint_positions(backend)
+            response.position_raw = int(settled[1]) if settled else target
+            response.ok = True
+            response.message = (
+                f"servo 1 {actual[1]} -> {response.position_raw} "
+                f"({math.degrees(offset):+.1f}도)")
+            self.get_logger().info(f"offset_base_yaw: {response.message}")
+        except Exception as exc:  # noqa: BLE001 -- 서비스 경계
+            response.message = f"servo 1 보정 실패: {exc}"
+            self.get_logger().error(response.message)
         return response
 
     def _on_hold_position(self, request, response):

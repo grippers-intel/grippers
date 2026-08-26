@@ -636,6 +636,9 @@ class PerceptionNode(Node):
         response.x = 0.0
         response.h = 0.0
         response.w = 0.0
+        response.metric_ok = False
+        response.forward_m = 0.0
+        response.lateral_m = 0.0
         if self._cpu_yolo_model is None or self._latest_frame is None:
             return response
 
@@ -651,7 +654,35 @@ class PerceptionNode(Node):
         response.x = (x1 + x2) / 2.0
         response.h = y2 - y1
         response.w = x2 - x1
+
+        # 미터 환산 — GRASP 진입 판정이 "물체가 턱이 쓸고 갈 영역 안에
+        # 있는가"를 재려면 픽셀이 아니라 거리가 필요하다. 실패하면 값을
+        # 지어내지 않고 metric_ok=False로 남긴다.
+        metric = self._target_offsets_m(request.raw_cls, bbox)
+        if metric is not None:
+            response.metric_ok = True
+            response.forward_m, response.lateral_m = metric
         return response
+
+    def _target_offsets_m(self, class_name, bbox_xyxy):
+        """bbox -> (전방 거리 m, 좌우 오프셋 m). 모르면 **None**.
+
+        `_approach_pose_m`과 같은 수식을 쓰되 정지 거리 보정 없이 물체 자체의
+        위치를 낸다 — 그쪽은 "어디에 서야 하는가"를, 이쪽은 "물체가 어디에
+        있는가"를 답한다."""
+        x1, y1, x2, y2 = bbox_xyxy
+        bbox_area_px = (x2 - x1) * (y2 - y1)
+        if bbox_area_px < MIN_BBOX_AREA_PX:
+            return None
+        k_class = CLASS_DISTANCE_CALIBRATION_SQRT_PX_M.get(class_name)
+        if k_class is None or self._rgb_fx is None:
+            return None
+        effective_px = math.sqrt(bbox_area_px) - BBOX_PADDING_PX
+        if effective_px <= 0.0:
+            return None
+        z_m = k_class / effective_px
+        u = (x1 + x2) / 2.0
+        return z_m, -(u - self._rgb_cx) * z_m / self._rgb_fx
 
     def _on_monitor_clearance(self, request, response):
         # 안전 원칙: 실제 측정 전까지는 항상 정지 신호. 절대 False로 바꾸지 말 것.

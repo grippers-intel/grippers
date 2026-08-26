@@ -22,6 +22,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/MonitorClearance.srv"
   "srv/ConfirmGrasp.srv"
   "srv/ObserveTarget.srv"
+  "srv/OffsetBaseYaw.srv"
   "srv/Parse.srv"
   "srv/ConfirmPhrase.srv"
   "action/ReorientArm.action"

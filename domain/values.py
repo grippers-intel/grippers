@@ -124,3 +124,18 @@ class MissionContext:
         새로 만들므로 거기서 되돌리면 카운터가 영원히 0에 머물러 무한 재시도가
         된다. 되돌리는 자리는 대상이 바뀌는 유일한 지점인 `SELECT` 하나다."""
         return replace(self, grasp_attempts=0)
+
+
+@dataclass(frozen=True)
+class TargetObservation:
+    """Pi 자기 뎁스 카메라가 본 파지 목표 하나.
+
+    `metric_ok`가 False면 `forward_m`/`lateral_m`은 **의미가 없다** — bbox가
+    너무 작거나, 그 클래스의 거리 보정값이 아직 미실측이거나, camera_info를
+    못 받은 경우다. 0.0을 그대로 쓰면 "물체가 바로 앞 정중앙"으로 읽혀
+    가장 위험한 방향으로 틀린다."""
+
+    label: str
+    forward_m: float = 0.0
+    lateral_m: float = 0.0        # + 왼쪽
+    metric_ok: bool = False

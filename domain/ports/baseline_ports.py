@@ -64,6 +64,7 @@ class Report:
     # 2번 — GRASP 조건 판정 결과.
     GRASP_READY = "GRASP_READY"
     GRASP_BLOCKED = "GRASP_BLOCKED"      # 미충족 — 수정된 명령을 기다린다
+    GRASP_CENTERING = "GRASP_CENTERING"  # Pi가 좌우 보정 중 — Host는 기다린다
 
     # 3번 — GRASP 수행 결과.
     GRASP_DONE = "GRASP_DONE"            # 파지 성공 + CARRY 전환 가능

@@ -53,6 +53,15 @@ FAILURE_CONTRACTS = [
     (ArmDriver, "reorient", lambda: FakeArm(reorient_ok=False).reorient(0.0), False, None),
     (ArmDriver, "fold_to_cradle", lambda: FakeArm(fold_ok=False).fold_to_cradle(), False, None),
     (
+        # servo 1이 한계각을 넘는 보정을 거부하면 False — 호출자가 Host에
+        # 다시 세워 달라고 넘긴다.
+        ArmDriver,
+        "offset_base_yaw",
+        lambda: FakeArm(yaw_offset_ok=False).offset_base_yaw(0.5),
+        False,
+        "`False`",
+    ),
+    (
         # 자기 뎁스캠이 목표를 못 찾으면 None — GRASP 조건 판정이 그걸
         # 미충족으로 읽어 Host에 되돌려준다.
         Perception,

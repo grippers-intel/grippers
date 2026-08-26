@@ -10,13 +10,16 @@
 on/off 플래그가 아니라 **사이클별 라벨 스크립트**이기 때문이다."""
 
 from domain.ports.perception import Perception
-from domain.values import Clearance
+from domain.values import Clearance, TargetObservation
 
 
 class ScriptedPerception(Perception):
     def __init__(
         self,
         label: str | None = "queen",
+        forward_m: float = 0.0,
+        lateral_m: float = 0.0,
+        metric_ok: bool = False,
         script: list | None = None,
         contact_risk: bool = False,
         grasp_confirmed: bool = True,
@@ -25,6 +28,9 @@ class ScriptedPerception(Perception):
         # `script`가 있으면 사이클마다 하나씩, 없으면 `label`을 계속 돌려준다.
         self._script = list(script) if script else None
         self._label = label
+        self._forward_m = forward_m
+        self._lateral_m = lateral_m
+        self._metric_ok = metric_ok
         self._idx = 0
         self._contact_risk = contact_risk
         self._grasp_confirmed = grasp_confirmed
@@ -34,14 +40,24 @@ class ScriptedPerception(Perception):
         self.remember_target_calls = 0
         self.remembered_cls: str | None = None
 
-    def identify_target(self) -> str | None:
-        """정면 물체의 raw 라벨. `label=None`으로 "못 찾음"을 주입한다."""
+    def identify_target(self):
+        """정면 물체 관측. `label=None`으로 "못 찾음"을 주입한다.
+
+        `script`에는 라벨 문자열이나 `TargetObservation`을 섞어 넣을 수 있다 —
+        전자는 미터 값이 필요 없는 테스트를 짧게 쓰기 위한 것이다.
+
+        기본 `metric_ok=False`인 이유: 미터 값을 주입하지 않은 테스트가
+        우연히 정렬 판정을 통과하면 안 된다. "모르면 실패"가 이 포트의
+        계약이다."""
         self.identify_calls += 1
         if self._script is None:
-            return self._label
-        label = self._script[min(self._idx, len(self._script) - 1)]
-        self._idx += 1
-        return label
+            value = self._label
+        else:
+            value = self._script[min(self._idx, len(self._script) - 1)]
+            self._idx += 1
+        if value is None or isinstance(value, TargetObservation):
+            return value
+        return TargetObservation(value, self._forward_m, self._lateral_m, self._metric_ok)
 
     def monitor_clearance(self) -> Clearance:
         """기본값은 `contact_risk=False`(happy path)다. 포트 계약의 "모르면 멈춘다"와

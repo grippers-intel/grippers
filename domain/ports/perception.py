@@ -3,16 +3,21 @@ grippers_perception의 LearnedPerception이 이걸 구현한다."""
 
 from abc import ABC, abstractmethod
 
-from domain.values import Clearance
+from domain.values import Clearance, TargetObservation
 
 
 class Perception(ABC):
     @abstractmethod
-    def identify_target(self) -> str | None:
-        """정면에서 집을 물체를 자기 뎁스 카메라로 식별한다. raw YOLO 라벨.
+    def identify_target(self) -> TargetObservation | None:
+        """정면에서 집을 물체를 자기 뎁스 카메라로 관측한다.
+
+        raw YOLO 라벨과 함께 **전방 거리·좌우 오프셋**을 낸다 — GRASP 진입
+        판정이 "물체가 턱이 쓸고 갈 영역 안에 있는가"를 재려면 라벨만으로는
+        부족하기 때문이다(domain/task/grasp_alignment.py).
 
         **못 찾거나 확신할 수 없으면 `None`** — GRASP 조건 판정이 그걸
         미충족으로 읽어 Host에 되돌려준다(preconditions.check_grasp).
+        찾았지만 거리를 환산 못 했으면 `metric_ok=False`로 돌려준다.
 
         왜 Pi가 이걸 하는가. 2026-08-26 팀 확정으로 Host 명령에는 좌표도
         라벨도 없다(state와 속도 넷뿐). 그런데 **내려가는 것은 이 팔**이고,

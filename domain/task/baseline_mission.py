@@ -46,6 +46,7 @@ from dataclasses import dataclass, field
 
 from domain.ports.baseline_ports import MissionState, Report
 from domain.task import baseline_constants as bc
+from domain.task import grasp_alignment as ga
 from domain.task import preconditions as pc
 from domain.task.floor_grasp_policy import (
     GRIPPER_MAX_SAFE_OPEN_MM,
@@ -88,6 +89,15 @@ _PROFILE_BY_LABEL = {
 def plan_for_label(label):
     """raw 라벨에 맞는 교시 파지 계획. 모르는 라벨이면 **None** — 모르면 실패."""
     return _PROFILE_BY_LABEL.get(label)
+
+
+def object_width_mm(label):
+    """그 라벨 물체의 실측 폭(mm). 모르는 라벨이면 **None**.
+
+    턱이 쓸고 갈 영역의 좌우 허용치를 낼 때 쓴다 — 넓은 물체일수록 중심이
+    덜 벗어나야 턱에 스치지 않고 들어온다."""
+    entry = _OBJECT_WIDTH_MM.get(label)
+    return entry[1] if entry else None
 
 
 class LinkWatchdog:
@@ -230,9 +240,13 @@ class BaselineApproachState(State):
         return self
 
     def _judge_grasp(self, ports, command):
-        """임무 2번 — 조건 판정 후 보고. 충족이면 GRASP로, 아니면 제자리."""
+        """임무 2번 — 조건 판정 후 보고. 충족이면 GRASP로, 아니면 제자리.
+
+        판정은 두 겹이다. 먼저 기본 전제(E-STOP·정지·빈 그리퍼·식별)를 보고,
+        통과하면 **물체가 턱이 쓸고 갈 영역 안에 있는지**를 본다."""
         ports.base.stop()
-        label = ports.perception.identify_target()
+        observation = ports.perception.identify_target()
+        label = observation.label if observation is not None else None
         report = pc.check_grasp(pc.GraspInputs(
             estop_set=ports.estop.is_set(),
             base_stopped=_base_stopped(ports, command),
@@ -243,8 +257,39 @@ class BaselineApproachState(State):
         if not report.ok:
             ports.host.report(Report.GRASP_BLOCKED, self.name, report.detail)
             return self
-        ports.host.report(Report.GRASP_READY, self.name, label)
-        return BaselineGraspState(label, self.retries)
+
+        return self._judge_alignment(ports, observation, label)
+
+    def _judge_alignment(self, ports, observation, label):
+        """좌우·전후 정렬 판정 (사용자 지시 2026-08-26).
+
+        영역 안이면 내려가고, 영역 안인데 치우쳤으면 **Pi가 servo 1로 고친
+        뒤 다시 본다**, 영역 밖이면 Host에 다시 세워 달라고 한다.
+
+        보정 직후에 곧장 내려가지 않고 한 사이클 더 관측하는 이유: 이
+        저장소의 접근 제어가 전부 "관측 -> 소이동 -> 재관측" 폐루프다.
+        한 번 계산한 값으로 열린 루프를 돌면 오차가 쌓인다는 것이 이미
+        실기로 확인됐다."""
+        verdict = ga.judge(observation, object_width_mm(label))
+
+        if verdict.action == ga.READY:
+            ports.host.report(Report.GRASP_READY, self.name,
+                              f"{label} {verdict.reason}")
+            return BaselineGraspState(label, self.retries)
+
+        if verdict.action == ga.PI_CENTER:
+            if ports.arm.offset_base_yaw(verdict.servo1_offset_rad):
+                ports.host.report(Report.GRASP_CENTERING, self.name, verdict.reason)
+            else:
+                # 관절이 거부했다 — 한계각 초과나 범위 밖이다. 팔로 못 고치면
+                # 차량이 다시 서야 한다.
+                ports.host.report(
+                    Report.GRASP_BLOCKED, self.name,
+                    f"{verdict.reason} — servo 1이 거부했다, 재회전 필요")
+            return self
+
+        ports.host.report(Report.GRASP_BLOCKED, self.name, verdict.reason)
+        return self
 
 
 class BaselineGraspState(State):
@@ -289,12 +334,29 @@ class BaselineGraspState(State):
 
         if not ports.arm.move_to_floor_pose(gp.profile, "carry"):
             return self._failed(ports, "CARRY 전환 실패")
+
+        # 성공 판정은 **독립적인 두 신호가 모두** 있어야 한다(사용자 지시
+        # 2026-08-26). 부하는 "무언가를 쥐고 있다"를, 뎁스 카메라는 "있던
+        # 물체가 그 자리에서 사라졌다"를 말한다 — 실패 양상이 겹치지 않는다.
+        #
+        # 부하만 보면 물체 모서리를 살짝 물었거나 턱이 서로를 문 경우도
+        # 통과한다. 뎁스만 보면 내려오는 그리퍼가 물체를 **쳐서 시야 밖으로
+        # 밀어낸** 경우도 "사라짐"으로 읽힌다. 둘 다 요구하면 각자의 오검출이
+        # 서로를 막는다.
         carried = ports.arm.get_load()
+        vanished = ports.perception.confirm_grasp()
+        if carried < bc.LOAD_THRESHOLD and not vanished:
+            return self._failed(ports, f"부하도 낮고 물체도 그대로다 (부하 {carried:.4f})")
         if carried < bc.LOAD_THRESHOLD:
             return self._failed(ports, f"CARRY에서 빈손 (부하 {carried:.4f})")
+        if not vanished:
+            # 쥐고는 있는데 목표는 제자리다 — 엉뚱한 것을 물었거나 물체를
+            # 쳐 놓고 턱끼리 문 경우다.
+            return self._failed(
+                ports, f"부하는 {carried:.4f}인데 목표가 그 자리에 남아 있다")
 
         ports.host.report(Report.GRASP_DONE, MissionState.CARRY,
-                          f"{self.label} 부하 {carried:.4f}")
+                          f"{self.label} 부하 {carried:.4f} · 목표 사라짐 확인")
         return BaselineCarryState(self.label)
 
     def _failed(self, ports, detail):

@@ -27,10 +27,30 @@ from domain.task.baseline_mission import (
     plan_for_label,
 )
 from domain.task.motion import AGREED_LINEAR_MPS, AGREED_ROTATION_RAD_S
+from domain.values import TargetObservation
 
 
 EMPTY_LOAD = 0.03      # FakeArm.LOAD_EMPTY — 빈 그리퍼 실측 분포 안의 값
 HOLDING_LOAD = 0.14    # FakeArm.LOAD_HOLDING
+
+# 정렬 판정이 통과하려면 턱 선을 알아야 한다 — 실측 전이라 테스트에서 주입한다.
+JAW_LINE_M = 0.36
+SERVO1_REACH_MM = 240.0
+
+
+@pytest.fixture(autouse=True)
+def _measured_geometry(monkeypatch):
+    """턱 선과 팔 길이를 실측값 자리에 넣어 준다.
+
+    실기에서 이 둘이 None인 동안에는 정렬 판정이 전부 Host로 넘어간다 —
+    그 동작도 아래에서 따로 검증한다."""
+    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M", JAW_LINE_M)
+    monkeypatch.setattr(bc, "SERVO1_AXIS_TO_JAW_MM", SERVO1_REACH_MM)
+
+
+def _centered(label="queen"):
+    """턱 쓸기 구간 한가운데, 좌우 정렬된 관측."""
+    return ScriptedPerception(script=[TargetObservation(label, JAW_LINE_M + 0.02, 0.0, True)])
 
 
 def _ports(host=None, base=None, arm=None, perception=None, lidar=None, estop=None):
@@ -151,7 +171,7 @@ def test_Host_명령이_계속_없으면_멈춘다():
 
 def test_조건이_충족되면_GRASP_READY를_보고하고_넘어간다():
     host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
-    ports = _ports(host=host, perception=ScriptedPerception(label="queen"))
+    ports = _ports(host=host, perception=_centered())
 
     nxt = BaselineApproachState().execute(ports)
 
@@ -183,7 +203,7 @@ def test_자기_카메라가_목표를_못_보면_내려가지_않는다():
 
 def test_교시_자세가_없는_라벨이면_내려가지_않는다():
     host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
-    ports = _ports(host=host, perception=ScriptedPerception(label="바나나"))
+    ports = _ports(host=host, perception=ScriptedPerception(script=[TargetObservation("바나나", JAW_LINE_M + 0.02, 0.0, True)]))
 
     nxt = BaselineApproachState().execute(ports)
 
@@ -193,7 +213,7 @@ def test_교시_자세가_없는_라벨이면_내려가지_않는다():
 
 def test_차체가_움직이는_중이면_GRASP를_막는다():
     host = FakeHostLink([HostCommand(MissionState.GRASP, linear_x=0.1)])
-    ports = _ports(host=host)
+    ports = _ports(host=host, perception=_centered())
 
     nxt = BaselineApproachState().execute(ports)
 
@@ -337,3 +357,137 @@ def test_ESTOP이_걸리면_GRASP_조건_판정이_통과하지_않는다():
 
     assert Report.GRASP_BLOCKED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
+
+
+# ── 정렬 판정 (사용자 지시 2026-08-26) ────────────────────────────────────
+
+
+def test_영역_안에서_치우치면_Pi가_servo1로_고친다():
+    """Host가 아니라 Pi가 고친다 — 차량 제어 원칙의 의도된 예외다."""
+    host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
+    arm = FakeArm(load_ratio=EMPTY_LOAD)
+    perception = ScriptedPerception(
+        script=[TargetObservation("queen", JAW_LINE_M + 0.02, 0.040, True)])
+    ports = _ports(host=host, arm=arm, perception=perception)
+
+    nxt = BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_CENTERING in host.reported_kinds
+    assert len(arm.yaw_offsets) == 1
+    assert arm.yaw_offsets[0] > 0.0            # 왼쪽으로 치우쳤으니 왼쪽으로 돈다
+    assert isinstance(nxt, BaselineApproachState)   # 보정 후 다시 관측한다
+
+
+def test_보정_후_곧장_내려가지_않는다():
+    """관측 -> 소이동 -> 재관측 폐루프. 열린 루프는 오차가 쌓인다."""
+    host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
+    arm = FakeArm(load_ratio=EMPTY_LOAD)
+    perception = ScriptedPerception(
+        script=[TargetObservation("queen", JAW_LINE_M + 0.02, 0.040, True)])
+    ports = _ports(host=host, arm=arm, perception=perception)
+
+    BaselineApproachState().execute(ports)
+
+    assert arm.floor_pose_calls == []
+
+
+def test_턱_폭_밖이면_Host에_재회전을_요구한다():
+    host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
+    perception = ScriptedPerception(
+        script=[TargetObservation("queen", JAW_LINE_M + 0.02, 0.090, True)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD), perception=perception)
+
+    nxt = BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_BLOCKED in host.reported_kinds
+    assert "재회전" in host.reports[-1][2]
+    assert isinstance(nxt, BaselineApproachState)
+
+
+def test_전진_거리_밖이면_Host에_재직진을_요구한다():
+    host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
+    far = JAW_LINE_M + bc.GRASP_CREEP_FORWARD_MM / 1000.0 + 0.05
+    perception = ScriptedPerception(script=[TargetObservation("queen", far, 0.0, True)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD), perception=perception)
+
+    BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_BLOCKED in host.reported_kinds
+    assert "재직진" in host.reports[-1][2]
+
+
+def test_servo1이_거부하면_Host에_넘긴다():
+    """한계각을 넘는 보정은 차량이 잘못 선 것이다."""
+    host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
+    arm = FakeArm(load_ratio=EMPTY_LOAD, yaw_offset_ok=False)
+    perception = ScriptedPerception(
+        script=[TargetObservation("queen", JAW_LINE_M + 0.02, 0.040, True)])
+    ports = _ports(host=host, arm=arm, perception=perception)
+
+    BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_BLOCKED in host.reported_kinds
+    assert "재회전" in host.reports[-1][2]
+
+
+def test_거리_환산에_실패하면_내려가지_않는다():
+    """metric_ok=False의 0.0을 그대로 쓰면 '바로 앞 정중앙'으로 읽힌다."""
+    host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
+    perception = ScriptedPerception(
+        script=[TargetObservation("queen", 0.0, 0.0, False)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD), perception=perception)
+
+    nxt = BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_BLOCKED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
+def test_턱_선_미실측이면_정렬_판정을_포기하고_Host에_넘긴다(monkeypatch):
+    """실측 전 오늘의 동작 — 지어낸 프레임 변환으로 팔을 내리지 않는다."""
+    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M", None)
+    host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD), perception=_centered())
+
+    nxt = BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_BLOCKED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
+# ── 두 신호 파지 판정 (사용자 지시 2026-08-26) ─────────────────────────────
+
+
+def test_부하만_높고_목표가_남아있으면_실패로_본다():
+    """턱끼리 물었거나 물체를 쳐 놓은 경우 — 부하 하나로는 못 가른다."""
+    host = FakeHostLink()
+    perception = ScriptedPerception(grasp_confirmed=False)
+    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), perception=perception)
+
+    nxt = BaselineGraspState("queen").execute(ports)
+
+    assert Report.GRASP_FAILED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
+def test_목표는_사라졌는데_부하가_없으면_실패로_본다():
+    """내려오는 그리퍼가 물체를 쳐서 밀어낸 경우 — 뎁스 하나로는 못 가른다."""
+    host = FakeHostLink()
+    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0),
+                   perception=ScriptedPerception(grasp_confirmed=True))
+
+    nxt = BaselineGraspState("queen").execute(ports)
+
+    assert Report.GRASP_FAILED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
+def test_두_신호가_모두_있어야_성공이다():
+    host = FakeHostLink()
+    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD),
+                   perception=ScriptedPerception(grasp_confirmed=True))
+
+    nxt = BaselineGraspState("queen").execute(ports)
+
+    assert Report.GRASP_DONE in host.reported_kinds
+    assert isinstance(nxt, BaselineCarryState)

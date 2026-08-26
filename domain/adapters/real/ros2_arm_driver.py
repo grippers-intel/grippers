@@ -5,7 +5,7 @@ assert로 검사해서 런타임 AssertionError가 난다 — 여기서 필드�
 
 from geometry_msgs.msg import Point
 from grippers_interfaces.action import MoveToCartesian, MoveToFloorPose, ReorientArm
-from grippers_interfaces.srv import GetLoad, SetGripper
+from grippers_interfaces.srv import GetLoad, OffsetBaseYaw, SetGripper
 from rclpy.action import ActionClient
 from std_srvs.srv import Trigger
 
@@ -31,6 +31,7 @@ class Ros2ArmDriver(ArmDriver):
         self._load_client = node.create_client(GetLoad, "arm_driver/get_load")
         self._fold_client = node.create_client(Trigger, "arm_driver/fold_to_cradle")
         self._hold_client = node.create_client(Trigger, "arm_driver/hold_position")
+        self._yaw_client = node.create_client(OffsetBaseYaw, "arm_driver/offset_base_yaw")
 
     def move_to_cartesian(self, xyz_m: Point3, down: bool = False) -> bool:
         """도달하면 True. 액션 서버가 없거나 결과가 오지 않으면 **False** —
@@ -89,6 +90,17 @@ class Ros2ArmDriver(ArmDriver):
         if res is None:
             return False
         return res.success
+
+    def offset_base_yaw(self, offset_rad: float) -> bool:
+        """servo 1 좌우 보정. 서비스가 없거나 노드가 거부하면 **False** —
+        그 경우 호출자가 Host에 다시 세워 달라고 넘긴다."""
+        req = OffsetBaseYaw.Request(offset_rad=float(offset_rad))
+        res = call_service(self._node, self._yaw_client, req, label="offset_base_yaw")
+        if res is None:
+            return False
+        if not res.ok:
+            self._node.get_logger().warn(f"offset_base_yaw 거부: {res.message}")
+        return res.ok
 
     def hold_position(self) -> None:
         # stop()과 같은 이유로 응답을 기다리지 않는다 — E-STOP 경로에서 호출되므로

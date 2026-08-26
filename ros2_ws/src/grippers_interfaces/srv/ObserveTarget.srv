@@ -1,6 +1,19 @@
+# 정면 목표 물체를 한 프레임으로 관측한다. GRASP 진입 판정이 쓴다.
+#
+# 픽셀 값(x/h/w)과 미터 값(forward_m/lateral_m)을 함께 낸다. 미터 환산에는
+# RGB camera_info와 클래스별 거리 보정 상수가 필요한데 둘 다 perception_node
+# 안에만 있으므로, 환산도 거기서 끝내고 결과만 넘긴다 — 호출자가 픽셀을
+# 다시 미터로 바꾸려 하면 그 상수들이 두 곳으로 갈라진다.
+#
+# metric_ok=false면 forward_m/lateral_m은 **의미 없다**(0.0). bbox가 너무
+# 작거나, 그 클래스의 K가 아직 미실측이거나, camera_info를 아직 못 받은
+# 경우다 — "모르면 실패" 관례.
 string raw_cls
 ---
 bool found
-float32 x
-float32 h
-float32 w
+float32 x               # bbox 중심 가로 픽셀
+float32 h               # bbox 높이 픽셀
+float32 w               # bbox 너비 픽셀
+bool metric_ok
+float32 forward_m       # 카메라 정면 거리
+float32 lateral_m       # 좌우 오프셋 (+ 왼쪽)
