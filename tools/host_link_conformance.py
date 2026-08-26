@@ -61,6 +61,14 @@ CMD_PORT, STATUS_PORT = 45005, 45006
 # ── Host가 send()에서 해야 할 변환 ─────────────────────────────────────────
 # 크기는 팀이 2026-08-26에 고정했다(직진·횡이동 0.1 m/s, 제자리회전 0.25 rad/s).
 # 그래서 Host의 방향-only 명령(go/stop/yaw+/yaw-)이 일대일로 번역된다.
+# ⚠️ `go`의 속도가 구간마다 다르다. 바구니로 붙는 구간(FACE_BOX/NUDGE_BOX)은
+# 0.06이다 — 정지 지연 235ms 동안 0.1이면 23.5mm를 더 가는데 INSERT 허용폭이
+# ±15mm라 오버슈트가 창을 넘는다(domain/task/motion.py 주석 참고).
+#
+# Host가 안 낮춰도 Pi가 그 구간에서 0.06으로 자르지만, **Host가 직접 보내는
+# 편이 낫다** — 그래야 Host의 도착 예측과 실제 이동이 어긋나지 않는다.
+BASKET_APPROACH_STATUSES = ("FACE_BOX", "NUDGE_BOX")
+
 CMD_TO_MOTION = {
     "go":    {"linear_x": 0.1, "linear_y": 0.0, "angular_z": 0.0, "stop": False},
     "stop":  {"linear_x": 0.0, "linear_y": 0.0, "angular_z": 0.0, "stop": True},
@@ -101,7 +109,10 @@ def translate(mission_command):
     """Host `MissionCommand` -> 팀 확정 다섯 필드.
 
     Host `UdpVehicleLink.send()`가 `asdict(cmd)` 대신 이것을 보내면 된다."""
-    motion = CMD_TO_MOTION[mission_command.cmd]
+    motion = dict(CMD_TO_MOTION[mission_command.cmd])
+    if (mission_command.cmd == "go"
+            and mission_command.status in BASKET_APPROACH_STATUSES):
+        motion["linear_x"] = 0.06
     return {"state": STATUS_TO_STATE[mission_command.status], **motion}
 
 

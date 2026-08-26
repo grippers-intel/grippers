@@ -4,6 +4,7 @@
 
 import pytest
 
+from domain.task import motion as mo
 from domain.ports.baseline_ports import HostCommand, MissionState
 from domain.task.motion import (
     AGREED_LINEAR_MPS,
@@ -88,3 +89,61 @@ def test_명령이_없으면_거부하고_정지한다():
 
     assert not decision.ok
     assert decision.motion.is_stop
+
+
+# ── 바구니 접근 구간 속도 상한 (2026-08-26) ────────────────────────────────
+# 지연이 허용폭보다 크다는 계산이 근거다. Host가 "멈춰"라고 판단한 순간부터
+# 바퀴가 실제로 서기까지 235ms가 쌓이는데(Host 루프 125 + 링크 10 + Pi
+# 사이클 100), 0.1 m/s면 그동안 23.5mm를 더 간다. INSERT 허용폭은 ±15mm다.
+
+def test_APPROACH_BOX에서는_더_느리게_자른다():
+    """0.1로 오면 0.06으로 실행된다 — 그러지 않으면 오버슈트가 창을 넘는다."""
+    decision = resolve_motion(
+        HostCommand(state=MissionState.APPROACH_BOX, linear_x=0.1))
+
+    assert decision.ok
+    assert decision.motion.linear_x == pytest.approx(mo.BASKET_APPROACH_MPS)
+
+
+def test_낮췄다는_사실을_사유에_남긴다():
+    """Host는 0.1을 보냈는데 0.06으로 도는 것을 모르면 안 된다."""
+    decision = resolve_motion(
+        HostCommand(state=MissionState.APPROACH_BOX, linear_x=0.1))
+
+    assert "낮췄다" in decision.reason
+
+
+def test_이미_느리면_그대로_둔다():
+    """Host가 스스로 0.06을 보냈으면 손대지 않고, 사유도 안 남긴다."""
+    decision = resolve_motion(
+        HostCommand(state=MissionState.APPROACH_BOX, linear_x=0.06))
+
+    assert decision.motion.linear_x == pytest.approx(0.06)
+    assert decision.reason == ""
+
+
+def test_다른_상태는_안_낮춘다():
+    """주행 구간까지 느리게 하면 시연이 하염없이 길어진다."""
+    for state in (MissionState.APPROACH, MissionState.CARRY):
+        decision = resolve_motion(HostCommand(state=state, linear_x=0.1))
+
+        assert decision.motion.linear_x == pytest.approx(mo.AGREED_LINEAR_MPS)
+
+
+def test_회전은_안_낮춘다():
+    """회전은 한 사이클에 1.8도라 이미 허용치(5도)의 3분의 1이다."""
+    decision = resolve_motion(
+        HostCommand(state=MissionState.APPROACH_BOX, angular_z=0.25))
+
+    assert decision.motion.angular_z == pytest.approx(mo.AGREED_ROTATION_RAD_S)
+
+
+def test_상한이_데드밴드_위에_있다():
+    """0.05 아래는 아무리 오래 줘도 안 움직인다 — 낮출 수 있는 바닥이다."""
+    assert mo.BASKET_APPROACH_MPS > 0.05
+
+
+def test_상태_문자열이_포트와_같다():
+    """motion은 순환 import를 피하려고 문자열을 직접 들고 있다. 둘이
+    갈라지면 상한이 조용히 안 걸린다."""
+    assert mo._APPROACH_BOX == MissionState.APPROACH_BOX

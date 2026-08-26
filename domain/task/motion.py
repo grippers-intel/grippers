@@ -35,9 +35,45 @@ from dataclasses import dataclass
 AGREED_LINEAR_MPS = 0.1
 AGREED_ROTATION_RAD_S = 0.25
 
+# 바구니 최종 접근에서만 쓰는 더 낮은 상한 (2026-08-26 사용자 승인).
+#
+# ## 왜 구간을 나누는가 — 지연이 허용폭보다 크다
+#
+# Host가 "지금 멈춰"라고 판단한 순간부터 바퀴가 실제로 서기까지 지연이 쌓인다.
+#
+#     Host 루프 한 바퀴(8Hz)    125 ms
+#     UDP + Pi 수신              10 ms
+#     Pi 사이클(10Hz)           100 ms
+#     ------------------------------
+#     합계                      235 ms
+#
+# 0.1 m/s면 그동안 **23.5 mm**를 더 간다. 그런데 INSERT 허용폭은 ±15 mm
+# (BASKET_STOP_TOLERANCE_M)다 — **오버슈트가 창보다 크다.** 창 안에 우연히
+# 들어갈 수는 있어도 제어되는 것이 아니다.
+#
+# 0.06으로 낮추면 같은 지연이 14 mm가 되어 창 안에 들어온다.
+#
+# ## 왜 더 낮추지 못하는가
+#
+# 데드밴드가 0.05다. 그 아래는 아무리 오래 줘도 안 움직인다. 0.06이 실제로
+# 도는 최저 속도이므로 여기가 바닥이다. 더 잘게 가야 하면 속도가 아니라
+# **끊어 가기**로 해야 한다(ros2_mecanum_base.creep_forward).
+#
+# ## 왜 Pi가 자르는가 — 이건 경로가 아니라 센서 제약이다
+#
+# 차량 제어는 Host 소유다. 그런데 이 상한은 "어디로 갈지"가 아니라 "이보다
+# 빠르면 내 센서로 판정 자체가 불가능하다"는 Pi 쪽 사실이다. 데드밴드나
+# 바구니 절벽과 같은 성격이라 Pi가 지킨다 — Host가 0.1을 보내도 이 구간에서는
+# 0.06으로 실행되고, 그 사실을 보고에 적는다.
+BASKET_APPROACH_MPS = 0.06
+
 # 부동소수 잡음을 0으로 본다. UDP+JSON을 거치며 0.0이 1e-17로 오는 경우가
 # 있는데, 그걸 "회전 명령"으로 읽으면 병진과 섞였다고 오판해 거부한다.
 EPSILON = 1e-6
+
+# MissionState.APPROACH_BOX와 같은 문자열이어야 한다. baseline_ports를
+# import하면 순환이 되므로 값을 직접 적고, 테스트가 두 값을 대조한다.
+_APPROACH_BOX = "APPROACH_BOX"
 
 
 @dataclass(frozen=True)
@@ -99,8 +135,21 @@ def resolve_motion(command) -> MotionDecision:
             f"linear=({command.linear_x:.3f}, {command.linear_y:.3f}), "
             f"angular={command.angular_z:.3f}")
 
-    return MotionDecision(True, Motion(
-        linear_x=_clamp(command.linear_x, AGREED_LINEAR_MPS),
-        linear_y=_clamp(command.linear_y, AGREED_LINEAR_MPS),
+    # 바구니로 붙는 구간만 더 낮은 상한을 쓴다. 회전은 안 낮춘다 — 회전은
+    # 한 사이클에 1.8도라 이미 허용치(5도)의 3분의 1이다.
+    linear_cap = (BASKET_APPROACH_MPS if command.state == _APPROACH_BOX
+                  else AGREED_LINEAR_MPS)
+    motion = Motion(
+        linear_x=_clamp(command.linear_x, linear_cap),
+        linear_y=_clamp(command.linear_y, linear_cap),
         angular_z=_clamp(command.angular_z, AGREED_ROTATION_RAD_S),
-    ))
+    )
+    slowed = (linear_cap < AGREED_LINEAR_MPS
+              and (abs(command.linear_x) > linear_cap + EPSILON
+                   or abs(command.linear_y) > linear_cap + EPSILON))
+    if slowed:
+        return MotionDecision(
+            True, motion,
+            f"바구니 접근 구간이라 {linear_cap:.2f} m/s로 낮췄다 "
+            f"(명령 {max(abs(command.linear_x), abs(command.linear_y)):.2f})")
+    return MotionDecision(True, motion)
