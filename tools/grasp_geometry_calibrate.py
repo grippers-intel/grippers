@@ -73,6 +73,7 @@ knight 18.7 / soccer 25.6cm로 읽혔다.
     python3 grasp_geometry_calibrate.py --mode servo1 --profile chess_queen
     python3 grasp_geometry_calibrate.py --mode seat --label rook
     python3 grasp_geometry_calibrate.py --mode k --label rook
+    python3 grasp_geometry_calibrate.py --mode confirm --label rook
 """
 
 import argparse
@@ -189,6 +190,69 @@ class CalibrationNode(Node):
         outcome = done.result()
         if outcome is None or not outcome.result.reached:
             raise RuntimeError(f"'{stage}' 도달 실패")
+
+
+def mode_confirm(node, label):
+    """"파지 후 CARRY에서 물체가 보이면 실패" 규칙이 실제로 성립하는지 본다.
+
+    사용자 지시(2026-08-26): 턱 끝에 꽉 물려도 안 떨어질 수 있으므로 부하만
+    믿을 수 없고, CARRY 자세에서 뎁스 카메라에 목표가 보이면 파지 실패로
+    처리해야 한다. 그 규칙은 이미 구현돼 있다(Perception.confirm_grasp).
+
+    **여기서 확인하는 것은 그 규칙의 반대 방향이다.** 물체를 제대로 들고
+    CARRY로 갔을 때, 그리퍼에 물린 그 물체가 카메라에 잡히면 안 된다 —
+    잡히면 성공한 파지가 매번 실패로 뒤집힌다. 팔이 접힌 자세에서 물체가
+    시야 밖에 있는지는 계산으로 알 수 없고 실기로만 확인된다."""
+    profile = PROFILE_BY_LABEL[label]
+    geometry = FLOOR_GRASP_PROFILES[profile]
+
+    print(BANNER)
+    print(f"모드 E · '{label}' CARRY에서 파지물이 보이는지 확인")
+    print(BANNER)
+    print("  팔이 내려가 턱을 벌립니다. 물체를 넣어 주세요.")
+    input("  준비되면 Enter > ")
+
+    node.hold()
+    node.set_gripper(geometry.preopen_width_mm)
+    node.stage(profile, "safe")
+    node.stage(profile, "grasp")
+    input("  턱 사이에 물체를 넣고 Enter > ")
+
+    before = node.observe(label)
+    print(f"    [기준] 바닥의 물체: found={before.found} h={before.h:.1f}px")
+
+    node.set_gripper(geometry.close_width_mm)
+    node.stage(profile, "midpoint")
+    node.stage(profile, "safe")
+    node.stage(profile, "carry")
+    load = float(node.arm_state().load_ratio[5])
+    print(f"    CARRY 부하 = {load:.4f}")
+    if load < 0.05:
+        print("    ⛔ 들고 있지 않습니다 — 이 시험은 물체를 든 상태여야 합니다.")
+        return None
+
+    seen = 0
+    heights = []
+    for i in range(SAMPLES):
+        response = node.observe(label)
+        if response.found:
+            seen += 1
+            heights.append(response.h)
+        print(f"    {i + 1}/{SAMPLES}  found={response.found}  h={response.h:.1f}px")
+
+    print()
+    print(BANNER)
+    if seen == 0:
+        print("  ✅ 물고 있는데도 카메라에 안 잡힙니다 — 규칙이 성립합니다.")
+        print("     CARRY에서 목표가 보이면 그건 바닥에 남은 것이므로 파지 실패가 맞습니다.")
+    else:
+        ratio = (statistics.median(heights) / before.h) if before.found and before.h else 0.0
+        print(f"  ⚠️ {seen}/{SAMPLES}회 잡혔습니다 (h 비율 {ratio:.2f})")
+        print("     물고 있는 물체가 시야에 들어옵니다 — 이대로면 성공한 파지가")
+        print("     실패로 뒤집힙니다. CARRY 자세를 더 접거나, confirm_grasp의")
+        print("     STILL_THERE_H_RATIO를 이 비율보다 높게 잡아야 합니다.")
+    print(BANNER)
+    return seen
 
 
 def mode_seat(node, label):
@@ -465,7 +529,8 @@ def mode_servo1(node, profile):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--mode", choices=("jaw", "seat", "servo1", "k"), required=True)
+    parser.add_argument("--mode", choices=("jaw", "seat", "confirm", "servo1", "k"),
+                        required=True)
     parser.add_argument("--label", default="queen", choices=sorted(PROFILE_BY_LABEL))
     parser.add_argument("--profile", default="chess_queen")
     args = parser.parse_args()
@@ -476,6 +541,9 @@ def main():
         if args.mode == "jaw":
             node.require_camera()
             mode_jaw_line(node, args.label)
+        elif args.mode == "confirm":
+            node.require_camera()
+            mode_confirm(node, args.label)
         elif args.mode == "seat":
             node.require_camera()
             mode_seat(node, args.label)
