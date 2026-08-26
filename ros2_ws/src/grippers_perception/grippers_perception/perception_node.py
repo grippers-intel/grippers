@@ -138,8 +138,36 @@ HAILO_SCORE_THRESHOLD = 0.8
 # 상태였다. 시연 전에 감당할 위험이 아니라 /grippers/models(호스트
 # ~/docker/shared/grippers/models에 바인드 마운트되어 컨테이너 수명과
 # 무관하게 남는다)로 옮기고 기본값을 그쪽으로 돌린다.
-# sha256 9680cf7d156c32cdc8082214108451aa3e110598c0ce7ee3cf541791d173182c
-# (맥 ~/Downloads/grippers_model_backup/best_cpu.pt에도 같은 파일 보관)
+#
+# ## 배포된 가중치 (2026-08-26 train-9로 교체)
+#
+# 경로는 고정하고 파일만 갈아 끼운다 — 경로를 버전마다 바꾸면 코드와 실기가
+# 어긋날 때 어느 쪽이 맞는지 알 수 없게 된다. 이전 버전은 같은 디렉터리에
+# 이름을 붙여 남기므로 되돌리려면 그 파일을 best_cpu.pt로 덮으면 된다.
+#
+#   train-9  2026-08-26  sha256 bd13ae42b9a080d85a9c620b983d7c4ad45d6f69ccc0a99da6c44cb0ce6490c8
+#   train-8  2026-08-21  sha256 9680cf7d156c32cdc8082214108451aa3e110598c0ce7ee3cf541791d173182c
+#            되돌리기: models/best_cpu_train8_20260821.pt
+#
+# 클래스 구성은 두 버전이 **완전히 같다**(6종, 인덱스까지 동일:
+# 0 knight / 1 queen / 2 rook / 3 box / 4 soccer / 5 star). 매핑 코드를
+# 손댈 필요가 없다는 뜻이다.
+#
+# 검증 지표는 전 항목이 올랐다:
+#
+#            train-8   train-9
+#   precision  0.932    0.973
+#   recall     0.862    0.956    <- +9.3%p
+#   mAP50      0.935    0.984
+#   mAP50-95   0.829    0.948    <- +11.9%p
+#
+# ⚠️ recall이 크게 오른 것은 **게이트 임계를 다시 봐야 한다는 뜻**이기도 하다.
+# 지금 걸려 있는 오검출 게이트(conf 0.70 · bottom-y 290 · 5중 3 합의)는
+# train-8의 검출 분포를 보고 잡은 값이다. train-9는 진짜 물체를 더 높은
+# 신뢰도로 잡을 가능성이 크므로 게이트가 헐거워졌을 수 있다 —
+# tools/grasp_geometry_calibrate.py --mode gate로 여유를 다시 재 볼 것.
+#
+# (맥 ~/Downloads/grippers_model_backup/ 에 두 버전 모두 보관)
 CPU_YOLO_MODEL_PATH_DEFAULT = "/grippers/models/best_cpu.pt"
 # ⚠️ 2026-08-23: 단일 프레임 신뢰도 임계값을 0.8까지 올려 오검출을 억누르던
 # 방식(2026-08-22 시도)을 폐기했다 — 대신 HANDOFF.md가 실기로 검증한 2단계
