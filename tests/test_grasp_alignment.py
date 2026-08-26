@@ -218,14 +218,20 @@ def test_좌우_영점을_안_잰_클래스는_판정하지_않는다(monkeypatc
     assert "좌우 영점" in verdict.reason
 
 
-def test_실측된_좌우_영점이_클래스마다_다르다():
-    """겉보기 좌우 값에 그 클래스의 거리 배율 오차가 실려 있다 —
-    같은 물리 30mm를 rook 29.5 / queen 24.0 / knight 31.4로 읽었다."""
-    zeros = bc.DEPTH_LATERAL_TO_JAW_CENTER_M
+def test_좌우_영점_셋이_하나의_물리량으로_모인다():
+    """좌우 영점은 **카메라가 턱 중심에서 옆으로 얼마나 떨어져 있는가**라는
+    하나의 물리량이다. 클래스마다 따로 두는 것은 그 클래스의 거리 배율
+    오차가 겉보기 좌우 값에 실리기 때문이지, 물리량이 셋이어서가 아니다.
 
-    assert zeros["rook"] == 0.0295
-    assert zeros["queen"] == 0.0240
-    assert zeros["knight"] == 0.0314
+    2026-08-26에 queen의 K가 19.3% 틀린 것을 잡아 고치자 세 값이 29.5 /
+    31.4 / 29.7 mm로 2mm 안에 모였다(그 전에는 queen만 24.0으로 튀었다).
+    이 수렴이 K 보정이 옳다는 증거이므로, 흩어지면 무언가 틀어진 것이다."""
+    # autouse 픽스처가 시험용 라벨(영점 0.0)을 끼워 넣으므로 실제 클래스만 본다.
+    zeros = [bc.DEPTH_LATERAL_TO_JAW_CENTER_M[label] * 1000
+             for label in ("rook", "queen", "knight")]
+
+    assert max(zeros) - min(zeros) < 3.0, f"좌우 영점이 흩어졌다: {zeros}"
+    assert 28.0 < sum(zeros) / len(zeros) < 32.0
 
 
 def test_영점을_빼면_중앙이_0이_된다(monkeypatch):
@@ -252,11 +258,21 @@ def test_같은_물리_자리를_클래스마다_다르게_읽는다():
     assert 0.06 < knight / rook - 1.0 < 0.08
 
 
-def test_queen_턱_선이_실측값이다():
-    """닫음 0.0821 -> 들어올림 0.0626 -> CARRY 0.0626. 닫는 순간 대비로는
-    떨어졌지만 들어올린 뒤로는 흔들리지 않았다 — 닫는 순간의 부하에는
-    눌러 들어가는 동적 성분이 섞여 있다."""
-    assert bc.JAW_LINE_DEPTH_FORWARD_M["queen"] == 0.1421
+def test_queen_턱_선이_K_보정_뒤_rook과_만난다():
+    """턱 선은 정의상 **모든 클래스에서 물리적으로 같은 자리**다. 겉보기
+    값이 클래스마다 다른 것은 거리 배율 오차 때문이므로, 배율이 맞으면
+    값도 만나야 한다.
+
+    queen의 원래 실측 0.1421은 K가 19.3% 틀린 상태에서 잰 값이었다. K를
+    고치고 같은 배율로 되돌리니 0.1761이 되어 rook의 0.1757과 0.4mm 안에서
+    만난다 — 이 일치가 보정이 옳다는 방증이다.
+
+    knight(0.1881)는 12mm 떨어져 있는데, 이는 배율 문제가 아니라 말 모양이
+    불규칙해 bbox 중심이 턱이 무는 자리와 다르게 잡히기 때문으로 본다.
+    클래스마다 따로 재는 이유가 그것이다."""
+    jaw = bc.JAW_LINE_DEPTH_FORWARD_M
+
+    assert abs(jaw["queen"] - jaw["rook"]) < 0.002
 
 
 def test_세_체스말_턱_선이_모두_실측됐다():
