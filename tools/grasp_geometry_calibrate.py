@@ -47,14 +47,31 @@ knight 18.7 / soccer 25.6cm로 읽혔다.
 
 각도를 크게 잡을수록 재는 오차의 영향이 줄지만, 서비스가 15도에서 막는다.
 
-## 실행 전
+## 모드 C — 클래스별 거리 보정 K
+
+    K = 거리 * (sqrt(bbox 면적) - 2.5)
+
+알려진 거리 여러 곳에 놓고 읽어 최소제곱으로 K를 낸다. 거리의 기준점은
+**아무 데나 잡아도 되지만 클래스 안에서 일관돼야 한다** — GRASP는 언제나
+(관측 - 그 클래스의 턱 선)만 쓰므로 기준점이 상쇄된다. 재기 쉬운 차체 전면을
+권한다.
+
+## 실행 전 (모드 A·C는 넷 다 필요)
 
     ros2 run grippers_arm arm_driver --ros-args -p arm_port:=/dev/soarm
-    ros2 run grippers_perception perception_node        (모드 A만)
-    ros2 launch peripherals depth_camera.launch.py      (모드 A만)
+    ros2 launch peripherals depth_camera.launch.py
+    ros2 run grippers_perception depth_cam_rotate_node
+    ros2 run grippers_perception perception_node
+
+⚠️ **depth_cam_rotate_node를 빼먹기 쉽다.** perception_node는 회전 보정된
+스트림만 구독하므로, 이게 없으면 카메라가 돌고 있어도 YOLO에 프레임이 한
+장도 안 간다 — 증상은 "그냥 검출 실패"라 원인이 안 드러난다(2026-08-26
+실기에서 실제로 겪었다). 그래서 이 도구는 시작할 때 프레임이 실제로
+흐르는지 먼저 확인한다.
 
     python3 grasp_geometry_calibrate.py --mode jaw --label queen
     python3 grasp_geometry_calibrate.py --mode servo1 --profile chess_queen
+    python3 grasp_geometry_calibrate.py --mode k --label rook
 """
 
 import argparse
@@ -65,6 +82,8 @@ import sys
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import Image
 from std_srvs.srv import Trigger
 
 from grippers_interfaces.action import MoveToFloorPose
@@ -74,6 +93,13 @@ from grippers_arm.floor_grasp_profiles import FLOOR_GRASP_PROFILES
 BANNER = "=" * 68
 SAMPLES = 7                # 턱 선 관측 표본 수 — 중앙값을 쓴다
 SERVO1_PROBE_DEG = 12.0    # 서비스 한계(15도) 안쪽에서 최대한 크게
+
+# perception_node가 YOLO를 돌리는 스트림. depth_cam_rotate_node가 낸다.
+ROTATED_RGB_TOPIC = "/depth_cam/rgb/image_rotated"
+
+# perception_node의 BBOX_PADDING_PX와 같은 값이어야 한다 — 검출기 성질에서
+# 온 여유분이라 클래스와 무관하다.
+BBOX_PADDING_PX = 2.5
 
 # 라벨 -> 교시 프로필. baseline_mission._OBJECT_WIDTH_MM와 같은 대응이다.
 PROFILE_BY_LABEL = {
@@ -91,6 +117,26 @@ class CalibrationNode(Node):
         self._hold = self.create_client(Trigger, "/arm_driver/hold_position")
         self._yaw = self.create_client(OffsetBaseYaw, "/arm_driver/offset_base_yaw")
         self._floor = ActionClient(self, MoveToFloorPose, "/arm_driver/move_to_floor_pose")
+        self._frames = 0
+        self.create_subscription(Image, ROTATED_RGB_TOPIC, self._on_frame,
+                                 qos_profile_sensor_data)
+
+    def _on_frame(self, _msg):
+        self._frames += 1
+
+    def require_camera(self):
+        """YOLO에 프레임이 실제로 가고 있는지 먼저 확인한다.
+
+        이걸 안 보면 depth_cam_rotate_node가 빠졌을 때 증상이 "검출 실패"로만
+        나타나 원인이 안 드러난다 — 2026-08-26 실기에서 실제로 겪었다."""
+        for _ in range(60):
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if self._frames:
+                return
+        raise RuntimeError(
+            f"{ROTATED_RGB_TOPIC}에 프레임이 없습니다 — "
+            "depth_cam_rotate_node가 떠 있는지 확인하세요\n"
+            "    ros2 run grippers_perception depth_cam_rotate_node")
 
     def _call(self, client, request, label, timeout=15.0):
         if not client.wait_for_service(timeout_sec=5.0):
@@ -136,6 +182,68 @@ class CalibrationNode(Node):
         outcome = done.result()
         if outcome is None or not outcome.result.reached:
             raise RuntimeError(f"'{stage}' 도달 실패")
+
+
+def mode_k(node, label):
+    """클래스별 거리 보정 K를 여러 거리에서 최소제곱으로 낸다."""
+    print(BANNER)
+    print(f"모드 C · '{label}' 거리 보정 K 실측")
+    print(BANNER)
+    print("  알려진 거리 여러 곳에 물체를 놓고 읽습니다.")
+    print("  거리 기준점은 재기 쉬운 곳(차체 전면 권장)으로 잡되,")
+    print("  **한 클래스 안에서는 끝까지 같은 기준**을 쓰세요.")
+    print("  파지 거리대를 포함해 2~4점을 권합니다 (예: 0.15 / 0.25 / 0.40 m).")
+    print("  빈 줄을 입력하면 계산으로 넘어갑니다.")
+    print()
+
+    samples = []
+    while True:
+        raw = input(f"  거리(m) [{len(samples)}점 수집됨] > ").strip()
+        if not raw:
+            break
+        try:
+            distance_m = float(raw)
+        except ValueError:
+            print("    수치가 아닙니다.")
+            continue
+
+        areas = []
+        for _ in range(SAMPLES):
+            response = node.observe(label)
+            if response.found:
+                areas.append(response.w * response.h)
+        if len(areas) < 3:
+            print(f"    ⛔ 유효 검출 {len(areas)}회 — 다시 놓고 시도하세요.")
+            continue
+        area = statistics.median(areas)
+        effective = math.sqrt(area) - BBOX_PADDING_PX
+        print(f"    면적 중앙값 {area:.0f} px²  ->  sqrt-pad = {effective:.2f} px"
+              f"  ->  K = {distance_m * effective:.4f}")
+        samples.append((distance_m, effective))
+
+    if not samples:
+        print("\n  수집된 점이 없습니다.")
+        return None
+
+    # d ~= K / e 를 K에 대해 최소제곱: K = sum(d/e) / sum(1/e^2)
+    numerator = sum(d / e for d, e in samples if e > 0)
+    denominator = sum(1.0 / (e * e) for _d, e in samples if e > 0)
+    k = numerator / denominator
+
+    print()
+    print(BANNER)
+    print(f'  "{label}": {k:.4f},')
+    print()
+    print("  적합도 확인 — 각 점에서 이 K가 되돌려주는 거리:")
+    for d, e in samples:
+        print(f"    실제 {d:.3f} m  ->  추정 {k / e:.3f} m  "
+              f"(오차 {(k / e - d) * 1000:+.0f} mm)")
+    print()
+    print("  perception_node.py의 CLASS_DISTANCE_CALIBRATION_SQRT_PX_M에 넣으세요.")
+    print("  ⚠️ K를 바꾸면 그 클래스의 턱 선도 다시 재야 합니다 — 둘은 같은")
+    print("     척도 위에 있어야 (관측 - 턱 선)이 의미를 갖습니다.")
+    print(BANNER)
+    return k
 
 
 def mode_jaw_line(node, label):
@@ -251,7 +359,7 @@ def mode_servo1(node, profile):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--mode", choices=("jaw", "servo1"), required=True)
+    parser.add_argument("--mode", choices=("jaw", "servo1", "k"), required=True)
     parser.add_argument("--label", default="queen", choices=sorted(PROFILE_BY_LABEL))
     parser.add_argument("--profile", default="chess_queen")
     args = parser.parse_args()
@@ -260,7 +368,11 @@ def main():
     node = CalibrationNode()
     try:
         if args.mode == "jaw":
+            node.require_camera()
             mode_jaw_line(node, args.label)
+        elif args.mode == "k":
+            node.require_camera()
+            mode_k(node, args.label)
         else:
             mode_servo1(node, args.profile)
         return 0
