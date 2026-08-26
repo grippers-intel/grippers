@@ -132,14 +132,48 @@ def test_scan_to_points의_각도_배치가_맞다():
 
 
 def test_라이다_높이가_실측값이다():
-    """URDF(0.1625)가 아니라 사용자 실측(0.091)을 따른다."""
-    assert math.isclose(bl.LIDAR_HEIGHT_M, 0.091, abs_tol=1e-9)
+    """URDF(0.1625)도 2026-08-25에 잘못 적은 0.091도 아닌, 재실측한 0.140이다."""
+    assert math.isclose(bl.LIDAR_HEIGHT_M, 0.140, abs_tol=1e-9)
+    assert math.isclose(bl.LIDAR_TILT_DEG, 11.3, abs_tol=1e-9)
 
 
-def test_라이다_평면이_바구니_테두리보다_낮다():
-    """두 저장소가 적은 바구니 높이 중 낮은 쪽(115mm)에서도 성립해야 한다."""
-    낮은_테두리_추정 = 0.115
-    assert bl.LIDAR_HEIGHT_M < 낮은_테두리_추정
+def test_빔이_테두리를_넘으려면_최소한_이만큼_떨어져야_한다():
+    """라이다가 테두리보다 **높이** 있으므로, 이제 "충분히 멀리"가 조건이다.
+
+    기울기 덕분에 앞으로 갈수록 빔이 낮아진다. 테두리(115mm) 아래로
+    내려오는 지점이 약 125mm이고, 그보다 가까이 붙으면 빔이 테두리 위를
+    스쳐 지나가 바구니를 통째로 놓친다 — 예전 전제("평면이 테두리보다
+    낮다")와 부호가 반대다."""
+    assert bl.LIDAR_HEIGHT_M > bl.BASKET_RIM_HEIGHT_M
+
+    너무_가까움 = bl.beam_height_m(0.10)
+    assert 너무_가까움 > bl.BASKET_RIM_HEIGHT_M
+
+    경계 = bl.LIDAR_HEIGHT_M - bl.BASKET_RIM_HEIGHT_M
+    경계 /= math.tan(math.radians(bl.LIDAR_TILT_DEG))
+    assert math.isclose(경계, 0.125, abs_tol=0.002)
+
+
+def test_실기_검증된_정지_거리에서_빔이_테두리_아래에_있다():
+    """2026-08-26에 투하가 성공한 라이다 판독 0.1386m 지점."""
+    여유 = bl.BASKET_RIM_HEIGHT_M - bl.beam_height_m(0.1386)
+    assert 0.0 < 여유 < 0.005          # 성립하지만 3mm 안팎으로 아슬아슬하다
+
+
+def test_빔은_70cm에서_바닥에_닿는다():
+    """그 너머의 정면 반사는 바구니가 아니라 바닥이다."""
+    바닥_도달 = bl.LIDAR_HEIGHT_M / math.tan(math.radians(bl.LIDAR_TILT_DEG))
+    assert math.isclose(바닥_도달, 0.70, abs_tol=0.01)
+
+
+def test_scan_to_front_points가_정면을_x축에_놓는다():
+    """정면 = 라이다 +90도(2026-08-26 판 실험). 그 각도의 반사가 +x로 와야 한다."""
+    pts = bl.scan_to_front_points([0.30], angle_min=math.radians(90.0), angle_increment=0.0)
+    x, y = pts[0]
+    assert math.isclose(y, 0.0, abs_tol=1e-9)
+    # 기울기 보정으로 판독값보다 짧아진 수평거리가 나온다.
+    assert math.isclose(x, 0.30 * math.cos(math.radians(bl.LIDAR_TILT_DEG)), abs_tol=1e-9)
+    assert x < 0.30
 
 
 def test_법선이_로봇에서_바구니를_향한다():
