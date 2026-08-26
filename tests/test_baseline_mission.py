@@ -46,6 +46,11 @@ def _measured_geometry(monkeypatch):
     그 동작도 아래에서 따로 검증한다."""
     monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M",
                         {**bc.JAW_LINE_DEPTH_FORWARD_M, "queen": JAW_LINE_M})
+    # 좌우 영점은 클래스별이다. 테스트 물체는 영점 0으로 둬서 읽은 값이
+    # 그대로 중심선 기준 오차가 되게 한다.
+    monkeypatch.setattr(bc, "DEPTH_LATERAL_TO_JAW_CENTER_M",
+                        {**bc.DEPTH_LATERAL_TO_JAW_CENTER_M,
+                         "queen": 0.0, "바나나": 0.0})
     monkeypatch.setattr(bc, "SERVO1_AXIS_TO_JAW_MM", SERVO1_REACH_MM)
 
 

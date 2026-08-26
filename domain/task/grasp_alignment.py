@@ -146,8 +146,16 @@ def judge(observation, object_width_mm: float,
             reason=f"'{observation.label}'의 턱 선(JAW_LINE_DEPTH_FORWARD_M) 미실측 "
                    "— 턱 쓸기 구간을 모른다")
 
-    # 카메라 광축과 턱 중심선의 어긋남을 먼저 지운다.
-    lateral = observation.lateral_m - bc.DEPTH_LATERAL_TO_JAW_CENTER_M
+    # 좌우 영점을 먼저 뺀다. 클래스별인 이유는 상수 주석 참고 — 겉보기
+    # 좌우 값에 그 클래스의 거리 배율 오차가 실려 있어, 같은 클래스로 잰
+    # 영점을 빼야 상쇄된다.
+    zero = bc.DEPTH_LATERAL_TO_JAW_CENTER_M.get(observation.label)
+    if zero is None:
+        return AlignmentVerdict(
+            UNKNOWN,
+            reason=f"'{observation.label}'의 좌우 영점"
+                   "(DEPTH_LATERAL_TO_JAW_CENTER_M) 미실측 — 중앙을 모른다")
+    lateral = observation.lateral_m - zero
     forward = observation.forward_m
     near_m, far_m = depth_range
     half_width = capture_half_width_m(object_width_mm)

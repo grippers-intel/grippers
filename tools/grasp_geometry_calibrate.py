@@ -93,6 +93,12 @@ from grippers_arm.floor_grasp_profiles import FLOOR_GRASP_PROFILES
 
 BANNER = "=" * 68
 SAMPLES = 7                # 턱 선 관측 표본 수 — 중앙값을 쓴다
+
+# 들어올리며 부하가 이만큼 떨어지면 턱 끝 파지로 본다.
+LOAD_SLIP_DROP = 0.010
+# 턱 목의 깊이(실측 2026-08-26). 턱 끝에 걸렸을 때 얼마나 더 가까이
+# 놓아야 하는지 안내하는 데 쓴다.
+JAW_THROAT_DEPTH_M = 0.023
 SERVO1_PROBE_DEG = 12.0    # 서비스 한계(15도) 안쪽에서 최대한 크게
 
 # perception_node가 YOLO를 돌리는 스트림. depth_cam_rotate_node가 낸다.
@@ -186,7 +192,16 @@ class CalibrationNode(Node):
 
 
 def mode_seat(node, label):
-    """턱으로 직접 물려 앉힌 뒤 읽는다 — 턱 선과 좌우 영점을 함께 낸다.
+    """턱으로 직접 물려 **좌우 영점**을 잰다.
+
+    ⚠️ 2026-08-26 실기로 이 모드의 전제 절반이 틀렸다는 것이 드러났다.
+    평행 턱은 곧게 닫히므로 **깊이 방향으로는 물체를 끌어당기지 않는다** —
+    손가락 끝에 있으면 끝에서 그대로 물린다(rook에서 실제로 그랬다).
+    그래서 여기서 나오는 전방 거리는 턱 선이 **아니라** 조작자가 밀어 넣은
+    자리일 뿐이다. 턱 선은 --mode jaw(들어올림 검사 포함)로 재야 한다.
+
+    좌우는 다르다. 두 손가락이 대칭으로 닫히므로 물체는 좌우로는 반드시
+    턱 중심에 앉는다. 그래서 이 모드는 **좌우 영점에만** 쓴다.
 
     모드 A는 조작자가 눈으로 놓은 자리를 읽는다. 그게 정말 턱 중앙인지는
     알 수 없다 — 턱이 168mm까지 벌어져 있어 15mm쯤 치우쳐도 평행 턱이
@@ -200,7 +215,7 @@ def mode_seat(node, label):
     geometry = FLOOR_GRASP_PROFILES[profile]
 
     print(BANNER)
-    print(f"모드 D · '{label}' 턱 선 + 좌우 영점  (기계가 직접 앉힌다)")
+    print(f"모드 D · '{label}' 좌우 영점  (턱이 좌우로는 중앙에 앉힌다)")
     print(BANNER)
     print("  팔이 바닥 파지 자세로 내려가 턱을 벌립니다.")
     input("  준비되면 Enter > ")
@@ -247,12 +262,12 @@ def mode_seat(node, label):
     lateral = statistics.median(r[1] for r in readings)
     print()
     print(BANNER)
-    print(f'  JAW_LINE_DEPTH_FORWARD_M["{label}"] = {forward:.4f}')
-    print(f"  DEPTH_LATERAL_TO_JAW_CENTER_M = {lateral:.4f}")
+    print(f'  DEPTH_LATERAL_TO_JAW_CENTER_M["{label}"] = {lateral:.4f}')
     print()
-    print("  좌우 값은 **카메라 광축과 턱 중심선의 어긋남**입니다 — 물체를")
-    print("  기계가 중앙에 앉혔으므로, 여기서 0이 아니면 카메라 쪽 오프셋입니다.")
-    print("  클래스를 바꿔 가며 같은 값이 나오면 확정입니다.")
+    print("  물체를 턱이 좌우 중앙에 앉혔으므로, 이 값이 곧 카메라 영점입니다.")
+    print(f"  ⚠️ 전방 {forward:.4f}는 **턱 선이 아닙니다** — 평행 턱은 깊이")
+    print("     방향으로 끌어당기지 않아, 밀어 넣은 자리가 그대로 나옵니다.")
+    print("     턱 선은 --mode jaw로 재세요(들어올림 검사가 붙어 있습니다).")
     print(BANNER)
     return forward, lateral
 
@@ -364,22 +379,40 @@ def mode_jaw_line(node, label):
     node.stage(profile, "safe")
     node.stage(profile, "grasp")
     node.set_gripper(geometry.close_width_mm)
-    state = node.arm_state()
-    load = float(state.load_ratio[5])
-    print(f"    파지 부하 = {load:.4f}")
 
+    # 닫힌 직후의 부하만으로는 **턱 끝 파지를 못 가른다.** 2026-08-26 실측:
+    # 턱 끝(들다가 미끄러짐) 0.0821 > 제대로 물림 0.0782로 실패한 쪽이 오히려
+    # 높았다. 그래서 실제로 들어올려 부하가 유지되는지 본다 — 조작자의
+    # 눈대중을 판정에서 빼는 것이 이 검사의 목적이다.
+    closed = float(node.arm_state().load_ratio[5])
+    node.stage(profile, "midpoint")
+    lifted = float(node.arm_state().load_ratio[5])
     node.stage(profile, "safe")
     node.stage(profile, "carry")
+    carried = float(node.arm_state().load_ratio[5])
+    print(f"    부하  닫음 {closed:.4f}  ->  들어올림 {lifted:.4f}  ->  CARRY {carried:.4f}")
 
-    verdict = "물렸습니다 — 이 값이 턱 선입니다" if load >= 0.05 else \
-        "⚠️ 안 물렸습니다 — 물체가 턱 선이 아닌 자리에 있었습니다"
+    held = carried >= 0.05
+    slipped = held and carried < closed - LOAD_SLIP_DROP
+
     print()
     print(BANNER)
-    print(f"  {verdict}")
+    if not held:
+        print("  ⛔ 놓쳤습니다 — 이 자리는 턱 밖입니다.")
+        print(f"     물체를 약 {JAW_THROAT_DEPTH_M * 1000:.0f}mm 더 가까이 놓고 "
+              "다시 하세요.")
+        return None
+    if slipped:
+        print("  ⚠️ 물기는 했지만 들어올리며 부하가 떨어졌습니다 — **턱 끝 파지**입니다.")
+        print(f"     이 값({forward:.4f})은 턱 선이 아닙니다.")
+        print(f"     물체를 약 {JAW_THROAT_DEPTH_M * 1000:.0f}mm 더 가까이 놓고 "
+              "다시 하세요.")
+        print(f"     (다음 시도 목표 판독 ~ {forward - JAW_THROAT_DEPTH_M:.4f})")
+        return None
+
+    print("  제대로 물렸고 들어올려도 유지됐습니다 — 이 값이 턱 선입니다.")
     print(f'  JAW_LINE_DEPTH_FORWARD_M["{label}"] = {forward:.4f}')
-    if abs(lateral) > 0.010:
-        print(f"  ⚠️ 좌우 {lateral * 1000:+.1f}mm 치우쳐 있었습니다 — "
-              "DEPTH_LATERAL_TO_JAW_CENTER_M 후보이거나 배치가 어긋난 것입니다")
+    print(f'  (참고) 이때 좌우 판독 = {lateral:.4f} — 좌우 영점은 --mode seat로 재세요')
     print(BANNER)
     return forward
 

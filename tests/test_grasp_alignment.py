@@ -13,17 +13,22 @@ from domain.values import TargetObservation
 
 JAW_LINE_M = 0.36
 SERVO1_REACH_MM = 240.0
+TEST_LABEL = "테스트말"
 
 
 @pytest.fixture(autouse=True)
 def _measured_geometry(monkeypatch):
+    # 실측 상수를 건드리지 않도록 가상의 클래스를 하나 넣어 쓴다 — 영점을
+    # 0으로 두면 읽은 좌우 값이 그대로 중심선 기준 오차가 된다.
     monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M",
-                        {**bc.JAW_LINE_DEPTH_FORWARD_M, "queen": JAW_LINE_M})
+                        {**bc.JAW_LINE_DEPTH_FORWARD_M, TEST_LABEL: JAW_LINE_M})
+    monkeypatch.setattr(bc, "DEPTH_LATERAL_TO_JAW_CENTER_M",
+                        {**bc.DEPTH_LATERAL_TO_JAW_CENTER_M, TEST_LABEL: 0.0})
     monkeypatch.setattr(bc, "SERVO1_AXIS_TO_JAW_MM", SERVO1_REACH_MM)
 
 
 def _obs(forward_m=JAW_LINE_M + 0.02, lateral_m=0.0, metric_ok=True):
-    return TargetObservation("queen", forward_m, lateral_m, metric_ok)
+    return TargetObservation(TEST_LABEL, forward_m, lateral_m, metric_ok)
 
 
 # ── 영역의 모양 ────────────────────────────────────────────────────────────
@@ -43,7 +48,7 @@ def test_열린_폭보다_넓은_물체는_들어올_수_없다():
 
 
 def test_깊이_구간은_턱_선부터_전진_거리까지다():
-    near, far = ga.capture_depth_range_m("queen")
+    near, far = ga.capture_depth_range_m(TEST_LABEL)
 
     assert near == pytest.approx(JAW_LINE_M)
     assert far == pytest.approx(JAW_LINE_M + bc.GRASP_CREEP_FORWARD_MM / 1000.0)
@@ -128,7 +133,7 @@ def test_팔_길이_미실측이면_보정_대신_Host에_넘긴다(monkeypatch)
 
 def test_카메라_광축_어긋남을_먼저_지운다(monkeypatch):
     """카메라가 가운데가 아니면 보정이 늘 한쪽으로 치우친다."""
-    monkeypatch.setattr(bc, "DEPTH_LATERAL_TO_JAW_CENTER_M", 0.040)
+    monkeypatch.setattr(bc, "DEPTH_LATERAL_TO_JAW_CENTER_M", {TEST_LABEL: 0.040})
 
     assert ga.judge(_obs(lateral_m=0.040), 17.0).action == ga.READY
 
@@ -199,3 +204,34 @@ def test_턱_끝에_걸리는_거리에서는_전진이_남아있다():
 def test_제대로_앉은_자리에서는_전진할_것이_없다():
     """이미 턱 선이면 전진 거리가 0 이하라 판정이 '너무 가깝다'로 간다."""
     assert ga.creep_distance_m(TargetObservation("rook", 0.1757, 0.0, True)) is None
+
+
+# ── 좌우 영점은 클래스마다 다르다 ─────────────────────────────────────────
+
+
+def test_좌우_영점을_안_잰_클래스는_판정하지_않는다(monkeypatch):
+    monkeypatch.setattr(bc, "DEPTH_LATERAL_TO_JAW_CENTER_M", {"rook": 0.0295})
+
+    verdict = ga.judge(_obs(lateral_m=0.0), 17.0)
+
+    assert verdict.action == ga.UNKNOWN
+    assert "좌우 영점" in verdict.reason
+
+
+def test_실측된_좌우_영점이_클래스마다_다르다():
+    """겉보기 좌우 값에 그 클래스의 거리 배율 오차가 실려 있다 —
+    같은 물리 30mm를 rook 29.5 / queen 24.0 / knight 31.4로 읽었다."""
+    zeros = bc.DEPTH_LATERAL_TO_JAW_CENTER_M
+
+    assert zeros["rook"] == 0.0295
+    assert zeros["queen"] == 0.0240
+    assert zeros["knight"] == 0.0314
+
+
+def test_영점을_빼면_중앙이_0이_된다(monkeypatch):
+    """영점 자리에 놓인 물체는 '가운데'로 판정돼야 한다."""
+    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M", {"rook": 0.1757})
+
+    verdict = ga.judge(TargetObservation("rook", 0.1957, 0.0295, True), 24.5)
+
+    assert verdict.action == ga.READY
