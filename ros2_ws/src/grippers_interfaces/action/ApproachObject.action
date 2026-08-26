@@ -1,6 +1,0 @@
-string raw_cls
----
-bool arrived
----
-float32 err_x_px
-float32 err_h_px

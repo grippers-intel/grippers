@@ -18,7 +18,7 @@ CALL_HELPER = REAL_DIR / "_ros_call.py"
 BLOCKING_CALLS = {"wait_for_service", "wait_for_server", "spin_until_future_complete"}
 
 # 응답을 기다리지 않는 것이 계약인 E-STOP 경로. 여기만 헬퍼를 거치지 않고
-# call_async 를 직접 부른다 (states.py EstopState).
+# call_async 를 직접 부른다 (baseline_mission.BaselineEstopState).
 ESTOP_METHODS = {"stop", "hold_position"}
 
 
@@ -50,6 +50,7 @@ def test_adapter_files_are_all_covered():
     assert names == {
         "ros2_arm_driver.py",
         "ros2_command_interpreter.py",
+        "ros2_lidar.py",
         "ros2_mecanum_base.py",
         "ros2_perception.py",
     }

@@ -1,312 +1,339 @@
-"""baseline 미션 FSM 테스트 — 하드웨어·ROS2·네트워크 없이 Fake만으로 돈다.
+"""Host 주도 Pi 미션 FSM의 계약을 고정한다 (팀 확정, 2026-08-26).
 
-사용자가 2026-08-25에 정리한 7단계 흐름을 그대로 검증한다. 기존
-`domain/task/states.py`의 루프 FSM과는 별개 경로다.
-
-⚠️ 실기 미검증. 여기서 검증하는 것은 전이 그래프와 "모르면 실패" 기본값뿐이고,
-실측이 안 된 수치가 필요한 자리는 판정을 포기하는지를 확인한다."""
+여기서 지키려는 성질은 하나로 요약된다 — **Pi는 명령을 실행하고 보고할 뿐,
+스스로 정하지 않는다.** 상태 전이는 Host가 보낸 state가 만들고, 주행은
+Host가 보낸 속도가 만든다. 예외는 GRASP/INSERT를 실행한 뒤 그 결과로
+넘어가는 두 자리뿐이다.
+"""
 
 import threading
 
 import pytest
 
 from domain.adapters.fake.fake_arm import FakeArm
-from domain.adapters.fake.fake_host_link import FakeBaselineBase, FakeHostLink, FakeLidar
+from domain.adapters.fake.fake_base import FakeBase
+from domain.adapters.fake.fake_host_link import FakeHostLink, FakeLidar
 from domain.adapters.fake.scripted_perception import ScriptedPerception
-from domain.ports.baseline_ports import BasketFace, HostPlan, Status
+from domain.ports.baseline_ports import BasketFace, HostCommand, MissionState, Report
 from domain.task import baseline_constants as bc
-from domain.task import baseline_mission as bm
-from domain.values import Pose2D
+from domain.task.baseline_mission import (
+    BaselineApproachState,
+    BaselineCarryState,
+    BaselineGraspState,
+    BaselineIdleState,
+    BaselineInsertState,
+    BaselinePorts,
+    LinkWatchdog,
+    plan_for_label,
+)
+from domain.task.motion import AGREED_LINEAR_MPS, AGREED_ROTATION_RAD_S
 
-MAX_STEPS = 60
+
+EMPTY_LOAD = 0.03      # FakeArm.LOAD_EMPTY — 빈 그리퍼 실측 분포 안의 값
+HOLDING_LOAD = 0.14    # FakeArm.LOAD_HOLDING
 
 
-def _ports(host=None, lidar=None, arm=None, perception=None, base=None):
-    return bm.BaselinePorts(
-        base=base or FakeBaselineBase(),
-        arm=arm or FakeArm(),
+def _ports(host=None, base=None, arm=None, perception=None, lidar=None, estop=None):
+    return BaselinePorts(
+        base=base or FakeBase(),
+        arm=arm or FakeArm(load_ratio=EMPTY_LOAD),
         perception=perception or ScriptedPerception(),
         host=host or FakeHostLink(),
         lidar=lidar or FakeLidar(),
-        estop=threading.Event(),
+        estop=estop or threading.Event(),
+        watchdog=LinkWatchdog(),
     )
 
 
-def _plan(**kw):
-    kw.setdefault("target_label", "knight")
-    kw.setdefault("destination", "chess")
-    kw.setdefault("waypoints", (Pose2D(x=1.0, y=0.5, theta=0.0),))
-    return HostPlan(**kw)
+def _good_face():
+    return BasketFace(True, bc.BASKET_STOP_LIDAR_M, 0.01, "정면 확보")
 
 
-def _clear_perception(**kw):
-    """정면이 깨끗하다고 보고하는 perception."""
-    kw.setdefault("contact_risk", False)
-    return ScriptedPerception(**kw)
+# ── 명령 실행 ──────────────────────────────────────────────────────────────
 
 
-# ── 1~3. Host 지시 -> IDLE에서 곧장 APPROACH ────────────────────────────────
+def test_APPROACH는_Host가_준_속도를_그대로_낸다():
+    base = FakeBase()
+    host = FakeHostLink([HostCommand(MissionState.APPROACH, linear_x=0.1)])
+    ports = _ports(host=host, base=base)
 
-def test_지시가_없으면_IDLE에_머문다():
-    ports = _ports(host=FakeHostLink([None]))
-    assert bm.BaselineIdleState().execute(ports).name == "IDLE"
+    BaselineApproachState().execute(ports)
 
-
-def test_지시가_오면_SCAN_SELECT_없이_APPROACH로_간다():
-    """목표는 Host가 이미 골랐다 — Pi가 다시 찾지 않는다."""
-    host = FakeHostLink([_plan()])
-    nxt = bm.BaselineIdleState().execute(_ports(host=host))
-    assert nxt.name == "APPROACH"
-    assert Status.APPROACHING in host.reported_statuses
+    assert base.last_velocity == (0.1, 0.0, 0.0)
 
 
-def test_모르는_라벨은_시작하지_않는다():
-    host = FakeHostLink([_plan(target_label="바나나")])
-    nxt = bm.BaselineIdleState().execute(_ports(host=host))
-    assert nxt.name == "DONE"
+def test_합의보다_빠른_속도는_잘라서_낸다():
+    """Host 버그나 패킷 손상이 그대로 바퀴로 가면 안 된다."""
+    base = FakeBase()
+    host = FakeHostLink([HostCommand(MissionState.APPROACH, linear_x=1.0, linear_y=-2.0)])
+    ports = _ports(host=host, base=base)
+
+    BaselineApproachState().execute(ports)
+
+    assert base.last_velocity == (AGREED_LINEAR_MPS, -AGREED_LINEAR_MPS, 0.0)
 
 
-# ── 3~4. 경로 추종과 미세 회피 ──────────────────────────────────────────────
+def test_제자리회전은_합의_속도로_잘린다():
+    base = FakeBase()
+    host = FakeHostLink([HostCommand(MissionState.APPROACH, angular_z=9.0)])
+    ports = _ports(host=host, base=base)
 
-def test_정면이_깨끗하면_경로를_따라간다():
-    base = FakeBaselineBase()
-    ports = _ports(host=FakeHostLink([_plan()]), base=base,
-                   perception=_clear_perception())
-    nxt = bm.BaselineApproachState(_plan()).execute(ports)
-    assert nxt.name == "APPROACH"
-    assert base.drive_calls
+    BaselineApproachState().execute(ports)
 
-
-def test_정면이_위험하면_멈추고_옆으로_비킨_뒤_보고한다(monkeypatch):
-    monkeypatch.setattr(bc, "AVOID_LATERAL_STEP_M", 0.05)
-    base = FakeBaselineBase()
-    host = FakeHostLink([_plan()])
-    ports = _ports(host=host, base=base,
-                   perception=ScriptedPerception(contact_risk=True))
-
-    nxt = bm.BaselineApproachState(_plan()).execute(ports)
-
-    assert base.stop_calls == 1
-    assert base.creep_lateral_calls == [0.05]
-    assert Status.AVOIDING in host.reported_statuses
-    assert nxt.avoided == 1
-    assert not base.drive_calls, "위험한데 경로를 계속 따라가면 안 된다"
+    assert base.last_velocity == (0.0, 0.0, AGREED_ROTATION_RAD_S)
 
 
-def test_회피폭이_미실측이면_비키지_않고_정지만_한다():
-    """지어낸 거리로 옆걸음하느니 멈추고 Host에 맡긴다."""
-    assert bc.AVOID_LATERAL_STEP_M is None
-    base = FakeBaselineBase()
-    host = FakeHostLink([_plan()])
-    ports = _ports(host=host, base=base,
-                   perception=ScriptedPerception(contact_risk=True))
+def test_제자리정지는_다른_필드를_무시한다():
+    base = FakeBase()
+    host = FakeHostLink([HostCommand(MissionState.APPROACH, linear_x=0.1, stop=True)])
+    ports = _ports(host=host, base=base)
 
-    nxt = bm.BaselineApproachState(_plan()).execute(ports)
+    BaselineApproachState().execute(ports)
 
-    assert base.creep_lateral_calls == []
-    assert nxt.name == "IDLE"
-    assert Status.AVOIDING in host.reported_statuses
+    assert base.velocity_calls == []
+    assert base.stop_calls >= 1
 
 
-def test_회피_예산을_다_쓰면_전면_재계획을_요청한다(monkeypatch):
-    monkeypatch.setattr(bc, "AVOID_LATERAL_STEP_M", 0.05)
-    host = FakeHostLink([_plan()])
-    ports = _ports(host=host, perception=ScriptedPerception(contact_risk=True))
-    state = bm.BaselineApproachState(_plan(), avoided=bc.MAX_AVOID_STEPS)
+def test_회전과_병진이_섞인_명령은_거부하고_되돌려준다():
+    """추측해서 하나를 고르면 Host는 자기가 뭘 잘못 보냈는지 영영 모른다."""
+    base = FakeBase()
+    host = FakeHostLink([HostCommand(MissionState.APPROACH, linear_x=0.1, angular_z=0.25)])
+    ports = _ports(host=host, base=base)
 
-    assert state.execute(ports).name == "IDLE"
-    assert "예산 소진" in host.reports[-1][1]
+    BaselineApproachState().execute(ports)
 
-
-# ── 5. GRASP 전환은 Host가 정한다 ───────────────────────────────────────────
-
-def test_GRASP_전환은_Host의_grasp_ready로만_일어난다():
-    host = FakeHostLink([_plan(grasp_ready=True)])
-    ports = _ports(host=host, perception=_clear_perception())
-    assert bm.BaselineApproachState(_plan()).execute(ports).name == "GRASP"
+    assert base.velocity_calls == []
+    assert base.stop_calls >= 1
+    assert Report.REJECTED in host.reported_kinds
 
 
-def test_Pi는_스스로_19cm를_판정하지_않는다():
-    """grasp_ready가 False면 아무리 가까워도 APPROACH를 유지한다."""
-    ports = _ports(host=FakeHostLink([_plan(grasp_ready=False)]),
-                   perception=_clear_perception())
-    assert bm.BaselineApproachState(_plan()).execute(ports).name == "APPROACH"
+# ── 임무 1번: 상태 보고 ────────────────────────────────────────────────────
 
 
-# ── 6. GRASP ────────────────────────────────────────────────────────────────
+def test_매_사이클_현재_state를_보고한다():
+    host = FakeHostLink([HostCommand(MissionState.APPROACH)])
+    ports = _ports(host=host)
 
-def test_파지_성공하면_미세_전진을_거쳐_바구니_접근으로_넘어간다():
-    base = FakeBaselineBase()
-    host = FakeHostLink([_plan(grasp_ready=True)])
-    ports = _ports(host=host, base=base, arm=FakeArm(load_ratio=[0.07]))
+    BaselineApproachState().execute(ports)
 
-    nxt = bm.BaselineGraspState(_plan()).execute(ports)
-
-    assert nxt.name == "APPROACH_BOX"
-    assert base.creep_forward_calls == [bc.GRASP_CREEP_FORWARD_MM / 1000.0]
-    assert Status.GRASP_DONE in host.reported_statuses
+    assert (Report.STATE, MissionState.APPROACH, "") in host.reports
 
 
-def test_파지_자세_순서가_교시_경로를_따른다():
-    arm = FakeArm(load_ratio=[0.07])
-    ports = _ports(arm=arm, host=FakeHostLink([_plan(grasp_ready=True)]))
+def test_Host가_APPROACH_BOX를_부르면_그_이름으로_보고한다():
+    host = FakeHostLink([HostCommand(MissionState.APPROACH_BOX)])
+    ports = _ports(host=host)
 
-    bm.BaselineGraspState(_plan()).execute(ports)
+    nxt = BaselineCarryState("queen").execute(ports)
+
+    assert MissionState.APPROACH_BOX in host.reported_states
+    assert nxt.reported_as == MissionState.APPROACH_BOX
+
+
+# ── 링크 워치독 ────────────────────────────────────────────────────────────
+
+
+def test_Host_명령이_계속_없으면_멈춘다():
+    """None은 '정지'가 아니라 '모른다'다 — 마지막 명령대로 계속 굴러가면 안 된다."""
+    base = FakeBase()
+    host = FakeHostLink([None])
+    ports = _ports(host=host, base=base)
+
+    state = BaselineApproachState()
+    for _ in range(bc.HOST_COMMAND_TIMEOUT_CYCLES):
+        state = state.execute(ports)
+
+    assert base.velocity_calls == []
+    assert Report.REJECTED in host.reported_kinds
+
+
+# ── 임무 2번: GRASP 조건 판정 ──────────────────────────────────────────────
+
+
+def test_조건이_충족되면_GRASP_READY를_보고하고_넘어간다():
+    host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
+    ports = _ports(host=host, perception=ScriptedPerception(label="queen"))
+
+    nxt = BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_READY in host.reported_kinds
+    assert isinstance(nxt, BaselineGraspState)
+    assert nxt.label == "queen"
+
+
+def test_그리퍼가_비어있지_않으면_GRASP를_막고_제자리에_머문다():
+    """물고 있는 것을 떨어뜨리는 사고를 막는다."""
+    host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD))
+
+    nxt = BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_BLOCKED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
+def test_자기_카메라가_목표를_못_보면_내려가지_않는다():
+    host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
+    ports = _ports(host=host, perception=ScriptedPerception(label=None))
+
+    nxt = BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_BLOCKED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
+def test_교시_자세가_없는_라벨이면_내려가지_않는다():
+    host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
+    ports = _ports(host=host, perception=ScriptedPerception(label="바나나"))
+
+    nxt = BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_BLOCKED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
+def test_차체가_움직이는_중이면_GRASP를_막는다():
+    host = FakeHostLink([HostCommand(MissionState.GRASP, linear_x=0.1)])
+    ports = _ports(host=host)
+
+    nxt = BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_BLOCKED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
+# ── 임무 3번: GRASP 수행 ───────────────────────────────────────────────────
+
+
+def test_파지에_성공하면_CARRY로_가고_완료를_보고한다():
+    host = FakeHostLink()
+    arm = FakeArm(load_ratio=HOLDING_LOAD)
+    ports = _ports(host=host, arm=arm)
+
+    nxt = BaselineGraspState("queen").execute(ports)
+
+    assert Report.GRASP_DONE in host.reported_kinds
+    assert isinstance(nxt, BaselineCarryState)
+
+
+def test_파지_후_IDLE이_아니라_CARRY로_접는다():
+    """물체를 문 채 IDLE로 접으면 그리퍼가 라이다 정면을 가린다(2026-08-26 실측)."""
+    arm = FakeArm(load_ratio=HOLDING_LOAD)
+    ports = _ports(arm=arm)
+
+    BaselineGraspState("queen").execute(ports)
 
     stages = [stage for _profile, stage in arm.floor_pose_calls]
-    assert stages == ["safe", "grasp", "midpoint", "safe", "carry"]
+    assert "carry" in stages
+    assert "idle" not in stages
 
 
-def test_CARRY_IDLE_빈손이면_물체가_보이는지로_두_갈래를_가른다():
-    for confirmed, expected in ((False, Status.GRASP_FAILED_RETRY),
-                                (True, Status.GRASP_FAILED_RETARGET)):
-        host = FakeHostLink([_plan(grasp_ready=True)])
-        ports = _ports(host=host, arm=FakeArm(load_ratio=[0.07, 0.07, 0.03]),
-                       perception=ScriptedPerception(grasp_confirmed=confirmed))
+def test_파지에_실패하면_APPROACH로_돌아가고_스스로_재시도하지_않는다():
+    host = FakeHostLink()
+    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0))
 
-        nxt = bm.BaselineGraspState(_plan()).execute(ports)
+    nxt = BaselineGraspState("queen").execute(ports)
 
-        assert nxt.name == "IDLE"
-        assert expected in host.reported_statuses
+    assert Report.GRASP_FAILED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
 
 
-def test_파지_실패하면_바구니로_출발하지_않는다():
-    arm = FakeArm(load_ratio=[0.02])
-    ports = _ports(arm=arm, host=FakeHostLink([_plan(grasp_ready=True)]))
-
-    nxt = bm.BaselineGraspState(_plan()).execute(ports)
-
-    assert nxt.name == "IDLE"
-    assert "drop" not in [stage for _p, stage in arm.floor_pose_calls]
+def test_파지_명령_폭은_ros2_프로파일_공식에서_나온다():
+    """도메인과 ros2 프로파일이 갈라져 파지가 헐거워진 2026-08-26 사고 방지."""
+    assert plan_for_label("queen").close_width_mm == 7.0
+    assert plan_for_label("rook").close_width_mm == 9.5
+    assert plan_for_label("soccer").close_width_mm == 31.0
 
 
-def test_얇은_체스말도_파지_하한_아래로_조이지_않는다():
-    arm = FakeArm(load_ratio=[0.07])
-    ports = _ports(arm=arm, host=FakeHostLink([_plan(grasp_ready=True)]))
-    bm.BaselineGraspState(_plan(target_label="queen")).execute(ports)
-    assert min(arm.gripper_widths) >= bm.GRASP_MIN_MM
+# ── 임무 4번: INSERT 조건 판정과 수행 ──────────────────────────────────────
 
 
-def test_라벨로_프로필을_고른다_폭_휴리스틱을_쓰지_않는다():
-    """Host가 라벨을 주므로 star/soccer도 갈린다 — 폭으로는 못 가르던 쌍이다."""
-    assert bm.plan_for_label("star").profile == "soccer_polyhedron"
-    assert bm.plan_for_label("box").profile == "cube"
-    assert bm.plan_for_label("queen").profile == "chess_queen"
-    assert bm.plan_for_label("없는라벨") is None
+def test_라이다가_정면을_잡고_거리가_맞으면_INSERT로_간다():
+    host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), lidar=FakeLidar([_good_face()]))
+
+    nxt = BaselineCarryState("queen").execute(ports)
+
+    assert Report.INSERT_READY in host.reported_kinds
+    assert isinstance(nxt, BaselineInsertState)
 
 
-# ── 7. 바구니 접근과 INSERT ─────────────────────────────────────────────────
+def test_라이다가_정면을_못_잡으면_INSERT를_막는다():
+    """모르면 실패 — 팔을 크게 전개하는 동작이라 막는 쪽이 싸다."""
+    host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), lidar=FakeLidar())
 
-def test_라이다_오프셋이_미실측이면_정지_판정을_포기한다():
-    """지어낸 거리에서 팔을 전개하느니 멈추고 보고한다."""
-    assert bc.LIDAR_TO_CHASSIS_FRONT_M is None
-    host = FakeHostLink([_plan()])
-    base = FakeBaselineBase()
-    nxt = bm.BaselineApproachBoxState(_plan()).execute(_ports(host=host, base=base))
-    assert nxt.name == "IDLE"
-    assert base.stop_calls == 1
-    assert "미실측" in host.reports[-1][1]
+    nxt = BaselineCarryState("queen").execute(ports)
+
+    assert Report.INSERT_BLOCKED in host.reported_kinds
+    assert isinstance(nxt, BaselineCarryState)
 
 
-def test_라이다가_정지거리를_보면_INSERT로_넘어간다(monkeypatch):
-    monkeypatch.setattr(bc, "LIDAR_TO_CHASSIS_FRONT_M", 0.15)
-    stop_at = bm.basket_stop_distance_m()
-    lidar = FakeLidar([BasketFace(True, stop_at - 0.01, 0.0)])
-    base = FakeBaselineBase()
-    nxt = bm.BaselineApproachBoxState(_plan()).execute(
-        _ports(lidar=lidar, base=base, host=FakeHostLink([_plan()])))
-    assert nxt.name == "INSERT"
-    assert base.stop_calls == 1
+def test_바구니가_절벽보다_가까우면_INSERT를_막는다():
+    """판독이 하한 아래면 테두리를 넘겨보고 있을 수 있다."""
+    host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
+    close = BasketFace(True, bc.BASKET_MIN_LIDAR_M - 0.005, 0.0, "정면 확보")
+    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), lidar=FakeLidar([close]))
+
+    nxt = BaselineCarryState("queen").execute(ports)
+
+    assert Report.INSERT_BLOCKED in host.reported_kinds
+    assert isinstance(nxt, BaselineCarryState)
 
 
-def test_라이다_판정이_실패하면_INSERT로_안_넘어간다(monkeypatch):
-    monkeypatch.setattr(bc, "LIDAR_TO_CHASSIS_FRONT_M", 0.15)
-    lidar = FakeLidar([BasketFace(False, 0.01, 0.0, "점 부족")])
-    nxt = bm.BaselineApproachBoxState(_plan()).execute(
-        _ports(lidar=lidar, host=FakeHostLink([_plan()])))
-    assert nxt.name == "APPROACH_BOX"
+def test_빈손이면_INSERT를_막는다():
+    host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0), lidar=FakeLidar([_good_face()]))
+
+    nxt = BaselineCarryState("queen").execute(ports)
+
+    assert Report.INSERT_BLOCKED in host.reported_kinds
 
 
-def test_아직_멀면_경로를_계속_따라간다(monkeypatch):
-    monkeypatch.setattr(bc, "LIDAR_TO_CHASSIS_FRONT_M", 0.15)
-    base = FakeBaselineBase()
-    lidar = FakeLidar([BasketFace(True, 1.0, 0.0)])
-    bm.BaselineApproachBoxState(_plan()).execute(
-        _ports(lidar=lidar, base=base, host=FakeHostLink([_plan()])))
-    assert base.drive_calls
+def test_투하_후_부하가_줄면_성공으로_보고하고_IDLE로_돌아간다():
+    host = FakeHostLink()
+    arm = FakeArm(load_ratio=[0.0626, 0.0313])
+    ports = _ports(host=host, arm=arm)
+
+    nxt = BaselineInsertState("queen").execute(ports)
+
+    assert Report.INSERT_DONE in host.reported_kinds
+    assert Report.IDLE_DONE in host.reported_kinds
+    assert isinstance(nxt, BaselineIdleState)
 
 
-def test_INSERT는_열고_닫은_뒤_접는다():
-    """접기 전에 닫는다 — 닫힌 그리퍼가 접기에 알맞은 형상이다."""
-    arm = FakeArm(load_ratio=[0.07])
-    host = FakeHostLink([_plan()])
-    nxt = bm.BaselineInsertState(_plan()).execute(_ports(arm=arm, host=host))
+def test_부하가_안_줄면_실패로_보고한다():
+    host = FakeHostLink()
+    arm = FakeArm(load_ratio=0.0626)
+    ports = _ports(host=host, arm=arm)
 
-    assert nxt.name == "DONE"
-    assert arm.gripper_widths[-2:] == [
-        bm.plan_for_label("knight").release_width_mm, bm.CLOSED_MM]
-    assert arm.floor_pose_calls[-1][1] == "idle"
-    assert Status.MISSION_DONE in host.reported_statuses
+    BaselineInsertState("queen").execute(ports)
+
+    assert Report.INSERT_FAILED in host.reported_kinds
 
 
-def test_INSERT는_활짝_열지_않는다():
-    arm = FakeArm(load_ratio=[0.07])
-    bm.BaselineInsertState(_plan()).execute(_ports(arm=arm))
-    assert max(arm.gripper_widths) < bm.GRIPPER_MAX_SAFE_OPEN_MM
+def test_접기_전에_그리퍼를_닫는다():
+    """벌린 채로 접으면 손가락이 차체에 걸린다(2026-08-25 사용자 지시)."""
+    arm = FakeArm(load_ratio=[0.0626, 0.0313])
+    ports = _ports(arm=arm)
+
+    BaselineInsertState("queen").execute(ports)
+
+    widths = arm.gripper_widths
+    stages = [stage for _profile, stage in arm.floor_pose_calls]
+    assert widths[-1] == 9.0
+    assert stages[-1] == "idle"
 
 
-# ── 전체 흐름 ──────────────────────────────────────────────────────────────
-
-def test_한_바퀴가_DONE으로_끝난다(monkeypatch):
-    monkeypatch.setattr(bc, "LIDAR_TO_CHASSIS_FRONT_M", 0.15)
-    stop_at = bm.basket_stop_distance_m()
-    host = FakeHostLink([
-        _plan(),
-        _plan(grasp_ready=True),
-        _plan(),
-    ])
-    ports = _ports(host=host, arm=FakeArm(load_ratio=[0.07]),
-                   perception=_clear_perception(),
-                   lidar=FakeLidar([BasketFace(True, stop_at - 0.01, 0.0)]))
-
-    names = []
-    for i, state in enumerate(bm.BaselineMission(ports).run()):
-        names.append(state.name)
-        if i > MAX_STEPS:
-            pytest.fail(f"상한 안에 못 끝났다: {names}")
-
-    assert names[0] == "IDLE"
-    assert names[-1] == "DONE"
-    assert "GRASP" in names and "INSERT" in names
-    assert Status.MISSION_DONE in host.reported_statuses
+# ── E-STOP ────────────────────────────────────────────────────────────────
 
 
-def test_ESTOP은_전이_그래프가_아니라_인터럽트다():
-    ports = _ports(host=FakeHostLink([_plan()]))
-    ports.estop.set()
-    states = list(bm.BaselineMission(ports).run())
-    assert [s.name for s in states] == ["ESTOP"]
+def test_ESTOP이_걸리면_GRASP_조건_판정이_통과하지_않는다():
+    estop = threading.Event()
+    estop.set()
+    host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
+    ports = _ports(host=host, estop=estop)
 
+    nxt = BaselineApproachState().execute(ports)
 
-# ── 실측 TODO가 남아 있다는 사실 자체를 못 박는다 ──────────────────────────
-
-def test_미실측_상수_목록이_비어_있지_않다():
-    """실기 투입 전 이 목록이 비어야 한다. 비면 이 테스트를 지운다."""
-    assert set(bc.unresolved()) == {
-        "MARKER_TO_CHASSIS_FRONT_M",
-        "LIDAR_TO_CHASSIS_FRONT_M",
-        "LIDAR_MIN_RANGE_M",
-        "BASKET_RIM_HEIGHT_M",
-        "AVOID_LATERAL_STEP_M",
-    }
-
-
-def test_턱이_닫히는_지점이_실측_대상으로_남아_있다():
-    """19cm 정렬 -> 10cm 전진이면 턱은 차체 전면 90mm 앞에서 닫힌다.
-
-    이건 결함이 아니라 설계다 — 팔이 열린 채 내려온 뒤 차체가 전진해서
-    물체를 턱 사이로 밀어 넣는다(사용자 설명 2026-08-26). 다만 전진 거리가
-    매우 예민해 여러 번 실측해야 하고 50mm로 바뀔 수 있다. 값이 바뀌면 이
-    테스트가 실패하니 BASELINE_MISSION_TODO.md도 같이 갱신하게 된다."""
-    assert bc.jaw_close_forward_mm() == 90.0
-    assert bc.GRASP_CREEP_FORWARD_MM in (100.0, 50.0), "실측으로 확정되면 후보를 좁혀라"
+    assert Report.GRASP_BLOCKED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)

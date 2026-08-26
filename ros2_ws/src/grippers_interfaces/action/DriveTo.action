@@ -1,5 +1,0 @@
-geometry_msgs/Pose2D target
----
-bool arrived
----
-float64 distance_remaining

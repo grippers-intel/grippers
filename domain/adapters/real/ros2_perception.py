@@ -8,18 +8,11 @@ perception_node에 서비스로 말을 건다.
 넘기면 런타임에 AssertionError가 난다. 필드 하나하나를 명시적으로
 꺼내 옮긴다."""
 
-from grippers_interfaces.srv import (
-    FindBox,
-    MeasureOpening,
-    MonitorClearance,
-    ObserveTarget,
-    ScanFloor,
-)
+from grippers_interfaces.srv import MonitorClearance, ObserveTarget
 
 from domain.adapters.real._ros_call import SAFETY_TIMEOUT_SEC, call_service
-from domain.adapters.real._ros_convert import box_observation_from_msg, box_observation_to_msg
 from domain.ports.perception import Perception
-from domain.values import BoxObservation, Clearance, Destination, Detection, ObjectClass, Point3
+from domain.values import Clearance
 
 
 def _blind_clearance() -> Clearance:
@@ -31,25 +24,9 @@ def _blind_clearance() -> Clearance:
     return Clearance(front_m=0.0, left_m=0.0, right_m=0.0, contact_risk=True)
 
 
-def _detection_from_msg(msg) -> Detection:
-    return Detection(
-        track_id=msg.track_id,
-        cls=ObjectClass[msg.cls],
-        pose_m=Point3(x=msg.pose.x, y=msg.pose.y, z=msg.pose.z),
-        dims_m=Point3(x=msg.dims.x, y=msg.dims.y, z=msg.dims.z),
-        yaw_rad=msg.yaw_rad,
-        confidence=msg.confidence,
-    )
-
-
 class Ros2Perception(Perception):
     def __init__(self, node):
         self._node = node
-        self._scan_client = node.create_client(ScanFloor, "perception/scan_floor")
-        self._find_box_client = node.create_client(FindBox, "perception/find_box")
-        self._measure_opening_client = node.create_client(
-            MeasureOpening, "perception/measure_opening"
-        )
         self._clearance_client = node.create_client(
             MonitorClearance, "perception/monitor_clearance"
         )
@@ -57,37 +34,33 @@ class Ros2Perception(Perception):
         # GRASP 직전에 기억해 둔 목표 관측 (remember_target -> confirm_grasp)
         self._remembered: tuple[str, float, float] | None = None
 
-    def scan_floor(self) -> list[Detection]:
-        """검출 목록. 서비스가 없거나 응답이 없으면 **빈 목록** — `SELECT` 가
-        고를 후보가 없어 `DONE` 으로 간다. 관측이 안 되는데 계속 도는 것보다
-        미션을 끝내고 이유를 로그로 남기는 편이 낫다."""
-        res = call_service(self._node, self._scan_client, ScanFloor.Request(), label="scan_floor")
-        if res is None:
-            return []
-        return [_detection_from_msg(d) for d in res.detections.detections]
+    # Pi 자기 뎁스캠이 알아볼 수 있는 raw 클래스들. perception_node의 YOLO
+    # 라벨과 같아야 한다. 순서가 우선순위다 — 여러 개가 동시에 보이면
+    # 앞쪽을 고른다.
+    KNOWN_LABELS = ("queen", "knight", "rook", "box", "star", "soccer")
 
-    def find_box(self, dest: Destination) -> BoxObservation | None:
-        """찾지 못했거나 서비스가 응답하지 않으면 **None** — `TRANSPORT` 가
-        대상을 보류 등록하고 `SCAN` 으로 복귀한다.
+    def identify_target(self) -> str | None:
+        """정면 물체의 raw 라벨. 못 찾으면 **None**.
 
-        ⚠️ FindBox.srv의 필드명은 아직 `color`다(_ros_convert.py 상단 경고와
-        같은 이유로 와이어 인터페이스는 이번 변경 범위 밖) — Destination의
-        이름("LEFT"/"RIGHT")을 그 문자열 필드에 담아 보낸다."""
-        req = FindBox.Request(color=dest.name)
-        res = call_service(self._node, self._find_box_client, req, label="find_box")
-        if res is None or not res.found:
-            return None
-        return box_observation_from_msg(res.box)
+        `ObserveTarget`은 "이 클래스가 보이나"를 묻는 서비스라 클래스를
+        하나씩 물어본다. 서비스를 새로 만들지 않고 있는 것으로 푸는 쪽을
+        택했다 — GRASP 진입 때 한 번만 도는 경로라 왕복 몇 번의 비용이
+        인터페이스를 늘리는 비용보다 싸다.
 
-    def measure_opening(self, box: BoxObservation) -> float | None:
-        """입구 폭(mm). 서비스가 없거나 응답이 없으면 **None**(해 없음 취급) —
-        `POSE_PLAN` 이 `REJECT` 로 보낸다. 입구 폭을 모르는 채로 투입을 시도하면
-        상자 테두리에 물체를 찍는다."""
-        req = MeasureOpening.Request(box=box_observation_to_msg(box))
-        res = call_service(self._node, self._measure_opening_client, req, label="measure_opening")
-        if res is None:
-            return None
-        return res.opening_mm
+        여러 개가 동시에 보이면 **가장 큰 것**을 고른다. 파지하러 내려가는
+        거리에서는 목표가 화면에서 가장 크고, 배경에 걸친 다른 물체는 작게
+        잡히기 때문이다."""
+        best_label, best_area = None, 0.0
+        for label in self.KNOWN_LABELS:
+            res = call_service(
+                self._node, self._observe_client,
+                ObserveTarget.Request(raw_cls=label), label="identify_target")
+            if res is None or not res.found:
+                continue
+            area = float(res.h) * float(res.w)
+            if area > best_area:
+                best_label, best_area = label, area
+        return best_label
 
     def monitor_clearance(self) -> Clearance:
         """여유 공간. 서비스가 없거나 응답이 없으면 **`contact_risk=True`** —

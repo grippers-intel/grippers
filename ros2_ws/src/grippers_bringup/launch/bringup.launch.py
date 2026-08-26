@@ -42,8 +42,9 @@ def launch_setup(context):
     # 실기 확인: 이 launch가 포함하는 imu_filter.launch.py가 `imu_calib`
     # 패키지 부재로 SIGINT를 내며 launch 전체를 죽인다. 팀원이 실기로 검증한
     # 우회로 그대로 odom_publisher.launch.py만 직접 포함한다 — 대신 EKF가
-    # 없어 /odom이 비어 있으므로, base_driver_node도 /odom_raw(바퀴
-    # 오도메트리 원본)를 구독하도록 맞췄다(base_driver_node.py 참고).
+    # 없어 /odom이 비어 있다. 2026-08-26 팀 확정 이후 Pi에는 주행 판단이
+    # 없으므로(Host가 속도를 직접 보낸다) 이 노드는 cmd_vel을 바퀴로
+    # 내보내는 역할만 한다.
     controller_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(controller_package_path, "launch/odom_publisher.launch.py")
@@ -80,12 +81,6 @@ def launch_setup(context):
         condition=UnlessCondition(use_fake_arm),
         parameters=[{"arm_port": arm_port}],
     )
-    base_driver_node = Node(
-        package="grippers_base",
-        executable="base_driver",
-        output="screen",
-        condition=UnlessCondition(use_fake_base),
-    )
     bag_recorder = ExecuteProcess(
         cmd=["ros2", "bag", "record", "-a", "-o", bag_output],
         output="screen",
@@ -113,7 +108,6 @@ def launch_setup(context):
         lidar_launch,
         perception_node,
         arm_driver_node,
-        base_driver_node,
         bag_recorder,
         *grippers_nodes,
     ]
@@ -125,7 +119,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "use_fake_base",
                 default_value="true",
-                description="true면 controller/base_driver 없이 FakeBase 사용",
+                description="true면 controller 없이 FakeBase 사용",
             ),
             DeclareLaunchArgument(
                 "use_fake_arm",

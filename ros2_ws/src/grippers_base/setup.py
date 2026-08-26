@@ -18,8 +18,6 @@ setup(
     license="TODO: License declaration",
     tests_require=["pytest"],
     entry_points={
-        "console_scripts": [
-            "base_driver = grippers_base.base_driver_node:main",
-        ],
+        "console_scripts": [],
     },
 )

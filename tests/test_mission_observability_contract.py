@@ -78,23 +78,37 @@ def test_logged_port_records_exception_and_reraises_it():
     assert "[PORT] ERROR ExamplePort.fail" in logger.error_messages[0]
 
 
-def test_all_four_mission_ports_are_wrapped_for_boundary_logging():
-    run_fsm = _function(ORCHESTRATOR, "_run_fsm")
-    names = _called_names(run_fsm)
+def test_hardware_ports_are_wrapped_for_boundary_logging():
+    """경계 로깅이 빠지면 실기에서 어느 포트가 무엇을 돌려줬는지 못 본다.
 
-    assert names.count("_logged") == 4
+    Host 링크와 라이다는 감싸지 않는다 — 전자는 사이클마다 도는 순수
+    입출력이라 로그가 폭주하고, 후자는 판정 결과를 그대로 Host에 보고하므로
+    이미 기록이 남는다."""
+    source = ORCHESTRATOR.read_text(encoding="utf-8")
+
+    assert source.count("LoggedPort(") == 3
+    for port in ("Ros2MecanumBase", "Ros2ArmDriver", "Ros2Perception"):
+        assert port in source
 
 
-def test_state_is_published_in_normal_and_abort_paths():
-    run_fsm = _function(ORCHESTRATOR, "_run_fsm")
-    abort = _function(ORCHESTRATOR, "_abort_mission")
+def test_state_is_published_every_cycle():
+    """`/mission/state`는 아레나 오버레이와 디버깅이 보는 유일한 창이다."""
+    run_forever = _function(ORCHESTRATOR, "_run_forever")
 
-    assert "publish" in _called_names(run_fsm)
-    assert "publish" in _called_names(abort)
+    assert "_publish_state" in _called_names(run_forever)
     assert '"/mission/state"' in ORCHESTRATOR.read_text(encoding="utf-8")
 
 
-def test_launch_exposes_four_fake_switches_and_optional_rosbag():
+def test_orchestrator_holds_the_arm_when_the_fsm_throws():
+    """예외로 FSM이 죽을 때 팔을 놓으면 파지물이 떨어진다."""
+    run_forever = _function(ORCHESTRATOR, "_run_forever")
+    names = _called_names(run_forever)
+
+    assert "stop" in names
+    assert "hold_position" in names
+
+
+def test_launch_exposes_the_fake_switches_and_optional_rosbag():
     source = BRINGUP.read_text(encoding="utf-8")
 
     for name in (
@@ -108,5 +122,4 @@ def test_launch_exposes_four_fake_switches_and_optional_rosbag():
 
     assert 'LaunchConfiguration("record_bag")' in source
     assert '["ros2", "bag", "record", "-a", "-o", bag_output]' in source
-    assert source.count("UnlessCondition(use_fake_base)") == 2
     assert source.count("UnlessCondition(use_fake_perception)") == 3

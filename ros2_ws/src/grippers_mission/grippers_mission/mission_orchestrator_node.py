@@ -1,42 +1,50 @@
-"""
-mission_orchestrator_node — domain/task의 FSM을 ROS2로 감싼다.
-FSM 자체는 별도 스레드에서 순차 실행, rclpy는 MultiThreadedExecutor로
+"""mission_orchestrator_node — Pi 미션 FSM을 ROS2로 감싼다 (팀 확정, 2026-08-26).
+
+FSM 자체는 별도 스레드에서 순차 실행하고, rclpy는 MultiThreadedExecutor로
 스핀해서 E-STOP이 FSM 블로킹 도중에도 즉시 들어올 수 있게 한다.
 
-명령 입력: /command(std_msgs/String)를 구독해 큐에 쌓는다. FSM 스레드는
-하나만 떠서 큐에서 블로킹으로 다음 명령을 기다렸다가 MissionTask.run(
-raw_text)을 끝까지 돌리고, 끝나면 다시 큐를 기다린다 — 재실행(미션 완료
-후 새 명령)이 이 루프 구조로 자연스럽게 된다. Ports/어댑터는 한 번만
-만들어서 계속 재사용한다. voice_io 노드는 STT 결과를 그대로 이 토픽에
-발행할 뿐이고, 복창(confirm_phrase)은 voice_io가 처리한다 — 도메인
-FSM은 parse()만 안다(state_machine.md §3 IDLE 계약).
+## 무엇이 바뀌었나
+
+예전 오케스트레이터는 `/command`(음성 명령 문자열)를 받아 `MissionTask`를
+한 번 돌리는 구조였다. 목표 선정과 경로 계산이 Pi에 있던 시절의 모양이다.
+
+이제 **Host가 미션을 주도한다.** 명령은 UDP로 오고, 그 안에 상태와 속도만
+들어 있다. FSM은 시작해서 끝나는 것이 아니라 **계속 도는 루프**이고,
+Host가 보내는 state가 진행을 정한다. 그래서 명령 큐도, 재실행 루프도 없다.
+
+`/mission/state`는 그대로 발행한다 — 아레나 관중 오버레이와 디버깅이
+이 토픽을 본다. Host 보고와 별개의 경로다.
 """
 
-import queue
 import sys
 import threading
+import time
 import traceback
 
 sys.path.insert(0, "/grippers")  # PYTHONPATH 미설정 환경 대비 안전장치
 
 import rclpy
-from grippers_interfaces.msg import MissionState
+from grippers_interfaces.msg import MissionState as MissionStateMsg
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import Empty, String
+from std_msgs.msg import Empty
 
 from domain.adapters.fake.fake_arm import FakeArm
 from domain.adapters.fake.fake_base import FakeBase
-from domain.adapters.fake.scripted_interpreter import ScriptedInterpreter
+from domain.adapters.fake.fake_host_link import FakeHostLink, FakeLidar
 from domain.adapters.fake.scripted_perception import ScriptedPerception
 from domain.adapters.logged_port import LoggedPort
 from domain.adapters.real.ros2_arm_driver import Ros2ArmDriver
-from domain.adapters.real.ros2_command_interpreter import Ros2CommandInterpreter
+from domain.adapters.real.ros2_lidar import Ros2Lidar
 from domain.adapters.real.ros2_mecanum_base import Ros2MecanumBase
 from domain.adapters.real.ros2_perception import Ros2Perception
-from domain.task.mission_task import MissionTask, Ports
+from domain.adapters.real.udp_host_link import UdpHostLink
+from domain.task.baseline_mission import BaselineMission, BaselinePorts
+
+# FSM 한 사이클의 목표 주기. Host가 보내는 명령 주기와 맞춘다.
+CYCLE_PERIOD_S = 0.1
 
 
 class MissionOrchestratorNode(Node):
@@ -45,7 +53,7 @@ class MissionOrchestratorNode(Node):
         cb_group = ReentrantCallbackGroup()
 
         self._state_pub = self.create_publisher(
-            MissionState,
+            MissionStateMsg,
             "/mission/state",
             qos_profile=QoSProfile(
                 reliability=ReliabilityPolicy.RELIABLE,
@@ -54,129 +62,72 @@ class MissionOrchestratorNode(Node):
             ),
         )
         self.create_subscription(
-            Empty,
-            "/mission/emergency_stop",
-            self._on_estop,
-            10,
-            callback_group=cb_group,
-        )
-        self._command_queue = queue.Queue()
-        self.create_subscription(
-            String,
-            "/command",
-            self._on_command,
-            10,
-            callback_group=cb_group,
-        )
-        self._estop_flag = threading.Event()
-        self.declare_parameter("use_fake_base", True)
-        self.declare_parameter("use_fake_arm", True)
-        self.declare_parameter("use_fake_perception", True)
-        self.declare_parameter("use_fake_interpreter", True)
+            Empty, "/mission/emergency_stop", self._on_estop, 10,
+            callback_group=cb_group)
 
-        self._fsm_thread = threading.Thread(target=self._run_fsm, daemon=True)
-        self._fsm_thread.start()
-        self.get_logger().info("mission_orchestrator ready")
+        self.declare_parameter("use_fake_base", False)
+        self.declare_parameter("use_fake_arm", False)
+        self.declare_parameter("use_fake_perception", False)
+        self.declare_parameter("use_fake_host", False)
+        self.declare_parameter("host_ip", "192.168.0.10")
 
-    def _on_estop(self, msg):
-        self.get_logger().warn("EMERGENCY STOP received")
-        self._estop_flag.set()
+        use_fake_base = self.get_parameter("use_fake_base").value
+        use_fake_arm = self.get_parameter("use_fake_arm").value
+        use_fake_perception = self.get_parameter("use_fake_perception").value
+        use_fake_host = self.get_parameter("use_fake_host").value
 
-    def _on_command(self, msg):
-        self.get_logger().info(f"[COMMAND] 큐에 추가: {msg.data!r}")
-        self._command_queue.put(msg.data)
-
-    def _run_fsm(self):
-        ports = Ports(
-            base=self._logged("BaseDriver", self._make_base()),
-            arm=self._logged("ArmDriver", self._make_arm()),
-            perception=self._logged("Perception", self._make_perception()),
-            interpreter=self._logged("CommandInterpreter", self._make_interpreter()),
-            estop=self._estop_flag,
-        )
-        task = MissionTask(ports)
-        while rclpy.ok():
-            raw_text = self._command_queue.get()  # 다음 명령이 올 때까지 블로킹 대기
-            self.get_logger().info(f"[MISSION] 시작: {raw_text!r}")
-            try:
-                for state in task.run(raw_text):
-                    self.get_logger().info(f"[MISSION] -> {state.name}")
-                    msg = MissionState()
-                    msg.state = state.name
-                    self._state_pub.publish(msg)
-            except Exception:
-                # 이 except가 없으면 FSM 스레드만 조용히 죽고 노드는 계속 스핀한다 —
-                # /command는 큐에 쌓이기만 하고 /mission/state는 끊겨서, 밖에서는
-                # 멈춘 이유를 알 수 없다. 미션 하나만 버리고 루프는 살려 둔다.
-                self._abort_mission(ports)
-
-    def _abort_mission(self, ports):
-        """미션 실행 중 예외를 수습하고 IDLE로 돌아간다.
-
-        순서가 중요하다 — **로봇을 먼저 세운다**. 예외는 FSM이 어디까지 진행한
-        뒤에 날지 알 수 없고(SCAN 이후라면 베이스가 이미 움직이는 중이다),
-        오케스트레이터가 지시를 멈춰도 base_driver/arm_driver는 별도 프로세스라
-        진행 중인 액션을 알아서 취소하지 않는다.
-
-        정지 호출 자체도 실패할 수 있으므로 각각 따로 감싼다 — base.stop()이
-        실패해도 arm.hold_position()은 시도해야 한다. 두 포트 모두 E-STOP
-        경로라 서비스가 없어도 0.5초 안에 돌아온다.
-
-        노드는 내리지 않는다. bringup.launch.py에 respawn 설정이 없어 한 번
-        내리면 복구되지 않고, 명령 하나가 잘못됐다고 로봇 전체를 못 쓰게 되는
-        것은 과하다."""
-        # rclpy 로거는 logging.Logger가 아니라 exc_info= 를 받지 않는다.
-        self.get_logger().fatal(
-            f"[MISSION] 예외로 중단 — 정지 후 IDLE 복귀\n{traceback.format_exc()}"
+        self._estop = threading.Event()
+        self._host = (FakeHostLink() if use_fake_host
+                      else UdpHostLink(self.get_parameter("host_ip").value,
+                                       logger=self.get_logger()))
+        self._ports = BaselinePorts(
+            base=LoggedPort(FakeBase() if use_fake_base else Ros2MecanumBase(self),
+                            "base", self.get_logger()),
+            arm=LoggedPort(FakeArm() if use_fake_arm else Ros2ArmDriver(self),
+                           "arm", self.get_logger()),
+            perception=LoggedPort(
+                ScriptedPerception() if use_fake_perception else Ros2Perception(self),
+                "perception", self.get_logger()),
+            host=self._host,
+            lidar=(FakeLidar() if use_fake_perception else Ros2Lidar(self)),
+            estop=self._estop,
         )
 
-        try:
-            ports.base.stop()
-        except Exception:
-            self.get_logger().error(
-                f"[MISSION] 중단 처리 중 base.stop() 실패\n{traceback.format_exc()}"
-            )
-        try:
-            ports.arm.hold_position()
-        except Exception:
-            self.get_logger().error(
-                f"[MISSION] 중단 처리 중 arm.hold_position() 실패\n{traceback.format_exc()}"
-            )
+        self._started = 0.0
+        self._contacts = 0
+        self._thread = threading.Thread(target=self._run_forever, daemon=True)
+        self._thread.start()
 
-        msg = MissionState()
-        msg.state = "IDLE"
+    def _on_estop(self, _msg):
+        self.get_logger().warn("E-STOP 수신 — FSM을 즉시 중단시킵니다")
+        self._estop.set()
+
+    def _publish_state(self, name):
+        msg = MissionStateMsg()
+        msg.state = name
+        msg.contact_count = self._contacts
+        msg.elapsed_s = time.monotonic() - self._started
         self._state_pub.publish(msg)
 
-    def _logged(self, name, adapter):
-        return LoggedPort(name, adapter, self.get_logger())
+    def _run_forever(self):
+        """FSM을 계속 돌린다.
 
-    def _make_base(self):
-        use_fake = self.get_parameter("use_fake_base").value
-        if use_fake:
-            self.get_logger().warn("use_fake_base=True — FakeBase 사용 중")
-            return FakeBase()
-        return Ros2MecanumBase(self)
-
-    def _make_arm(self):
-        use_fake = self.get_parameter("use_fake_arm").value
-        if use_fake:
-            self.get_logger().warn("use_fake_arm=True — FakeArm 사용 중")
-            return FakeArm()
-        return Ros2ArmDriver(self)
-
-    def _make_perception(self):
-        use_fake = self.get_parameter("use_fake_perception").value
-        if use_fake:
-            self.get_logger().warn("use_fake_perception=True — ScriptedPerception 사용 중")
-            return ScriptedPerception()
-        return Ros2Perception(self)
-
-    def _make_interpreter(self):
-        use_fake = self.get_parameter("use_fake_interpreter").value
-        if use_fake:
-            self.get_logger().warn("use_fake_interpreter=True — ScriptedInterpreter 사용 중")
-            return ScriptedInterpreter()
-        return Ros2CommandInterpreter(self)
+        `BaselineMission.run()`은 DONE에서 끝난다 — Host가 다음 미션을
+        시작할 수 있어야 하므로 끝나면 새로 만들어 다시 돈다. 미션의
+        시작과 끝을 정하는 것도 Host다."""
+        self._started = time.monotonic()
+        while rclpy.ok():
+            try:
+                for state in BaselineMission(self._ports).run():
+                    self._publish_state(state.name)
+                    time.sleep(CYCLE_PERIOD_S)
+                    if not rclpy.ok():
+                        return
+            except Exception:                    # noqa: BLE001 -- 실기 루프
+                self.get_logger().error(f"FSM 예외:\n{traceback.format_exc()}")
+                self._ports.base.stop()
+                self._ports.arm.hold_position()
+                time.sleep(1.0)
 
 
 def main(args=None):
@@ -186,9 +137,12 @@ def main(args=None):
     executor.add_node(node)
     try:
         executor.spin()
+    except KeyboardInterrupt:
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

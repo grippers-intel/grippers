@@ -1,4 +1,0 @@
-# domain.ports.perception.Perception.measure_opening(box) 대응.
-BoxObservation box
----
-float32 opening_mm

@@ -23,14 +23,11 @@ import time
 
 import rclpy
 from geometry_msgs.msg import Point, Vector3
-from grippers_interfaces.msg import BoxObservation, Detection, DetectionArray
+from grippers_interfaces.msg import Detection, DetectionArray
 from grippers_interfaces.srv import (
     ConfirmGrasp,
-    FindBox,
-    MeasureOpening,
     MonitorClearance,
     ObserveTarget,
-    ScanFloor,
 )
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
@@ -321,24 +318,6 @@ class PerceptionNode(Node):
             self.get_logger().warn("sensor_msgs 미설치 — 카메라 구독 비활성화")
 
         self.create_service(
-            ScanFloor,
-            "perception/scan_floor",
-            self._on_scan_floor,
-            callback_group=cb_group,
-        )
-        self.create_service(
-            FindBox,
-            "perception/find_box",
-            self._on_find_box,
-            callback_group=cb_group,
-        )
-        self.create_service(
-            MeasureOpening,
-            "perception/measure_opening",
-            self._on_measure_opening,
-            callback_group=cb_group,
-        )
-        self.create_service(
             MonitorClearance,
             "perception/monitor_clearance",
             self._on_monitor_clearance,
@@ -504,40 +483,6 @@ class PerceptionNode(Node):
         u = (x1 + x2) / 2.0
         y_obj = -(u - self._rgb_cx) * z_m / self._rgb_fx
         return _standoff_arrival_pose(z_m, y_obj)
-
-    # ---- 서비스 콜백 ----
-    def _on_scan_floor(self, request, response):
-        # TODO: 상자 영역 마스킹 (state_machine.md §4 재진입 방지 방어선) — 실제
-        # 위치 추정이 붙으면, 여기서 상자 ROI와 겹치는 detection을 걸러내야 한다.
-        # 필터링을 빼먹으면 이미 처리된 상자 내부 물체를 계속 재검출해 무한 루프
-        # 방지의 첫 번째 방어선(done_ids/held_ids 필터링)이 무력화된다.
-        if not self.get_parameter("scan_floor_enabled").value:
-            # 안전 게이트 — 모듈 상단 SCAN_FLOOR_ENABLED_DEFAULT 경고 참고.
-            # pose_m이 자리표시자인 채로 SELECT/APPROACH가 실제 베이스를
-            # 움직이는 걸 막는 기본값이다. 구조 검증 때만 명시적으로 켤 것.
-            response.detections = DetectionArray(detections=[])
-            return response
-
-        if self._latest_frame is None:
-            self.get_logger().warn("scan_floor: 프레임 없음 — 빈 목록 반환")
-            response.detections = DetectionArray(detections=[])
-            return response
-
-        if self._hailo_model is not None:
-            frame = _bgr_from_image_msg(self._latest_frame)
-            detections = self._scan_floor_detections_hailo(frame)
-        elif self._cpu_yolo_model is not None:
-            # 단일 프레임이 아니라 여러 프레임을 새로 모은다 — 다중 프레임
-            # 합의 필터(아래 _scan_floor_detections_cpu_yolo 참고)의 입력이
-            # 필요해서, 여기서 미리 떠 둔 self._latest_frame 한 장으로는
-            # 부족하다.
-            detections = self._scan_floor_detections_cpu_yolo()
-        else:
-            self.get_logger().warn("scan_floor: 백엔드 미로드 — 빈 목록 반환")
-            detections = []
-
-        response.detections = DetectionArray(detections=detections)
-        return response
 
     def _scan_floor_detections_hailo(self, frame):
         canvas = self._letterbox(frame, self._hailo_input_size)
@@ -706,23 +651,6 @@ class PerceptionNode(Node):
         response.x = (x1 + x2) / 2.0
         response.h = y2 - y1
         response.w = x2 - x1
-        return response
-
-    def _on_find_box(self, request, response):
-        # request.color는 와이어 필드명이 아직 레거시라 그렇다 — 2026-08-23
-        # 확정 미션 명세서로 domain.values.BoxColor가 Destination(LEFT/RIGHT)
-        # 으로 바뀌었고 지금 이 필드엔 그 이름이 들어온다(domain/adapters/
-        # real/_ros_convert.py 상단 경고 참고).
-        self.get_logger().warn(
-            f"find_box(dest={request.color}): 비전 파이프라인 미구현 — found=False 반환"
-        )
-        response.found = False
-        response.box = BoxObservation()
-        return response
-
-    def _on_measure_opening(self, request, response):
-        self.get_logger().warn("measure_opening: 비전 파이프라인 미구현 — 0.0 반환")
-        response.opening_mm = 0.0
         return response
 
     def _on_monitor_clearance(self, request, response):

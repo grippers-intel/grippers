@@ -1,62 +1,87 @@
-"""시연 baseline 미션 — Host 주도 흐름 (사용자 정리, 2026-08-25).
+"""Pi 미션 FSM — Host 명령을 실행하고 상태를 보고한다 (팀 확정, 2026-08-26).
 
-`domain/task/states.py`의 기존 루프 FSM과 **별개**다(사용자 지시). 기존
-FSM은 Pi가 스스로 SCAN -> SELECT -> TRANSPORT를 하는 구조였는데, 이제
-그 셋을 Host가 가져갔다. 여기서는 그 새 역할 분담을 그대로 표현한다.
+## 이 FSM이 하는 일과 하지 않는 일
 
-흐름
-    1. Host가 명령을 받는다 ("체스말 정리해줘")           <- Host
-    2. Host가 좌표·경로를 계산하고 목표를 고른다           <- Host
-    3. IDLE -> APPROACH. 경로를 따라가며 정면을 감시하고
-       위험하면 미세 회피 후 Host에 보고                   <- Pi (여기)
-    4. Host가 회피를 반영해 수정된 경로를 다시 보낸다      <- Host
-    5. 차체 전면 19cm 정렬을 Host가 판정해 GRASP로 넘긴다  <- Host
-    6. GRASP: 미세 전진 -> 파지 -> 판정 -> CARRY_IDLE      <- Pi (여기)
-    7. 성공 보고 -> Host가 바구니 경로 -> APPROACH_BOX ->
-       라이다로 정지 판정 -> INSERT -> IDLE                <- Pi (여기)
+Host가 물체 좌표, 차량 좌표와 방향, 경로 계산, 차량 제어 명령을 전부
+소유한다. 이 FSM은 **받은 명령을 실행하고, 자기 센서로만 알 수 있는 것을
+판단해 보고할 뿐이다.**
 
-Pi는 "무엇을 할지"를 정하지 않는다. 경로를 따라가고, 팔을 쓰고, 무슨 일이
-있었는지 보고할 뿐이다. 목표 선정과 재계획은 전부 Host 몫이다.
+그래서 여기에는 목표 선정도, 경로 계산도, 좌표 변환도 없다. 상태 전이는
+Host가 보내는 `state`가 정하고, 주행은 Host가 보내는 속도가 정한다. Pi가
+자기 판단으로 상태를 바꾸는 경우는 딱 둘이다 — GRASP/INSERT를 **실행한 뒤**
+그 결과에 따라 다음 상태로 넘어갈 때, 그리고 조건 미충족으로 **넘어가지 않고
+제자리에 머무를** 때.
 
-⚠️ 실기 미검증이다. 실측이 안 된 수치는 `baseline_constants.py`에서 `None`으로
-두었고, 그 값이 필요한 자리는 판정을 포기하고 보고만 한다 — 지어낸 숫자로
-도는 것처럼 보이게 하지 않는다.
+## 네 가지 임무
+
+1. 현 state를 매 사이클 Host에 보고한다.
+2. GRASP 명령이 오면 조건을 판정해 보고한다. 미충족이면 **머무르고
+   수정된 명령을 기다린다**(`preconditions.check_grasp`).
+3. GRASP를 수행하고, CARRY로 전환 가능하면 파지 완료를 보고한다.
+4. INSERT 명령이 오면 조건을 판정해 보고하고, 수행 후 성공 여부와 IDLE
+   복귀 완료를 보고한다.
+
+## 상태
+
+    IDLE          대기. Host 지시를 기다린다.
+    APPROACH      Host 속도대로 주행. GRASP 판정의 출발점.
+    GRASP         파지 수행 (한 번의 execute에서 끝까지 간다).
+    CARRY         물체를 든 채 Host 속도대로 주행. INSERT 판정의 출발점.
+                  Host가 APPROACH_BOX를 지시하면 그 이름으로 보고한다.
+    INSERT        투하 수행 후 IDLE 복귀.
+    DONE          Host가 종료를 지시했다.
+
+GRASP와 INSERT만 "한 번의 execute에서 시퀀스 전체를 수행"한다. 나머지는
+사이클마다 명령을 받아 속도만 내는 얇은 상태다.
+
+## 링크가 끊기면 멈춘다
+
+`latest_command()`의 None은 "정지"가 아니라 "모른다"다. 이 둘을 섞으면
+링크가 끊겼는데 마지막 명령대로 계속 굴러가는 사고가 난다. Host가 차량
+제어를 소유한다는 것은 **Host가 말을 멈추면 차량도 멈춘다**는 뜻이기도
+하다(`LinkWatchdog`).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from domain.ports.baseline_ports import Status
+from domain.ports.baseline_ports import MissionState, Report
 from domain.task import baseline_constants as bc
+from domain.task import preconditions as pc
 from domain.task.floor_grasp_policy import (
     GRIPPER_MAX_SAFE_OPEN_MM,
     HorizontalGraspPlan,
+    _close_width,
     _release_width,
 )
+from domain.task.motion import resolve_motion
 from domain.task.state import State
 
-# states.py의 실측 상수를 그대로 쓴다 — 같은 계층이고, 실측값을 복제하면
-# 한쪽만 고쳐지는 사고가 난다.
-from domain.task.states import CLOSED_MM, GRASP_MIN_MM
+# 그리퍼를 접기 전에 닫아 두는 폭. 벌린 채로 접으면 손가락이 차체에 걸린다
+# (2026-08-25 사용자 지시).
+CLOSED_MM = 9.0
 
-# Host가 보내는 raw YOLO 라벨 -> 실측 교시 프로필.
+# Pi 자기 뎁스캠이 내놓는 raw YOLO 라벨 -> 실측 교시 프로필.
 #
-# 기존 `select_horizontal_grasp_plan`은 검출 bbox의 바닥면 폭으로 프로필을
-# 골랐다 — 그 함수 docstring이 "YOLO subtype이 아직 없으므로"라고 밝힌
-# 임시 휴리스틱이다. baseline에서는 Host가 라벨을 직접 주므로 그 추측이
-# 필요 없다. 폭 휴리스틱이 못 가르던 star/soccer도 여기서는 갈린다.
+# Host는 라벨을 보내지 않는다(명령은 state와 속도 넷뿐이다). 무엇을 집을지는
+# **Pi가 자기 카메라로 확인한다** — 내려가는 것이 이 팔이므로 자기 눈으로 본
+# 것에 맞춰 자세를 고른다. 이것이 Pi가 자기 YOLO를 계속 쓰는 유일한 이유다.
+#
+# 폭 값은 `floor_grasp_policy`의 실측 공식에서 유도한다. 여기에 숫자를 직접
+# 적으면 ros2 프로필과 갈라진다 — 2026-08-26에 실제로 갈라져서 파지가 헐거워진
+# 사고가 있었다(도메인 13.0 vs ros2 7.0).
+_OBJECT_WIDTH_MM = {
+    "queen": ("chess_queen", 17.0),
+    "knight": ("chess_knight", 22.0),
+    "rook": ("chess_rook", 24.5),
+    "box": ("cube", 40.0),
+    "star": ("star_column", 45.0),
+    "soccer": ("soccer_polyhedron", 46.0),
+}
+
 _PROFILE_BY_LABEL = {
-    "queen": HorizontalGraspPlan("chess_queen", GRIPPER_MAX_SAFE_OPEN_MM, 13.0,
-                                 _release_width(17.0)),
-    "knight": HorizontalGraspPlan("chess_knight", GRIPPER_MAX_SAFE_OPEN_MM, 13.0,
-                                  _release_width(22.0)),
-    "rook": HorizontalGraspPlan("chess_rook", GRIPPER_MAX_SAFE_OPEN_MM, 15.0,
-                                _release_width(24.5)),
-    "box": HorizontalGraspPlan("cube", GRIPPER_MAX_SAFE_OPEN_MM, 30.0,
-                               _release_width(40.0)),
-    "star": HorizontalGraspPlan("soccer_polyhedron", GRIPPER_MAX_SAFE_OPEN_MM, 35.0,
-                                _release_width(45.0)),
-    "soccer": HorizontalGraspPlan("soccer_polyhedron", GRIPPER_MAX_SAFE_OPEN_MM, 35.0,
-                                  _release_width(46.0)),
+    label: HorizontalGraspPlan(profile, GRIPPER_MAX_SAFE_OPEN_MM,
+                               _close_width(width_mm), _release_width(width_mm))
+    for label, (profile, width_mm) in _OBJECT_WIDTH_MM.items()
 }
 
 
@@ -65,112 +90,182 @@ def plan_for_label(label):
     return _PROFILE_BY_LABEL.get(label)
 
 
-def basket_stop_distance_m():
-    """라이다가 읽을 때 멈춰야 하는 거리(라이다 원점 기준). 모르면 **None**.
+class LinkWatchdog:
+    """Host 명령이 연속으로 몇 번 빠졌는지 센다.
 
-    사용자가 정한 정지 거리는 **차체 전면** 기준 5cm인데, 라이다가 재는 것은
-    라이다 원점 기준 거리다. 그 둘을 잇는 오프셋이 아직 미실측이라 계산할 수
-    없다 — 지어낸 값으로 팔을 전개하느니 판정을 포기한다.
+    상태 객체가 전이마다 새로 만들어지므로 카운터는 여기 한 곳에 둔다."""
 
-    ⚠️ 실측 후에도 확인할 것: 이 거리가 라이다 최소 측정 거리보다 짧으면
-    표면이 아예 안 잡혀 판정이 불가능하다(`LIDAR_MIN_RANGE_M`)."""
-    offset = bc.LIDAR_TO_CHASSIS_FRONT_M
-    if offset is None:
-        return None
-    return bc.BASKET_APPROACH_STANDOFF_M + offset
+    def __init__(self, timeout_cycles: int = bc.HOST_COMMAND_TIMEOUT_CYCLES):
+        self.timeout_cycles = timeout_cycles
+        self.misses = 0
+
+    def observe(self, command) -> bool:
+        """명령을 받았으면 True. 연속 결측이 상한을 넘으면 False(=링크 끊김)."""
+        if command is not None:
+            self.misses = 0
+            return True
+        self.misses += 1
+        return self.misses < self.timeout_cycles
+
+
+@dataclass
+class BaselinePorts:
+    """Pi 미션이 쓰는 포트 묶음."""
+
+    base: object
+    arm: object
+    perception: object
+    host: object
+    lidar: object
+    estop: object
+    watchdog: LinkWatchdog = field(default_factory=LinkWatchdog)
+
+
+# ── 공통 동작 ──────────────────────────────────────────────────────────────
+
+
+def _drive(ports, command, state_name) -> bool:
+    """Host 속도를 베이스에 낸다. 명령이 부적합하면 정지 + 보고 후 False.
+
+    거부 사유를 그대로 Host에 돌려주는 이유: Pi가 추측해서 둘 중 하나를
+    실행하면 Host는 자기가 무엇을 잘못 보냈는지 영영 모른다."""
+    decision = resolve_motion(command)
+    if not decision.ok:
+        ports.base.stop()
+        ports.host.report(Report.REJECTED, state_name, decision.reason)
+        return False
+    if decision.motion.is_stop:
+        ports.base.stop()
+    else:
+        ports.base.apply_velocity(decision.motion.linear_x,
+                                  decision.motion.linear_y,
+                                  decision.motion.angular_z)
+    return True
+
+
+def _link_ok(ports, state_name, command) -> bool:
+    """워치독. 링크가 끊긴 것으로 보이면 정지하고 보고한다."""
+    if ports.watchdog.observe(command):
+        return True
+    ports.base.stop()
+    ports.host.report(Report.REJECTED, state_name,
+                      f"Host 명령이 {ports.watchdog.misses}사이클 연속 없음 — 정지")
+    return False
+
+
+def _base_stopped(ports, command) -> bool:
+    """지금 정지 상태인가. GRASP/INSERT 판정의 입력이다.
+
+    베이스에 물어보지 않고 명령으로 판단하는 이유: 이 시점의 진실은 "Host가
+    정지를 지시했는가"다. 바퀴의 실제 속도를 읽을 수단이 없기도 하다 —
+    /odom_raw는 명령을 적분할 뿐이라 같은 것을 되돌려준다."""
+    return command is None or command.stop or not command.wants_motion
+
+
+# ── 상태 ──────────────────────────────────────────────────────────────────
 
 
 class BaselineDoneState(State):
-    """미션 1회 종료. 오케스트레이터가 다음 Host 명령을 기다린다."""
+    """Host가 종료를 지시했다. 오케스트레이터가 다음 명령을 기다린다."""
 
-    name = "DONE"
-
-    def __init__(self, ctx=None):
-        self.ctx = ctx
+    name = MissionState.DONE
 
     def execute(self, ports):
+        ports.base.stop()
+        ports.host.report(Report.STATE, self.name)
         return None
 
 
 class BaselineIdleState(State):
-    """Host의 지시를 기다린다. 지시가 오면 곧장 APPROACH로 간다.
+    """대기. Host가 APPROACH를 지시하면 넘어간다."""
 
-    기존 FSM처럼 SCAN·SELECT를 거치지 않는다 — 목표는 Host가 이미 골랐다."""
-
-    name = "IDLE"
+    name = MissionState.IDLE
 
     def execute(self, ports):
-        plan = ports.host.latest_plan()
-        if plan is None or plan.target_label is None:
+        command = ports.host.latest_command()
+        if not _link_ok(ports, self.name, command):
             return self
-        if plan_for_label(plan.target_label) is None:
-            ports.host.report(Status.MISSION_DONE, f"모르는 라벨: {plan.target_label}")
+        ports.host.report(Report.STATE, self.name)
+        if command is None:
+            return self
+        if not _drive(ports, command, self.name):
+            return self
+
+        if command.state == MissionState.APPROACH:
+            return BaselineApproachState()
+        if command.state == MissionState.DONE:
             return BaselineDoneState()
-        ports.host.report(Status.APPROACHING, plan.target_label)
-        return BaselineApproachState(plan)
+        return self
 
 
 class BaselineApproachState(State):
-    """Host가 준 경로를 따라가며 정면을 감시한다.
+    """Host 속도대로 주행하며, GRASP 지시가 오면 조건을 판정한다 (임무 2번).
 
-    GRASP로 넘어갈지는 **Host가 정한다**(지시 5) — 차체 전면 19cm 정렬을
-    오버헤드 이미지로 판정해 `grasp_ready`로 알려준다. Pi는 그 판정을 다시
-    하지 않는다. 오버헤드가 차량과 물체를 동시에 보므로 자기 카메라보다
-    정확한 자리다."""
+    조건이 미충족이면 **여기 머무른다.** 스스로 자세를 고치거나 위치를
+    바꾸지 않는다 — 무엇을 고쳐야 하는지 Host에 알리고 수정된 명령을
+    기다리는 것이 이 상태의 계약이다."""
 
-    name = "APPROACH"
+    name = MissionState.APPROACH
 
-    def __init__(self, plan, avoided=0):
-        self.plan = plan
-        self.avoided = avoided
+    def __init__(self, retries: int = 0):
+        self.retries = retries
 
     def execute(self, ports):
-        plan = ports.host.latest_plan() or self.plan
-        if plan.grasp_ready:
-            return BaselineGraspState(plan)
+        command = ports.host.latest_command()
+        if not _link_ok(ports, self.name, command):
+            return self
+        ports.host.report(Report.STATE, self.name)
+        if command is None:
+            return self
 
-        clearance = ports.perception.monitor_clearance()
-        if clearance.contact_risk:
-            return self._avoid(ports, plan)
+        if command.state == MissionState.GRASP:
+            return self._judge_grasp(ports, command)
 
-        if plan.waypoints:
-            ports.base.drive_to(plan.waypoints[0])
-        return BaselineApproachState(plan, self.avoided)
+        if not _drive(ports, command, self.name):
+            return self
+        if command.state == MissionState.IDLE:
+            return BaselineIdleState()
+        if command.state == MissionState.DONE:
+            return BaselineDoneState()
+        return self
 
-    def _avoid(self, ports, plan):
-        """정면이 위험하다 — 멈추고 옆으로 조금 비킨 뒤 Host에 알린다.
-
-        비킨 사실을 알리면 Host가 그걸 반영한 경로를 다시 준다(지시 4).
-        Pi가 스스로 경로를 다시 짜지 않는 이유는 Pi가 아레나 전체를 못
-        보기 때문이다 — 자기 앞만 보고 크게 돌면 다른 물체로 들어간다."""
+    def _judge_grasp(self, ports, command):
+        """임무 2번 — 조건 판정 후 보고. 충족이면 GRASP로, 아니면 제자리."""
         ports.base.stop()
-        if self.avoided >= bc.MAX_AVOID_STEPS:
-            ports.host.report(Status.AVOIDING, "회피 예산 소진 — 전면 재계획 요청")
-            return BaselineIdleState()
-        step = bc.AVOID_LATERAL_STEP_M
-        if step is None:
-            ports.host.report(Status.AVOIDING, "AVOID_LATERAL_STEP_M 미실측 — 정지만 함")
-            return BaselineIdleState()
-        ports.base.creep_lateral(step)
-        ports.host.report(Status.AVOIDING, f"{step:.3f}m 비킴 — 경로 갱신 요청")
-        return BaselineApproachState(plan, self.avoided + 1)
+        label = ports.perception.identify_target()
+        report = pc.check_grasp(pc.GraspInputs(
+            estop_set=ports.estop.is_set(),
+            base_stopped=_base_stopped(ports, command),
+            gripper_load=ports.arm.get_load(),
+            detected_label=label,
+            profile_known=plan_for_label(label) is not None,
+        ))
+        if not report.ok:
+            ports.host.report(Report.GRASP_BLOCKED, self.name, report.detail)
+            return self
+        ports.host.report(Report.GRASP_READY, self.name, label)
+        return BaselineGraspState(label, self.retries)
 
 
 class BaselineGraspState(State):
-    """미세 전진 -> 파지 -> 부하 판정 -> CARRY_IDLE (지시 6).
+    """파지 수행 (임무 3번).
 
-    파지 동작 자체는 기존 `states.GraspState`에서 실기로 검증된 순서를 그대로
-    따른다 — 벌리고 내려가고, 닫고, midpoint에서 다시 보고, safe를 거쳐
-    IDLE로 접는다. 바뀐 것은 앞에 미세 전진이 붙고 결과를 Host에 보고한다는
-    점뿐이다."""
+    실기로 검증된 순서를 그대로 따른다 — 벌리고, 내려가고, 물체를 턱 사이로
+    밀어 넣고, 닫고, midpoint에서 부하를 다시 보고, safe를 거쳐 CARRY로 접는다.
 
-    name = "GRASP"
+    ⚠️ 마지막이 IDLE이 아니라 **CARRY**인 것이 중요하다. 물체를 문 채 IDLE로
+    접으면 그리퍼가 라이다 정면을 79% 가려 바구니를 못 본다(2026-08-26 실측,
+    floor_grasp_profiles.CARRY_RAW 주석)."""
 
-    def __init__(self, plan):
-        self.plan = plan
+    name = MissionState.GRASP
+
+    def __init__(self, label, retries: int = 0):
+        self.label = label
+        self.retries = retries
 
     def execute(self, ports):
-        gp = plan_for_label(self.plan.target_label)
+        ports.host.report(Report.STATE, self.name)
+        gp = plan_for_label(self.label)
         ports.base.stop()
 
         if not ports.base.creep_forward(bc.GRASP_CREEP_FORWARD_MM / 1000.0):
@@ -179,117 +274,164 @@ class BaselineGraspState(State):
         if not ports.arm.move_to_floor_pose(gp.profile, "safe"):
             return self._failed(ports, "safe 자세 실패")
         ports.arm.set_gripper(gp.preopen_width_mm)
-        ports.perception.remember_target(self.plan.target_label)
+        ports.perception.remember_target(self.label)
         if not ports.arm.move_to_floor_pose(gp.profile, "grasp"):
             return self._failed(ports, "grasp 자세 실패")
 
-        ports.arm.set_gripper(max(GRASP_MIN_MM, gp.close_width_mm))
+        ports.arm.set_gripper(gp.close_width_mm)
         load = ports.arm.get_load()
         lifted = load >= bc.LOAD_THRESHOLD and ports.arm.move_to_floor_pose(
             gp.profile, "midpoint")
         held = lifted and ports.arm.get_load() >= bc.LOAD_THRESHOLD
         cleared = held and ports.arm.move_to_floor_pose(gp.profile, "safe")
         if not cleared:
-            return self._failed(ports, "들어 올리지 못함")
+            return self._failed(ports, f"들어 올리지 못함 (부하 {load:.4f})")
 
-        # "idle"이 아니라 "carry" — 물체를 문 채로는 IDLE이 라이다 정면을
-        # 가린다(2026-08-26 실측). floor_grasp_profiles.CARRY_RAW 주석 참고.
         if not ports.arm.move_to_floor_pose(gp.profile, "carry"):
-            return self._failed(ports, "CARRY 복귀 실패")
-        if ports.arm.get_load() < bc.LOAD_THRESHOLD:
-            return self._failed(ports, "CARRY_IDLE에서 빈손")
+            return self._failed(ports, "CARRY 전환 실패")
+        carried = ports.arm.get_load()
+        if carried < bc.LOAD_THRESHOLD:
+            return self._failed(ports, f"CARRY에서 빈손 (부하 {carried:.4f})")
 
-        ports.host.report(Status.GRASP_DONE, self.plan.target_label)
-        return BaselineApproachBoxState(self.plan)
+        ports.host.report(Report.GRASP_DONE, MissionState.CARRY,
+                          f"{self.label} 부하 {carried:.4f}")
+        return BaselineCarryState(self.label)
 
     def _failed(self, ports, detail):
-        """파지 실패 — 정면을 다시 보고 두 갈래로 가른다 (사용자 지시).
+        """파지 실패 — 팔을 붙잡고 APPROACH로 되돌아가 Host의 판단을 기다린다.
 
-        아직 보인다  -> 같은 목표로 경로만 다시 받는다
-        사라졌다     -> 같은 클래스 중 최근접으로 교체를 요청한다
-
-        `confirm_grasp()`의 False는 "아직 있다"와 "판정 불가"를 함께 뜻한다.
-        둘 다 재시도로 보낸다 — 모를 때 목표를 버리는 것보다 한 번 더 해보는
-        쪽이 정보를 덜 잃는다."""
+        Pi가 스스로 재시도하지 않는다. 다시 시도할지, 다른 물체로 바꿀지,
+        어디로 옮겨 설지는 아레나 전체를 보는 Host가 정한다."""
         ports.base.stop()
         ports.arm.hold_position()
-        vanished = ports.perception.confirm_grasp()
-        status = Status.GRASP_FAILED_RETARGET if vanished else Status.GRASP_FAILED_RETRY
-        ports.host.report(status, detail)
-        return BaselineIdleState()
+        ports.host.report(Report.GRASP_FAILED, MissionState.APPROACH, detail)
+        return BaselineApproachState(self.retries + 1)
 
 
-class BaselineApproachBoxState(State):
-    """바구니 앞으로 이동하고, 라이다로 정지 시점을 판정한다 (지시 7).
+class BaselineCarryState(State):
+    """물체를 든 채 Host 속도대로 주행하고, INSERT 지시가 오면 판정한다 (임무 4번).
 
-    APPROACH와 같은 방식으로 Host 경로를 따라가되, 마지막 정지 판정만
-    라이다가 한다 — 오버헤드는 바구니 입구까지의 거리를 cm 단위로 재기에
-    각도가 나쁘고, 그 자리에서 팔을 전개하므로 틀리면 비싸다."""
+    Host가 `CARRY`를 보내든 `APPROACH_BOX`를 보내든 하는 일은 같다 — 받은
+    속도를 낸다. 보고하는 이름만 Host가 부른 이름을 따른다."""
 
-    name = "APPROACH_BOX"
+    name = MissionState.CARRY
 
-    def __init__(self, plan):
-        self.plan = plan
+    def __init__(self, label, reported_as: str = MissionState.CARRY):
+        self.label = label
+        self.reported_as = reported_as
 
     def execute(self, ports):
-        plan = ports.host.latest_plan() or self.plan
-        stop_at = basket_stop_distance_m()
-        if stop_at is None:
-            ports.host.report(
-                Status.APPROACHING_BOX,
-                "LIDAR_TO_CHASSIS_FRONT_M 미실측 — 정지 판정 불가")
-            ports.base.stop()
-            return BaselineIdleState()
+        command = ports.host.latest_command()
+        if not _link_ok(ports, self.reported_as, command):
+            return self
 
-        face = ports.lidar.basket_face(plan.basket_bearing_rad)
-        if face.ok and face.distance_m <= stop_at:
-            ports.base.stop()
-            return BaselineInsertState(plan)
+        # 이번 사이클에 Host가 부른 이름으로 보고한다. 직전 사이클의 이름을
+        # 쓰면 Host가 APPROACH_BOX로 넘긴 첫 사이클이 CARRY로 보고돼, Host의
+        # 상태 추적이 한 사이클씩 뒤처진다.
+        if command is not None and command.state in (
+                MissionState.CARRY, MissionState.APPROACH_BOX):
+            self.reported_as = command.state
+        ports.host.report(Report.STATE, self.reported_as)
+        if command is None:
+            return self
 
-        if plan.waypoints:
-            ports.base.drive_to(plan.waypoints[0])
-        return BaselineApproachBoxState(plan)
+        if command.state == MissionState.INSERT:
+            return self._judge_insert(ports, command)
+
+        if not _drive(ports, command, self.reported_as):
+            return self
+        if command.state in (MissionState.CARRY, MissionState.APPROACH_BOX):
+            return BaselineCarryState(self.label, self.reported_as)
+        if command.state == MissionState.DONE:
+            return BaselineDoneState()
+        return self
+
+    def _judge_insert(self, ports, command):
+        """임무 4번 앞단 — 조건 판정 후 보고. 충족이면 INSERT로, 아니면 제자리."""
+        ports.base.stop()
+        face = ports.lidar.basket_face()
+        gp = plan_for_label(self.label)
+        report = pc.check_insert(pc.InsertInputs(
+            estop_set=ports.estop.is_set(),
+            base_stopped=_base_stopped(ports, command),
+            gripper_load=ports.arm.get_load(),
+            face_ok=face.ok,
+            face_distance_m=face.distance_m,
+            face_yaw_error_rad=face.yaw_error_rad,
+            face_reason=face.reason,
+            profile=gp.profile if gp else None,
+        ))
+        if not report.ok:
+            ports.host.report(Report.INSERT_BLOCKED, self.reported_as, report.detail)
+            return self
+        ports.host.report(
+            Report.INSERT_READY, self.reported_as,
+            f"라이다 {face.distance_m:.3f}m yaw {face.yaw_error_rad:+.3f}rad")
+        return BaselineInsertState(self.label)
 
 
 class BaselineInsertState(State):
-    """투하 자세로 전개해 물체를 떨어뜨리고 IDLE로 접는다 (지시 7).
+    """투하 후 IDLE 복귀 (임무 4번 뒷단).
 
-    바닥 파지 높이로 내려가지 않는다 — 실측 DROP_195로 직접 전개한 뒤
+    바닥 파지 높이로 내려가지 않는다 — 실측 DROP 자세로 직접 전개한 뒤
     그리퍼를 연다. 활짝 열지 않고 물체가 빠져나올 만큼만 열며, 접기 **전에**
-    닫는다(사용자 지시 2026-08-25, 기존 InsertState와 같은 원칙)."""
+    닫는다(사용자 지시 2026-08-25).
 
-    name = "INSERT"
+    성공 판정은 **부하 변화**로 한다. 놓기 전후를 비교해 유의하게 줄었으면
+    물체가 손을 떠난 것이다 — 2026-08-26 실기에서 0.0626 -> 0.0313이었다.
+    이것으로 "바구니 안에 들어갔는가"까지는 알 수 없다. 그건 오버헤드로
+    보는 Host의 판단이고, Pi는 자기가 아는 것만 보고한다."""
 
-    def __init__(self, plan):
-        self.plan = plan
+    name = MissionState.INSERT
+
+    # 놓임으로 볼 부하 감소량. 2026-08-26 실기 감소폭이 0.0274였다.
+    RELEASE_LOAD_DROP = 0.015
+
+    def __init__(self, label):
+        self.label = label
+
+    def execute(self, ports):
+        ports.host.report(Report.STATE, self.name)
+        ports.base.stop()
+        gp = plan_for_label(self.label)
+
+        if not ports.arm.move_to_floor_pose(gp.profile, "drop"):
+            ports.arm.hold_position()
+            ports.host.report(Report.INSERT_FAILED, self.name, "투하 자세 실패")
+            return BaselineCarryState(self.label)
+
+        before = ports.arm.get_load()
+        ports.arm.set_gripper(gp.release_width_mm)
+        after = ports.arm.get_load()
+        released = after <= before - self.RELEASE_LOAD_DROP
+
+        ports.arm.set_gripper(CLOSED_MM)
+        folded = ports.arm.move_to_floor_pose(gp.profile, "idle")
+
+        if released:
+            ports.host.report(Report.INSERT_DONE, self.name,
+                              f"{self.label} 부하 {before:.4f} -> {after:.4f}")
+        else:
+            # 놓이지 않았는데 IDLE로 접으면 물체를 문 채 라이다를 가린다.
+            # 그래도 접기는 한다 — 팔을 전개한 채 두는 편이 더 위험하다.
+            ports.host.report(Report.INSERT_FAILED, self.name,
+                              f"부하가 안 줄었다 ({before:.4f} -> {after:.4f})")
+
+        ports.host.report(Report.IDLE_DONE, MissionState.IDLE,
+                          "복귀 완료" if folded else "IDLE 복귀 실패")
+        return BaselineIdleState()
+
+
+class BaselineEstopState(State):
+    """E-STOP. 정지하고 팔을 붙잡는다 — 파지물이 떨어지지 않도록."""
+
+    name = MissionState.ESTOP
 
     def execute(self, ports):
         ports.base.stop()
-        gp = plan_for_label(self.plan.target_label)
-        if not ports.arm.move_to_floor_pose(gp.profile, "drop"):
-            ports.arm.hold_position()
-            ports.host.report(Status.INSERT_DONE, "투하 자세 실패")
-            return BaselineIdleState()
-
-        ports.arm.set_gripper(gp.release_width_mm)
-        ports.arm.set_gripper(CLOSED_MM)
-        ports.arm.move_to_floor_pose(gp.profile, "idle")
-
-        ports.host.report(Status.INSERT_DONE, self.plan.destination or "")
-        ports.host.report(Status.MISSION_DONE, "")
-        return BaselineDoneState()
-
-
-@dataclass
-class BaselinePorts:
-    """baseline이 쓰는 포트 묶음. 기존 `Ports`에 host·lidar가 더해진다."""
-
-    base: object
-    arm: object
-    perception: object
-    host: object
-    lidar: object
-    estop: object
+        ports.arm.hold_position()
+        ports.host.report(Report.STATE, self.name)
+        return None
 
 
 class BaselineMission:
@@ -302,7 +444,6 @@ class BaselineMission:
         state = BaselineIdleState()
         while state is not None:
             if self.ports.estop.is_set():
-                from domain.task.states import EstopState
-                state = EstopState()
+                state = BaselineEstopState()
             yield state
             state = state.execute(self.ports)

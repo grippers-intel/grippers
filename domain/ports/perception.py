@@ -3,40 +3,25 @@ grippers_perception의 LearnedPerception이 이걸 구현한다."""
 
 from abc import ABC, abstractmethod
 
-from domain.values import BoxObservation, Clearance, Destination, Detection
+from domain.values import Clearance
 
 
 class Perception(ABC):
     @abstractmethod
-    def scan_floor(self) -> list[Detection]:
-        """바닥을 전역 관측해 검출 목록을 반환한다.
-        더 처리할 대상이 없으면(상자 영역 마스킹 포함) **빈 리스트**를 반환해야 한다 —
-        `SCAN` 은 빈 리스트를 '남은 대상 없음'으로 해석해 `DONE` 으로 전이한다.
+    def identify_target(self) -> str | None:
+        """정면에서 집을 물체를 자기 뎁스 카메라로 식별한다. raw YOLO 라벨.
 
-        **실패(서비스 부재 · 응답 없음)도 빈 리스트.** 관측이 안 되는데 계속 도는
-        것보다 미션을 끝내고 이유를 로그로 남기는 편이 낫다."""
+        **못 찾거나 확신할 수 없으면 `None`** — GRASP 조건 판정이 그걸
+        미충족으로 읽어 Host에 되돌려준다(preconditions.check_grasp).
 
-    @abstractmethod
-    def find_box(self, dest: Destination) -> BoxObservation | None:
-        """지정한 목적지(왼쪽/오른쪽) 바구니를 관측한다. 찾지 못하면 **`None`** 을
-        반환해야 한다 — `TRANSPORT` 는 `None` 을 받으면 대상을 보류 등록하고
-        `SCAN` 으로 복귀한다. 서비스 부재 · 응답 없음도 같은 `None` 이다.
+        왜 Pi가 이걸 하는가. 2026-08-26 팀 확정으로 Host 명령에는 좌표도
+        라벨도 없다(state와 속도 넷뿐). 그런데 **내려가는 것은 이 팔**이고,
+        어떤 교시 자세로 내려갈지는 무엇을 집는지에 달려 있다. 그래서
+        "무엇이 앞에 있는가"만은 Pi가 자기 눈으로 확인한다.
 
-        ⚠️ 2026-08-23 확정 미션 명세서: 바구니 좌표는 하드코딩이고 색 탐색은
-        하지 않는다. 그래도 이 메서드가 남아 있는 이유는, 하드코딩된 좌표
-        근처에서 실제 바구니 자세(opening_mm·long_axis_rad 등 INSERT가 쓰는
-        정밀값)를 확인하는 역할까지는 아직 없애지 않았기 때문이다 — "색으로
-        어디 있는지 찾는다"에서 "위치는 이미 알고, 그 자리의 상세를 잰다"로
-        의미가 바뀌었을 뿐이다."""
-
-    @abstractmethod
-    def measure_opening(self, box: BoxObservation) -> float | None:
-        """`box` 앞에 정렬한 상태에서 입구 폭(mm)을 정밀 실측한다.
-        `POSE_PLAN` 이 이 값으로 φ 해 구간을 계산한다.
-
-        **실측하지 못하면(서비스 부재 · 응답 없음) `None`** — '해 없음' 취급이라
-        `POSE_PLAN` 이 `REJECT` 로 보낸다. 입구 폭을 모르는 채로 투입을 시도하면
-        상자 테두리에 물체를 찍는다."""
+        Host의 Geti 모델과 충돌하지 않는다 — 저쪽은 아레나 전체에서 목표를
+        고르는 일이고, 이쪽은 이미 정해진 목표를 코앞에서 확인하는 일이다.
+        훈련 데이터부터 다르다(이 모델은 로봇 시점 합성 데이터로 배웠다)."""
 
     @abstractmethod
     def monitor_clearance(self) -> Clearance:

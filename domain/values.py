@@ -60,13 +60,6 @@ class Detection:
     confidence: float
 
 
-@dataclass
-class BoxObservation:
-    dest: Destination
-    pose_m: Pose2D
-    opening_mm: float
-    long_axis_rad: float
-
 
 @dataclass
 class Clearance:

@@ -19,7 +19,9 @@ ARM_NODE = (
     / "grippers_arm"
     / "arm_driver_node.py"
 )
-DOMAIN_STATES = pathlib.Path(__file__).resolve().parent.parent / "domain" / "task" / "states.py"
+DOMAIN_MISSION = (pathlib.Path(__file__).resolve().parent.parent
+                  / "domain" / "task" / "baseline_mission.py")
+DOMAIN_POLICY = DOMAIN_MISSION.with_name("floor_grasp_policy.py")
 GRIPPER_CALIBRATION = ARM_NODE.with_name("gripper_calibration.py")
 
 
@@ -180,14 +182,15 @@ def test_gripper_checks_servo_and_position_write_result():
 
 def test_gripper_calibration_matches_measured_safe_contract():
     calibration = _load_gripper_calibration()
-    domain = _module_constants(DOMAIN_STATES, {"CLOSED_MM", "OPEN_MM"})
+    domain = _module_constants(DOMAIN_MISSION, {"CLOSED_MM"})
+    domain.update(_module_constants(DOMAIN_POLICY, {"GRIPPER_MAX_SAFE_OPEN_MM"}))
 
     assert calibration.GRIPPER_CALIBRATION_POINTS == (
         (9.0, 1150),
         (96.0, 1578),
         (168.0, 2000),
     )
-    assert domain == {"CLOSED_MM": 9.0, "OPEN_MM": 168.0}
+    assert domain == {"CLOSED_MM": 9.0, "GRIPPER_MAX_SAFE_OPEN_MM": 168.0}
 
 
 def test_gripper_calibration_interpolates_and_clamps():
@@ -496,11 +499,12 @@ def test_domain_grasp_state_also_opens_before_descending():
     """FSM도 도구와 같은 순서여야 한다 — safe로 올라간 뒤 그리퍼를 열고,
     그다음에 grasp로 내려간다(사용자 지시, 2026-08-24). 도구만 고치고 FSM이
     반대로 남아 있으면 자동 시연에서 같은 사고가 난다."""
-    source = DOMAIN_STATES.read_text(encoding="utf-8")
-    grasp = source[source.index("class GraspState"):source.index("class TransportState")]
+    source = DOMAIN_MISSION.read_text(encoding="utf-8")
+    grasp = source[source.index("class BaselineGraspState"):
+                   source.index("class BaselineCarryState")]
 
-    open_at = grasp.index("set_gripper(plan.preopen_width_mm)")
-    descend_at = grasp.index('move_to_floor_pose(plan.profile, "grasp")')
+    open_at = grasp.index("set_gripper(gp.preopen_width_mm)")
+    descend_at = grasp.index('move_to_floor_pose(gp.profile, "grasp")')
     assert open_at < descend_at
 
 

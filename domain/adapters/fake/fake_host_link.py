@@ -1,31 +1,36 @@
-"""baseline 미션용 Fake — 하드웨어·네트워크 없이 FSM을 끝까지 굴린다."""
+"""Pi 미션용 Fake — 하드웨어·네트워크 없이 FSM을 끝까지 굴린다."""
 
-from domain.adapters.fake.fake_base import FakeBase
-from domain.ports.baseline_ports import BasketFace, HostLink, HostPlan, Lidar
+from domain.ports.baseline_ports import BasketFace, HostCommand, HostLink, Lidar
 
 
 class FakeHostLink(HostLink):
-    """`script`에 HostPlan을 차례로 넣어두면 한 번 호출에 하나씩 내준다.
+    """`script`에 HostCommand를 차례로 넣어두면 한 번 호출에 하나씩 내준다.
 
-    소진되면 마지막 것을 계속 돌려준다 — ScriptedPerception.scan_floor와 같은
-    관례다. 보고는 `reports`에 (status, detail)로 쌓여 테스트에서 확인한다."""
+    소진되면 마지막 것을 계속 돌려준다 — 이 저장소의 다른 스크립트 더블과
+    같은 관례다. `None`을 넣으면 "명령이 안 왔다"를 흉내낸다(워치독 테스트용).
+
+    보고는 `reports`에 (report, state, detail)로 쌓인다."""
 
     def __init__(self, script: list | None = None):
         self._script = list(script) if script else [None]
         self._idx = 0
         self.reports: list = []
 
-    def latest_plan(self) -> HostPlan | None:
-        plan = self._script[min(self._idx, len(self._script) - 1)]
+    def latest_command(self) -> HostCommand | None:
+        command = self._script[min(self._idx, len(self._script) - 1)]
         self._idx += 1
-        return plan
+        return command
 
-    def report(self, status: str, detail: str = "") -> None:
-        self.reports.append((status, detail))
+    def report(self, report: str, state: str, detail: str = "") -> None:
+        self.reports.append((report, state, detail))
 
     @property
-    def reported_statuses(self) -> list:
-        return [status for status, _detail in self.reports]
+    def reported_kinds(self) -> list:
+        return [report for report, _state, _detail in self.reports]
+
+    @property
+    def reported_states(self) -> list:
+        return [state for _report, state, _detail in self.reports]
 
 
 class FakeLidar(Lidar):
@@ -41,38 +46,8 @@ class FakeLidar(Lidar):
         self._idx = 0
         self.calls = 0
 
-    def basket_face(self, bearing_rad: float) -> BasketFace:
+    def basket_face(self, bearing_rad: float = 0.0) -> BasketFace:
         self.calls += 1
         face = self._script[min(self._idx, len(self._script) - 1)]
         self._idx += 1
         return face
-
-
-class FakeBaselineBase(FakeBase):
-    """기존 FakeBase에 baseline이 요구하는 미세 이동 두 가지를 더한다.
-
-    ⚠️ 실제 `Ros2MecanumBase`에는 아직 이 두 메서드가 없다 — baseline을
-    실기로 돌리려면 배선해야 한다(BASELINE_MISSION_TODO.md)."""
-
-    def __init__(self, *args, creep_ok: bool = True, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._creep_ok = creep_ok
-        self.creep_forward_calls: list = []
-        self.creep_lateral_calls: list = []
-        self.drive_calls: list = []
-        self.stop_calls = 0
-
-    def drive_to(self, target) -> bool:
-        self.drive_calls.append(target)
-        return super().drive_to(target)
-
-    def creep_forward(self, distance_m: float) -> bool:
-        self.creep_forward_calls.append(distance_m)
-        return self._creep_ok
-
-    def creep_lateral(self, distance_m: float) -> bool:
-        self.creep_lateral_calls.append(distance_m)
-        return self._creep_ok
-
-    def stop(self) -> None:
-        self.stop_calls += 1
