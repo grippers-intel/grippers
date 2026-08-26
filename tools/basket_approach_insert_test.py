@@ -107,21 +107,47 @@ PROFILE = "chess_queen"
 # 라이다로 하니, 중간에 오프셋을 끼우면 오차만 하나 더 생긴다. 2026-08-26에
 # 판으로 잰 오프셋(4.54cm)과 바구니로 잰 오프셋(1.9cm)이 2.6cm 어긋나 있어
 # 실제로 믿을 수 없는 값이기도 하다(바구니 앞턱이 튀어나온 형상 탓으로 추정).
-TARGET_LIDAR_M = 0.1386
+# 2026-08-26 2차 실기에서 0.1386을 목표로 잡았더니 0.1301에서 멈췄다 —
+# 아래 ARRIVE_TOLERANCE_M 주석의 구조적 오버슈트 때문이다. 둘 다 투하에
+# 성공했으므로 **검증된 창은 [0.130, 0.139]**이고, 이제 오버슈트가
+# 목표 아래로 내려가지 않게 고쳤으므로 목표를 창의 위쪽 끝에 맞춘다.
+#
+# 아래로 못 내리는 이유가 따로 있다. 라이다 판독 약 0.125m에서 빔이
+# 바구니 테두리를 넘어가 **바구니를 통째로 놓친다**(basket_lidar_align의
+# beam_height_m 참고). 0.1301에서 잰 빔 높이가 114.0mm로 테두리까지
+# 1.0mm밖에 안 남았었다. 그래서 이 목표값은 "더 붙이면 좋다"가 아니라
+# **절벽에서 떨어져 있으라**는 값이다.
+TARGET_LIDAR_M = 0.140
 
-# 목표에 이만큼 들어오면 도착으로 본다. 버스트 하나가 약 21mm라 그보다
-# 작게 잡되, 라이다 잡음(잔차 2.8mm 수준)보다는 크게 둔다.
-ARRIVE_TOLERANCE_M = 0.005
+# 목표에 이만큼 들어오면 도착으로 본다.
+#
+# 2026-08-26: 5mm였는데 **최소 버스트 이동량(15mm)보다 작아서** 구조적으로
+# 지나쳤다. 남은 거리가 6mm였을 때 "도착 아님"으로 판정하고 최소 버스트
+# 15mm를 나갈 수밖에 없어 목표를 8.5mm 지나쳤다. 허용치가 최소 이동량보다
+# 작으면 반드시 이렇게 된다.
+#
+# 그래서 10mm로 올리고, 그와 별개로 "남은 거리가 최소 버스트 이동량보다
+# 작으면 더 나눌 수 없으니 도착으로 친다"는 규칙을 넣었다. 데드밴드 때문에
+# 버스트를 15mm보다 잘게 못 쪼개므로, **실효 도착 창은 결국 15mm가**
+# 정한다 — 이 상수를 더 올리기 전에는 15mm 아래로 못 내려간다.
+ARRIVE_TOLERANCE_M = 0.010
 
-# 이보다 가까워지면 판단을 기다리지 않고 즉시 멈춘다. 목표보다 3cm 앞이고,
-# 빔이 테두리를 넘는 하한(라이다 기준 12.5cm)과도 겹치지 않는다.
-EMERGENCY_MIN_M = 0.105
+# 이보다 가까워지면 판단을 기다리지 않고 즉시 멈춘다.
+#
+# 2026-08-26: 0.105였는데 **닿을 수 없는 값이었다**. 정지 창이 [0.140,
+# 0.155]이고 그 아래는 절벽(0.125)이라, 0.105를 읽는 상황은 이미 바구니를
+# 놓친 뒤다. 절벽 바로 아래로 올려 둔다 — 정상 주행이면 절대 안 걸리고,
+# 걸렸다면 "보고 있는 게 우리가 교정한 그 면이 아니다"라는 뜻이다.
+EMERGENCY_MIN_M = 0.120
 
 # 실제로 바퀴가 도는 최저 속도. 낮추지 말 것 — 아래로는 아무리 오래 줘도
 # 안 움직이는데 /odom_raw는 움직였다고 보고한다(2026-08-24 실기).
 BURST_SPEED_MPS = 0.06
 BURST_S = 0.35          # 약 21mm
 MIN_BURST_S = 0.25      # 이보다 짧으면 정지마찰을 못 이길 수 있다
+# 한 사이클에 앞으로 갈 수 있는 최소 거리. 이보다 잘게 못 쪼개므로 도착
+# 판정의 실효 분해능이 곧 이 값이다.
+MIN_BURST_TRAVEL_M = MIN_BURST_S * BURST_SPEED_MPS
 NUDGE_S = 0.20          # 파지 전 수동 미세 전진 한 번
 
 SETTLE_S = 0.35         # 정지 후 스캔이 안정될 때까지
@@ -504,7 +530,10 @@ def phase_approach(node, keys):
             print(f"  ⛔ 비상정지 — {distance:.3f} m 는 하한 {EMERGENCY_MIN_M:.3f} m 안쪽입니다.")
             return None
 
-        if distance <= TARGET_LIDAR_M + ARRIVE_TOLERANCE_M:
+        # 남은 거리를 최소 버스트보다 잘게 못 쪼갠다 — 여기서 한 번 더
+        # 나가면 반드시 목표 아래로 내려간다. 그래서 도착으로 친다.
+        if (distance <= TARGET_LIDAR_M + ARRIVE_TOLERANCE_M
+                or remaining < MIN_BURST_TRAVEL_M):
             node.stop()
             node.beep()
             print()
@@ -516,6 +545,9 @@ def phase_approach(node, keys):
                   f"잔차 {fit.residual_m * 1000:.1f} mm   점 {fit.point_count}개")
             print(f"    뎁스 참고  = {depth_str}")
             print(f"    이동 거리  = 약 {travelled * 1000:.0f} mm ({cycle} 사이클)")
+            print(f"    빔 높이    = {align.beam_height_m(distance) * 1000:.1f} mm "
+                  f"(테두리 {align.BASKET_RIM_HEIGHT_M * 1000:.0f}mm까지 "
+                  f"{(align.BASKET_RIM_HEIGHT_M - align.beam_height_m(distance)) * 1000:+.1f}mm)")
             print(BANNER)
             return fit
 

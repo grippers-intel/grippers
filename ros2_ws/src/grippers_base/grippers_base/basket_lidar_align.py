@@ -75,8 +75,10 @@ FRONT_OFFSET_DEG = 90.0
 # 바구니 테두리 높이(2026-08-20 실측, floor_grasp_profiles.py와 같은 값).
 BASKET_RIM_HEIGHT_M = 0.115
 
-# 바구니 폭(x 방향). Host aruco/config.py의 BOX_W와 같은 값이다.
-BASKET_FACE_WIDTH_M = 0.210
+# 바구니 정면의 실제 폭. 2026-08-26 접근 실기에서 라이다로 직접 쟀다 —
+# 방위각 창이 자르기 전 구간(0.18~0.53m)의 겉보기 폭이 233~251mm로
+# 일관됐다. Host aruco/config.py의 BOX_W(210mm)와 32mm 다르다.
+BASKET_FACE_WIDTH_M = 0.242
 
 # 벽과 바구니를 가르는 깊이. 바구니가 벽에서 175mm 나와 있으므로 그보다
 # 넉넉히 작게 잡아야 벽이 같은 덩어리로 묶이지 않는다.
@@ -103,10 +105,16 @@ DEFAULT_MIN_POINTS = 5
 # 계속 실패한다. 그때는 이 값을 올리되, 위 모서리 수치(14.9mm)보다는
 # 아래에 두어야 검사가 의미를 유지한다.
 DEFAULT_MAX_RESIDUAL_M = 0.010
-# 정면을 비스듬히 보면 겉보기 폭이 줄어든다. 하한을 폭의 절반으로 둬서
-# 45도까지는 받아들이고, 상한은 벽이 섞였을 때를 걸러낸다.
-DEFAULT_MIN_FACE_WIDTH_M = 0.10
-DEFAULT_MAX_FACE_WIDTH_M = 0.32
+# 겉보기 폭의 허용 범위는 **거리에 따라 달라진다** — 고정 상수로 두면
+# 안 된다(2026-08-26 접근 실기에서 드러났다). 자세한 근거는
+# face_width_bounds() 참고. 아래 두 값은 그 함수가 쓰는 비율이다.
+#
+# 하한을 절반으로 두는 이유: 정면을 비스듬히 보면 겉보기 폭이 cos만큼
+# 줄어들어, 45도까지는 받아들이겠다는 뜻이다.
+FACE_WIDTH_MIN_RATIO = 0.50
+# 상한: 실측 겉보기 폭이 예측의 0.96~1.02배였다. 잡음과 가장자리 점을
+# 감안해 1.15배까지 받는다.
+FACE_WIDTH_MAX_RATIO = 1.15
 
 
 class FaceFit(NamedTuple):
@@ -200,6 +208,38 @@ def select_face_points(points: list, expected_bearing_rad: float,
     ]
 
 
+def face_width_bounds(distance_m: float,
+                      window_rad: float = DEFAULT_BEARING_WINDOW_RAD,
+                      face_width_m: float = BASKET_FACE_WIDTH_M):
+    """그 거리에서 **볼 수 있는** 겉보기 폭의 하한·상한을 낸다.
+
+    2026-08-26 접근 실기에서 폭 검사가 조용히 무의미해지는 것을 발견해
+    넣었다. 가까워지면 겉보기 폭이 바구니가 아니라 **방위각 창**으로
+    결정된다 — 창이 잘라 낸 폭은 `2 * 거리 * tan(창)`이고, 실측이 이
+    예측과 0.96~1.02배로 맞았다:
+
+        거리 0.130m -> 창 182mm, 실측 182mm
+        거리 0.145m -> 창 203mm, 실측 196mm
+        거리 0.177m -> 창 248mm(> 바구니 242mm) -> 실측 242mm
+        거리 0.532m -> 바구니 242mm            -> 실측 239mm
+
+    그래서 기대 폭은 `min(바구니 폭, 창이 자른 폭)`이다. 고정 상수
+    (예전의 100~320mm)로 두면 근거리에서 상한이 너무 헐거워 아무것도
+    못 거른다.
+
+    ⚠️ **한계**: 창이 바구니보다 좁아지는 거리
+    (`WIDTH_TEST_USEFUL_ABOVE_M`) 아래로는 벽이 섞여도 폭이 똑같이 창
+    폭으로 나오므로, 이 검사는 판별력을 잃는다. 그 구간에서는 잔차와
+    점 개수가 유일한 방어선이다."""
+    geometric_limit = 2.0 * distance_m * math.tan(window_rad)
+    visible = min(face_width_m, geometric_limit)
+    return FACE_WIDTH_MIN_RATIO * visible, FACE_WIDTH_MAX_RATIO * visible
+
+
+# 이 거리 아래로는 방위각 창이 바구니보다 좁아져 폭 검사가 판별력을 잃는다.
+WIDTH_TEST_USEFUL_ABOVE_M = BASKET_FACE_WIDTH_M / (2.0 * math.tan(DEFAULT_BEARING_WINDOW_RAD))
+
+
 def fit_line(points: list):
     """점들에 직선을 총최소제곱으로 맞춘다.
 
@@ -235,8 +275,8 @@ def fit_basket_face(
     cluster_depth_m: float = DEFAULT_CLUSTER_DEPTH_M,
     min_points: int = DEFAULT_MIN_POINTS,
     max_residual_m: float = DEFAULT_MAX_RESIDUAL_M,
-    min_face_width_m: float = DEFAULT_MIN_FACE_WIDTH_M,
-    max_face_width_m: float = DEFAULT_MAX_FACE_WIDTH_M,
+    min_face_width_m: float = None,
+    max_face_width_m: float = None,
 ) -> FaceFit:
     """바구니 정면까지의 거리와 정렬 오차를 낸다.
 
@@ -257,10 +297,16 @@ def fit_basket_face(
         return FaceFit(False, distance, yaw_error, width, residual, len(face),
                        f"잔차 {residual * 1000:.1f}mm — 평면이 아니다"
                        f"(상한 {max_residual_m * 1000:.0f}mm)")
-    if not (min_face_width_m <= width <= max_face_width_m):
+    # 폭 한계는 거리에 따라 달라진다 — face_width_bounds() 참고.
+    lower, upper = face_width_bounds(distance, window_rad)
+    if min_face_width_m is not None:
+        lower = min_face_width_m
+    if max_face_width_m is not None:
+        upper = max_face_width_m
+    if not (lower <= width <= upper):
         return FaceFit(False, distance, yaw_error, width, residual, len(face),
                        f"겉보기 폭 {width * 1000:.0f}mm — 바구니로 볼 수 없다"
-                       f"({min_face_width_m * 1000:.0f}~{max_face_width_m * 1000:.0f}mm)")
+                       f"({lower * 1000:.0f}~{upper * 1000:.0f}mm)")
     return FaceFit(True, distance, yaw_error, width, residual, len(face), "정면 확보")
 
 
