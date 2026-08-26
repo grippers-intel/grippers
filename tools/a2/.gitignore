@@ -1,6 +1,0 @@
-# 측정 원본은 커밋하지 않는다. 결과 수치만 이슈와 docs/ops/measurements.md 에 남긴다.
-*.csv
-*.png
-*.json
-a2_report.md
-a1d_report.md
