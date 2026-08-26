@@ -211,3 +211,34 @@ def test_부하가_떨어지고_있으면_막는다():
 
 def test_부하가_올라가는_것은_막지_않는다():
     assert check_insert(_insert(load_change=+0.020)).ok
+
+
+# ── 부하 임계가 실측 두 띠 사이에 있는가 ──────────────────────────────────
+# 2026-08-26 실측. 이 값들은 하드웨어에서 재서 얻은 것이라 코드가 바뀐다고
+# 달라지지 않는다 — 임계를 손대면 이 테스트가 먼저 걸리게 해 둔다.
+EMPTY_LOAD_BAND = (0.0235, 0.0430)   # 자세·폭 전부 포함한 빈손 관측 전체
+GRIPPED_LOAD_BAND = (0.0626, 0.0821)  # rook 0.0782 / knight 0.0782 / queen 0.0626
+LOAD_QUANTUM = 1.0 / 256.0            # 판독 양자 — 관측값이 전부 이 배수다
+
+
+def test_부하_임계가_빈손_띠_위에_있다():
+    """이전 값 0.04는 빈손 상한 0.0430보다 **낮았다** — 상한 쪽으로 떠돈
+    순간에 빈손을 파지 성공으로 읽었다. 그게 이 프로젝트에서 가장 위험한
+    상수였던 이유다."""
+    assert bc.LOAD_THRESHOLD > EMPTY_LOAD_BAND[1]
+    assert bc.EMPTY_LOAD_CEILING > EMPTY_LOAD_BAND[1]
+
+
+def test_부하_임계가_파지_띠_아래에_있다():
+    """임계가 파지 하한을 넘으면 성공한 파지를 매번 실패로 읽는다."""
+    assert bc.LOAD_THRESHOLD < GRIPPED_LOAD_BAND[0]
+
+
+def test_부하_임계가_양쪽으로_두_양자_이상_떨어져_있다():
+    """판독은 1/256 양자화돼 있고 버스트 사이에 한두 양자씩 떠돈다.
+    여유가 두 양자 미만이면 판독 한 칸 차이로 판정이 뒤집힌다."""
+    below = bc.LOAD_THRESHOLD - EMPTY_LOAD_BAND[1]
+    above = GRIPPED_LOAD_BAND[0] - bc.LOAD_THRESHOLD
+
+    assert below >= 2 * LOAD_QUANTUM, f"빈손 쪽 여유가 {below / LOAD_QUANTUM:.1f} 양자뿐"
+    assert above >= 2 * LOAD_QUANTUM, f"파지 쪽 여유가 {above / LOAD_QUANTUM:.1f} 양자뿐"
