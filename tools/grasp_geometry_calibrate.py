@@ -195,6 +195,52 @@ class CalibrationNode(Node):
             raise RuntimeError(f"'{stage}' 도달 실패")
 
 
+def mode_gate(node, label):
+    """새 오검출 게이트가 **진짜 물체를 죽이지 않는지** 확인한다.
+
+    2026-08-26에 observe_target에 세 겹의 게이트를 걸었다 — 신뢰도 0.70,
+    화면 아래쪽(bbox 아래끝 >= 290px), 5프레임 중 3회 합의. 배경 오검출
+    (노트북을 rook 0.60으로 잡던 것)을 막기 위해서다.
+
+    막는 쪽은 실기로 확인됐지만 **통과시켜야 할 쪽은 아직 아니다.** 게이트가
+    너무 빡빡하면 파지 거리의 진짜 물체가 통째로 사라지고, 그러면 GRASP가
+    영영 시작되지 않는다. 여기서는 물체를 실제 파지 자리에 놓고 세 게이트를
+    각각 얼마나 여유 있게 통과하는지 본다."""
+    print(BANNER)
+    print(f"모드 F · '{label}' 오검출 게이트 통과 여부")
+    print(BANNER)
+    print("  팔은 올라간 자세로 두고, 물체를 **실제 파지 자리**에 놓으세요.")
+    print("  (차체 전면에서 약 166mm, 정면 중앙)")
+    input("  준비되면 Enter > ")
+
+    results = []
+    for i in range(SAMPLES):
+        response = node.observe(label)
+        results.append(response)
+        if response.found:
+            print(f"    {i + 1}/{SAMPLES}  found  bbox 아래끝 추정 불가(서비스는 중앙·폭·높이만 준다)  "
+                  f"h={response.h:.1f}px w={response.w:.1f}px  전방 {response.forward_m:.3f}m")
+        else:
+            print(f"    {i + 1}/{SAMPLES}  **검출 없음**")
+
+    hits = sum(1 for r in results if r.found)
+    print()
+    print(BANNER)
+    if hits == SAMPLES:
+        print(f"  ✅ {hits}/{SAMPLES} 전부 통과 — 게이트가 진짜 물체를 막지 않습니다.")
+    elif hits == 0:
+        print(f"  ⛔ {SAMPLES}회 모두 검출 없음 — **게이트가 너무 빡빡합니다.**")
+        print("     perception_node 로그의 '[observe] 게이트 탈락' 줄을 보세요.")
+        print("     신뢰도 때문인지 화면 위치 때문인지 거기 찍힙니다.")
+        print("     ros2 run ... 로그: docker exec ... tail /tmp/p.log")
+    else:
+        print(f"  ⚠️ {hits}/{SAMPLES}만 통과 — 경계에 걸쳐 있습니다.")
+        print("     합의(5중 3)는 넘겼더라도 여유가 없습니다. 로그를 보고")
+        print("     OBSERVE_CONF_THRESHOLD 또는 OBSERVE_MIN_BOTTOM_Y_PX를 조정하세요.")
+    print(BANNER)
+    return hits
+
+
 def mode_confirm(node, label):
     """"파지 후 CARRY에서 물체가 보이면 실패" 규칙이 실제로 성립하는지 본다.
 
@@ -544,8 +590,9 @@ def mode_servo1(node, profile):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--mode", choices=("jaw", "seat", "confirm", "servo1", "k"),
-                        required=True)
+    parser.add_argument(
+        "--mode", choices=("jaw", "seat", "confirm", "gate", "servo1", "k"),
+        required=True)
     parser.add_argument("--label", default="queen", choices=sorted(PROFILE_BY_LABEL))
     parser.add_argument("--profile", default="chess_queen")
     args = parser.parse_args()
@@ -556,6 +603,9 @@ def main():
         if args.mode == "jaw":
             node.require_camera()
             mode_jaw_line(node, args.label)
+        elif args.mode == "gate":
+            node.require_camera()
+            mode_gate(node, args.label)
         elif args.mode == "confirm":
             node.require_camera()
             mode_confirm(node, args.label)

@@ -19,6 +19,7 @@ scan_floor는 Hailo-10H YOLO로 실제 검출을 반환할 수 있지만 `scan_f
 """
 
 import math
+import statistics
 import time
 
 import rclpy
@@ -221,6 +222,49 @@ APPROACH_STANDOFF_M = 0.18
 # 이전과 완전히 같은 값을 내고, 그 거리에서 멀어질수록 룩 데이터가 옳다고
 # 말하는 방향으로만 달라진다.
 BBOX_PADDING_PX = 2.5
+
+# ── observe_target 전용 오검출 게이트 (2026-08-26) ────────────────────────
+#
+# observe_target은 **단일 프레임** 경로라 scan_floor의 다중 프레임 합의를
+# 통째로 건너뛴다. 원래는 시각 서보 루프가 매 반복 부르는 저지연 관측이라
+# 그게 맞았는데, 그 루프가 Host로 넘어가면서 이제 이 서비스를 쓰는 곳은
+# GRASP 진입 판정과 파지 확인 — **차가 멈춰 있는 순간**뿐이다. 그래서
+# 억제를 다시 걸 여유가 생겼다.
+#
+# 걸지 않으면 어떻게 되는지 2026-08-26에 실기로 봤다. CARRY 자세에서
+# 사무실 배경을 향해 관측하자 **닫힌 노트북을 rook 0.60으로**, 다른
+# 노트북을 knight 0.49로 잡았다. identify_target은 모든 클래스 중 가장 큰
+# 검출을 고르므로, 그대로 두면 노트북을 집으러 내려간다.
+#
+# 세 겹으로 막는다.
+
+# (1) 신뢰도 — 사용자 지시 2026-08-26. floor_consensus.CONF_THRESHOLD(0.45)는
+# 다중 프레임 합의가 뒤에서 걸러 주는 것을 전제로 넉넉히 연 값이라 여기엔
+# 맞지 않는다. 위 오검출들이 0.49~0.60이었으므로 그보다 위로 올린다.
+OBSERVE_CONF_THRESHOLD = 0.70
+
+# (2) 화면상 위치 — 파지 거리(0.15~0.4m)의 바닥 물체는 화면 아래쪽에 온다.
+# 배경·먼 물체는 위쪽이다. 위 오검출 5개의 bbox 아래끝이 144~240px로 전부
+# 이 선 위였다(화면 높이 480).
+#
+# ⚠️ 실측으로 확인할 것 — 파지 거리에 놓인 진짜 물체의 아래끝이 이 값을
+# 넘어야 한다. tools/grasp_geometry_calibrate.py --mode gate가 그걸 재고
+# 통과 여부를 바로 알려준다. 너무 높게 잡으면 진짜 물체가 통째로 사라진다.
+OBSERVE_MIN_BOTTOM_Y_PX = 290.0
+
+# (3) 다중 프레임 합의 — 배경 오검출은 프레임마다 깜빡인다. 2026-08-26의
+# 노트북 오검출은 7프레임 중 2번만 나왔다.
+OBSERVE_CONSENSUS_FRAMES = 5
+OBSERVE_CONSENSUS_MIN_HITS = 3
+
+# 표본을 이만큼 재사용한다. identify_target이 클래스 6개를 연달아 묻는데,
+# 그때마다 5프레임을 새로 뜨면 6배가 든다 — 같은 순간의 같은 표본으로
+# 답하는 것이 맞고 더 빠르다.
+OBSERVE_CACHE_SEC = 1.0
+
+# 표본을 모으는 데 허용하는 상한. 프레임은 약 7Hz로 오고 그때마다 CPU
+# 추론이 붙으므로 5장에 1~2초가 든다.
+OBSERVE_COLLECT_TIMEOUT_SEC = 4.0
 CLASS_DISTANCE_CALIBRATION_SQRT_PX_M = {
     # 2026-08-23 실측(핫스팟 연결 실기, observe_target 서비스로 단일 프레임
     # h×w 직접 측정 — scan_floor의 consensus 게이트(MIN_BOTTOM_Y_PX=290)는
@@ -290,6 +334,10 @@ class PerceptionNode(Node):
         cb_group = ReentrantCallbackGroup()
 
         self._latest_frame = None
+        self._frame_seq = 0
+        # observe_target 다중 프레임 표본 캐시 — (표본, 수집 시각)
+        self._observe_samples_cache = None
+        self._observe_samples_at = 0.0
         self._rgb_fx = self._rgb_cx = None
         if _CV_AVAILABLE:
             # depth_cam_rotate_node가 내보내는 회전 보정된 컬러 스트림.
@@ -427,6 +475,7 @@ class PerceptionNode(Node):
 
     def _on_image(self, msg):
         self._latest_frame = msg
+        self._frame_seq += 1
 
     def _on_rgb_camera_info(self, msg):
         self._rgb_fx = msg.k[0]
@@ -619,19 +668,68 @@ class PerceptionNode(Node):
             confidence=score,
         )
 
-    def _on_observe_target(self, request, response):
-        """base_driver_node의 approach_object 액션(시각 서보 루프)이 매 반복마다
-        부르는 저지연 관측. scan_floor(다중 프레임 합의)와는 목적이 다르다 —
-        이건 SELECT가 이미 고른 특정 raw 클래스 하나를 반복 재관측하며
-        수렴시키는 제어 루프 입력이라, 매 반복의 지연이 곧 루프 주기다.
-        tools/perception/approach.py도 이동마다 다시 관측해 오차를 스스로
-        지우는 폐루프라 여기서도 최신 프레임 1장이면 충분하다 — 노이즈는
-        다음 반복이 알아서 고친다.
+    def _gate_observe_detections(self, detections):
+        """observe_target 전용 오검출 게이트 — 신뢰도와 화면상 위치.
 
-        CPU YOLO 백엔드 전용(Hailo는 하드웨어 고장 #189로 다루지 않는다).
-        모델 미로드·프레임 없음·해당 클래스 미검출은 전부 found=False —
-        "모르면 실패" 관례. 여러 후보가 있으면 가장 큰(=가까운) 것을 고른다
-        (tools/perception/approach.py의 pick()과 동일)."""
+        걸러낸 것을 세어 돌려준다. 조용히 버리면 "왜 아무것도 안 잡히나"를
+        실기에서 추적할 수 없다."""
+        kept, weak, high = [], 0, 0
+        for class_name, score, bbox in detections:
+            if score < OBSERVE_CONF_THRESHOLD:
+                weak += 1
+                continue
+            if bbox[3] < OBSERVE_MIN_BOTTOM_Y_PX:
+                # 화면 위쪽 = 멀거나 바닥이 아니다. 파지 거리의 물체는
+                # 아래쪽에 온다.
+                high += 1
+                continue
+            kept.append((class_name, score, bbox))
+        return kept, weak, high
+
+    def _observe_samples(self):
+        """정지 전제 다중 프레임 표본. 캐시가 살아 있으면 재사용한다.
+
+        캐시를 두는 이유: identify_target이 클래스 6개를 연달아 묻는데,
+        그때마다 5프레임을 새로 뜨면 6배가 든다. 같은 순간을 묻는 질문이니
+        같은 표본으로 답하는 것이 맞고 더 빠르다."""
+        now = time.monotonic()
+        if (self._observe_samples_cache is not None
+                and now - self._observe_samples_at < OBSERVE_CACHE_SEC):
+            return self._observe_samples_cache
+
+        frames = self._collect_cpu_yolo_frames(
+            OBSERVE_CONSENSUS_FRAMES, OBSERVE_COLLECT_TIMEOUT_SEC)
+        gated, weak_total, high_total = [], 0, 0
+        for frame_detections in frames:
+            kept, weak, high = self._gate_observe_detections(frame_detections)
+            gated.append(kept)
+            weak_total += weak
+            high_total += high
+        if weak_total or high_total:
+            self.get_logger().info(
+                f"[observe] 게이트 탈락 — 신뢰도<{OBSERVE_CONF_THRESHOLD} {weak_total}건, "
+                f"화면 위쪽(y<{OBSERVE_MIN_BOTTOM_Y_PX:.0f}) {high_total}건 "
+                f"({len(frames)}프레임)")
+        self._observe_samples_cache = gated
+        self._observe_samples_at = now
+        return gated
+
+    def _on_observe_target(self, request, response):
+        """정면 목표 하나를 관측한다. GRASP 진입 판정과 파지 확인이 쓴다.
+
+        ⚠️ 2026-08-26에 단일 프레임에서 다중 프레임 합의로 바꿨다. 원래는
+        시각 서보 루프가 매 반복 부르는 저지연 관측이라 최신 한 장이면
+        충분했는데(노이즈는 다음 반복이 고친다), 그 루프가 Host로 넘어가면서
+        이제 이 서비스를 쓰는 곳은 **차가 멈춰 있는 판정 순간**뿐이다.
+        되돌리는 반복이 없으므로 한 장의 오검출이 그대로 결정이 된다.
+
+        같은 날 실기: CARRY 자세에서 사무실 배경을 향해 관측하자 닫힌
+        노트북을 rook 0.60으로 잡았다. 7프레임 중 2번만 나왔으므로 합의가
+        걸러 낸다.
+
+        CPU YOLO 백엔드 전용. 모델 미로드·프레임 없음·합의 미달은 전부
+        found=False — "모르면 실패" 관례. 여러 후보가 있으면 가장 큰(=가까운)
+        것을 고른다."""
         response.found = False
         response.x = 0.0
         response.h = 0.0
@@ -642,13 +740,24 @@ class PerceptionNode(Node):
         if self._cpu_yolo_model is None or self._latest_frame is None:
             return response
 
-        frame = _bgr_from_image_msg(self._latest_frame)
-        raw_detections = self._yolo_raw_frame_detections(frame)
-        candidates = [d for d in raw_detections if d[0] == request.raw_cls]
-        if not candidates:
+        samples = self._observe_samples()
+        boxes = []
+        for frame_detections in samples:
+            candidates = [d for d in frame_detections if d[0] == request.raw_cls]
+            if candidates:
+                # 가장 큰 높이 = 가장 가까운 것.
+                boxes.append(max(candidates, key=lambda d: d[2][3] - d[2][1])[2])
+
+        if len(boxes) < OBSERVE_CONSENSUS_MIN_HITS:
+            if boxes:
+                self.get_logger().info(
+                    f"[observe] {request.raw_cls} {len(boxes)}/{len(samples)}프레임 — "
+                    f"합의 미달(최소 {OBSERVE_CONSENSUS_MIN_HITS}) → 검출 없음으로 본다")
             return response
 
-        _, _, bbox = max(candidates, key=lambda d: d[2][3] - d[2][1])  # 가장 큰 높이
+        # 프레임마다 조금씩 흔들리므로 좌표별 중앙값을 쓴다 — 한 프레임이
+        # 크게 튀어도 결과가 끌려가지 않는다.
+        bbox = tuple(statistics.median(b[i] for b in boxes) for i in range(4))
         x1, y1, x2, y2 = bbox
         response.found = True
         response.x = (x1 + x2) / 2.0
