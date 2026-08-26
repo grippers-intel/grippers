@@ -498,7 +498,15 @@ def phase_approach(node, keys):
     keys.ensure_cbreak()
 
     print()
-    print("   #   경과    라이다     남음   yaw     잔차   폭    점    뎁스        상태")
+    # ⚠️ 좌우 오프셋 열은 2026-08-26 통주행 뒤에 붙였다. 그날 INSERT 조건
+    # 네 개 중 셋(판독 안정성·점 개수·부하)은 로그에서 읽어낼 수 있었는데
+    # **좌우 오프셋만 어디에도 안 찍혀서** 유일하게 검증을 못 했다.
+    # 하필 그게 실측이 아니라 계산으로 잡은 값(BASKET_LATERAL_TOLERANCE_M)이다.
+    #
+    # 사용자 지시(2026-08-26): 실제로는 바구니에 **사선으로 진입할 수도**
+    # 있다. 사선이면 거리와 yaw가 멀쩡해도 팔이 바구니 끝을 벗어난 곳을
+    # 겨눌 수 있으므로, 좌우 오프셋이 네 조건 중 가장 중요해진다.
+    print("   #   경과    라이다     남음   yaw     잔차   폭    점   좌우    뎁스        상태")
     travelled = 0.0
     started = time.time()
 
@@ -521,7 +529,7 @@ def phase_approach(node, keys):
               f"{distance:6.3f}m  {remaining * 1000:+6.0f}mm  "
               f"{math.degrees(fit.yaw_error_rad):+5.1f}deg  "
               f"{fit.residual_m * 1000:4.1f}mm  {fit.face_width_m * 1000:3.0f}  "
-              f"{fit.point_count:3d}  {depth_str}  {source}"
+              f"{fit.point_count:3d}  {_lateral_str(fit)}  {depth_str}  {source}"
               + ("" if fit.ok else f"  [{fit.reason}]"))
 
         if distance <= EMERGENCY_MIN_M:
@@ -543,6 +551,8 @@ def phase_approach(node, keys):
                   f"오차 {(distance - TARGET_LIDAR_M) * 1000:+.1f} mm)")
             print(f"    정렬 yaw   = {math.degrees(fit.yaw_error_rad):+.2f} deg   "
                   f"잔차 {fit.residual_m * 1000:.1f} mm   점 {fit.point_count}개")
+            print(f"    좌우 오프셋 = {_lateral_str(fit).strip()}   "
+                  f"(허용 ±{align_tolerance_mm():.0f} mm)")
             print(f"    뎁스 참고  = {depth_str}")
             print(f"    이동 거리  = 약 {travelled * 1000:.0f} mm ({cycle} 사이클)")
             print(f"    빔 높이    = {align.beam_height_m(distance) * 1000:.1f} mm "
@@ -608,6 +618,24 @@ def phase_insert(node, keys):
     state = node.arm_state()
     print(f"    IDLE 도달 raw = {[int(v) for v in state.position_raw][:5]}")
     return before, after
+
+
+def align_tolerance_mm():
+    """INSERT가 허용하는 좌우 오프셋(mm). 도메인 상수와 한 곳에서 읽는다."""
+    from domain.task import baseline_constants as bc
+    return bc.BASKET_LATERAL_TOLERANCE_M * 1000.0
+
+
+def _lateral_str(fit):
+    """좌우 오프셋 표시.
+
+    ⚠️ `lateral_known`이 False면 **모르는 것**이지 0이 아니다. 0으로 찍으면
+    "가운데 있다"로 읽혀 정반대 결론이 나오므로 물음표로 구분한다 —
+    바구니 면이 시야 가장자리에 걸려 한쪽 끝만 보일 때 실제로 그렇게 된다.
+    """
+    if not getattr(fit, "lateral_known", False):
+        return "  ?  "
+    return f"{fit.lateral_offset_m * 1000:+5.0f}"
 
 
 def _m(value):
