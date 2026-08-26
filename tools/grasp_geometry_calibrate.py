@@ -100,6 +100,9 @@ LOAD_SLIP_DROP = 0.010
 # 턱 목의 깊이(실측 2026-08-26). 턱 끝에 걸렸을 때 얼마나 더 가까이
 # 놓아야 하는지 안내하는 데 쓴다.
 JAW_THROAT_DEPTH_M = 0.023
+# Ros2Perception.STILL_THERE_H_RATIO와 같은 값이어야 한다 — 이 도구가
+# 실제 판정을 재현하는 것이 목적이므로 다르면 거짓 안심/거짓 경고가 된다.
+STILL_THERE_H_RATIO = 0.8
 SERVO1_PROBE_DEG = 12.0    # 서비스 한계(15도) 안쪽에서 최대한 크게
 
 # perception_node가 YOLO를 돌리는 스트림. depth_cam_rotate_node가 낸다.
@@ -231,28 +234,40 @@ def mode_confirm(node, label):
         print("    ⛔ 들고 있지 않습니다 — 이 시험은 물체를 든 상태여야 합니다.")
         return None
 
-    seen = 0
-    heights = []
+    # confirm_grasp의 **실제 판정**을 그대로 재현한다. found만 세면 배경
+    # 오검출까지 경고로 잡혀 과하게 겁을 준다 — 2026-08-26에 실제로 그랬다.
+    threshold = before.h * STILL_THERE_H_RATIO
+    print(f"    (기준 h={before.h:.1f}px -> '그대로 있다' 임계 {threshold:.1f}px)")
+    seen, would_fail, heights = 0, 0, []
     for i in range(SAMPLES):
         response = node.observe(label)
+        verdict = "검출 없음 -> 성공"
         if response.found:
             seen += 1
             heights.append(response.h)
-        print(f"    {i + 1}/{SAMPLES}  found={response.found}  h={response.h:.1f}px")
+            still = response.h >= threshold
+            would_fail += int(still)
+            verdict = ("그대로 있다 -> 파지 실패" if still
+                       else "더 작다 = 다른 개체 -> 성공")
+        print(f"    {i + 1}/{SAMPLES}  found={response.found}  "
+              f"h={response.h:.1f}px  {verdict}")
 
     print()
     print(BANNER)
-    if seen == 0:
-        print("  ✅ 물고 있는데도 카메라에 안 잡힙니다 — 규칙이 성립합니다.")
-        print("     CARRY에서 목표가 보이면 그건 바닥에 남은 것이므로 파지 실패가 맞습니다.")
+    if would_fail == 0:
+        print(f"  ✅ confirm_grasp는 {SAMPLES}프레임 모두 **파지 성공**으로 판정합니다.")
+        print("     규칙이 성립합니다.")
+        if seen:
+            print(f"  ⚠️ 다만 {seen}/{SAMPLES}회 무언가 검출되긴 했습니다 "
+                  f"(h 최대 {max(heights):.0f}px, 임계 {threshold:.0f}px).")
+            print("     물고 있는 물체가 아니라 **배경 오검출**입니다. 지금은 크기가")
+            print("     작아 걸러지지만, 더 큰 오검출이 나오면 뒤집힙니다.")
     else:
-        ratio = (statistics.median(heights) / before.h) if before.found and before.h else 0.0
-        print(f"  ⚠️ {seen}/{SAMPLES}회 잡혔습니다 (h 비율 {ratio:.2f})")
-        print("     물고 있는 물체가 시야에 들어옵니다 — 이대로면 성공한 파지가")
-        print("     실패로 뒤집힙니다. CARRY 자세를 더 접거나, confirm_grasp의")
-        print("     STILL_THERE_H_RATIO를 이 비율보다 높게 잡아야 합니다.")
+        print(f"  ⛔ {would_fail}/{SAMPLES}회가 **파지 실패**로 판정됩니다.")
+        print("     성공한 파지가 뒤집힙니다 — CARRY 자세를 더 접거나")
+        print("     오검출을 걸러내야 합니다.")
     print(BANNER)
-    return seen
+    return would_fail
 
 
 def mode_seat(node, label):
