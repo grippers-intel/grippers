@@ -75,6 +75,7 @@ knight 18.7 / soccer 25.6cm로 읽혔다.
     python3 grasp_geometry_calibrate.py --mode k --label rook
     python3 grasp_geometry_calibrate.py --mode confirm --label rook
     python3 grasp_geometry_calibrate.py --mode load --label rook
+    python3 grasp_geometry_calibrate.py --mode scale --label rook
 """
 
 import argparse
@@ -111,6 +112,19 @@ STILL_THERE_H_RATIO = 0.8
 OBSERVE_CACHE_SEC = 3.0
 # 게이트 시험 표본 수. 하나에 캐시 대기 + 수집이 붙어 약 5초씩 든다.
 GATE_SAMPLES = 4
+
+# 척도 확인 표본 수. 캐시를 비워 가며 뜨므로 하나에 약 5초씩 든다.
+SCALE_SAMPLES = 3
+# 이 안이면 척도가 유지된 것으로 본다. 줄자 200mm에 1mm 오차가 0.5%이므로
+# 사람이 재는 정밀도를 넘지 않는 선에서 잡는다.
+SCALE_TOLERANCE = 0.05
+# perception_node.CLASS_DISTANCE_CALIBRATION_SQRT_PX_M의 현재 값.
+# 척도가 어긋났을 때 보정값을 바로 낼 수 있게 여기 적어 둔다 —
+# 도메인 계층이 ROS 패키지를 import하지 않는 것과 같은 이유로 복사한다.
+CURRENT_K = {
+    "knight": 35.9307, "queen": 28.3382, "rook": 34.8340,
+    "soccer": 18.9592, "box": None, "star": None,
+}
 SERVO1_PROBE_DEG = 12.0    # 서비스 한계(15도) 안쪽에서 최대한 크게
 
 # 빈 부하를 재는 자세 순회. 순서는 arm_driver_node의 전이 제약을 따른다 —
@@ -774,10 +788,118 @@ def mode_load(node, label):
     return observed
 
 
+def mode_scale(node, label):
+    """판독 **척도**가 맞는지 본다 — 기준점을 몰라도 되는 방식으로.
+
+    ## 왜 --mode k로는 안 되는가
+
+    기존 K는 base_link 기준 줄자로 잡았다. 차체 전면 기준으로 다시 재면 차체
+    절반 길이만큼 다른 K가 나오는데, 그러면 **숫자가 달라도 모델이 바뀐 건지
+    기준점이 다른 건지 구분이 안 된다.** 모델을 갈아 끼운 뒤 "척도가
+    유지됐는가"를 묻는 데는 절대 K가 오히려 방해가 된다.
+
+    ## 차이를 보면 기준점이 사라진다
+
+        판독 = K / e,   실제거리 = d + c   (c = 모르는 기준점 오프셋)
+
+    한 자리에서 읽고, 줄자로 잰 만큼 **곧게 뒤로** 밀고, 다시 읽는다. 두
+    판독의 차이에서 c가 상쇄된다. 200mm 밀었는데 판독이 200mm 변하면 척도가
+    맞는 것이고, 180mm만 변했으면 K가 그 비율만큼 틀린 것이다.
+
+        척도 f = 판독변화 / 줄자거리
+        보정된 K = 지금 K / f
+
+    ## 왜 이것이 GRASP가 필요로 하는 바로 그 검사인가
+
+    GRASP는 절대 거리를 안 쓴다 — `(관측 - 그 클래스의 턱 선)`이라는 **차이**만
+    쓴다. 그래서 K의 절대값이 틀려도 차이만 맞으면 전진량은 정확하다. 반대로
+    차이가 틀리면 절대값이 아무리 그럴듯해도 전진량이 어긋난다.
+
+    f ~= 1.0이면 그 클래스의 턱 선을 다시 잴 필요가 없다.
+    """
+    print(BANNER)
+    print(f"모드 S · '{label}' 판독 척도 확인")
+    print(BANNER)
+    print("  물체를 정면에 놓고 한 번, **줄자로 잰 만큼 곧게 뒤로 밀고**")
+    print("  한 번 더 읽습니다. 기준점은 몰라도 됩니다 — 차이만 씁니다.")
+    print()
+    print("  ⚠️ 좌우로 흔들리면 안 됩니다. 앞뒤로만 미세요.")
+    print("     파지 거리대(약 0.18m)에서 시작해 200mm 정도 미는 것을 권합니다.")
+    print()
+
+    def read():
+        """캐시를 비워 가며 독립 표본을 뜨고 중앙값을 낸다."""
+        values = []
+        for i in range(SCALE_SAMPLES):
+            if i:
+                time.sleep(OBSERVE_CACHE_SEC + 0.3)
+            response = node.observe(label)
+            if not response.found:
+                print("      (미검출 — 건너뜁니다)")
+                continue
+            values.append(response.forward_m)
+            print(f"      {i + 1}/{SCALE_SAMPLES}  전방 {response.forward_m:.4f} m")
+        if len(values) < 2:
+            raise RuntimeError("유효 검출이 부족합니다 — 물체를 다시 놓고 시도하세요")
+        return statistics.median(values)
+
+    input("  가까운 자리에 놓고 Enter > ")
+    near = read()
+    print(f"    가까운 자리 판독 = {near:.4f} m")
+
+    print()
+    raw = input("  뒤로 민 거리(mm)를 줄자로 재서 입력하세요 > ").strip()
+    try:
+        moved_mm = float(raw)
+    except ValueError:
+        print("  ⛔ 수치가 아닙니다.")
+        return None
+    if moved_mm <= 0:
+        print("  ⛔ 0보다 커야 합니다.")
+        return None
+
+    input("  민 뒤 Enter > ")
+    far = read()
+    print(f"    먼 자리 판독 = {far:.4f} m")
+
+    change_mm = (far - near) * 1000.0
+    scale = change_mm / moved_mm
+
+    print()
+    print(BANNER)
+    print(f"  줄자 이동   = {moved_mm:7.1f} mm")
+    print(f"  판독 변화   = {change_mm:7.1f} mm")
+    print(f"  척도 f      = {scale:7.3f}")
+    print()
+
+    current_k = CURRENT_K.get(label)
+    if abs(scale - 1.0) <= SCALE_TOLERANCE:
+        print(f"  ✅ 척도가 유지됐습니다 (오차 {abs(scale - 1.0) * 100:.1f}%,"
+              f" 허용 {SCALE_TOLERANCE * 100:.0f}%).")
+        print(f"     '{label}'의 K와 턱 선을 **다시 잴 필요가 없습니다.**")
+    else:
+        print(f"  ⛔ 척도가 {(scale - 1.0) * 100:+.1f}% 어긋났습니다.")
+        if current_k:
+            print(f"     보정된 K = {current_k:.4f} / {scale:.3f} "
+                  f"= {current_k / scale:.4f}")
+            print("     perception_node.py의 CLASS_DISTANCE_CALIBRATION_SQRT_PX_M에")
+            print("     넣고, **그 클래스의 턱 선과 좌우 영점을 다시 재세요**")
+            print("     (--mode jaw, --mode seat). 셋은 같은 척도 위에 있어야 합니다.")
+        else:
+            print(f"     '{label}'은 K가 아직 없습니다 — --mode k로 먼저 잡으세요.")
+    print()
+    print("  참고: 이동량이 작을수록 줄자 오차가 척도에 크게 실립니다.")
+    print(f"        지금 {moved_mm:.0f}mm면 줄자 1mm 오차가 척도 "
+          f"{100.0 / moved_mm:.2f}%에 해당합니다.")
+    print(BANNER)
+    return scale
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "--mode", choices=("jaw", "seat", "confirm", "gate", "servo1", "k", "load"),
+        "--mode",
+        choices=("jaw", "seat", "confirm", "gate", "servo1", "k", "load", "scale"),
         required=True)
     parser.add_argument("--label", default="queen", choices=sorted(PROFILE_BY_LABEL))
     parser.add_argument("--profile", default="chess_queen")
@@ -804,6 +926,9 @@ def main():
         elif args.mode == "load":
             # 카메라를 안 쓴다 — 팔과 부하만 본다.
             mode_load(node, args.label)
+        elif args.mode == "scale":
+            node.require_camera()
+            mode_scale(node, args.label)
         else:
             mode_servo1(node, args.profile)
         return 0
