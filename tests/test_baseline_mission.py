@@ -154,7 +154,7 @@ def test_매_사이클_현재_state를_보고한다():
 
     BaselineApproachState().execute(ports)
 
-    assert (Report.STATE, MissionState.APPROACH, "") in host.reports
+    assert (Report.STATE, MissionState.APPROACH, "", None) in host.reports
 
 
 def test_Host가_APPROACH_BOX를_부르면_그_이름으로_보고한다():

@@ -21,16 +21,22 @@ class FakeHostLink(HostLink):
         self._idx += 1
         return command
 
-    def report(self, report: str, state: str, detail: str = "") -> None:
-        self.reports.append((report, state, detail))
+    def report(self, report: str, state: str, detail: str = "", fix=None) -> None:
+        self.reports.append((report, state, detail, fix))
 
     @property
     def reported_kinds(self) -> list:
-        return [report for report, _state, _detail in self.reports]
+        return [report for report, _state, _detail, _fix in self.reports]
 
     @property
     def reported_states(self) -> list:
-        return [state for _report, state, _detail in self.reports]
+        return [state for _report, state, _detail, _fix in self.reports]
+
+    @property
+    def reported_fixes(self) -> list:
+        """보정 요구가 실린 보고만. Host가 실제로 행동할 수 있는 것들이다."""
+        return [(report, fix) for report, _state, _detail, fix in self.reports
+                if fix is not None]
 
 
 class FakeLidar(Lidar):

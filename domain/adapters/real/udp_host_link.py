@@ -103,11 +103,19 @@ class UdpHostLink:
 
     # --- 송신 ---------------------------------------------------------
 
-    def report(self, report: str, state: str, detail: str = "") -> None:
-        """보고는 fire-and-forget이다 — 안 닿으면 Host 워치독이 판단한다."""
-        payload = json.dumps(
-            {"report": report, "state": state, "detail": detail},
-            ensure_ascii=False).encode("utf-8")
+    def report(self, report: str, state: str, detail: str = "", fix=None) -> None:
+        """보고는 fire-and-forget이다 — 안 닿으면 Host 워치독이 판단한다.
+
+        `fix`는 Host가 **기계적으로 실행할 수 있는** 보정 요구다
+        (domain.task.corrections.Correction). 없으면 필드 자체를 안 보낸다 —
+        빈 객체를 보내면 Host가 "고칠 게 있는데 값이 0"으로 읽을 수 있다.
+
+        detail은 사람이 읽는 용도로 그대로 둔다. 둘은 같은 판정에서 나오므로
+        어긋날 수 없고, Host가 fix를 아직 안 읽어도 기존대로 동작한다."""
+        body = {"report": report, "state": state, "detail": detail}
+        if fix is not None:
+            body["fix"] = fix.as_dict() if hasattr(fix, "as_dict") else dict(fix)
+        payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
         try:
             self._tx.sendto(payload, self._host)
         except OSError as exc:

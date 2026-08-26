@@ -52,6 +52,12 @@ class AlignmentVerdict:
     lateral_error_m: float = 0.0
     servo1_offset_rad: float = 0.0
     reason: str = ""
+    # 전후 오차. +면 물체가 전진 거리 밖(더 가야 한다), -면 턱 선보다 가깝다
+    # (물러나야 한다). 0이면 전후는 문제가 아니라는 뜻이다.
+    #
+    # 판정한 자리에서 같이 만든다 — 문장으로만 남기고 나중에 정규식으로 뜯는
+    # 방식은 문구를 고칠 때마다 조용히 깨진다(corrections.py 주석 참고).
+    forward_error_m: float = 0.0
 
 
 def capture_half_width_m(object_width_mm: float, open_width_mm=None) -> float:
@@ -164,12 +170,14 @@ def judge(observation, object_width_mm: float,
         return AlignmentVerdict(
             HOST_CORRECTION, lateral, 0.0,
             f"물체가 턱 선보다 가깝다 ({forward * 1000:.0f}mm < {near_m * 1000:.0f}mm) "
-            "— 후진 필요")
+            "— 후진 필요",
+            forward_error_m=forward - near_m)
     if forward > far_m:
         return AlignmentVerdict(
             HOST_CORRECTION, lateral, 0.0,
             f"물체가 전진 거리 밖이다 ({forward * 1000:.0f}mm > {far_m * 1000:.0f}mm) "
-            "— 재직진 필요")
+            "— 재직진 필요",
+            forward_error_m=forward - far_m)
     if abs(lateral) > half_width:
         return AlignmentVerdict(
             HOST_CORRECTION, lateral, 0.0,

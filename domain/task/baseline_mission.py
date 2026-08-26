@@ -46,6 +46,7 @@ from dataclasses import dataclass, field
 
 from domain.ports.baseline_ports import MissionState, Report
 from domain.task import baseline_constants as bc
+from domain.task import corrections
 from domain.task import grasp_alignment as ga
 from domain.task import preconditions as pc
 from domain.task.floor_grasp_policy import (
@@ -291,16 +292,20 @@ class BaselineApproachState(State):
 
         if verdict.action == ga.PI_CENTER:
             if ports.arm.offset_base_yaw(verdict.servo1_offset_rad):
-                ports.host.report(Report.GRASP_CENTERING, self.name, verdict.reason)
+                ports.host.report(Report.GRASP_CENTERING, self.name, verdict.reason,
+                                  corrections.from_alignment(verdict))
             else:
                 # 관절이 거부했다 — 한계각 초과나 범위 밖이다. 팔로 못 고치면
                 # 차량이 다시 서야 한다.
                 ports.host.report(
                     Report.GRASP_BLOCKED, self.name,
-                    f"{verdict.reason} — servo 1이 거부했다, 재회전 필요")
+                    f"{verdict.reason} — servo 1이 거부했다, 재회전 필요",
+                    corrections.Correction(corrections.ROTATE,
+                                           lateral_m=verdict.lateral_error_m))
             return self
 
-        ports.host.report(Report.GRASP_BLOCKED, self.name, verdict.reason)
+        ports.host.report(Report.GRASP_BLOCKED, self.name, verdict.reason,
+                          corrections.from_alignment(verdict))
         return self
 
 
@@ -453,7 +458,7 @@ class BaselineCarryState(State):
                 distance_change = face.distance_m - previous_face.distance_m
             load_change = load - previous_load
 
-        report = pc.check_insert(pc.InsertInputs(
+        insert_inputs = pc.InsertInputs(
             estop_set=ports.estop.is_set(),
             base_stopped=_base_stopped(ports, command),
             gripper_load=load,
@@ -467,9 +472,14 @@ class BaselineCarryState(State):
             face_lateral_known=face.lateral_known,
             distance_change_m=distance_change,
             load_change=load_change,
-        ))
+        )
+        report = pc.check_insert(insert_inputs)
         if not report.ok:
-            ports.host.report(Report.INSERT_BLOCKED, self.reported_as, report.detail)
+            # 보정 요구를 같이 실어 보낸다. 남은 미충족이 Host가 고칠 수 있는
+            # 것이 아니면(점 개수·안정성·부하) from_insert가 None을 준다 —
+            # 지어낸 보정을 주면 Host가 엉뚱하게 움직인다.
+            ports.host.report(Report.INSERT_BLOCKED, self.reported_as, report.detail,
+                              corrections.from_insert(insert_inputs))
             return BaselineCarryState(self.label, self.reported_as, self.sample)
         ports.host.report(
             Report.INSERT_READY, self.reported_as,

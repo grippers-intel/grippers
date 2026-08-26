@@ -120,12 +120,19 @@ class HostLink(ABC):
         따로 봐야 한다(`baseline_mission`의 `_motion_for` 참고)."""
 
     @abstractmethod
-    def report(self, report: str, state: str, detail: str = "") -> None:
+    def report(self, report: str, state: str, detail: str = "", fix=None) -> None:
         """Pi의 상태·판정 결과를 Host에 알린다.
 
         `report`는 `Report`의 상수, `state`는 `MissionState`의 상수다. 둘을
         함께 보내는 이유: Host는 "무슨 일이 있었나"(report)와 "지금 어디에
         있나"(state)를 둘 다 알아야 다음 명령을 만들 수 있다.
+
+        `fix`는 선택이다. 막힌 보고(`*_BLOCKED`, `GRASP_CENTERING`)에는
+        Host가 그대로 실행할 수 있는 보정 요구를 같이 실어 보낸다
+        (`domain.task.corrections.Correction`). 없으면 필드가 안 나간다.
+
+        detail은 사람용, fix는 기계용이다. 둘 다 같은 판정에서 나오므로
+        어긋날 수 없다 — 산문을 나중에 파싱하는 방식과 다른 점이 그것이다.
 
         실패해도 돌려줄 값이 없다 — 보고가 안 닿으면 Host의 워치독이 알아서
         판단한다."""
