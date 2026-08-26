@@ -16,6 +16,7 @@ soarm_lab.arm을 그대로 감싼다. 새 IK/서보 로직은 없음.
 """
 
 import fcntl
+import math
 import os
 import sys
 import time
