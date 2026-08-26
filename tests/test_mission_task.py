@@ -473,7 +473,7 @@ def test_grasp_rechecks_at_145mm_then_folds_to_carry_idle_before_transport(make_
         ("soccer_polyhedron", "safe"),
         ("soccer_polyhedron", "carry"),
     ]
-    assert arm.gripper_widths == [168.0, 35.0]
+    assert arm.gripper_widths == [168.0, 31.0]
     assert next_state.name == "TRANSPORT"
     # 로깅 전용: confirm_grasp가 실제로 호출되는지만 검증한다 — 판정에는
     # 아직 안 쓰이므로 next_state는 confirm_grasp 결과와 무관하게 TRANSPORT다.

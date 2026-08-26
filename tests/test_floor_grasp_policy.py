@@ -20,12 +20,12 @@ def test_gabe_policy_uses_measured_cube_and_wide_object_commands():
     assert (cube.profile, cube.preopen_width_mm, cube.close_width_mm) == (
         "cube",
         168.0,
-        30.0,
+        25.0,
     )
     assert (wide.profile, wide.preopen_width_mm, wide.close_width_mm) == (
         "soccer_polyhedron",
         168.0,
-        35.0,
+        31.0,
     )
 
 
@@ -37,7 +37,7 @@ def test_chess_policy_chooses_nearest_measured_grasp_width():
         "chess_knight"
     )
     rook = select_horizontal_grasp_plan(detection(ObjectClass.CHESS_PIECE, 24.5))
-    assert (rook.profile, rook.close_width_mm) == ("chess_rook", 15.0)
+    assert (rook.profile, rook.close_width_mm) == ("chess_rook", 9.5)
 
 
 def test_approach_target_key_resolves_chess_pieces_by_measured_width():
