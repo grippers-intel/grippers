@@ -529,22 +529,30 @@ def mode_jaw_line(node, label):
     carried = float(node.arm_state().load_ratio[5])
     print(f"    부하  닫음 {closed:.4f}  ->  들어올림 {lifted:.4f}  ->  CARRY {carried:.4f}")
 
+    # 순서가 중요하다. "애초에 못 물었다"와 "물었다가 미끄러졌다"는 원인도
+    # 대처도 다르다 — 2026-08-26에 queen이 미끄러졌는데 도구가 "턱 밖"이라고
+    # 잘못 말했다.
+    gripped = closed >= 0.05
     held = carried >= 0.05
-    slipped = held and carried < closed - LOAD_SLIP_DROP
+    weakened = held and carried < closed - LOAD_SLIP_DROP
 
     print()
     print(BANNER)
-    if not held:
-        print("  ⛔ 놓쳤습니다 — 이 자리는 턱 밖입니다.")
-        print(f"     물체를 약 {JAW_THROAT_DEPTH_M * 1000:.0f}mm 더 가까이 놓고 "
-              "다시 하세요.")
+    if not gripped:
+        print("  ⛔ 애초에 물지 못했습니다 — 물체가 턱 사이에 없었습니다.")
+        print("     좌우 정렬과 배치를 먼저 확인하세요.")
         return None
-    if slipped:
-        print("  ⚠️ 물기는 했지만 들어올리며 부하가 떨어졌습니다 — **턱 끝 파지**입니다.")
+    if not held:
+        print("  ⚠️ 물었다가 **들어올리며 놓쳤습니다** — 턱 끝 파지입니다.")
         print(f"     이 값({forward:.4f})은 턱 선이 아닙니다.")
-        print(f"     물체를 약 {JAW_THROAT_DEPTH_M * 1000:.0f}mm 더 가까이 놓고 "
-              "다시 하세요.")
-        print(f"     (다음 시도 목표 판독 ~ {forward - JAW_THROAT_DEPTH_M:.4f})")
+    elif weakened:
+        print("  ⚠️ 물고는 있지만 들어올리며 부하가 떨어졌습니다 — 턱 끝에 가깝습니다.")
+        print(f"     이 값({forward:.4f})은 턱 선으로 쓰기에 위험합니다.")
+    if not held or weakened:
+        print(f"     물체를 **자로 재서 약 {JAW_THROAT_DEPTH_M * 1000:.0f}mm 앞으로**"
+              " 옮기고 다시 하세요.")
+        print("     ⚠️ 다음 판독값이 그만큼 줄지는 않습니다 — 클래스마다 거리")
+        print("        배율이 달라서, 옮긴 물리 거리와 판독 변화량이 다릅니다.")
         return None
 
     print("  제대로 물렸고 들어올려도 유지됐습니다 — 이 값이 턱 선입니다.")

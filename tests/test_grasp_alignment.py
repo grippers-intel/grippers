@@ -235,3 +235,18 @@ def test_영점을_빼면_중앙이_0이_된다(monkeypatch):
     verdict = ga.judge(TargetObservation("rook", 0.1957, 0.0295, True), 24.5)
 
     assert verdict.action == ga.READY
+
+
+def test_knight_턱_선이_실측값이다():
+    """닫음/들어올림/CARRY 부하가 0.0782로 한 번도 안 떨어진 실측이다."""
+    assert bc.JAW_LINE_DEPTH_FORWARD_M["knight"] == 0.1881
+
+
+def test_같은_물리_자리를_클래스마다_다르게_읽는다():
+    """턱 선은 정의상 모든 클래스에서 물리적으로 같은 자리다. 그런데 판독은
+    7% 다르다 — 턱 선을 클래스마다 따로 두는 이유가 이것이다."""
+    rook = bc.JAW_LINE_DEPTH_FORWARD_M["rook"]
+    knight = bc.JAW_LINE_DEPTH_FORWARD_M["knight"]
+
+    assert knight > rook
+    assert 0.06 < knight / rook - 1.0 < 0.08
