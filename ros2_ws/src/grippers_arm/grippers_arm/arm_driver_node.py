@@ -49,6 +49,7 @@ from .gripper_calibration import (
 )
 from .floor_grasp_profiles import (
     BASKET_DROP_195_RAW,
+    CARRY_RAW,
     HORIZONTAL_GRASP_POSES_DEG,
     HORIZONTAL_SAFE_145_RAW,
     IDLE_CRADLE_RAW,
@@ -551,7 +552,7 @@ class ArmDriverNode(Node):
         try:
             if req.profile not in HORIZONTAL_GRASP_POSES_DEG:
                 raise ValueError(f"알 수 없는 수평 파지 profile: {req.profile}")
-            if req.stage not in {"idle", "safe", "grasp", "midpoint", "drop", "recover_idle"}:
+            if req.stage not in {"idle", "carry", "safe", "grasp", "midpoint", "drop", "recover_idle"}:
                 raise ValueError(f"알 수 없는 수평 파지 stage: {req.stage}")
 
             # 세션 첫 이동이면 여기서 IDLE로 자동 정렬한다(사용자 지시,
@@ -807,6 +808,7 @@ class ArmDriverNode(Node):
             return {**goals, 1: frozen_servo1}
 
         idle = self._tuple_goals(IDLE_CRADLE_RAW)
+        carry = self._tuple_goals(CARRY_RAW)
         drop = self._tuple_goals(BASKET_DROP_195_RAW)
         safe = _freeze_servo1(self._tuple_goals(HORIZONTAL_SAFE_145_RAW))
         grasp = _freeze_servo1(self._raw_goals(backend, HORIZONTAL_GRASP_POSES_DEG[profile]))
@@ -817,9 +819,25 @@ class ArmDriverNode(Node):
         if stage == "idle":
             if self._near_pose(actual, idle):
                 return
-            if not (self._near_pose(actual, safe) or self._near_pose(actual, drop)):
-                raise ValueError("idle 복귀는 safe/drop 자세에서만 시작할 수 있습니다")
+            if not (self._near_pose(actual, safe) or self._near_pose(actual, drop)
+                    or self._near_pose(actual, carry)):
+                raise ValueError("idle 복귀는 safe/drop/carry 자세에서만 시작할 수 있습니다")
             self._glide_to_raw_positions(backend, idle, defer_joints=RETURN_TO_IDLE_DEFERRED_JOINTS)
+            return
+
+        if stage == "carry":
+            # 물체를 든 채 주행할 자세. IDLE과 같은 게이트를 쓰고 **같은 손목
+            # 지연을 반드시 건다** — safe에서 오는 servo 4 이동량이 +1381 raw
+            # (121도)로 idle로 갈 때(+1618)와 같은 성격이다. 지연 없이 가면
+            # 어깨가 내려가는 동안 손목이 같이 접혀 그리퍼가 차체 전면을
+            # 긁는다(RETURN_TO_IDLE_DEFERRED_JOINTS 주석의 2026-08-24 사고).
+            if self._near_pose(actual, carry):
+                return
+            if not (self._near_pose(actual, safe) or self._near_pose(actual, drop)
+                    or self._near_pose(actual, idle)):
+                raise ValueError("carry 이동은 safe/drop/idle 자세에서만 시작할 수 있습니다")
+            self._glide_to_raw_positions(backend, carry,
+                                          defer_joints=RETURN_TO_IDLE_DEFERRED_JOINTS)
             return
 
         if stage == "recover_idle":
@@ -851,7 +869,8 @@ class ArmDriverNode(Node):
             if self._near_pose(actual, idle):
                 return
 
-            named = {"grasp": grasp, "midpoint": midpoint, "safe": safe, "drop": drop}
+            named = {"grasp": grasp, "midpoint": midpoint, "safe": safe,
+                     "drop": drop, "carry": carry}
             distances = {
                 name: max(abs(actual[servo_id] - pose[servo_id]) for servo_id in range(1, 6))
                 for name, pose in named.items()
@@ -871,13 +890,15 @@ class ArmDriverNode(Node):
                 "midpoint": (safe, idle),
                 "safe": (idle,),
                 "drop": (idle,),
+                "carry": (idle,),
             }[nearest]
             self.get_logger().warn(
                 f"recover_idle: 가장 가까운 등록 자세 '{nearest}'({distances[nearest]} raw)에서 "
                 f"{len(chain)}단계로 들어올려 복귀합니다"
             )
             for waypoint in chain:
-                defer = RETURN_TO_IDLE_DEFERRED_JOINTS if waypoint is idle else ()
+                defer = (RETURN_TO_IDLE_DEFERRED_JOINTS
+                         if waypoint is idle or waypoint is carry else ())
                 self._glide_to_raw_positions(backend, waypoint, defer_joints=defer)
             return
 
@@ -897,11 +918,16 @@ class ArmDriverNode(Node):
             if self._near_pose(actual, drop):
                 self._glide_to_raw_positions(backend, safe)
                 return
-            raise ValueError("safe 이동 시작 자세가 등록된 idle/grasp/midpoint/drop이 아닙니다")
+            if self._near_pose(actual, carry):
+                self._glide_to_raw_positions(backend, safe)
+                return
+            raise ValueError(
+                "safe 이동 시작 자세가 등록된 idle/carry/grasp/midpoint/drop이 아닙니다")
 
         if stage == "drop":
-            if not (self._near_pose(actual, idle) or self._near_pose(actual, safe)):
-                raise ValueError("drop 이동은 idle/safe 자세에서만 시작할 수 있습니다")
+            if not (self._near_pose(actual, idle) or self._near_pose(actual, safe)
+                    or self._near_pose(actual, carry)):
+                raise ValueError("drop 이동은 idle/safe/carry 자세에서만 시작할 수 있습니다")
             self._glide_to_raw_positions(backend, drop)
             return
 

@@ -282,7 +282,11 @@ class GraspState(State):
             # 물체를 든 채 SAFE_145 → IDLE 관절 자세로 직접 접는 경로를 큐브로
             # 실측했다. servo 2 load가 196 → 64로 줄고 gripper load는 0.1056으로
             # 유지됐다. CARRY_IDLE 도달과 파지 재검증 전에는 베이스가 움직이면 안 된다.
-            if not ports.arm.move_to_floor_pose(plan.profile, "idle"):
+            # 2026-08-26: "idle"이 아니라 "carry"다. 물체를 문 그리퍼가 IDLE
+            # 자세에서는 라이다 정면을 통째로 가린다(실측: 정면 ±30도의 79%가
+            # 4.5~6.8cm로 막힘). CARRY는 servo 4만 들어올린 자세로, 빈손
+            # 복귀용 IDLE은 부하 0인 크래들 안착 상태 그대로 남겨 둔다.
+            if not ports.arm.move_to_floor_pose(plan.profile, "carry"):
                 return EstopState()
             if ports.arm.get_load() < self.LOAD_THRESHOLD:
                 return self._request_host_replan(ports)

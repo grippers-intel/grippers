@@ -192,8 +192,10 @@ class BaselineGraspState(State):
         if not cleared:
             return self._failed(ports, "들어 올리지 못함")
 
-        if not ports.arm.move_to_floor_pose(gp.profile, "idle"):
-            return self._failed(ports, "CARRY_IDLE 복귀 실패")
+        # "idle"이 아니라 "carry" — 물체를 문 채로는 IDLE이 라이다 정면을
+        # 가린다(2026-08-26 실측). floor_grasp_profiles.CARRY_RAW 주석 참고.
+        if not ports.arm.move_to_floor_pose(gp.profile, "carry"):
+            return self._failed(ports, "CARRY 복귀 실패")
         if ports.arm.get_load() < bc.LOAD_THRESHOLD:
             return self._failed(ports, "CARRY_IDLE에서 빈손")
 

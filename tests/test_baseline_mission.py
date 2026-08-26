@@ -154,7 +154,7 @@ def test_파지_자세_순서가_교시_경로를_따른다():
     bm.BaselineGraspState(_plan()).execute(ports)
 
     stages = [stage for _profile, stage in arm.floor_pose_calls]
-    assert stages == ["safe", "grasp", "midpoint", "safe", "idle"]
+    assert stages == ["safe", "grasp", "midpoint", "safe", "carry"]
 
 
 def test_CARRY_IDLE_빈손이면_물체가_보이는지로_두_갈래를_가른다():

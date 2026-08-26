@@ -471,7 +471,7 @@ def test_grasp_rechecks_at_145mm_then_folds_to_carry_idle_before_transport(make_
         ("soccer_polyhedron", "grasp"),
         ("soccer_polyhedron", "midpoint"),
         ("soccer_polyhedron", "safe"),
-        ("soccer_polyhedron", "idle"),
+        ("soccer_polyhedron", "carry"),
     ]
     assert arm.gripper_widths == [168.0, 35.0]
     assert next_state.name == "TRANSPORT"
@@ -566,7 +566,7 @@ def test_carry_idle_drop_retries_same_target_when_object_is_still_there(make_por
     assert next_state.name == "HOST_REPLAN_RETRY"
     assert next_state.request is states_module.ReplanRequest.RETRY_SAME_TARGET
     assert perception.confirm_grasp_calls == 1
-    assert arm.floor_pose_calls[-1] == ("soccer_polyhedron", "idle")
+    assert arm.floor_pose_calls[-1] == ("soccer_polyhedron", "carry")
 
 
 def test_carry_idle_drop_retargets_when_object_vanished(make_ports):

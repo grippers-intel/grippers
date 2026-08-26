@@ -335,7 +335,7 @@ def test_recover_idle_skips_the_start_pose_gate_that_normal_idle_enforces():
     assert "recover_idle" in source
     # 일반 idle 경로의 게이트는 그대로 살아 있어야 한다 — recover_idle은
     # 기본값이 아니라 예외다.
-    assert "idle 복귀는 safe/drop 자세에서만 시작할 수 있습니다" in source
+    assert "idle 복귀는 safe/drop/carry 자세에서만 시작할 수 있습니다" in source
 
 
 def test_recover_idle_is_an_accepted_stage():
@@ -795,3 +795,31 @@ def test_out_of_range_positions_are_discarded_not_reported_as_valid():
     assert "POSITION_RAW_MAX" in source
     # 범위 검사가 online 판정보다 먼저 와야 버려진다.
     assert source.index("POSITION_RAW_MAX") < source.index("online.append(True)")
+
+
+def test_carry_stage_defers_the_wrist_exactly_like_idle_does():
+    """CARRY 이동에도 servo 4 지연이 걸려야 한다 (2026-08-26).
+
+    safe에서 carry로 갈 때 servo 4 이동량은 +1381 raw(121도)로, idle로 갈
+    때(+1618)와 같은 성격의 큰 이동이다. 지연 없이 보내면 어깨가 내려가는
+    동안 손목이 같은 비율로 접혀 그리퍼가 차체 전면을 긁는다 —
+    RETURN_TO_IDLE_DEFERRED_JOINTS 주석이 기록한 2026-08-24 사고가 그것이고,
+    거기서 룩을 놓쳤다.
+
+    지연 조건이 `waypoint is idle` 동일성 검사라, carry를 별도 자세로 만들면
+    조건에서 빠지기 쉽다. 그 회귀를 여기서 막는다."""
+    source = ast.unparse(_function("_move_floor_stage"))
+
+    carry_block = source.split("if stage == 'carry':", 1)
+    assert len(carry_block) == 2, "carry 분기가 없다"
+    body = carry_block[1].split("if stage ==", 1)[0]
+    assert "RETURN_TO_IDLE_DEFERRED_JOINTS" in body, (
+        "carry 이동이 손목 지연 없이 보간한다 — 차체 전면을 긁는다"
+    )
+
+
+def test_carry_is_an_accepted_stage_and_reachable_from_safe():
+    assert "'carry'" in ast.unparse(_function("_execute_floor_pose"))
+    source = ast.unparse(_function("_move_floor_stage"))
+    # INSERT는 carry에서 곧장 drop으로 간다.
+    assert "drop 이동은 idle/safe/carry 자세에서만 시작할 수 있습니다" in source
