@@ -96,7 +96,10 @@ from grippers_interfaces.srv import GetArmState, ObserveTarget, OffsetBaseYaw, S
 from grippers_arm.floor_grasp_profiles import FLOOR_GRASP_PROFILES
 
 BANNER = "=" * 68
-SAMPLES = 7                # 턱 선 관측 표본 수 — 중앙값을 쓴다
+SAMPLES = 7                # (구) 관측 표본 수 — 캐시를 안 비우는 곳에서만 쓴다
+# 턱 선 표본 수. 캐시를 비워 가며 뜨므로 하나에 약 3.3초씩 든다 — 표본을
+# 늘리는 값보다 사람이 기다리는 값이 더 빨리 커져서 4로 잡았다.
+JAW_SAMPLES = 4
 
 # 들어올린 **뒤에도** 부하가 이만큼 더 떨어지면 미끄러지는 중으로 본다.
 # 닫는 순간과 비교하지 않는다 — 위 판정부 주석 참고.
@@ -540,15 +543,21 @@ def mode_jaw_line(node, label):
     print("     지난 실기 기준: 차체 전면에서 약 166mm, 정면 중앙")
     input("  준비되면 Enter > ")
 
+    # ⚠️ 표본 사이에 캐시가 만료되도록 기다린다. 안 그러면 노드가 같은 표본을
+    # 계속 돌려줘 "7개 중앙값"이 사실은 관측 하나가 되고, 산포는 언제나
+    # 0.0000으로 찍혀 **정밀해 보이는 허상**이 된다. 2026-08-26에 --mode gate
+    # 에서 같은 결함을 잡았는데 여기는 놓쳤다.
     readings = []
-    for i in range(SAMPLES):
+    for i in range(JAW_SAMPLES):
+        if i:
+            time.sleep(OBSERVE_CACHE_SEC + 0.3)
         response = node.observe(label)
         if response.found and response.metric_ok:
             readings.append((response.forward_m, response.lateral_m))
-            print(f"    {i + 1}/{SAMPLES}  전방 {response.forward_m:.4f} m  "
+            print(f"    {i + 1}/{JAW_SAMPLES}  전방 {response.forward_m:.4f} m  "
                   f"좌우 {response.lateral_m * 1000:+.1f} mm")
         else:
-            print(f"    {i + 1}/{SAMPLES}  검출 실패 "
+            print(f"    {i + 1}/{JAW_SAMPLES}  검출 실패 "
                   f"(found={response.found} metric_ok={response.metric_ok})")
 
     if len(readings) < 3:
@@ -559,7 +568,8 @@ def mode_jaw_line(node, label):
     lateral = statistics.median(r[1] for r in readings)
     spread = max(r[0] for r in readings) - min(r[0] for r in readings)
     print()
-    print(f"  전방 중앙값 = {forward:.4f} m   (표본 폭 {spread * 1000:.1f} mm)")
+    print(f"  전방 중앙값 = {forward:.4f} m   (표본 폭 {spread * 1000:.1f} mm"
+          f", 서로 독립적인 관측 {len(readings)}개)")
     print(f"  좌우 중앙값 = {lateral * 1000:+.1f} mm")
     print()
     print("  이제 **전진 없이** 내려가 닫아서 이 값이 맞는지 확인합니다.")
