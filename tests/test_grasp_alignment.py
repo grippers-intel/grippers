@@ -17,7 +17,7 @@ SERVO1_REACH_MM = 240.0
 
 @pytest.fixture(autouse=True)
 def _measured_geometry(monkeypatch):
-    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M", JAW_LINE_M)
+    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M", {"queen": JAW_LINE_M})
     monkeypatch.setattr(bc, "SERVO1_AXIS_TO_JAW_MM", SERVO1_REACH_MM)
 
 
@@ -42,7 +42,7 @@ def test_열린_폭보다_넓은_물체는_들어올_수_없다():
 
 
 def test_깊이_구간은_턱_선부터_전진_거리까지다():
-    near, far = ga.capture_depth_range_m()
+    near, far = ga.capture_depth_range_m("queen")
 
     assert near == pytest.approx(JAW_LINE_M)
     assert far == pytest.approx(JAW_LINE_M + bc.GRASP_CREEP_FORWARD_MM / 1000.0)
@@ -107,7 +107,7 @@ def test_관측이_없으면_판정하지_않는다():
 
 
 def test_턱_선_미실측이면_판정하지_않는다(monkeypatch):
-    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M", None)
+    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M", {})
 
     verdict = ga.judge(_obs(), 17.0)
 
@@ -153,3 +153,27 @@ def test_이미_턱_선_안쪽이면_전진하지_않는다():
 
 def test_환산_실패면_전진_거리를_내지_않는다():
     assert ga.creep_distance_m(_obs(metric_ok=False)) is None
+
+
+# ── 턱 선은 클래스마다 다르다 ─────────────────────────────────────────────
+
+
+def test_안_잰_클래스는_판정하지_않는다(monkeypatch):
+    """클래스별 K의 배율 오차가 커서 한 값을 공용하면 안 된다 —
+    같은 물리 18cm를 queen 14.4 / soccer 25.6cm로 읽는다(2026-08-25 실측)."""
+    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M", {"rook": 0.36})
+
+    verdict = ga.judge(TargetObservation("queen", 0.38, 0.0, True), 17.0)
+
+    assert verdict.action == ga.UNKNOWN
+    assert "queen" in verdict.reason
+
+
+def test_클래스마다_다른_턱_선을_쓴다(monkeypatch):
+    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M",
+                        {"queen": 0.30, "soccer": 0.50})
+
+    assert ga.creep_distance_m(
+        TargetObservation("queen", 0.32, 0.0, True)) == pytest.approx(0.02)
+    assert ga.creep_distance_m(
+        TargetObservation("soccer", 0.52, 0.0, True)) == pytest.approx(0.02)

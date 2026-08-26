@@ -44,7 +44,7 @@ def _measured_geometry(monkeypatch):
 
     실기에서 이 둘이 None인 동안에는 정렬 판정이 전부 Host로 넘어간다 —
     그 동작도 아래에서 따로 검증한다."""
-    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M", JAW_LINE_M)
+    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M", {"queen": JAW_LINE_M})
     monkeypatch.setattr(bc, "SERVO1_AXIS_TO_JAW_MM", SERVO1_REACH_MM)
 
 
@@ -459,7 +459,7 @@ def test_거리_환산에_실패하면_내려가지_않는다():
 
 def test_턱_선_미실측이면_정렬_판정을_포기하고_Host에_넘긴다(monkeypatch):
     """실측 전 오늘의 동작 — 지어낸 프레임 변환으로 팔을 내리지 않는다."""
-    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M", None)
+    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M", {})
     host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
     ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD), perception=_centered())
 

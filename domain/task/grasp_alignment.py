@@ -65,16 +65,24 @@ def capture_half_width_m(object_width_mm: float, open_width_mm=None) -> float:
     return max(0.0, usable / 2.0) / 1000.0
 
 
-def capture_depth_range_m(creep_mm: float = bc.GRASP_CREEP_FORWARD_MM,
-                          jaw_line_m=None):
+def jaw_line_m(label):
+    """그 클래스의 턱 선(뎁스 판독값 기준). 아직 안 쟀으면 **None**.
+
+    클래스마다 따로인 이유는 `baseline_constants.JAW_LINE_DEPTH_FORWARD_M`
+    주석 참고 — 요약하면 클래스별 거리 보정 K의 배율 오차가 커서, 같은
+    클래스로 잰 턱 선을 빼야 그 오차가 상쇄된다."""
+    return bc.JAW_LINE_DEPTH_FORWARD_M.get(label)
+
+
+def capture_depth_range_m(label, creep_mm: float = bc.GRASP_CREEP_FORWARD_MM):
     """물체 중심이 이 전방 구간 안에 있어야 턱이 쓸고 지나간다.
 
     **뎁스 카메라가 읽는 값의 단위로** 돌려준다 — 비교 상대가 그 값이기
-    때문이다. 턱 선을 아직 안 쟀으면 **None**.
+    때문이다. 그 클래스의 턱 선을 아직 안 쟀으면 **None**.
 
     턱 선 **앞쪽**에 있어야 한다 — 이미 턱 선보다 가까우면 전진해도
     안 들어오고 밀려날 뿐이다. 뒤 끝은 전진 거리가 정한다."""
-    jaw = bc.JAW_LINE_DEPTH_FORWARD_M if jaw_line_m is None else jaw_line_m
+    jaw = jaw_line_m(label)
     if jaw is None:
         return None
     return jaw, jaw + creep_mm / 1000.0
@@ -95,8 +103,7 @@ def servo1_offset_for(lateral_error_m: float, reach_mm=None):
     return math.atan2(lateral_error_m, reach_mm / 1000.0)
 
 
-def creep_distance_m(observation, jaw_line_m=None,
-                     max_creep_mm: float = bc.GRASP_CREEP_FORWARD_MM):
+def creep_distance_m(observation, max_creep_mm: float = bc.GRASP_CREEP_FORWARD_MM):
     """이번 파지에 실제로 필요한 미세 전진 거리. 모르면 **None**.
 
     고정 상수를 쓰지 않는 이유: 전진의 목적은 "물체를 턱 선까지 데려오는
@@ -110,7 +117,7 @@ def creep_distance_m(observation, jaw_line_m=None,
     안전장치다."""
     if observation is None or not observation.metric_ok:
         return None
-    jaw = bc.JAW_LINE_DEPTH_FORWARD_M if jaw_line_m is None else jaw_line_m
+    jaw = jaw_line_m(observation.label)
     if jaw is None:
         return None
     needed = observation.forward_m - jaw
@@ -132,11 +139,12 @@ def judge(observation, object_width_mm: float,
         return AlignmentVerdict(
             UNKNOWN, reason="뎁스 카메라가 물체 위치를 미터로 환산하지 못했다")
 
-    depth_range = capture_depth_range_m()
+    depth_range = capture_depth_range_m(observation.label)
     if depth_range is None:
         return AlignmentVerdict(
             UNKNOWN,
-            reason="JAW_LINE_DEPTH_FORWARD_M 미실측 — 턱 쓸기 구간을 모른다")
+            reason=f"'{observation.label}'의 턱 선(JAW_LINE_DEPTH_FORWARD_M) 미실측 "
+                   "— 턱 쓸기 구간을 모른다")
 
     # 카메라 광축과 턱 중심선의 어긋남을 먼저 지운다.
     lateral = observation.lateral_m - bc.DEPTH_LATERAL_TO_JAW_CENTER_M

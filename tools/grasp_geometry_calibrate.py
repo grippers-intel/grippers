@@ -4,8 +4,21 @@
 `domain/task/grasp_alignment.py`의 판정이 이 둘 없이는 아무것도 못 한다.
 지금은 둘 다 None이라 치우친 물체를 전부 Host로 넘기고 있다.
 
-    JAW_LINE_DEPTH_FORWARD_M   턱 선을 **뎁스 카메라 판독값으로** 적은 것
+    JAW_LINE_DEPTH_FORWARD_M   턱 선을 **클래스마다** 뎁스 판독값으로 적은 것
     SERVO1_AXIS_TO_JAW_MM      servo 1 회전축에서 턱 중심까지의 수평 거리
+
+## 왜 클래스마다 따로 재는가
+
+클래스별 거리 보정 K의 정확도가 제각각이다 — rook만 3점 최소제곱이고
+나머지는 먼 거리 1점이라, 파지 거리대에서 배율 오차가 크다. 2026-08-25에
+여섯 물체를 **같은 물리 18cm**에 놓았더니 queen 14.4 / rook 18.3 /
+knight 18.7 / soccer 25.6cm로 읽혔다.
+
+턱 선을 하나로 공용하면 그 오차가 전진 거리에 그대로 실린다 — 실제 24mm를
+가야 하는 상황에서 queen은 -17mm, soccer는 101mm가 나온다. 같은 클래스로 잰
+턱 선을 빼면 오차가 대부분 상쇄돼 한 자릿수 mm로 줄어든다.
+
+**쓸 클래스마다 한 번씩 돌려야 한다.**
 
 ## 왜 턱 선을 뎁스 판독값으로 재는가
 
@@ -182,7 +195,7 @@ def mode_jaw_line(node, label):
     print()
     print(BANNER)
     print(f"  {verdict}")
-    print(f"  JAW_LINE_DEPTH_FORWARD_M = {forward:.4f}")
+    print(f'  JAW_LINE_DEPTH_FORWARD_M["{label}"] = {forward:.4f}')
     if abs(lateral) > 0.010:
         print(f"  ⚠️ 좌우 {lateral * 1000:+.1f}mm 치우쳐 있었습니다 — "
               "DEPTH_LATERAL_TO_JAW_CENTER_M 후보이거나 배치가 어긋난 것입니다")
