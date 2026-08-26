@@ -24,7 +24,11 @@ def _grasp(**overrides):
 def _insert(**overrides):
     base = dict(estop_set=False, base_stopped=True, gripper_load=0.0626,
                 face_ok=True, face_distance_m=bc.BASKET_STOP_LIDAR_M,
-                face_yaw_error_rad=0.0, face_reason="정면 확보", profile="chess_queen")
+                face_yaw_error_rad=0.0, face_reason="정면 확보", profile="chess_queen",
+                # 2026-08-26 검증 지점의 실측 수준 값들.
+                face_point_count=97, face_lateral_offset_m=0.0,
+                face_lateral_known=False,
+                distance_change_m=0.0, load_change=0.0)
     base.update(overrides)
     return InsertInputs(**base)
 
@@ -145,3 +149,65 @@ def test_무엇을_들고_있는지_모르면_막는다():
 
     assert not report.ok
     assert any("놓기 폭을 정할 수 없다" in reason for reason in report.reasons)
+
+
+# ── 2026-08-26에 추가한 네 가지 조건 ──────────────────────────────────────
+
+
+def test_좌우로_밀려_있으면_막는다():
+    """거리와 yaw만으로는 안 보이는 오차다 — 둘 다 정상인데 바깥에 떨어진다."""
+    report = check_insert(_insert(face_lateral_known=True,
+                                  face_lateral_offset_m=0.090))
+
+    assert not report.ok
+    assert any("좌우로 밀려" in reason for reason in report.reasons)
+
+
+def test_좌우_오프셋을_모르면_통과시킨다():
+    """양쪽 가장자리가 다 창 밖이면 그 자체가 '충분히 가운데'라는 뜻이다."""
+    assert check_insert(_insert(face_lateral_known=False,
+                                face_lateral_offset_m=0.0)).ok
+
+
+def test_허용_범위_안의_좌우_오프셋은_통과한다():
+    assert check_insert(_insert(face_lateral_known=True,
+                                face_lateral_offset_m=0.050)).ok
+
+
+def test_정면_점이_부족하면_막는다():
+    """빔이 테두리를 스치기 시작하면 완전히 놓치기 전에 점이 먼저 준다."""
+    report = check_insert(_insert(face_point_count=20))
+
+    assert not report.ok
+    assert any("점이 부족" in reason for reason in report.reasons)
+
+
+def test_직전_판독이_없으면_한_사이클_더_본다():
+    report = check_insert(_insert(distance_change_m=None))
+
+    assert not report.ok
+    assert any("직전 판독이 없다" in reason for reason in report.reasons)
+
+
+def test_판독이_흔들리면_막는다():
+    """합의 속도 0.1m/s면 한 사이클에 10mm 움직인다 — 주행 중이면 반드시 걸린다."""
+    report = check_insert(_insert(distance_change_m=-0.010))
+
+    assert not report.ok
+    assert any("흔들린다" in reason for reason in report.reasons)
+
+
+def test_잡음_수준의_변화는_통과한다():
+    assert check_insert(_insert(distance_change_m=0.003)).ok
+
+
+def test_부하가_떨어지고_있으면_막는다():
+    """팔을 크게 펼치기 전에 미끄러짐을 잡는다."""
+    report = check_insert(_insert(load_change=-0.020))
+
+    assert not report.ok
+    assert any("미끄러지는" in reason for reason in report.reasons)
+
+
+def test_부하가_올라가는_것은_막지_않는다():
+    assert check_insert(_insert(load_change=+0.020)).ok

@@ -385,9 +385,14 @@ class BaselineCarryState(State):
 
     name = MissionState.CARRY
 
-    def __init__(self, label, reported_as: str = MissionState.CARRY):
+    def __init__(self, label, reported_as: str = MissionState.CARRY,
+                 previous=None):
         self.label = label
         self.reported_as = reported_as
+        # 직전 사이클의 (라이다 거리, 그리퍼 부하). INSERT 판정의 "흔들리지
+        # 않는가"·"미끄러지지 않는가"가 이 표본과 비교해서 나온다.
+        self.previous = previous
+        self.sample = None
 
     def execute(self, ports):
         command = ports.host.latest_command()
@@ -404,38 +409,64 @@ class BaselineCarryState(State):
         if command is None:
             return self
 
+        # 라이다와 부하를 **매 사이클** 떠 둔다. INSERT 명령이 왔을 때
+        # 비교할 직전 표본이 이미 있어야 왕복이 한 번 줄고, 주행 중에 뜬
+        # 표본은 자연히 현재와 어긋나므로 "아직 안 멈췄다"가 그대로 드러난다.
+        face = ports.lidar.basket_face()
+        self.sample = (face, ports.arm.get_load())
+
         if command.state == MissionState.INSERT:
-            return self._judge_insert(ports, command)
+            return self._judge_insert(ports, command, face)
 
         if not _drive(ports, command, self.reported_as):
             return self
         if command.state in (MissionState.CARRY, MissionState.APPROACH_BOX):
-            return BaselineCarryState(self.label, self.reported_as)
+            return BaselineCarryState(self.label, self.reported_as, self.sample)
         if command.state == MissionState.DONE:
             return BaselineDoneState()
         return self
 
-    def _judge_insert(self, ports, command):
-        """임무 4번 앞단 — 조건 판정 후 보고. 충족이면 INSERT로, 아니면 제자리."""
+    def _judge_insert(self, ports, command, face):
+        """임무 4번 앞단 — 조건 판정 후 보고. 충족이면 INSERT로, 아니면 제자리.
+
+        직전 사이클 표본과 비교하는 항목이 둘 있다(판독 안정성·부하 안정성).
+        표본이 없으면 판정하지 않고 한 사이클 더 본다 — Host는 INSERT를
+        계속 보내므로 다음 사이클에 자연히 채워진다."""
         ports.base.stop()
-        face = ports.lidar.basket_face()
         gp = plan_for_label(self.label)
+        load = self.sample[1]
+
+        distance_change = load_change = None
+        if self.previous is not None:
+            previous_face, previous_load = self.previous
+            if previous_face.ok and face.ok:
+                distance_change = face.distance_m - previous_face.distance_m
+            load_change = load - previous_load
+
         report = pc.check_insert(pc.InsertInputs(
             estop_set=ports.estop.is_set(),
             base_stopped=_base_stopped(ports, command),
-            gripper_load=ports.arm.get_load(),
+            gripper_load=load,
             face_ok=face.ok,
             face_distance_m=face.distance_m,
             face_yaw_error_rad=face.yaw_error_rad,
             face_reason=face.reason,
             profile=gp.profile if gp else None,
+            face_point_count=face.point_count,
+            face_lateral_offset_m=face.lateral_offset_m,
+            face_lateral_known=face.lateral_known,
+            distance_change_m=distance_change,
+            load_change=load_change,
         ))
         if not report.ok:
             ports.host.report(Report.INSERT_BLOCKED, self.reported_as, report.detail)
-            return self
+            return BaselineCarryState(self.label, self.reported_as, self.sample)
         ports.host.report(
             Report.INSERT_READY, self.reported_as,
-            f"라이다 {face.distance_m:.3f}m yaw {face.yaw_error_rad:+.3f}rad")
+            f"라이다 {face.distance_m:.3f}m yaw {face.yaw_error_rad:+.3f}rad "
+            f"점 {face.point_count} 좌우 "
+            + (f"{face.lateral_offset_m * 1000:+.0f}mm"
+               if face.lateral_known else "창 안(중앙)"))
         return BaselineInsertState(self.label)
 
 
@@ -467,7 +498,7 @@ class BaselineInsertState(State):
         if not ports.arm.move_to_floor_pose(gp.profile, "drop"):
             ports.arm.hold_position()
             ports.host.report(Report.INSERT_FAILED, self.name, "투하 자세 실패")
-            return BaselineCarryState(self.label)
+            return BaselineCarryState(self.label)  # 표본은 버린다 — 팔이 움직였다
 
         before = ports.arm.get_load()
         ports.arm.set_gripper(gp.release_width_mm)

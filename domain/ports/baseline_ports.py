@@ -139,6 +139,13 @@ class BasketFace:
     distance_m: float
     yaw_error_rad: float
     reason: str = ""
+    # 피팅에 쓰인 점 개수. 빔이 테두리를 스치기 시작하면 완전히 놓치기
+    # **전에** 이 값이 먼저 줄어든다 — 절벽의 조기 신호다.
+    point_count: int = 0
+    # 차량 중심선에서 바구니 중심까지의 좌우 거리(+ 왼쪽).
+    # `lateral_known`이 False면 **모르는 것**이지 0이 아니다.
+    lateral_offset_m: float = 0.0
+    lateral_known: bool = False
 
 
 class Lidar(ABC):

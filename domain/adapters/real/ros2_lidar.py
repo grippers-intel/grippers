@@ -54,4 +54,5 @@ class Ros2Lidar(Lidar):
             range_min=max(scan.range_min, LD19_MIN_RANGE_M),
             range_max=min(scan.range_max, 3.0))
         fit = align.fit_basket_face(points, expected_bearing_rad=bearing_rad)
-        return BasketFace(fit.ok, fit.distance_m, fit.yaw_error_rad, fit.reason)
+        return BasketFace(fit.ok, fit.distance_m, fit.yaw_error_rad, fit.reason,
+                          fit.point_count, fit.lateral_offset_m, fit.lateral_known)

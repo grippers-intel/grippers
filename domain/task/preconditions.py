@@ -71,6 +71,12 @@ class InsertInputs:
     face_yaw_error_rad: float
     face_reason: str = ""
     profile: str | None = None
+    face_point_count: int = 0
+    face_lateral_offset_m: float = 0.0
+    face_lateral_known: bool = False
+    # 직전 사이클과 비교한 값들. None이면 비교할 이전 표본이 없다는 뜻이다.
+    distance_change_m: float | None = None
+    load_change: float | None = None
 
 
 def check_grasp(inputs: GraspInputs) -> PreconditionReport:
@@ -148,5 +154,36 @@ def check_insert(inputs: InsertInputs) -> PreconditionReport:
         reasons.append(
             f"정렬이 틀어졌다 (yaw {inputs.face_yaw_error_rad:+.3f}rad > "
             f"{bc.BASKET_YAW_TOLERANCE_RAD:.3f}rad)")
+
+    # ① 좌우 오프셋 — 거리와 yaw만으로는 안 보이는 오차다. 바구니와 나란한
+    # 채로 옆으로 밀려 있으면 둘 다 정상인데 물체는 바깥에 떨어진다.
+    # 모르는 경우(창을 양쪽 다 채움)는 통과시킨다 — 그 상황 자체가 "가장자리가
+    # 창 밖에 있을 만큼 가운데"라는 뜻이다.
+    if inputs.face_lateral_known and (
+            abs(inputs.face_lateral_offset_m) > bc.BASKET_LATERAL_TOLERANCE_M):
+        reasons.append(
+            f"좌우로 밀려 있다 ({inputs.face_lateral_offset_m * 1000:+.0f}mm > "
+            f"±{bc.BASKET_LATERAL_TOLERANCE_M * 1000:.0f}mm)")
+
+    # ③ 점 개수 — 빔이 테두리를 스치기 시작하면 완전히 놓치기 전에 여기가
+    # 먼저 준다.
+    if inputs.face_point_count < bc.BASKET_MIN_FACE_POINTS:
+        reasons.append(
+            f"정면 점이 부족하다 ({inputs.face_point_count}개 < "
+            f"{bc.BASKET_MIN_FACE_POINTS}개) — 테두리를 스치고 있을 수 있다")
+
+    # ② 연속 판독 일치 — 한 프레임 튐과 "차체가 아직 안 멈춤"을 함께 잡는다.
+    if inputs.distance_change_m is None:
+        reasons.append("직전 판독이 없다 — 한 사이클 더 확인해야 한다")
+    elif abs(inputs.distance_change_m) > bc.BASKET_STABILITY_TOLERANCE_M:
+        reasons.append(
+            f"판독이 흔들린다 ({inputs.distance_change_m * 1000:+.0f}mm) — "
+            "아직 움직이는 중이거나 관측이 불안정하다")
+
+    # ④ 부하 안정성 — 팔을 펼치기 전에 미끄러짐을 잡는다.
+    if inputs.load_change is not None and inputs.load_change < -bc.GRIPPER_SLIP_LOAD_DROP:
+        reasons.append(
+            f"그리퍼 부하가 떨어지고 있다 ({inputs.load_change:+.4f}) — "
+            "물체가 미끄러지는 중일 수 있다")
 
     return PreconditionReport(not reasons, tuple(reasons))

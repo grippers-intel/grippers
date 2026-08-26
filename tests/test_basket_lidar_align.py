@@ -8,6 +8,8 @@ import importlib.util
 import math
 import pathlib
 
+import pytest
+
 MODULE = (
     pathlib.Path(__file__).resolve().parent.parent
     / "ros2_ws" / "src" / "grippers_base" / "grippers_base" / "basket_lidar_align.py"
@@ -180,3 +182,51 @@ def test_법선이_로봇에서_바구니를_향한다():
     fit = bl.fit_line(_face_points(0.30, math.radians(15.0)))
     nx, ny, cx, cy, _residual, _width = fit
     assert nx * cx + ny * cy > 0.0
+
+
+# ── 좌우 오프셋 검출 (2026-08-26 추가) ────────────────────────────────────
+
+
+def _basket_points(distance_m, offset_m, window_rad=math.radians(35.0), n=400):
+    """`offset_m`만큼 옆으로 밀린 바구니 정면을, 방위각 창으로 잘라서 낸다."""
+    points = []
+    for i in range(-n // 2, n // 2 + 1):
+        y = offset_m + i * bl.BASKET_FACE_WIDTH_M / n
+        if abs(math.atan2(y, distance_m)) <= window_rad:
+            points.append((distance_m, y))
+    return points
+
+
+def test_창을_양쪽_다_채우면_오프셋을_모른다():
+    """0은 '가운데'가 아니라 '모른다'다 — 판정하는 쪽이 그렇게 읽어야 한다."""
+    offset, known = bl.face_lateral_offset_m(_basket_points(0.140, 0.0), 0.140)
+
+    assert known is False
+    assert offset == 0.0
+
+
+def test_한쪽_가장자리가_보이면_오프셋을_역산한다():
+    for actual in (0.045, 0.080, -0.080):
+        offset, known = bl.face_lateral_offset_m(
+            _basket_points(0.140, actual), 0.140)
+        assert known is True
+        assert offset == pytest.approx(actual, abs=0.006)
+
+
+def test_투하가_실패하는_오프셋은_반드시_검출된다():
+    """검출 시작(약 40mm)이 위험 시작(약 78mm)보다 먼저여야 구멍이 없다."""
+    _offset, known = bl.face_lateral_offset_m(_basket_points(0.140, 0.078), 0.140)
+
+    assert known is True
+
+
+def test_점이_없으면_모른다():
+    assert bl.face_lateral_offset_m([], 0.140) == (0.0, False)
+
+
+def test_정상_피팅이_오프셋을_함께_낸다():
+    fit = bl.fit_basket_face(_basket_points(0.140, 0.080), expected_bearing_rad=0.0)
+
+    assert fit.ok
+    assert fit.lateral_known is True
+    assert fit.lateral_offset_m == pytest.approx(0.080, abs=0.006)

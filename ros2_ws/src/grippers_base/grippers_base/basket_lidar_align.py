@@ -125,6 +125,11 @@ class FaceFit(NamedTuple):
     residual_m: float
     point_count: int
     reason: str
+    # 차량 중심선에서 바구니 정면 중심까지의 좌우 거리(+ 왼쪽).
+    # `lateral_known`이 False면 **모르는 것**이지 0이 아니다 — 바구니가
+    # 방위각 창을 양쪽 다 채워 가장자리가 안 보이는 경우다.
+    lateral_offset_m: float = 0.0
+    lateral_known: bool = False
 
 
 def scan_to_points(ranges, angle_min: float, angle_increment: float,
@@ -268,6 +273,57 @@ def fit_line(points: list):
     return nx, ny, cx, cy, residual_rms, width
 
 
+def face_lateral_offset_m(points: list, distance_m: float,
+                          window_rad: float = DEFAULT_BEARING_WINDOW_RAD,
+                          face_width_m: float = BASKET_FACE_WIDTH_M,
+                          edge_margin_m: float = 0.010):
+    """차량이 바구니 정면에 대해 좌우로 얼마나 밀려 있는지 낸다.
+
+    `(오프셋 m, 알아냈는가)`. 못 알아내면 `(0.0, False)` — **0은 "가운데"가
+    아니라 "모른다"다.**
+
+    ## 왜 이게 따로 필요한가
+
+    선분 피팅이 주는 거리와 yaw로는 이 오차가 **안 보인다**. 차량이 바구니와
+    나란한 채로 옆으로 8cm 밀려 있으면 수직 거리도 yaw도 정상으로 나오는데
+    물체는 바구니 밖에 떨어진다. 2026-08-26까지의 판정에 있던 구멍이다.
+
+    ## 어떻게 보이는가
+
+    방위각 창이 자르는 폭은 `2 * 거리 * tan(창)`이다. 0.140m에서 196mm로
+    바구니 폭 242mm보다 좁으므로, 차량이 가운데 있으면 창 양쪽 끝까지
+    바구니가 꽉 찬다. 옆으로 밀리면 **한쪽에서 바구니 가장자리가 창 안으로
+    들어온다** — 그 가장자리가 보이는 순간 중심 위치를 역산할 수 있다.
+
+    0.140m에서 오프셋 23mm부터 가장자리가 보이기 시작한다. 투하가 실패하는
+    오프셋(바구니 반폭 121mm에서 물체와 여유를 뺀 약 78mm)보다 한참 먼저라
+    위험 구간을 덮는다.
+
+    ## 근사
+
+    yaw가 작다는 전제로 점의 y좌표를 그대로 좌우 위치로 쓴다. INSERT 허용
+    yaw가 5도이고 그때 오차가 거리의 0.4% 수준이라 무시할 수 있다."""
+    if not points or distance_m <= 0.0:
+        return 0.0, False
+    ys = [y for _x, y in points]
+    y_min, y_max = min(ys), max(ys)
+    window_half = distance_m * math.tan(window_rad)
+    half_face = face_width_m / 2.0
+
+    left_edge_visible = y_max < window_half - edge_margin_m
+    right_edge_visible = y_min > -window_half + edge_margin_m
+
+    if left_edge_visible and right_edge_visible:
+        # 양쪽 가장자리가 다 보인다 — 중심은 그 한가운데다. 가장 확실한 경우.
+        return (y_min + y_max) / 2.0, True
+    if left_edge_visible:
+        return y_max - half_face, True
+    if right_edge_visible:
+        return y_min + half_face, True
+    # 양쪽 다 창에 막혔다 — 바구니가 창보다 넓다는 것만 알 뿐 중심은 모른다.
+    return 0.0, False
+
+
 def fit_basket_face(
     points: list,
     expected_bearing_rad: float,
@@ -307,7 +363,9 @@ def fit_basket_face(
         return FaceFit(False, distance, yaw_error, width, residual, len(face),
                        f"겉보기 폭 {width * 1000:.0f}mm — 바구니로 볼 수 없다"
                        f"({lower * 1000:.0f}~{upper * 1000:.0f}mm)")
-    return FaceFit(True, distance, yaw_error, width, residual, len(face), "정면 확보")
+    offset, offset_known = face_lateral_offset_m(face, distance, window_rad)
+    return FaceFit(True, distance, yaw_error, width, residual, len(face), "정면 확보",
+                   offset, offset_known)
 
 
 # 잔차 검사가 잡는 것과 못 잡는 것

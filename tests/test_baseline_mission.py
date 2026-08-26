@@ -65,8 +65,20 @@ def _ports(host=None, base=None, arm=None, perception=None, lidar=None, estop=No
     )
 
 
-def _good_face():
-    return BasketFace(True, bc.BASKET_STOP_LIDAR_M, 0.01, "정면 확보")
+def _good_face(distance_m=None):
+    """2026-08-26 검증 지점 수준의 정상 관측."""
+    return BasketFace(True, distance_m or bc.BASKET_STOP_LIDAR_M, 0.01,
+                      "정면 확보", point_count=97,
+                      lateral_offset_m=0.0, lateral_known=False)
+
+
+def _carry_with_previous(label="queen", face=None, load=HOLDING_LOAD):
+    """직전 사이클 표본을 이미 들고 있는 CARRY 상태.
+
+    안정성 검사가 표본 비교라, 한 사이클만 돌리는 테스트는 이걸 써야
+    "직전 판독이 없다"에 걸리지 않는다."""
+    return BaselineCarryState(label, MissionState.CARRY,
+                              (face or _good_face(), load))
 
 
 # ── 명령 실행 ──────────────────────────────────────────────────────────────
@@ -270,9 +282,10 @@ def test_파지_명령_폭은_ros2_프로파일_공식에서_나온다():
 
 def test_라이다가_정면을_잡고_거리가_맞으면_INSERT로_간다():
     host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
-    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), lidar=FakeLidar([_good_face()]))
+    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD),
+                   lidar=FakeLidar([_good_face()]))
 
-    nxt = BaselineCarryState("queen").execute(ports)
+    nxt = _carry_with_previous().execute(ports)
 
     assert Report.INSERT_READY in host.reported_kinds
     assert isinstance(nxt, BaselineInsertState)
@@ -283,7 +296,7 @@ def test_라이다가_정면을_못_잡으면_INSERT를_막는다():
     host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
     ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), lidar=FakeLidar())
 
-    nxt = BaselineCarryState("queen").execute(ports)
+    nxt = _carry_with_previous().execute(ports)
 
     assert Report.INSERT_BLOCKED in host.reported_kinds
     assert isinstance(nxt, BaselineCarryState)
@@ -292,10 +305,10 @@ def test_라이다가_정면을_못_잡으면_INSERT를_막는다():
 def test_바구니가_절벽보다_가까우면_INSERT를_막는다():
     """판독이 하한 아래면 테두리를 넘겨보고 있을 수 있다."""
     host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
-    close = BasketFace(True, bc.BASKET_MIN_LIDAR_M - 0.005, 0.0, "정면 확보")
+    close = _good_face(bc.BASKET_MIN_LIDAR_M - 0.005)
     ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), lidar=FakeLidar([close]))
 
-    nxt = BaselineCarryState("queen").execute(ports)
+    nxt = _carry_with_previous(face=close).execute(ports)
 
     assert Report.INSERT_BLOCKED in host.reported_kinds
     assert isinstance(nxt, BaselineCarryState)
@@ -305,7 +318,7 @@ def test_빈손이면_INSERT를_막는다():
     host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
     ports = _ports(host=host, arm=FakeArm(load_ratio=0.0), lidar=FakeLidar([_good_face()]))
 
-    nxt = BaselineCarryState("queen").execute(ports)
+    nxt = _carry_with_previous(load=0.0).execute(ports)
 
     assert Report.INSERT_BLOCKED in host.reported_kinds
 
