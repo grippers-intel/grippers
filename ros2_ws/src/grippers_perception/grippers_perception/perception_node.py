@@ -260,7 +260,13 @@ OBSERVE_CONSENSUS_MIN_HITS = 3
 # 표본을 이만큼 재사용한다. identify_target이 클래스 6개를 연달아 묻는데,
 # 그때마다 5프레임을 새로 뜨면 6배가 든다 — 같은 순간의 같은 표본으로
 # 답하는 것이 맞고 더 빠르다.
-OBSERVE_CACHE_SEC = 1.0
+#
+# ⚠️ 수집 자체가 약 1.7초 걸린다(5프레임 x CPU 추론, 2026-08-26 실측).
+# 창이 그보다 짧으면 캐시가 **항상** 만료돼 있어 아무 효과가 없다 — 처음
+# 1.0초로 뒀다가 실기 로그에서 6번 연속 재수집하는 것을 보고 늘렸다.
+# 창은 수집 시간보다 넉넉히 길어야 하고, 만료 기준 시각도 수집을 **마친**
+# 시점이어야 한다.
+OBSERVE_CACHE_SEC = 3.0
 
 # 표본을 모으는 데 허용하는 상한. 프레임은 약 7Hz로 오고 그때마다 CPU
 # 추론이 붙으므로 5장에 1~2초가 든다.
@@ -711,7 +717,9 @@ class PerceptionNode(Node):
                 f"화면 위쪽(y<{OBSERVE_MIN_BOTTOM_Y_PX:.0f}) {high_total}건 "
                 f"({len(frames)}프레임)")
         self._observe_samples_cache = gated
-        self._observe_samples_at = now
+        # 수집을 **마친** 시각을 쓴다. 시작 시각을 쓰면 수집에 걸린 시간이
+        # 창에서 먼저 깎여 나가 캐시가 거의 즉시 만료된다.
+        self._observe_samples_at = time.monotonic()
         return gated
 
     def _on_observe_target(self, request, response):

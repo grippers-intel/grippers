@@ -243,7 +243,17 @@ class BaselineApproachState(State):
         """임무 2번 — 조건 판정 후 보고. 충족이면 GRASP로, 아니면 제자리.
 
         판정은 두 겹이다. 먼저 기본 전제(E-STOP·정지·빈 그리퍼·식별)를 보고,
-        통과하면 **물체가 턱이 쓸고 갈 영역 안에 있는지**를 본다."""
+        통과하면 **물체가 턱이 쓸고 갈 영역 안에 있는지**를 본다.
+
+        ⚠️ 이 한 번의 판정에 약 1.7초가 든다(2026-08-26 실측). identify_target이
+        오검출을 거르려고 5프레임 합의를 쓰고 CPU 추론이 프레임당 0.3초쯤
+        걸리기 때문이다. 클래스 6개를 묻지만 표본은 한 번만 뜬다.
+
+        그동안 이 사이클은 Host 명령을 읽지도 보고하지도 않는다. 워치독은
+        안 걸린다 — 명령이 **안 온** 것이 아니라 **안 읽은** 것이고, 링크는
+        최신 것만 들고 있다가 다음 읽기에 내준다. 다만 **Host 쪽에서는
+        약 1.7초 동안 보고가 끊긴다** — Host 워치독을 그보다 넉넉히 잡아야
+        한다."""
         ports.base.stop()
         observation = ports.perception.identify_target()
         label = observation.label if observation is not None else None
