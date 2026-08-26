@@ -71,6 +71,7 @@ knight 18.7 / soccer 25.6cm로 읽혔다.
 
     python3 grasp_geometry_calibrate.py --mode jaw --label queen
     python3 grasp_geometry_calibrate.py --mode servo1 --profile chess_queen
+    python3 grasp_geometry_calibrate.py --mode seat --label rook
     python3 grasp_geometry_calibrate.py --mode k --label rook
 """
 
@@ -182,6 +183,78 @@ class CalibrationNode(Node):
         outcome = done.result()
         if outcome is None or not outcome.result.reached:
             raise RuntimeError(f"'{stage}' 도달 실패")
+
+
+def mode_seat(node, label):
+    """턱으로 직접 물려 앉힌 뒤 읽는다 — 턱 선과 좌우 영점을 함께 낸다.
+
+    모드 A는 조작자가 눈으로 놓은 자리를 읽는다. 그게 정말 턱 중앙인지는
+    알 수 없다 — 턱이 168mm까지 벌어져 있어 15mm쯤 치우쳐도 평행 턱이
+    알아서 끌어당겨 물기 때문에, "물렸다"는 사실이 "중앙이었다"의 증거가
+    못 된다(2026-08-26 실기에서 두 번 다 +14~16mm가 나왔다).
+
+    여기서는 **기계가 직접 앉힌다.** 턱을 닫으면 물체가 턱 중심선과 목
+    안쪽으로 끌려 들어가고, 그 상태로 다시 벌린 뒤 팔을 들어 읽으면
+    조작자의 눈이 판단에서 빠진다."""
+    profile = PROFILE_BY_LABEL[label]
+    geometry = FLOOR_GRASP_PROFILES[profile]
+
+    print(BANNER)
+    print(f"모드 D · '{label}' 턱 선 + 좌우 영점  (기계가 직접 앉힌다)")
+    print(BANNER)
+    print("  팔이 바닥 파지 자세로 내려가 턱을 벌립니다.")
+    input("  준비되면 Enter > ")
+
+    node.hold()
+    node.set_gripper(geometry.preopen_width_mm)
+    node.stage(profile, "safe")
+    node.stage(profile, "grasp")
+
+    print()
+    print("  벌어진 턱 사이로 물체를 밀어 넣으세요 — 대충 넣으셔도 됩니다.")
+    print("  닫으면 턱이 알아서 중앙과 목 안쪽으로 끌어당깁니다.")
+    input("  넣었으면 Enter > ")
+
+    node.set_gripper(geometry.close_width_mm)
+    state = node.arm_state()
+    load = float(state.load_ratio[5])
+    print(f"    물린 부하 = {load:.4f}")
+    if load < 0.05:
+        print("    ⛔ 안 물렸습니다 — 다시 넣고 실행하세요.")
+        node.set_gripper(geometry.preopen_width_mm)
+        node.stage(profile, "safe")
+        node.stage(profile, "carry")
+        return None
+
+    print("  이제 놓고 팔을 들어 그 자리를 읽습니다. 물체를 건드리지 마세요.")
+    node.set_gripper(geometry.preopen_width_mm)
+    node.stage(profile, "safe")
+    node.stage(profile, "carry")
+
+    readings = []
+    for i in range(SAMPLES):
+        response = node.observe(label)
+        if response.found and response.metric_ok:
+            readings.append((response.forward_m, response.lateral_m))
+            print(f"    {i + 1}/{SAMPLES}  전방 {response.forward_m:.4f} m  "
+                  f"좌우 {response.lateral_m * 1000:+.1f} mm")
+
+    if len(readings) < 3:
+        print("\n  ⛔ 유효 관측이 3개 미만입니다.")
+        return None
+
+    forward = statistics.median(r[0] for r in readings)
+    lateral = statistics.median(r[1] for r in readings)
+    print()
+    print(BANNER)
+    print(f'  JAW_LINE_DEPTH_FORWARD_M["{label}"] = {forward:.4f}')
+    print(f"  DEPTH_LATERAL_TO_JAW_CENTER_M = {lateral:.4f}")
+    print()
+    print("  좌우 값은 **카메라 광축과 턱 중심선의 어긋남**입니다 — 물체를")
+    print("  기계가 중앙에 앉혔으므로, 여기서 0이 아니면 카메라 쪽 오프셋입니다.")
+    print("  클래스를 바꿔 가며 같은 값이 나오면 확정입니다.")
+    print(BANNER)
+    return forward, lateral
 
 
 def mode_k(node, label):
@@ -359,7 +432,7 @@ def mode_servo1(node, profile):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--mode", choices=("jaw", "servo1", "k"), required=True)
+    parser.add_argument("--mode", choices=("jaw", "seat", "servo1", "k"), required=True)
     parser.add_argument("--label", default="queen", choices=sorted(PROFILE_BY_LABEL))
     parser.add_argument("--profile", default="chess_queen")
     args = parser.parse_args()
@@ -370,6 +443,9 @@ def main():
         if args.mode == "jaw":
             node.require_camera()
             mode_jaw_line(node, args.label)
+        elif args.mode == "seat":
+            node.require_camera()
+            mode_seat(node, args.label)
         elif args.mode == "k":
             node.require_camera()
             mode_k(node, args.label)

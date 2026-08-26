@@ -45,10 +45,15 @@ class Ros2MecanumBase(BaseDriver):
     def creep_forward(self, distance_m: float) -> bool:
         """정지 상태에서 이만큼 앞으로 밀고 멈춘다.
 
-        버스트를 반복해 목표 거리를 채운다. 마지막 조각이 한 버스트보다
-        짧아도 **버스트 하나를 다 낸다** — 데드밴드 아래로 잘게 쪼개면 그
-        조각은 아예 움직이지 않기 때문이다. 그래서 실제 이동량은 목표보다
-        한 버스트 안쪽에서 길어질 수 있고, 그 오차가 이 방식의 분해능이다."""
+        버스트를 반복해 목표 거리를 채운다. 한 버스트가 약 21mm이고 그보다
+        잘게 못 쪼갠다 — 데드밴드 아래 속도는 아무리 오래 줘도 안 움직인다.
+
+        ⚠️ 목표가 반 버스트보다 짧으면 **아무것도 하지 않고 성공을 돌려준다.**
+        예전에는 최소 한 버스트를 강제했는데, 2026-08-26 실측으로 그게
+        위험하다는 것이 드러났다. 턱 목의 깊이가 23mm라, 5mm만 가면 되는
+        상황에서 21mm를 밀면 물체를 턱 안쪽 끝까지 처박고 계속 민다.
+        반올림해서 0이 나오면 남은 거리가 최대 10mm인데, 그건 턱 목 안이라
+        그냥 두는 편이 낫다."""
         if distance_m <= 0.0:
             return False
         if self._sleep is None:
@@ -56,7 +61,12 @@ class Ros2MecanumBase(BaseDriver):
             self._sleep = time.sleep
 
         burst_travel = CREEP_SPEED_MPS * CREEP_BURST_S
-        bursts = max(1, int(round(distance_m / burst_travel)))
+        bursts = int(round(distance_m / burst_travel))
+        if bursts == 0:
+            self._node.get_logger().info(
+                f"creep_forward: 목표 {distance_m * 1000:.0f}mm가 반 버스트보다 "
+                f"짧다 — 움직이지 않는다(턱 목 깊이 23mm 안)")
+            return True
         try:
             for _ in range(bursts):
                 self.apply_velocity(CREEP_SPEED_MPS, 0.0, 0.0)

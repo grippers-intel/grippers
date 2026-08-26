@@ -17,7 +17,8 @@ SERVO1_REACH_MM = 240.0
 
 @pytest.fixture(autouse=True)
 def _measured_geometry(monkeypatch):
-    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M", {"queen": JAW_LINE_M})
+    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M",
+                        {**bc.JAW_LINE_DEPTH_FORWARD_M, "queen": JAW_LINE_M})
     monkeypatch.setattr(bc, "SERVO1_AXIS_TO_JAW_MM", SERVO1_REACH_MM)
 
 
@@ -177,3 +178,24 @@ def test_클래스마다_다른_턱_선을_쓴다(monkeypatch):
         TargetObservation("queen", 0.32, 0.0, True)) == pytest.approx(0.02)
     assert ga.creep_distance_m(
         TargetObservation("soccer", 0.52, 0.0, True)) == pytest.approx(0.02)
+
+
+# ── 실측된 rook 기하 (2026-08-26) ─────────────────────────────────────────
+
+
+def test_rook_턱_선이_실측값이다():
+    """0.1985에서도 물리기는 했지만 턱 끝에 걸려 미끄러졌다 — 목표는
+    '물리는 자리'가 아니라 '제대로 앉는 자리'다."""
+    assert bc.JAW_LINE_DEPTH_FORWARD_M["rook"] == 0.1757
+
+
+def test_턱_끝에_걸리는_거리에서는_전진이_남아있다():
+    """1차 실측 자리(0.1985)에서 판정하면 아직 전진해야 한다고 나와야 한다."""
+    creep = ga.creep_distance_m(TargetObservation("rook", 0.1985, 0.0, True))
+
+    assert creep == pytest.approx(0.0228, abs=0.0005)
+
+
+def test_제대로_앉은_자리에서는_전진할_것이_없다():
+    """이미 턱 선이면 전진 거리가 0 이하라 판정이 '너무 가깝다'로 간다."""
+    assert ga.creep_distance_m(TargetObservation("rook", 0.1757, 0.0, True)) is None

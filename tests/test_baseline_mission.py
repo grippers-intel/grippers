@@ -44,7 +44,8 @@ def _measured_geometry(monkeypatch):
 
     실기에서 이 둘이 None인 동안에는 정렬 판정이 전부 Host로 넘어간다 —
     그 동작도 아래에서 따로 검증한다."""
-    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M", {"queen": JAW_LINE_M})
+    monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M",
+                        {**bc.JAW_LINE_DEPTH_FORWARD_M, "queen": JAW_LINE_M})
     monkeypatch.setattr(bc, "SERVO1_AXIS_TO_JAW_MM", SERVO1_REACH_MM)
 
 
