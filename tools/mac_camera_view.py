@@ -69,7 +69,7 @@ TOPIC, FRAMES, MARKER, YOLO = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.ar
 
 # perception_node의 게이트와 **같은 값이어야 한다.** 이 도구의 요점은 YOLO가
 # 무엇을 봤는지가 아니라, 그중 무엇이 파이프라인에 실제로 들어가는지다.
-MODEL_PATH = "/grippers/models/best_cpu.pt"
+MODEL_PATH = "/grippers/models/best.pt"
 CONF_GATE = 0.70
 MIN_BOTTOM_Y = 290.0
 

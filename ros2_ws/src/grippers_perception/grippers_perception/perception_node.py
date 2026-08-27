@@ -143,11 +143,15 @@ HAILO_SCORE_THRESHOLD = 0.8
 #
 # 경로는 고정하고 파일만 갈아 끼운다 — 경로를 버전마다 바꾸면 코드와 실기가
 # 어긋날 때 어느 쪽이 맞는지 알 수 없게 된다. 이전 버전은 같은 디렉터리에
-# 이름을 붙여 남기므로 되돌리려면 그 파일을 best_cpu.pt로 덮으면 된다.
+# 이름을 붙여 남기므로 되돌리려면 그 파일을 best.pt로 덮으면 된다.
+#
+# ⚠️ 2026-08-27 사용자 지시로 파일명을 best_cpu.pt에서 best.pt로 통일했다
+# ("_cpu" 접미사가 혼란을 줘서 뺐다). 아래 sha256과 지표는 파일명과 무관하게
+# 그대로 유효하다 — 내용은 안 바뀌었다.
 #
 #   train-9  2026-08-26  sha256 bd13ae42b9a080d85a9c620b983d7c4ad45d6f69ccc0a99da6c44cb0ce6490c8
 #   train-8  2026-08-21  sha256 9680cf7d156c32cdc8082214108451aa3e110598c0ce7ee3cf541791d173182c
-#            되돌리기: models/best_cpu_train8_20260821.pt
+#            되돌리기: models/best_cpu_train8_20260821.pt (이 백업 파일명은 안 바꿈)
 #
 # 클래스 구성은 두 버전이 **완전히 같다**(6종, 인덱스까지 동일:
 # 0 knight / 1 queen / 2 rook / 3 box / 4 soccer / 5 star). 매핑 코드를
@@ -168,7 +172,7 @@ HAILO_SCORE_THRESHOLD = 0.8
 # tools/grasp_geometry_calibrate.py --mode gate로 여유를 다시 재 볼 것.
 #
 # (맥 ~/Downloads/grippers_model_backup/ 에 두 버전 모두 보관)
-CPU_YOLO_MODEL_PATH_DEFAULT = "/grippers/models/best_cpu.pt"
+CPU_YOLO_MODEL_PATH_DEFAULT = "/grippers/models/best.pt"
 # ⚠️ 2026-08-23: 단일 프레임 신뢰도 임계값을 0.8까지 올려 오검출을 억누르던
 # 방식(2026-08-22 시도)을 폐기했다 — 대신 HANDOFF.md가 실기로 검증한 2단계
 # 게이트를 쓴다: 프레임당 admission은 conf 0.45(floor_consensus.CONF_

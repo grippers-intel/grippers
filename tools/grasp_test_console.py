@@ -247,7 +247,7 @@ YOLO_CAPTURE_DIR = "/grippers/recordings/yolo_captures"
 # 캡처에 쓰는 모델과 perception_node가 판단에 쓰는 모델이 다르면 이 콘솔의
 # 진단값을 믿을 수 없다. /tmp가 아니라 바인드 마운트된 /grippers/models인
 # 이유는 perception_node.py의 같은 날짜 주석 참고.
-YOLO_MODEL_PATH = "/grippers/models/best_cpu.pt"
+YOLO_MODEL_PATH = "/grippers/models/best.pt"
 YOLO_CAPTURE_CONF = 0.25  # perception_node의 CONF_THRESHOLD(0.45)보다 낮게 —
                           # "왜 못 잡았나"를 보려면 탈락한 약한 검출도 보여야 한다
 RGB_WAIT_TIMEOUT_S = 5.0  # 1단계 캡처 전 프레임 대기 상한

@@ -60,7 +60,7 @@ CAMERA_PITCH_DEG = 12.75
 NEAR_FIELD_CUTOFF_M = 0.128
 
 RGB_TOPIC = "depth_cam/rgb/image_rotated"
-MODEL_PATH = "/grippers/models/best_cpu.pt"
+MODEL_PATH = "/grippers/models/best.pt"
 OUT_DIR = "/grippers/recordings/near_field"
 # perception_node가 admission에 쓰는 값(floor_consensus.CONF_THRESHOLD).
 # 여기에 베껴 적는 이유는 하나뿐이다 — 원시 검출 표에서 "이건 게이트에

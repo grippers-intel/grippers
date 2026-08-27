@@ -35,7 +35,10 @@ sys.path.insert(0, "/grippers/tools/perception")
 from consensus import consensus  # noqa: E402
 
 TOPIC = "/ascamera/camera_publisher/rgb0/image"
-MODEL = "/grippers/models/best_ncnn_model"
+# 2026-08-27: 예전 기본값(best_ncnn_model)이 Pi에 없어 이 도구 자체가 못
+# 떴었다. perception_node.CPU_YOLO_MODEL_PATH_DEFAULT와 같은 경로로 맞춘다 —
+# 이름도 사용자 지시로 best_cpu.pt에서 best.pt로 통일했다.
+MODEL = "/grippers/models/best.pt"
 RELIABLE = ("knight", "queen", "rook", "soccer")
 
 
@@ -149,13 +152,17 @@ def main():
     ap.add_argument("--conf", type=float, default=0.45)
     ap.add_argument("--ratio", type=float, default=0.6)
     ap.add_argument("--purity", type=float, default=0.8)
-    ap.add_argument("--min-y", type=float, default=290.0,
-                    help="이 높이보다 위(먼 곳)의 검출은 무시. 빈 바닥 실측 기준 290")
+    # 2026-08-27: 290은 floor_consensus.MIN_BOTTOM_Y_PX가 2026-08-23에 이미
+    # 200으로 낮춘 그 낡은 값이었다 — SCAN 거리대(0.66~1.13m)에서 bbox 하단
+    # y가 227~271이라 290 기준으로는 다 "너무 멀다"로 걸러진다. 이 도구가
+    # floor_consensus.py와 다른 값을 쓰면 진단 결과를 못 믿는다.
+    ap.add_argument("--min-y", type=float, default=200.0,
+                    help="이 높이보다 위(먼 곳)의 검출은 무시. floor_consensus."
+                         "MIN_BOTTOM_Y_PX와 같은 기본값(200)")
     ap.add_argument("--all-classes", action="store_true",
                     help="허용목록을 풀고 6클래스 전부 본다(진단용, 항상 켜져 있음)")
     ap.add_argument("--model", default=MODEL,
-                    help=f"YOLO 가중치 경로 (기본 {MODEL} — 2026-08-27 기준 Pi에 없음, "
-                         "배포된 train-9은 /grippers/models/best_cpu.pt)")
+                    help=f"YOLO 가중치 경로 (기본 {MODEL})")
     args = ap.parse_args()
 
     rclpy.init()

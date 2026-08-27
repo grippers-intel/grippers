@@ -33,7 +33,7 @@ sys.path.insert(0, "/grippers/tools/perception")
 from floor_observer import to_bgr  # noqa: E402
 
 TOPIC = "/ascamera/camera_publisher/rgb0/image"
-MODEL = "/grippers/models/best_ncnn_model"
+MODEL = "/grippers/models/best.pt"  # 2026-08-27: best_ncnn_model은 Pi에 없던 경로였다
 
 
 class CommitMeter(Node):

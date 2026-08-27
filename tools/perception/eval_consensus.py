@@ -4,7 +4,7 @@ sys.path.insert(0, "/grippers/tools/perception")
 from ultralytics import YOLO
 from consensus import consensus
 
-MODEL = "/grippers/models/best_ncnn_model"
+MODEL = "/grippers/models/best.pt"  # 2026-08-27: best_ncnn_model은 Pi에 없던 경로였다
 folder, conf = sys.argv[1], float(sys.argv[2]) if len(sys.argv) > 2 else 0.25
 ratio = float(sys.argv[3]) if len(sys.argv) > 3 else 0.5
 
