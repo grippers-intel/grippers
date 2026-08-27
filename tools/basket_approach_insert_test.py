@@ -88,6 +88,13 @@ from grippers_interfaces.action import MoveToFloorPose
 from grippers_interfaces.srv import GetArmState, GetLoad, SetGripper
 from grippers_arm.floor_grasp_profiles import FLOOR_GRASP_PROFILES
 
+# 2026-08-27: INSERT 직전 판정을 이 도구가 독자적으로 다시 짜지 않는다 —
+# domain/task/preconditions.check_insert()가 이미 실기 검증된 전제조건
+# (좌우 오프셋 포함)을 순수 계산으로 갖고 있다. 이 도구는 사람이 화면을
+# 보고 Enter/q로 판단하는 구조였는데, 좌우 오프셋만은 계산은 하면서
+# 판정에는 안 썼다 — 그 구멍을 이걸로 메운다.
+from domain.task.preconditions import InsertInputs, check_insert  # noqa: E402
+
 # basket_lidar_align은 아직 Pi의 ros2_ws에 빌드돼 있지 않다(브랜치 작업물).
 # 복사본을 만들면 상수가 갈라지므로 저장소 원본을 경로로 직접 집어넣는다.
 _ALIGN_DIR = Path(__file__).resolve().parent.parent / "ros2_ws/src/grippers_base/grippers_base"
@@ -650,11 +657,38 @@ def phase_approach(node, keys):
     return None
 
 
-def phase_insert(node, keys):
+def phase_insert(node, keys, fit):
     print()
     print(BANNER)
     print("3단계 · INSERT")
     print(BANNER)
+
+    load = node.get_load()
+    inputs = InsertInputs(
+        # 이 도구엔 E-STOP 토픽을 안 걸어 뒀다 — 사람이 옆에서 보며 Enter/q로
+        # 직접 중단할 수 있으니 False로 고정한다. 실제 미션(mission_orchestrator)
+        # 은 이 값을 진짜 E-STOP 상태로 채운다.
+        estop_set=False,
+        base_stopped=True,  # phase_approach가 도착 시 node.stop()을 이미 불렀다
+        gripper_load=load,
+        face_ok=fit.ok,
+        face_distance_m=fit.distance_m,
+        face_yaw_error_rad=fit.yaw_error_rad,
+        face_reason=fit.reason,
+        profile=PROFILE,
+        face_point_count=fit.point_count,
+        face_lateral_offset_m=fit.lateral_offset_m,
+        face_lateral_known=fit.lateral_known,
+    )
+    report = check_insert(inputs)
+    if not report.ok:
+        print(f"  ⛔ INSERT 전제조건 미충족 — {report.detail}")
+        print("     정렬을 다시 잡고 처음부터 다시 실행하세요.")
+        return None
+
+    print("  전제조건 통과 — " + (
+        f"좌우 {inputs.face_lateral_offset_m * 1000:+.0f}mm"
+        if inputs.face_lateral_known else "좌우 오프셋 모름(창 안에 꽉 참 — 중앙에 가깝다는 뜻)"))
     print("  ⚠️ 팔을 크게 전개합니다. 정렬이 어긋났다고 보이면 지금 q로 빠져나오세요.")
     keys.wait_enter("  INSERT를 실행하려면 Enter (q로 종료) > ")
     profile = FLOOR_GRASP_PROFILES[PROFILE]
@@ -721,8 +755,8 @@ def main():
                         help=f"정지할 라이다 거리 m (기본 {TARGET_LIDAR_M})")
     parser.add_argument("--profile", default=PROFILE,
                         choices=sorted(FLOOR_GRASP_PROFILES.keys()),
-                        help=f"파지 프로파일 (기본 {PROFILE}) — 2026-08-27까지 퀸만 "
-                             "실기 검증됨, 나머지는 오늘 처음 이 도구로 돎")
+                        help=f"파지 프로파일 (기본 {PROFILE}) — 2026-08-27에 여섯 "
+                             "프로파일 전부 이 도구로 실기 검증됨")
     parser.add_argument("--skip-grasp", action="store_true",
                         help="이미 물체를 물고 CARRY에 있을 때 2단계부터 시작")
     parser.add_argument("--monitor-only", action="store_true",
@@ -755,7 +789,10 @@ def main():
             if fit is None:
                 print("\n접근이 목표에 도달하지 못했습니다 — INSERT는 건너뜁니다.")
                 return 1
-            phase_insert(node, keys)
+            result = phase_insert(node, keys, fit)
+            if result is None:
+                print("\nINSERT 전제조건 미충족으로 중단했습니다.")
+                return 1
             print()
             print(BANNER)
             _label = PROFILE_LABEL.get(PROFILE, PROFILE)
