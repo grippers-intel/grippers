@@ -127,9 +127,12 @@ from grippers_arm.gripper_calibration import GRIPPER_CLOSED_MM
 # 핫스팟 실기 실측). distance_m = K_CLASS / sqrt(bbox_area_px), bbox_area_px
 # = h*w. None은 미실측 클래스(box, star) — 이 스크립트는 해당 클래스에서
 # 전방/좌우 cm 계산을 건너뛴다.
+#
+# ⚠️ 2026-08-27: queen이 여기서 두 번(2026-08-26, 2026-08-27) 안 갈아 끼워진
+# 채로 남아 있었다 — perception_node.py를 고칠 때마다 이 사본도 같이 고칠 것.
 K_CLASS = {
     "knight": 35.9307,
-    "queen": 28.3382,
+    "queen": 38.3357,
     "rook": 34.8340,
     "box": None,
     "soccer": 18.9592,
