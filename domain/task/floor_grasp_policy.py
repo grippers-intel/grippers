@@ -1,13 +1,14 @@
-"""실측 수평 파지 프로필 선택 정책.
+"""실측 수평 파지 프로필의 폭 계산.
 
-YOLO subtype이 아직 없으므로 현재는 검출 bounding-box의 바닥면 폭으로
-검증된 물체 프로필을 고른다. 분류가 추가되면 이 휴리스틱을 명시 subtype으로
-교체하되 ArmDriver의 profile 계약은 유지한다.
+⚠️ 2026-08-27: 여기 있던 bbox 폭 휴리스틱(select_horizontal_grasp_plan·
+approach_target_key)을 지웠다. YOLO subtype이 없던 시절 물체 폭만으로
+프로필을 추측하던 경로인데, 지금 Pi YOLO(train-9)는 클래스 이름을 직접
+주므로 baseline_mission.plan_for_label()이 라벨로 바로 고른다 — 이
+휴리스틱은 저장소 어디서도 안 불리는 죽은 코드였다(코드 리뷰로 발견,
+사용자 확인 후 삭제).
 """
 
 from dataclasses import dataclass
-
-from domain.values import Detection, ObjectClass
 
 # ros2_ws/src/grippers_arm/grippers_arm/gripper_calibration.py의 GRIPPER_OPEN_MM
 # 실측값과 같은 수다. domain 계층은 그 ROS 패키지를 import하지 않으므로(계층
@@ -57,53 +58,3 @@ class HorizontalGraspPlan:
     preopen_width_mm: float
     close_width_mm: float
     release_width_mm: float
-
-
-def select_horizontal_grasp_plan(target: Detection) -> HorizontalGraspPlan:
-    widths_mm = sorted((target.dims_m.x * 1000.0, target.dims_m.y * 1000.0))
-    narrow_mm, wide_mm = widths_mm
-
-    if target.cls is ObjectClass.GABE:
-        if wide_mm <= 42.0:
-            return HorizontalGraspPlan(
-                "cube", GRIPPER_MAX_SAFE_OPEN_MM, _close_width(40.0), _release_width(40.0))
-        # 별기둥과 축구공은 같은 20 mm 자세와 35 mm 닫힘값으로 검증됐다.
-        return HorizontalGraspPlan(
-            "soccer_polyhedron", GRIPPER_MAX_SAFE_OPEN_MM, _close_width(46.0),
-            _release_width(46.0))
-
-    # 체스말 subtype이 없는 동안 실측 폭에 가장 가까운 프로필을 쓴다.
-    chess = (
-        (17.0, "chess_queen", _close_width(17.0)),
-        (22.0, "chess_knight", _close_width(22.0)),
-        (24.5, "chess_rook", _close_width(24.5)),
-    )
-    width_mm, profile, close_mm = min(chess, key=lambda item: abs(narrow_mm - item[0]))
-    return HorizontalGraspPlan(
-        profile, GRIPPER_MAX_SAFE_OPEN_MM, close_mm, _release_width(width_mm))
-
-
-# HANDOFF.md(2026-08-23)의 시각 서보 접근 루프(tools/perception/approach.py)는
-# 교시값을 raw YOLO 클래스 이름별로 저장한다(approach_target_<raw class>.json).
-# 그런데 domain.values.Detection에는 YOLO subtype이 없다 — select_horizontal_
-# grasp_plan()이 폭 휴리스틱을 쓰는 것과 같은 이유(위 주석 참고)다. 새 wire
-# 필드를 추가하는 대신 이미 검증된 같은 휴리스틱을 재사용한다.
-_PROFILE_TO_RAW_CLASS = {
-    "chess_rook": "rook",
-    "chess_knight": "knight",
-    "chess_queen": "queen",
-    "cube": "box",
-    # "soccer_polyhedron"은 star/soccer 둘 다를 가리켜 폭만으로는 못 가른다 —
-    # 모르면 실패 관례대로 매핑하지 않는다(아래 approach_target_key 참고).
-}
-
-
-def approach_target_key(target: Detection) -> str | None:
-    """target을 tools/perception/approach.py의 --cls(=교시 파일 키)로 바꾼다.
-
-    체스 기물 3종은 select_horizontal_grasp_plan과 같은 폭 휴리스틱으로
-    raw 클래스 이름과 정확히 대응된다. GABE는 cube(≈box)만 갈리고
-    star/soccer는 폭이 겹쳐 구분할 수 없다 — 이 경우 **`None`**을 돌려준다.
-    호출자(real adapter)는 이걸 "정밀 접근 불가"로 다뤄야 한다."""
-    plan = select_horizontal_grasp_plan(target)
-    return _PROFILE_TO_RAW_CLASS.get(plan.profile)
