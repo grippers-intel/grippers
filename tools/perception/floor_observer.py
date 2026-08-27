@@ -152,11 +152,15 @@ def main():
     ap.add_argument("--min-y", type=float, default=290.0,
                     help="이 높이보다 위(먼 곳)의 검출은 무시. 빈 바닥 실측 기준 290")
     ap.add_argument("--all-classes", action="store_true",
-                    help="허용목록을 풀고 6클래스 전부 본다(진단용)")
+                    help="허용목록을 풀고 6클래스 전부 본다(진단용, 항상 켜져 있음)")
+    ap.add_argument("--model", default=MODEL,
+                    help=f"YOLO 가중치 경로 (기본 {MODEL} — 2026-08-27 기준 Pi에 없음, "
+                         "배포된 train-9은 /grippers/models/best_cpu.pt)")
     args = ap.parse_args()
 
     rclpy.init()
-    node = FloorObserver(n_frames=args.frames, conf=args.conf,
+    node = FloorObserver(model_path=args.model,
+                         n_frames=args.frames, conf=args.conf,
                          min_ratio=args.ratio, min_purity=args.purity,
                          min_y=args.min_y, allowed=None)
     print(f"[관측] {args.frames}프레임 수집 중…", flush=True)
