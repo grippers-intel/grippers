@@ -24,10 +24,16 @@ Host의 일이 Pi로 새는 신호다.
 # 내려와 있고 그리퍼는 열린 상태다. 그 상태로 차체가 전진하면 물체가
 # 손가락 사이로 들어온다 — 평행 턱의 벌어진 목이 좌우 자기정렬 효과까지 낸다.
 #
-# ⚠️ 매우 예민한 값이다. 사용자가 "여러 번 실측할 필요가 있다"고 명시했고,
-# **5cm로 바뀔 수 있다.** 실기 조정 전까지 이 값을 근거로 다른 수치를
-# 유도하지 말 것.
-GRASP_CREEP_FORWARD_MM = 100.0  # 지시(잠정 — 50.0 후보)
+# 2026-08-27 사용자 결정으로 50.0 확정. GRASP 진입 시 Host가 물체 중심을
+# 차체 전면 200mm(GRASP_OBJECT_CENTER_FORWARD_MM 갱신 예정 — Host 쪽 일)에
+# 조준해 세우고, 여기서 50mm만 밀면 된다는 설계다.
+#
+# ⚠️ 이 값은 grasp_alignment.creep_distance_m()의 **상한**이지 무조건 미는
+# 거리가 아니다 — 실제 전진량은 그때그때 뎁스 카메라 실측(관측 전방값 - 그
+# 클래스 턱 선)으로 계산하고, 이 값은 관측이 튀었을 때 크게 밀고 나가지
+# 않게 막는 안전장치다. Host가 200mm 조준에서 어긋나도 이 계산이 그 오차를
+# 흡수한다.
+GRASP_CREEP_FORWARD_MM = 50.0  # 지시(확정 2026-08-27)
 
 # 교시 파지 자세가 전제하는 물체 중심 위치(차체 전면 기준 전방).
 # floor_grasp_profiles.GRASP_OBJECT_CENTER_FORWARD_MM과 같은 값이다.
@@ -379,8 +385,8 @@ MAX_GRASP_RETRY = 3  # 지시
 
 
 def unresolved() -> dict:
-    """아직 TODO인 상수 이름과 사유. 실기 투입 전 이 목록이 비어야 한다."""
-    return {
-        "GRASP_CREEP_FORWARD_MM": "100mm 대 50mm 미확정 — 반복 실측 필요",
-        "JAW_LINE_DEPTH_FORWARD_M": "클래스별 미측정 — 없는 클래스는 정렬 판정을 못 한다",
-    }
+    """아직 TODO인 상수 이름과 사유. 실기 투입 전 이 목록이 비어야 한다.
+
+    2026-08-27: GRASP_CREEP_FORWARD_MM 50.0으로 확정, JAW_LINE_DEPTH_FORWARD_M
+    여섯 클래스(rook/knight/queen/soccer/box/star) 전부 실측 완료로 비었다."""
+    return {}
