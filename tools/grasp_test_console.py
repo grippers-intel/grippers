@@ -135,7 +135,7 @@ K_CLASS = {
     "queen": 38.3357,
     "rook": 37.7658,
     "box": None,
-    "soccer": 18.9592,
+    "soccer": 25.8794,
     "star": None,
 }
 # 2026-08-24: 거리 모델을 z = K/sqrt(hw)에서 z = K/(sqrt(hw) - BBOX_PADDING_PX)로

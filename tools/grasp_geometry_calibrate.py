@@ -144,7 +144,7 @@ CURRENT_K = {
     # 계산해 냈다(30.94 — 실제로 써야 할 38.3357이 아니었다). 두 파일을
     # 항상 같이 고칠 것.
     "knight": 39.5578, "queen": 38.3357, "rook": 37.7658,
-    "soccer": 18.9592, "box": None, "star": None,
+    "soccer": 25.8794, "box": None, "star": None,
 }
 SERVO1_PROBE_DEG = 12.0    # 서비스 한계(15도) 안쪽에서 최대한 크게
 
