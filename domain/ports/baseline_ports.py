@@ -117,7 +117,7 @@ class HostLink(ABC):
 
         **None은 "정지"가 아니라 "모른다"다.** 이 둘을 섞으면 링크가 끊겼는데
         마지막 명령대로 계속 굴러가는 사고가 난다 — 호출하는 쪽이 워치독을
-        따로 봐야 한다(`baseline_mission`의 `_motion_for` 참고)."""
+        따로 봐야 한다(`baseline_mission`의 `LinkWatchdog`/`_link_ok` 참고)."""
 
     @abstractmethod
     def report(self, report: str, state: str, detail: str = "", fix=None) -> None:
