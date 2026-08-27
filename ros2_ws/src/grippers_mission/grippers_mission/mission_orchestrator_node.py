@@ -80,14 +80,21 @@ class MissionOrchestratorNode(Node):
         self._host = (FakeHostLink() if use_fake_host
                       else UdpHostLink(self.get_parameter("host_ip").value,
                                        logger=self.get_logger()))
+        # ⚠️ 2026-08-27 발견: LoggedPort.__init__(self, name, delegate, logger)인데
+        # 여기 세 호출이 전부 (delegate, "이름", logger) 순서로 뒤바뀌어 있었다 —
+        # self._name에 실제 드라이버 객체가, self._delegate에 문자열이 들어가
+        # ports.base.stop() 같은 모든 실호출이 `'str' object has no attribute
+        # 'stop'`으로 죽었다(mission_orchestrator FSM 크래시의 원인). 도메인
+        # pytest 스위트는 이 ROS 전용 파일을 안 건드리므로 여태 안 걸렸다.
         self._ports = BaselinePorts(
-            base=LoggedPort(FakeBase() if use_fake_base else Ros2MecanumBase(self),
-                            "base", self.get_logger()),
-            arm=LoggedPort(FakeArm() if use_fake_arm else Ros2ArmDriver(self),
-                           "arm", self.get_logger()),
+            base=LoggedPort("base", FakeBase() if use_fake_base else Ros2MecanumBase(self),
+                            self.get_logger()),
+            arm=LoggedPort("arm", FakeArm() if use_fake_arm else Ros2ArmDriver(self),
+                           self.get_logger()),
             perception=LoggedPort(
+                "perception",
                 ScriptedPerception() if use_fake_perception else Ros2Perception(self),
-                "perception", self.get_logger()),
+                self.get_logger()),
             host=self._host,
             lidar=(FakeLidar() if use_fake_perception else Ros2Lidar(self)),
             estop=self._estop,

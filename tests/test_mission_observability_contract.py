@@ -91,6 +91,29 @@ def test_hardware_ports_are_wrapped_for_boundary_logging():
         assert port in source
 
 
+def test_logged_port_calls_pass_the_name_first():
+    """2026-08-27 실기 크래시의 재발 방지.
+
+    LoggedPort.__init__(self, name, delegate, logger)인데, 이 파일의 세
+    호출이 (delegate, "이름", logger) 순서로 뒤바뀌어 있었다 — 그러면
+    `self._delegate`에 문자열이 들어가 `ports.base.stop()` 같은 모든 실호출이
+    `'str' object has no attribute 'stop'`으로 죽는다. 도메인 pytest 스위트는
+    ROS 전용인 이 파일을 안 건드리므로 실기에서만 터졌었다. AST로 첫 위치
+    인자가 항상 문자열 리터럴인지 확인해 순서가 다시 안 바뀌게 막는다."""
+    tree = _parse(ORCHESTRATOR)
+    calls = [
+        call for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name) and call.func.id == "LoggedPort"
+    ]
+    assert len(calls) == 3
+    for call in calls:
+        first_arg = call.args[0]
+        assert isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str), (
+            "LoggedPort의 첫 인자는 이름 문자열이어야 한다 — "
+            f"실제로는 {ast.dump(first_arg)}")
+
+
 def test_state_is_published_every_cycle():
     """`/mission/state`는 아레나 오버레이와 디버깅이 보는 유일한 창이다."""
     run_forever = _function(ORCHESTRATOR, "_run_forever")
