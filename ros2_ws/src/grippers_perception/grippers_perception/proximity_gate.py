@@ -50,16 +50,13 @@ import math
 from typing import NamedTuple
 
 # perception_node.CLASS_DISTANCE_CALIBRATION_SQRT_PX_M의 실측값 중 최소.
-# soccer가 가장 작다(작은 물체일수록 K가 작다). 새 클래스를 실측해 이보다
-# 작은 K가 나오면 이 값을 반드시 낮춰야 한다 — 안 그러면 그 클래스에 대해
-# 게이트가 늦게 걸린다.
+# 새 클래스를 실측해 이보다 작은 K가 나오면 이 값을 반드시 낮춰야 한다 —
+# 안 그러면 그 클래스에 대해 게이트가 늦게 걸린다.
 #
-# 2026-08-27: soccer의 K가 --mode scale 재보정으로 18.9592 -> 25.8794로
-# 26.7% 올랐다(네 클래스 중 가장 큰 어긋남이었다). 여전히 네 클래스 중
-# 최소값이라 이 상수 자리는 그대로 soccer가 맡지만, 낡은 18.9592를 계속
-# 쓰면 실제보다 과도하게 보수적인 lower_bound가 나온다 — 위험한 방향은
-# 아니지만(더 일찍 멈추는 쪽) 부정확하므로 같이 올린다.
-MIN_MEASURED_K_SQRT_PX_M = 25.8794
+# 2026-08-27: box(cube)를 처음 실측(--mode k)하니 23.2733으로 soccer의
+# 25.8794보다 작았다 — 최소값 자리가 soccer에서 box로 넘어갔다. (soccer도
+# 같은 날 --mode scale 재보정으로 18.9592 -> 25.8794로 26.7% 올랐었다.)
+MIN_MEASURED_K_SQRT_PX_M = 23.2733
 
 # perception_node.BBOX_PADDING_PX와 같은 값. 검출 bbox가 물체 실루엣보다
 # 항상 일정 픽셀만큼 크게 잡히는 검출기 성질이라 클래스와 무관하다.

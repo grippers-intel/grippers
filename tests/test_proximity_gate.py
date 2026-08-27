@@ -100,7 +100,7 @@ def test_최소K를_쓰므로_거리를_과소평가한다():
     """실측 K 중 어느 것을 써도 하한보다 멀게 나와야 한다 — 늦게 멈추지 않는다."""
     area = 5000.0
     bound = pg.lower_bound_distance_m(area)
-    for k in (39.5578, 38.3357, 37.7658, 25.8794):  # 2026-08-27 네 클래스 전부 갱신
+    for k in (39.5578, 38.3357, 37.7658, 25.8794, 23.2733):  # 2026-08-27 box 추가
         actual = k / (math.sqrt(area) - pg.BBOX_PADDING_PX)
         assert actual >= bound - 1e-9
 

@@ -134,7 +134,7 @@ K_CLASS = {
     "knight": 39.5578,
     "queen": 38.3357,
     "rook": 37.7658,
-    "box": None,
+    "box": 23.2733,
     "soccer": 25.8794,
     "star": None,
 }
