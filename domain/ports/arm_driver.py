@@ -18,11 +18,16 @@ class ArmDriver(ABC):
     @abstractmethod
     def move_to_cartesian(self, xyz_m: Point3, down: bool = False) -> bool:
         """손끝을 xyz_m(m)로 이동한다. 도달 불가하면 False.
-        그리퍼 개폐는 이 메서드가 하지 않는다 — `set_gripper()` 를 별도로 호출한다
-        (docs/design/state_machine.md §3 `GRASP` 계약).
+        그리퍼 개폐는 이 메서드가 하지 않는다 — `set_gripper()` 를 별도로 호출한다.
 
         **실패(도달 불가 · 서버 부재 · 응답 없음)는 예외가 아니라 `False`.**
-        `GRASP` 가 재시도하고, 예산이 소진되면 대상을 보류 등록한다."""
+
+        ⚠️ 2026-08-28: 현재 실기 FSM(`baseline_mission.BaselineGraspState`)은
+        이 메서드를 안 부른다 — 좌표 기반 파지였던 예전 설계의 흔적이고,
+        지금은 실측 프로필/단계 기반인 `move_to_floor_pose()`로 대체됐다.
+        real/fake 어댑터와 액션 서버는 계속 살아 있고 테스트도 돌지만,
+        미션 경로에서는 죽은 코드다 — 지우지 않은 이유는 손끝 좌표 이동이
+        나중에 다시 필요해질 수 있어서다(예: 임의 물체 위치 대응)."""
 
     @abstractmethod
     def set_gripper(self, width_mm: float) -> None:
@@ -51,12 +56,21 @@ class ArmDriver(ABC):
     def reorient(self, phi_rad: float) -> bool:
         """손목을 장축-수평면 각 φ(rad)로 재조정한다. 정착에 실패하면 False.
 
-        **서버 부재 · 응답 없음도 `False`** — `INSERT` 가 `REJECT` 로 넘겨
-        물체를 내려놓고 보류 등록한다."""
+        **서버 부재 · 응답 없음도 `False`.**
+
+        ⚠️ 2026-08-28: 실기 서버(`arm_driver_node._execute_reorient`)가 아직
+        스텁이다 — 실제 손목 재조정 없이 `settled=True`만 돌려준다. 현재
+        실기 FSM도 이 메서드를 안 부른다. move_to_cartesian과 같은 이유로
+        남겨 둔, 아직 완성되지 않은 미래용 훅이다."""
 
     @abstractmethod
     def fold_to_cradle(self) -> bool:
-        """팔을 이동용 거치 자세로 접는다. **실패는 `False`.**"""
+        """팔을 이동용 거치 자세로 접는다. **실패는 `False`.**
+
+        구현(`arm_driver_node._on_fold_to_cradle`)은 서보 부하를 접기 전후로
+        확인하는 완성된 로직이고 테스트도 있다(`test_arm_hardware_contract.py`).
+        다만 2026-08-28 기준 `baseline_mission`의 실기 FSM은 이 메서드를 안
+        부른다 — 수동 도구·향후 이동 단계용으로 남겨 둔 상태다."""
 
     @abstractmethod
     def offset_base_yaw(self, offset_rad: float) -> bool:

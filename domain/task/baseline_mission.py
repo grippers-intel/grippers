@@ -385,10 +385,16 @@ class BaselineGraspState(State):
         """파지 실패 — 팔을 붙잡고 APPROACH로 되돌아가 Host의 판단을 기다린다.
 
         Pi가 스스로 재시도하지 않는다. 다시 시도할지, 다른 물체로 바꿀지,
-        어디로 옮겨 설지는 아레나 전체를 보는 Host가 정한다."""
+        어디로 옮겨 설지는 아레나 전체를 보는 Host가 정한다 — 그래서 여기엔
+        재시도 상한이 없다(예전엔 baseline_constants.MAX_GRASP_RETRY라는
+        미사용 상수가 있었지만, 이 설계 원칙과 어긋나 2026-08-28에 지웠다).
+        다만 몇 번째 시도가 실패했는지는 Host가 판단을 내리는 데 필요한
+        정보라 detail에 실어 보낸다(2026-08-28)."""
+        attempt = self.retries + 1
         ports.base.stop()
         ports.arm.hold_position()
-        ports.host.report(Report.GRASP_FAILED, MissionState.APPROACH, detail)
+        ports.host.report(Report.GRASP_FAILED, MissionState.APPROACH,
+                          f"{attempt}번째 시도 실패 — {detail}")
         return BaselineApproachState(self.retries + 1)
 
 

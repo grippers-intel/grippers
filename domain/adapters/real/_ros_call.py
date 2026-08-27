@@ -10,8 +10,13 @@ future 대기에도 상한을 두고 미완료 future를 처리한다.
 
 **타임아웃은 예외를 던지지 않는다.** 실패는 `None` 으로 돌아오고, 각 어댑터가 자기
 포트의 실패 계약(`False` · `None` · 빈 목록 · `contact_risk=True`)으로 번역한다.
-그래야 서비스 부재가 미션 종료가 아니라 루프 FSM의 정상적인 실패 경로 —
-보류 등록 후 `SCAN` 복귀 — 로 흡수된다 (docs/design/state_machine.md §3).
+그래야 서비스 부재가 미션 종료가 아니라 각 상태(`baseline_mission.py`)가 이미
+알고 있는 정상적인 실패 경로로 흡수된다 — 예: `BaselineGraspState._failed()`가
+GRASP 실패를 Host에 보고하고 APPROACH로 되돌아간다. (⚠️ 2026-08-28: 예전엔
+여기서 `docs/design/state_machine.md §3`의 "보류 등록 후 SCAN 복귀"를
+인용했는데, `SCAN`은 지금 `MissionState`에 없는 상태고 그 문서 자체가
+Host-Pi 역할 분담이 확정되기 전의 것이라 실제 동작과 다르다 — repo docs는
+확인 없이 인용하지 말 것.)
 
 ⚠️ 2026-08-23 실기 확인(첫 전체 FSM 실기 테스트): `rclpy.spin_until_future_complete
 (node, ...)` 를 쓰지 않는다 — 예전에는 여기서 그걸 썼다. `node`는

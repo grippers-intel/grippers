@@ -34,8 +34,8 @@ class Ros2ArmDriver(ArmDriver):
         self._yaw_client = node.create_client(OffsetBaseYaw, "arm_driver/offset_base_yaw")
 
     def move_to_cartesian(self, xyz_m: Point3, down: bool = False) -> bool:
-        """도달하면 True. 액션 서버가 없거나 결과가 오지 않으면 **False** —
-        `GRASP` 가 재시도하고, 예산이 소진되면 대상을 보류 등록한다."""
+        """도달하면 True. 액션 서버가 없거나 결과가 오지 않으면 **False**
+        (계약 상세는 `ArmDriver.move_to_cartesian` 참고 — 현재 FSM은 안 부른다)."""
         goal = MoveToCartesian.Goal(
             target=Point(x=xyz_m.x, y=xyz_m.y, z=xyz_m.z),
             down=down,
@@ -76,8 +76,9 @@ class Ros2ArmDriver(ArmDriver):
         return res.load_ratio
 
     def reorient(self, phi_rad: float) -> bool:
-        """정착하면 True. 액션 서버가 없거나 결과가 오지 않으면 **False** —
-        `INSERT` 가 `REJECT` 로 넘겨 물체를 내려놓고 보류 등록한다."""
+        """정착하면 True. 액션 서버가 없거나 결과가 오지 않으면 **False**
+        (계약 상세는 `ArmDriver.reorient` 참고 — 서버가 아직 스텁이고 현재
+        FSM도 안 부른다)."""
         goal = ReorientArm.Goal(phi=phi_rad)
         result = call_action(self._node, self._reorient_client, goal, label="reorient")
         if result is None:
