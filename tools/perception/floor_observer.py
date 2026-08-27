@@ -13,10 +13,11 @@
 떨어지므로, 순도가 낮은 관측은 **아예 집으러 가지 않는다.** 헛집는 것보다 건너뛰는
 쪽이 낫다.
 
-**클래스 허용목록** — 실측에서 knight/queen/rook/soccer 는 안정적이었으나
-box 는 60장 중 0회 검출, star 는 신뢰도 0.31 로 불안정했다. 흰색 3D 프린팅 도형이
-흰색 체스 기물과 형상·색이 겹치는 탓이다. 데이터 보강 전까지는 허용목록으로
-막아 둔다 — 못 믿을 클래스로 동작하느니 없는 셈 치는 게 안전하다.
+**클래스 허용목록** — 2026-08-23 train-8 실측에서 knight/queen/rook/soccer 는
+안정적이었으나 box 는 60장 중 0회 검출, star 는 신뢰도 0.31 로 불안정했다.
+2026-08-27 train-9로 재검증하니(--frames 60) box 60/60·순도 1.00·신뢰 0.93,
+star 60/60·순도 1.00·신뢰 0.95 로 나머지 넷보다도 깨끗했다 — train-8의
+검출력 한계였을 뿐이었다. 이제 여섯 클래스 전부 믿는다.
 """
 from __future__ import annotations
 
@@ -39,7 +40,7 @@ TOPIC = "/ascamera/camera_publisher/rgb0/image"
 # 떴었다. perception_node.CPU_YOLO_MODEL_PATH_DEFAULT와 같은 경로로 맞춘다 —
 # 이름도 사용자 지시로 best_cpu.pt에서 best.pt로 통일했다.
 MODEL = "/grippers/models/best.pt"
-RELIABLE = ("knight", "queen", "rook", "soccer")
+RELIABLE = ("knight", "queen", "rook", "soccer", "box", "star")  # 2026-08-27 train-9로 box·star 추가
 
 
 @dataclass

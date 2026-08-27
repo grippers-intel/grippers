@@ -63,14 +63,16 @@ MAX_SPREAD_PX = 40.0
 # 합의 후 트랙의 평균 신뢰도 하한 — 순도가 높아도(다수결이 압도적이어도)
 # 평균 신뢰도 자체가 낮으면 여전히 못 믿는다(예: 매번 같은 오분류를 냄).
 MIN_SUPPORT_CONF = 0.35
-# ⚠️ 2026-08-23 실측: "box"는 60프레임 중 0회 검출, "star"는 신뢰도 0.31로
-# 불안정했다 — 흰색 3D 프린팅 도형이 흰색 체스 기물과 형상·색이 겹치는
-# 탓으로 추정. 데이터 보강 전까지는 허용목록으로 막는다(floor_observer.py
-# RELIABLE과 동일) — 이 두 클래스는 cpu_yolo_scan_mapping.py에서 GABE로
-# 올바르게 매핑돼 있어도 여기서 걸러진다. 별개의 두 문제다: 매핑은 "이
-# 클래스가 뭘 의미하는가"(정확함), 이 게이트는 "이 클래스를 지금 믿을 수
-# 있는가"(아직 아님).
-RELIABLE_CLASSES = ("knight", "queen", "rook", "soccer")
+# 2026-08-23 실측(train-8): "box"는 60프레임 중 0회 검출, "star"는 신뢰도
+# 0.31로 불안정했다 — 흰색 3D 프린팅 도형이 흰색 체스 기물과 형상·색이
+# 겹치는 탓으로 추정. 데이터 보강 전까지 허용목록으로 막아 뒀었다.
+#
+# 2026-08-27 train-9로 재검증(tools/perception/floor_observer.py --frames
+# 60): box 60/60·순도 1.00·신뢰 0.93·산포 0.2px, star 60/60·순도 1.00·
+# 신뢰 0.95·산포 0.1px — 나머지 네 클래스보다도 깨끗하다. train-8의
+# 검출력 한계였을 뿐 형상·색 겹침 자체가 원인은 아니었던 것으로 보인다.
+# 이제 여섯 클래스 전부 허용목록에 둔다(floor_observer.py RELIABLE과 동일).
+RELIABLE_CLASSES = ("knight", "queen", "rook", "soccer", "box", "star")
 
 
 def confirmed_tracks(frames, n_frames):
