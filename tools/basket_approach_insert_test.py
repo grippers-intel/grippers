@@ -105,6 +105,22 @@ PROFILE_LABEL = {
     "cube": "박스", "star_column": "스타", "soccer_polyhedron": "축구공",
 }
 
+
+def _eul_reul(word: str) -> str:
+    """word 뒤에 붙일 목적격 조사('을'/'를'). 받침 유무로 정한다."""
+    code = ord(word[-1]) - 0xAC00
+    if 0 <= code < 11172 and code % 28 != 0:
+        return "을"
+    return "를"
+
+
+def _i_ga(word: str) -> str:
+    """word 뒤에 붙일 주격 조사('이'/'가'). 받침 유무로 정한다."""
+    code = ord(word[-1]) - 0xAC00
+    if 0 <= code < 11172 and code % 28 != 0:
+        return "이"
+    return "가"
+
 # 2026-08-26 실기: 이 라이다 판독 거리에서 carry→drop→투하가 성공했다
 # (정면 피팅 거리 0.1386m, 잔차 2.8mm, yaw -0.87도. 나이트로 검증).
 #
@@ -460,7 +476,7 @@ def phase_grasp(node, keys):
     print(BANNER)
     profile = FLOOR_GRASP_PROFILES[PROFILE]
 
-    keys.wait_enter(f"  {label}를 차체 전면 19cm 정면에 놓고 Enter (q로 종료) > ")
+    keys.wait_enter(f"  {label}{_eul_reul(label)} 차체 전면 19cm 정면에 놓고 Enter (q로 종료) > ")
 
     print("  토크 켜는 중...")
     node.hold_position()
@@ -502,7 +518,7 @@ def phase_grasp(node, keys):
     print(f"  응답 ok={response.ok}  응답 부하={response.load_ratio:.4f}  "
           f"정착 부하={settled:.4f}  ({verdict}, 참고선 {GRASP_LOAD_HINT})")
 
-    keys.wait_enter(f"  {label}이 제대로 물렸는지 눈으로 확인하고 Enter (q로 종료) > ")
+    keys.wait_enter(f"  {label}{_i_ga(label)} 제대로 물렸는지 눈으로 확인하고 Enter (q로 종료) > ")
 
     print("  grasp → safe (midpoint 경유) ...")
     node.move_stage("safe")
@@ -742,7 +758,8 @@ def main():
             phase_insert(node, keys)
             print()
             print(BANNER)
-            print(f"완료. {PROFILE_LABEL.get(PROFILE, PROFILE)}이 바구니 안에 "
+            _label = PROFILE_LABEL.get(PROFILE, PROFILE)
+            print(f"완료. {_label}{_i_ga(_label)} 바구니 안에 "
                   "들어갔는지 눈으로 확인해 주세요.")
             print(BANNER)
             return 0
