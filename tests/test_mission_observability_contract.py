@@ -122,4 +122,9 @@ def test_launch_exposes_the_fake_switches_and_optional_rosbag():
 
     assert 'LaunchConfiguration("record_bag")' in source
     assert '["ros2", "bag", "record", "-a", "-o", bag_output]' in source
-    assert source.count("UnlessCondition(use_fake_perception)") == 3
+    # depth_camera_launch, lidar_launch, perception_node, depth_cam_rotate_node
+    # (2026-08-27: 이 launch에서 빠져 있어 매번 손으로 따로 띄워야 했다 —
+    # perception_node는 회전 보정된 스트림만 구독하므로 없으면 뒤집힌
+    # 프레임에서 YOLO가 매 프레임 오검출을 낸다).
+    assert "depth_cam_rotate_node" in source
+    assert source.count("UnlessCondition(use_fake_perception)") == 4

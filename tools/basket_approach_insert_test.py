@@ -140,6 +140,18 @@ ARRIVE_TOLERANCE_M = 0.010
 # 걸렸다면 "보고 있는 게 우리가 교정한 그 면이 아니다"라는 뜻이다.
 EMERGENCY_MIN_M = 0.120
 
+# 근거리 안전 구멍(2026-08-26 실기분석 §5/§9): 라이다 빔이 테두리를 넘어가면
+# 판독값이 "멀어지는" 방향으로 거짓말한다 — 바구니 뒤 벽까지의 거리이거나
+# math.inf다. 둘 다 값이 커지므로, EMERGENCY_MIN_M처럼 "판독값이 작으면
+# 멈춘다"는 규칙은 원리적으로 이 실패 모드를 못 잡는다.
+#
+# 대신 이 거리(CLIFF_WATCH_M) 안쪽부터는 "전진했는데 판독값이 커졌다"와
+# "가까이서 정면 피팅을 놓쳤다" 두 신호로 직접 잡는다 — 절벽을 넘는 순간
+# (전환 즉시) 잡는 가장 이른 방어선이다(같은 분석 §9의 후보 3번·2번을
+# 함께 적용). CLIFF_JUMP_M은 정상 잔차(1~5mm대)보다 넉넉히 큰 여유다.
+CLIFF_WATCH_M = 0.20
+CLIFF_JUMP_M = 0.015
+
 # 실제로 바퀴가 도는 최저 속도. 낮추지 말 것 — 아래로는 아무리 오래 줘도
 # 안 움직이는데 /odom_raw는 움직였다고 보고한다(2026-08-24 실기).
 BURST_SPEED_MPS = 0.06
@@ -509,6 +521,7 @@ def phase_approach(node, keys):
     print("   #   경과    라이다     남음   yaw     잔차   폭    점   좌우    뎁스        상태")
     travelled = 0.0
     started = time.time()
+    prev_distance = None   # 절벽 감시용 — 직전 사이클 판독 거리
 
     for cycle in range(1, MAX_CYCLES + 1):
         node.pump(SETTLE_S)
@@ -531,6 +544,25 @@ def phase_approach(node, keys):
               f"{fit.residual_m * 1000:4.1f}mm  {fit.face_width_m * 1000:3.0f}  "
               f"{fit.point_count:3d}  {_lateral_str(fit)}  {depth_str}  {source}"
               + ("" if fit.ok else f"  [{fit.reason}]"))
+
+        # 근거리 절벽 방어 — EMERGENCY_MIN_M 검사보다 먼저 본다. "작아지면
+        # 멈춘다"는 그 규칙이 못 잡는 실패 모드라서, 여기서 직접 잡는다.
+        if prev_distance is not None and prev_distance <= CLIFF_WATCH_M:
+            if not fit.ok:
+                node.stop()
+                print()
+                print(f"  ⛔ 근거리 피팅 실패 — 직전 {prev_distance:.3f}m에서 정면을 "
+                      f"잡았다가 놓쳤습니다. 절벽(빔이 테두리를 넘어감)일 수 있어 "
+                      f"멈춥니다. [{fit.reason}]")
+                return None
+            if distance > prev_distance + CLIFF_JUMP_M:
+                node.stop()
+                print()
+                print(f"  ⛔ 근거리에서 판독값이 커졌습니다 ({prev_distance:.3f}m → "
+                      f"{distance:.3f}m). 절벽을 넘었을 가능성이 있어 멈춥니다 — "
+                      f"더 가까이 가면 상황이 나빠지기만 합니다.")
+                return None
+        prev_distance = distance
 
         if distance <= EMERGENCY_MIN_M:
             node.stop()

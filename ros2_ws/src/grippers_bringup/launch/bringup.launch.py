@@ -74,6 +74,16 @@ def launch_setup(context):
         condition=UnlessCondition(use_fake_perception),
         parameters=[{"scan_floor_enabled": scan_floor_enabled}],
     )
+    # perception_node는 회전 보정된 스트림만 구독한다 — 이 노드가 없으면
+    # 카메라가 뒤집힌 프레임에서 YOLO가 매 프레임 오검출을 낸다(2026-08-26
+    # 인수인계서 §작업 규칙). 이전까지는 이 launch에서 빠져 있어 매번 손으로
+    # 따로 띄워야 했다.
+    depth_cam_rotate_node = Node(
+        package="grippers_perception",
+        executable="depth_cam_rotate_node",
+        output="screen",
+        condition=UnlessCondition(use_fake_perception),
+    )
     arm_driver_node = Node(
         package="grippers_arm",
         executable="arm_driver",
@@ -107,6 +117,7 @@ def launch_setup(context):
         depth_camera_launch,
         lidar_launch,
         perception_node,
+        depth_cam_rotate_node,
         arm_driver_node,
         bag_recorder,
         *grippers_nodes,
