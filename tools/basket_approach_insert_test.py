@@ -97,7 +97,13 @@ import basket_lidar_align as align  # noqa: E402
 
 # --- 실측에서 온 상수 ------------------------------------------------------
 
+# 2026-08-26엔 퀸 전용으로 하드코딩돼 있었다. 2026-08-27에 --profile로
+# 바꿀 수 있게 열었다 — main()이 argparse 뒤 이 전역을 다시 쓴다.
 PROFILE = "chess_queen"
+PROFILE_LABEL = {
+    "chess_queen": "퀸", "chess_knight": "나이트", "chess_rook": "룩",
+    "cube": "박스", "star_column": "스타", "soccer_polyhedron": "축구공",
+}
 
 # 2026-08-26 실기: 이 라이다 판독 거리에서 carry→drop→투하가 성공했다
 # (정면 피팅 거리 0.1386m, 잔차 2.8mm, yaw -0.87도. 나이트로 검증).
@@ -379,7 +385,14 @@ class ApproachNode(Node):
     def arm_state(self):
         return self._call(self._state, GetArmState.Request(), label="get_arm_state")
 
-    def move_stage(self, stage, profile=PROFILE, timeout=60.0):
+    def move_stage(self, stage, profile=None, timeout=60.0):
+        # ⚠️ 기본 인자를 profile=PROFILE로 두면 클래스 정의 시점(=import
+        # 시점)의 값(chess_queen)에 영구히 고정된다 — main()이 나중에
+        # 전역 PROFILE을 바꿔도 이 함수의 기본값은 안 따라온다(파이썬
+        # 기본 인자는 def 시점에 한 번만 평가된다, servo1_offset_for의
+        # 같은 함정 참고). 그래서 여기서 매 호출마다 전역을 다시 읽는다.
+        if profile is None:
+            profile = PROFILE
         if not self._floor.wait_for_server(timeout_sec=10.0):
             raise RuntimeError("move_to_floor_pose 액션 서버 없음")
         goal = MoveToFloorPose.Goal()
@@ -440,13 +453,14 @@ def preflight(node):
 
 
 def phase_grasp(node, keys):
+    label = PROFILE_LABEL.get(PROFILE, PROFILE)
     print()
     print(BANNER)
-    print("1단계 · 퀸 파지  (바구니에서 약 50cm 떨어진 자리)")
+    print(f"1단계 · {label} 파지  (바구니에서 약 50cm 떨어진 자리)")
     print(BANNER)
     profile = FLOOR_GRASP_PROFILES[PROFILE]
 
-    keys.wait_enter("  퀸을 차체 전면 19cm 정면에 놓고 Enter (q로 종료) > ")
+    keys.wait_enter(f"  {label}를 차체 전면 19cm 정면에 놓고 Enter (q로 종료) > ")
 
     print("  토크 켜는 중...")
     node.hold_position()
@@ -488,7 +502,7 @@ def phase_grasp(node, keys):
     print(f"  응답 ok={response.ok}  응답 부하={response.load_ratio:.4f}  "
           f"정착 부하={settled:.4f}  ({verdict}, 참고선 {GRASP_LOAD_HINT})")
 
-    keys.wait_enter("  퀸이 제대로 물렸는지 눈으로 확인하고 Enter (q로 종료) > ")
+    keys.wait_enter(f"  {label}이 제대로 물렸는지 눈으로 확인하고 Enter (q로 종료) > ")
 
     print("  grasp → safe (midpoint 경유) ...")
     node.move_stage("safe")
@@ -684,17 +698,22 @@ def _fit_str(fit):
 
 
 def main():
-    global TARGET_LIDAR_M
+    global TARGET_LIDAR_M, PROFILE
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--target", type=float, default=TARGET_LIDAR_M,
                         help=f"정지할 라이다 거리 m (기본 {TARGET_LIDAR_M})")
+    parser.add_argument("--profile", default=PROFILE,
+                        choices=sorted(FLOOR_GRASP_PROFILES.keys()),
+                        help=f"파지 프로파일 (기본 {PROFILE}) — 2026-08-27까지 퀸만 "
+                             "실기 검증됨, 나머지는 오늘 처음 이 도구로 돎")
     parser.add_argument("--skip-grasp", action="store_true",
-                        help="이미 퀸을 물고 CARRY에 있을 때 2단계부터 시작")
+                        help="이미 물체를 물고 CARRY에 있을 때 2단계부터 시작")
     parser.add_argument("--monitor-only", action="store_true",
                         help="주행·팔 없이 라이다/뎁스 측정만 1초마다 출력")
     args = parser.parse_args()
     TARGET_LIDAR_M = args.target
+    PROFILE = args.profile
 
     if os.environ.get("ROS_DOMAIN_ID") != "21":
         print("⚠️ ROS_DOMAIN_ID가 21이 아닙니다 — 노드가 서로 안 보입니다.", file=sys.stderr)
@@ -723,7 +742,8 @@ def main():
             phase_insert(node, keys)
             print()
             print(BANNER)
-            print("완료. 퀸이 바구니 안에 들어갔는지 눈으로 확인해 주세요.")
+            print(f"완료. {PROFILE_LABEL.get(PROFILE, PROFILE)}이 바구니 안에 "
+                  "들어갔는지 눈으로 확인해 주세요.")
             print(BANNER)
             return 0
     except KeyboardInterrupt:
