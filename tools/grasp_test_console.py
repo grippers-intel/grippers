@@ -131,9 +131,9 @@ from grippers_arm.gripper_calibration import GRIPPER_CLOSED_MM
 # ⚠️ 2026-08-27: queen이 여기서 두 번(2026-08-26, 2026-08-27) 안 갈아 끼워진
 # 채로 남아 있었다 — perception_node.py를 고칠 때마다 이 사본도 같이 고칠 것.
 K_CLASS = {
-    "knight": 35.9307,
+    "knight": 39.5578,
     "queen": 38.3357,
-    "rook": 34.8340,
+    "rook": 37.7658,
     "box": None,
     "soccer": 18.9592,
     "star": None,

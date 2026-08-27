@@ -136,14 +136,14 @@ OBSERVE_MIN_BOTTOM_Y_PX = 290.0
 # 도메인 계층이 ROS 패키지를 import하지 않는 것과 같은 이유로 복사한다.
 # baseline_constants.JAW_LINE_DEPTH_FORWARD_M의 사본. 척도 어긋남이 전진량에
 # 얼마나 실리는지 그 자리에서 보여주는 데만 쓴다.
-JAW_LINE_FOR_HINT = {"rook": 0.1757, "knight": 0.1881, "queen": 0.1421}
+JAW_LINE_FOR_HINT = {"rook": 0.1757, "knight": 0.1881, "queen": 0.1969}
 CURRENT_K = {
     # 2026-08-27: queen 28.3382 -> 38.3357로 동기화. perception_node.py는
     # 2026-08-26에 이미 35.1155로 고쳐져 있었는데 이 사본을 안 같이 고쳐서,
     # 그날 이후 --mode scale이 스테일 28.3382 기준으로 "보정값"을 잘못
     # 계산해 냈다(30.94 — 실제로 써야 할 38.3357이 아니었다). 두 파일을
     # 항상 같이 고칠 것.
-    "knight": 35.9307, "queen": 38.3357, "rook": 34.8340,
+    "knight": 39.5578, "queen": 38.3357, "rook": 37.7658,
     "soccer": 18.9592, "box": None, "star": None,
 }
 SERVO1_PROBE_DEG = 12.0    # 서비스 한계(15도) 안쪽에서 최대한 크게

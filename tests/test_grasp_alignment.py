@@ -190,20 +190,24 @@ def test_클래스마다_다른_턱_선을_쓴다(monkeypatch):
 
 def test_rook_턱_선이_실측값이다():
     """0.1985에서도 물리기는 했지만 턱 끝에 걸려 미끄러졌다 — 목표는
-    '물리는 자리'가 아니라 '제대로 앉는 자리'다."""
-    assert bc.JAW_LINE_DEPTH_FORWARD_M["rook"] == 0.1757
+    '물리는 자리'가 아니라 '제대로 앉는 자리'다.
+
+    2026-08-27 K 재보정(34.8340 -> 37.7658) 뒤 다시 재 0.1911이 됐다 —
+    0.1757은 낡은 K 기준값이었다."""
+    assert bc.JAW_LINE_DEPTH_FORWARD_M["rook"] == 0.1911
 
 
 def test_턱_끝에_걸리는_거리에서는_전진이_남아있다():
-    """1차 실측 자리(0.1985)에서 판정하면 아직 전진해야 한다고 나와야 한다."""
+    """1차 실측 자리(0.1985, 옛 K 기준)에서 판정하면 아직 전진해야 한다고
+    나와야 한다 — 턱 선이 0.1911로 갱신된 뒤에도 여전히 그 앞이다."""
     creep = ga.creep_distance_m(TargetObservation("rook", 0.1985, 0.0, True))
 
-    assert creep == pytest.approx(0.0228, abs=0.0005)
+    assert creep == pytest.approx(0.0074, abs=0.0005)
 
 
 def test_제대로_앉은_자리에서는_전진할_것이_없다():
     """이미 턱 선이면 전진 거리가 0 이하라 판정이 '너무 가깝다'로 간다."""
-    assert ga.creep_distance_m(TargetObservation("rook", 0.1757, 0.0, True)) is None
+    assert ga.creep_distance_m(TargetObservation("rook", 0.1911, 0.0, True)) is None
 
 
 # ── 좌우 영점은 클래스마다 다르다 ─────────────────────────────────────────
@@ -223,15 +227,16 @@ def test_좌우_영점_셋이_하나의_물리량으로_모인다():
     하나의 물리량이다. 클래스마다 따로 두는 것은 그 클래스의 거리 배율
     오차가 겉보기 좌우 값에 실리기 때문이지, 물리량이 셋이어서가 아니다.
 
-    2026-08-26에 queen의 K가 19.3% 틀린 것을 잡아 고치자 세 값이 29.5 /
-    31.4 / 29.7 mm로 2mm 안에 모였다(그 전에는 queen만 24.0으로 튀었다).
-    이 수렴이 K 보정이 옳다는 증거이므로, 흩어지면 무언가 틀어진 것이다."""
+    2026-08-27, 세 클래스 모두 K를 --mode scale로 재보정한 뒤 --mode seat로
+    다시 재니 31.6 / 32.9 / 34.0 mm — 3mm 안에 모인다. 턱 선 쪽(아래
+    test_세_클래스_턱_선이_11mm_안에서_흩어져_있다)과 달리 좌우는 카메라
+    장착 위치가 만드는 고정 오프셋 성격이 강해서 비교적 잘 모인다."""
     # autouse 픽스처가 시험용 라벨(영점 0.0)을 끼워 넣으므로 실제 클래스만 본다.
     zeros = [bc.DEPTH_LATERAL_TO_JAW_CENTER_M[label] * 1000
              for label in ("rook", "queen", "knight")]
 
     assert max(zeros) - min(zeros) < 3.0, f"좌우 영점이 흩어졌다: {zeros}"
-    assert 28.0 < sum(zeros) / len(zeros) < 32.0
+    assert 30.0 < sum(zeros) / len(zeros) < 34.0
 
 
 def test_영점을_빼면_중앙이_0이_된다(monkeypatch):
@@ -244,35 +249,40 @@ def test_영점을_빼면_중앙이_0이_된다(monkeypatch):
 
 
 def test_knight_턱_선이_실측값이다():
-    """닫음/들어올림/CARRY 부하가 0.0782로 한 번도 안 떨어진 실측이다."""
-    assert bc.JAW_LINE_DEPTH_FORWARD_M["knight"] == 0.1881
+    """닫음/들어올림/CARRY 부하가 0.0782로 한 번도 안 떨어진 실측이다.
+
+    2026-08-27 K 재보정(35.9307 -> 39.5578) 뒤 다시 재 0.2023이 됐다 —
+    0.1881은 낡은 K 기준값이었다."""
+    assert bc.JAW_LINE_DEPTH_FORWARD_M["knight"] == 0.2023
 
 
 def test_같은_물리_자리를_클래스마다_다르게_읽는다():
-    """턱 선은 정의상 모든 클래스에서 물리적으로 같은 자리다. 그런데 판독은
-    7% 다르다 — 턱 선을 클래스마다 따로 두는 이유가 이것이다."""
+    """턱 선은 정의상 모든 클래스에서 물리적으로 같은 자리다. K를
+    재보정한 뒤에도(2026-08-27) knight가 rook보다 약 5.9% 멀게 읽는다 —
+    턱 선을 클래스마다 따로 두는 이유가 이것이다."""
     rook = bc.JAW_LINE_DEPTH_FORWARD_M["rook"]
     knight = bc.JAW_LINE_DEPTH_FORWARD_M["knight"]
 
     assert knight > rook
-    assert 0.06 < knight / rook - 1.0 < 0.08
+    assert 0.03 < knight / rook - 1.0 < 0.10
 
 
-def test_queen_턱_선이_K_보정_뒤_rook과_만난다():
-    """턱 선은 정의상 **모든 클래스에서 물리적으로 같은 자리**다. 겉보기
-    값이 클래스마다 다른 것은 거리 배율 오차 때문이므로, 배율이 맞으면
-    값도 만나야 한다.
+def test_세_클래스_턱_선이_11mm_안에서_흩어져_있다():
+    """턱 선은 정의상 **모든 클래스에서 물리적으로 같은 자리**다. 예전에는
+    "K를 고치면 한 자릿수 mm로 수렴한다"고 적혀 있었는데, 그건 유도값끼리
+    맞춰본 결과였다 — queen 0.1761은 rook의 K 배율을 거꾸로 적용해 만든
+    값이라 rook과 가깝게 나오도록 계산된 것이었다.
 
-    queen의 원래 실측 0.1421은 K가 19.3% 틀린 상태에서 잰 값이었다. K를
-    고치고 같은 배율로 되돌리니 0.1761이 되어 rook의 0.1757과 0.4mm 안에서
-    만난다 — 이 일치가 보정이 옳다는 방증이다.
-
-    knight(0.1881)는 12mm 떨어져 있는데, 이는 배율 문제가 아니라 말 모양이
-    불규칙해 bbox 중심이 턱이 무는 자리와 다르게 잡히기 때문으로 본다.
-    클래스마다 따로 재는 이유가 그것이다."""
+    2026-08-27, 세 클래스 모두 K를 --mode scale로 실측 재보정하고
+    --mode jaw로 직접 재니 rook 0.1911 / queen 0.1969 / knight 0.2023 —
+    11.2mm 스프레드가 남는다. 유도가 아니라 셋 다 직접 측정한 결과이므로
+    이게 지금의 진짜 그림이다. 클래스별로 따로 저장해 두는 것이 옳은
+    이유이기도 하다 — GRASP는 항상 "관측 - 그 클래스의 턱 선"만 쓰므로
+    이 스프레드는 상쇄된다."""
     jaw = bc.JAW_LINE_DEPTH_FORWARD_M
+    values = [jaw["rook"], jaw["queen"], jaw["knight"]]
 
-    assert abs(jaw["queen"] - jaw["rook"]) < 0.002
+    assert max(values) - min(values) < 0.015, f"턱 선 스프레드가 예상보다 크다: {values}"
 
 
 def test_세_체스말_턱_선이_모두_실측됐다():
