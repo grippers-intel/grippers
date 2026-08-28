@@ -26,8 +26,9 @@ from domain.ports.arm_driver import ArmDriver
 from domain.ports.base_driver import BaseDriver
 from domain.ports.command_interpreter import CommandInterpreter
 from domain.ports.perception import Perception
-from domain.values import BoxColor, BoxObservation, Point3, Pose2D
+from domain.values import BoxColor, BoxObservation, Point3, Pose2D, ScanResult
 
+_SCAN_FAIL = "테스트 주입 — perception 서비스 없음"
 _TARGET = Pose2D(x=0.2, y=0.0, theta=0.0)
 _POINT = Point3(x=0.2, y=0.0, z=0.0)
 _BOX = BoxObservation(
@@ -69,11 +70,14 @@ FAILURE_CONTRACTS = [
     (ArmDriver, "reorient", lambda: FakeArm(reorient_ok=False).reorient(0.0), False, None),
     (ArmDriver, "fold_to_cradle", lambda: FakeArm(fold_ok=False).fold_to_cradle(), False, None),
     (
+        # 🔴 이 행은 이슈 #194 로 계약이 바뀌었다. 예전에는 `found=False` 가
+        # 실패 주입이었고 기대값이 `[]` 였는데, 그건 **정상 관측 + 검출 0개**이지
+        # 실패가 아니다. 실패는 `scan_unavailable` 로 따로 주입한다.
         Perception,
         "scan_floor",
-        lambda: ScriptedPerception(found=False).scan_floor(),
-        [],
-        "빈 리스트",
+        lambda: ScriptedPerception(scan_unavailable=_SCAN_FAIL).scan_floor(),
+        ScanResult.unavailable(_SCAN_FAIL),
+        "`ScanResult.unavailable(reason)`",
     ),
     (
         Perception,

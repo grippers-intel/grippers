@@ -56,6 +56,7 @@ stateDiagram-v2
     state "HANDOVER\n인계" as HANDOVER
     state "REJECT\n투입 불가 판정 · 내려놓기" as REJECT
     state "DONE\n결과 보고" as DONE
+    state "PERCEPTION_FAILED\n관측 불가로 중단" as PERCEPTION_FAILED
 
     SCAN --> DONE : 미처리 대상 0개
     SCAN --> SELECT : 미처리 대상 ≥ 1
@@ -79,6 +80,8 @@ stateDiagram-v2
     HANDOVER --> SCAN : 처리 완료 등록
 
     DONE --> [*]
+    SCAN --> PERCEPTION_FAILED : 관측 실패 (#194)
+    PERCEPTION_FAILED --> [*]
 
     note right of SCAN
         루프의 유일한 진입점.
@@ -104,7 +107,7 @@ stateDiagram-v2
 | 상태 | 호출하는 포트 | 성공 시 다음 | 실패 시 다음 |
 |---|---|---|---|
 | `IDLE` | `interpreter.parse()` | `SCAN` | 대기 유지 — `raw_text` 없음 · **해석 실패(`None`)** |
-| `SCAN` | `perception.scan_floor()` | 대상 有 → `SELECT` / 無 → `DONE` | 재스캔 (n < 3) |
+| `SCAN` | `perception.scan_floor()` | 관측 성공 + 대상 有 → `SELECT` / 관측 성공 + 無 → `DONE` | 재스캔 (n < 3). **관측 실패(`ScanResult.UNAVAILABLE`)는 재스캔 대상이 아니라 `PERCEPTION_FAILED` 종료** (이슈 #194) |
 | `SELECT` | — (순수 판단) | `APPROACH` | `DONE` |
 | `APPROACH` | `base.drive_to()` | `GRASP` | `SCAN` (보류) |
 | `GRASP` | `arm.move_to_floor_pose()` · `set_gripper()` · `get_load()` (수직 fallback은 `move_to_cartesian()`) | `TRANSPORT` / `DELIVER` | 자기 자신 → `SCAN` |
@@ -115,6 +118,7 @@ stateDiagram-v2
 | `HANDOVER` | `arm.set_gripper()` · `get_load()` | `SCAN` (완료) | 대기 |
 | `REJECT` | `arm.move_to_cartesian()` · `set_gripper()` | `SCAN` (보류) | `SCAN` |
 | `DONE` | — | `None` (종료) | — |
+| `PERCEPTION_FAILED` | `base.stop()` | `None` (종료) | — · 팔은 래치하지 않는다 |
 
 ### `IDLE` 의 대기 조건
 
@@ -289,6 +293,7 @@ return PosePlanState(self.ctx, self.target, box)
 | `RELEASE` | 분화 | `INSERT` / `HANDOVER` |
 | — | 신규 | `SCAN` · `SELECT` · `TRANSPORT` · `DELIVER` · `REJECT` · `DONE` |
 | `*FailedState` 4종 | **삭제** | 실패는 종료가 아니라 `SCAN` 복귀 + 보류 등록 |
+| — | **신규 (2026-08-28)** | `PERCEPTION_FAILED` — 유일한 비성공 종료. 관측 자체를 못 하면 `SCAN` 복귀도 `DONE` 도 옳지 않다 (이슈 #194) |
 | `EstopState` | 유지 | `EstopState` |
 
 `*FailedState` 4종이 사라지는 게 가장 큰 구조 변화입니다. 선형 FSM에서 실패는 흡수 상태였지만,

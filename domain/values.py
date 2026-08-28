@@ -68,6 +68,75 @@ class Clearance:
     contact_risk: bool
 
 
+class ScanStatus(Enum):
+    """`scan_floor()` 가 **관측을 수행했는가**. 검출 개수와는 다른 축이다.
+
+    `OBSERVED` 는 카메라가 바닥을 실제로 봤다는 뜻이고, 그 결과 검출이 0개인
+    것은 정상이다 — 치울 것이 남지 않았다는 관측이다. `UNAVAILABLE` 은 아예
+    보지 못했다는 뜻이라 "남은 대상 없음" 으로 읽으면 안 된다 (이슈 #194)."""
+
+    OBSERVED = auto()
+    UNAVAILABLE = auto()
+
+
+@dataclass(frozen=True)
+class ScanResult:
+    """`scan_floor()` 의 반환 계약. **빈 장면과 관측 실패를 타입에서 가른다.**
+
+    예전 계약은 둘 다 `[]` 였다. 그래서 perception 이 통째로 죽어도 `SCAN` 이
+    "남은 대상 없음" 으로 읽고 `DONE` 으로 갔다 — 센서 장애가 정상 완료로
+    기록됐다 (이슈 #194).
+
+    **truthiness 로 판정할 수 없다.** `__bool__` 이 `TypeError` 를 던진다.
+    정의하지 않고 두면 파이썬 기본 동작상 **항상 참**이 되어 `if not result` 가
+    조용히 거짓 분기로 흘러 결함을 숨긴다 — 그건 차단이 아니라 은폐다. 그래서
+    막지 않고 **터뜨린다.** 호출자는 `status` · `observed_ok` · `detections` 를
+    명시적으로 봐야 한다.
+
+    `detections` 는 `tuple` 이다. `frozen=True` 는 **필드 재대입만** 막으므로
+    `list` 를 그대로 담으면 만든 쪽이 나중에 원본을 고쳐 내용이 바뀐다.
+
+    `reason` 은 `UNAVAILABLE` 일 때만 의미가 있는 진단 문자열이다. 실패 종류를
+    세분한 enum 을 두지 않은 것은 **어댑터가 그만큼 알지 못하기 때문**이다 —
+    `_ros_call.call_service()` 가 서비스 부재와 응답 없음을 둘 다 `None` 으로
+    돌려주고 구분은 그쪽 경고 로그에만 남는다. 모르는 것을 아는 척하는 타입을
+    만드는 대신, 어댑터가 아는 만큼만 문자열로 싣고 상세는 로그를 가리킨다."""
+
+    status: ScanStatus
+    detections: tuple[Detection, ...] = ()
+    reason: str | None = None
+
+    def __bool__(self):
+        raise TypeError(
+            "ScanResult 는 참·거짓으로 쓸 수 없다 — status · observed_ok · "
+            "detections 를 명시적으로 확인할 것 (이슈 #194)"
+        )
+
+    def __post_init__(self):
+        if self.status is ScanStatus.OBSERVED and self.reason is not None:
+            raise ValueError("OBSERVED 에는 reason 을 싣지 않는다")
+        if self.status is ScanStatus.UNAVAILABLE and self.detections:
+            raise ValueError("UNAVAILABLE 에는 검출을 싣지 않는다")
+
+    @classmethod
+    def observed(cls, detections) -> "ScanResult":
+        """관측 성공. `detections` 가 비어 있으면 '치울 것이 없다' 는 정상 관측이다."""
+        return cls(status=ScanStatus.OBSERVED, detections=tuple(detections))
+
+    @classmethod
+    def unavailable(cls, reason: str) -> "ScanResult":
+        """관측 실패. `reason` 은 비워 두지 않는다 — 실패 원인이 없으면 실기에서
+        무엇이 끊겼는지 알 수 없다."""
+        if not reason:
+            raise ValueError("unavailable 에는 reason 이 필요하다")
+        return cls(status=ScanStatus.UNAVAILABLE, reason=reason)
+
+    @property
+    def observed_ok(self) -> bool:
+        """관측 자체가 성공했는가. 검출 유무와는 무관하다."""
+        return self.status is ScanStatus.OBSERVED
+
+
 @dataclass
 class MissionSpec:
     mode: MissionMode

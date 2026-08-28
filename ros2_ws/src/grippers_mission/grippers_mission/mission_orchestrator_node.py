@@ -101,6 +101,12 @@ class MissionOrchestratorNode(Node):
             try:
                 for state in task.run(raw_text):
                     self.get_logger().info(f"[MISSION] -> {state.name}")
+                    # MissionState.msg 는 상태 **이름**만 싣는다. 관측 실패처럼
+                    # 원인이 상태에 실려 오는 경우, 여기서 한 번 찍지 않으면
+                    # 무엇이 끊겼는지가 어디에도 남지 않는다 (이슈 #194).
+                    reason = getattr(state, "reason", None)
+                    if reason:
+                        self.get_logger().error(f"[MISSION] {state.name} 사유: {reason}")
                     msg = MissionState()
                     msg.state = state.name
                     self._state_pub.publish(msg)

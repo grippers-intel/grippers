@@ -16,6 +16,7 @@ from domain.values import (
     ObjectClass,
     Point3,
     Pose2D,
+    ScanResult,
 )
 
 _DEFAULT_DETECTION = Detection(
@@ -38,6 +39,7 @@ class ScriptedPerception(Perception):
         opening_mm: float | None = 400.0,
         box_opening_mm: float = 400.0,
         contact_risk: bool = False,
+        scan_unavailable: str | None = None,
     ):
         if script is not None:
             self._script = script
@@ -52,12 +54,21 @@ class ScriptedPerception(Perception):
         self._opening_mm = opening_mm
         self._box_opening_mm = box_opening_mm
         self._contact_risk = contact_risk
+        self._scan_unavailable = scan_unavailable
 
-    def scan_floor(self) -> list[Detection]:
-        # 스크립트가 소진되면 마지막 원소를 계속 반환한다 (같은 목록 반복).
-        idx = min(self._call_count, len(self._script) - 1)
+    def scan_floor(self) -> ScanResult:
+        """`found=False` 는 **정상 관측 + 검출 0개**, `scan_unavailable="..."` 은
+        **관측 실패**다 — 이 둘을 따로 주입할 수 있어야 이슈 #194 의 두 경로를
+        하드웨어 없이 CI 에서 가를 수 있다.
+
+        `scan_unavailable` 은 `_script` 보다 우선한다. 실패를 주입해 두고도
+        스크립트가 검출을 돌려주면 시험이 무엇을 검증하는지 모호해진다."""
         self._call_count += 1
-        return self._script[idx]
+        if self._scan_unavailable is not None:
+            return ScanResult.unavailable(self._scan_unavailable)
+        # 스크립트가 소진되면 마지막 원소를 계속 반환한다 (같은 목록 반복).
+        idx = min(self._call_count - 1, len(self._script) - 1)
+        return ScanResult.observed(self._script[idx])
 
     def find_box(self, color: BoxColor) -> BoxObservation | None:
         if not self._box_found:

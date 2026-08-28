@@ -8,6 +8,10 @@ docs/design/sequences.md 가 상태 내부 포트 호출 순서의 단일 소스
 - 종료 조건은 "마지막 단계 도달"이 아니라 "관측 결과 남은 대상 없음" → `DONE`
 - `*FailedState` 4종은 전부 삭제됐다. 실패는 미션 종료가 아니라 `SCAN` 복귀 +
   보류 목록(`held_ids`) 등록이다 (state_machine.md §5)
+- 🔴 **예외가 하나 있다 — `PERCEPTION_FAILED`** (이슈 #194). 관측 자체를 못 하면
+  `SCAN` 으로 되돌아가도 같은 실패를 반복할 뿐이고, `DONE` 으로 보내면 센서 장애가
+  정상 완료로 기록된다. 그래서 이것만 명시적 비성공 **종료**다. 물리 E-STOP 과는
+  다르다 — 사람이 누른 인터럽트가 아니라 "볼 수 없어 이어갈 수 없다" 는 관측 실패다
 
 E-STOP은 이 전이 그래프에 없다 — `MissionTask.run()` 이 다음 `execute()` 호출 전에
 `EstopState` 로 갈아치우는 인터럽트이지 정상 전이가 아니다 (state_machine.md §2)."""
@@ -16,7 +20,7 @@ from dataclasses import replace
 
 from domain.task.floor_grasp_policy import select_horizontal_grasp_plan
 from domain.task.state import State
-from domain.values import MissionContext, MissionMode, Point3, Pose2D
+from domain.values import MissionContext, MissionMode, Point3, Pose2D, ScanStatus
 
 # ── 실측/미실측 상수 ─────────────────────────────────────────────────────
 # 그리퍼 개구 폭은 2026-08-20 실측 완료. 나머지 좌표/임계값은 TODO이며,
@@ -126,8 +130,16 @@ class ScanState(State):
         self.rescans = rescans
 
     def execute(self, ports):
-        detections = ports.perception.scan_floor()
+        scan = ports.perception.scan_floor()
 
+        # 관측 실패는 재스캔 대상이 아니다 — 서비스가 없거나 응답하지 않는 상태에서
+        # 세 번 더 부른다고 달라지지 않고, `DONE` 으로 보내면 센서 장애가 정상 완료로
+        # 기록된다 (이슈 #194). 검출 0개인 '정상 빈 장면' 과는 다른 축이므로
+        # truthiness 가 아니라 status 로 가른다.
+        if scan.status is ScanStatus.UNAVAILABLE:
+            return PerceptionFailedState(self.ctx, scan.reason)
+
+        detections = scan.detections
         if not detections:
             if self.rescans < self.MAX_RESCAN:
                 return ScanState(self.ctx, self.rescans + 1)
@@ -317,8 +329,19 @@ class GraspState(State):
 
         # 실패한 파지가 물체를 밀었을 수 있다 — 이전 pose 재사용은 같은 실패를
         # 반복하므로 재스캔해서 같은 track_id의 갱신된 pose로 재시도한다.
-        refreshed = ports.perception.scan_floor()
-        updated = next((d for d in refreshed if d.track_id == self.target.track_id), self.target)
+        scan = ports.perception.scan_floor()
+
+        # 관측 실패면 갱신할 근거가 없다. 여기서 옛 pose 로 재시도하면 **보이지도
+        # 않는 자리에 팔을 내리는** 것이라, 재스캔의 목적과 정반대다 (이슈 #194).
+        if scan.status is ScanStatus.UNAVAILABLE:
+            return PerceptionFailedState(self.ctx, scan.reason)
+
+        # 관측은 됐는데 같은 track_id 가 없으면 기존 정책 그대로 — 이전 pose 로
+        # 한 번 더 시도한다. 물체가 잠깐 가려졌을 수 있고, 재시도 예산은 이미
+        # `MAX_GRASP_RETRY` 로 제한돼 있다.
+        updated = next(
+            (d for d in scan.detections if d.track_id == self.target.track_id), self.target
+        )
         return GraspState(self.ctx.retry(), updated)
 
 
@@ -487,6 +510,57 @@ class RejectState(State):
         ports.arm.move_to_cartesian(PUT_DOWN_POINT_M, down=True)
         ports.arm.set_gripper(OPEN_MM)
         return ScanState(self.ctx.hold(self.target.track_id))
+
+
+class PerceptionFailedState(State):
+    """관측 실패로 인한 **비성공 종료** (이슈 #194).
+
+    `DONE` 과 갈라야 하는 이유 — `DONE` 은 "바닥을 봤고 치울 것이 없다" 는
+    성공 종료다. 여기는 **바닥을 보지 못했다.** 둘을 같은 상태로 두면 센서가
+    통째로 죽은 미션이 완료로 집계된다.
+
+    `ESTOP` 과 갈라야 하는 이유 — E-STOP 은 사람이 누른 물리 인터럽트이고
+    팔 자세를 래치한다. 관측 실패는 사람이 개입한 것이 아니고, 팔을 래치하면
+    복구에 사람 손이 필요해진다. 여기서는 **베이스만 세운다.**
+
+    `SCAN` 으로 되돌리지 않는 이유 — 서비스가 없거나 응답하지 않는 상태는
+    재시도로 풀리지 않는다. `ScanState.MAX_RESCAN` 은 '일시적 오검출' 대비이지
+    '센서 부재' 대비가 아니다.
+
+    `reason` 은 어댑터가 실은 진단 문자열이다. 상태 이름만으로는 무엇이
+    끊겼는지 알 수 없으므로 실기 로그에서 이 값이 원인 추적의 시작점이 된다.
+    `MissionState.msg` 는 이름만 싣기 때문에, 오케스트레이터가 전이 로그에
+    이 값을 따로 찍는다.
+
+    **진입 지점은 두 곳뿐이고, 둘 다 물체를 들고 있지 않다.**
+
+    - `ScanState.execute()` — 그리퍼 비어 있음(루프 재진입점이라 직전 사이클이
+      이미 끝났다), 베이스 정지(SCAN 은 정지 상태에서만 관측한다)
+    - `GraspState._retry_after_release()` — 그리퍼 비어 있음. **이 메서드 첫 줄이
+      `set_gripper(OPEN_MM)` 이다.** 베이스는 GRASP 중이라 정지
+
+    ⚠️ **`hold_position()` 을 부르지 않는 이유** — 래치는 "지금 자세를 붙잡아
+    낙하를 막는" 동작이다. 위 표대로 **두 경로 모두 손에 아무것도 없으므로**
+    막을 낙하가 없고, 래치하면 복구에 사람 손이 필요해진다. 반대로 물체를 든
+    채 이 상태에 들어오는 경로가 새로 생기면 **이 전제가 깨진다** — 그때는
+    래치 여부를 다시 판단해야 한다.
+
+    ⚠️ 여기서 **팔에 새 동작을 명령하지 않는다.** 관측이 끊긴 상태라 어디로
+    보내야 안전한지 알 근거가 없다. 기존 servo goal 이 그대로 유지되고, 그게
+    지금 실측 근거로 뒷받침되는 유일한 선택이다."""
+
+    name = "PERCEPTION_FAILED"
+
+    def __init__(self, ctx, reason=None):
+        self.ctx = ctx
+        self.reason = reason
+
+    def execute(self, ports):
+        # 베이스만 세운다 — 팔은 래치하지 않는다(E-STOP 과의 차이). 두 호출 경로
+        # (`SCAN`·`GRASP` 재시도) 모두 실제로는 이미 정지 상태지만, 이 상태가
+        # 다른 자리에서 불릴 때를 대비한 방어다.
+        ports.base.stop()
+        return None
 
 
 class DoneState(State):

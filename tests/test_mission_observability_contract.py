@@ -110,3 +110,26 @@ def test_launch_exposes_four_fake_switches_and_optional_rosbag():
     assert '["ros2", "bag", "record", "-a", "-o", bag_output]' in source
     assert source.count("UnlessCondition(use_fake_base)") == 2
     assert source.count("UnlessCondition(use_fake_perception)") == 3
+
+
+def test_terminal_state_reason_is_logged_once(monkeypatch):
+    """`MissionState.msg` 는 상태 이름만 싣는다 — 원인은 로그에만 남는다.
+
+    `PerceptionFailedState.reason` 이 객체에만 있고 아무 데도 안 찍히면 실기에서
+    "PERCEPTION_FAILED 인데 왜?" 를 알 수 없다 (이슈 #194). 오케스트레이터는
+    rclpy 없이 import 할 수 없으므로 AST 로 그 한 줄이 있는지 본다."""
+    source = ORCHESTRATOR.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(ORCHESTRATOR))
+
+    reason_reads = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Constant)
+        and node.args[1].value == "reason"
+    ]
+    assert reason_reads, "상태의 reason 을 읽는 곳이 없다"
+    assert 'f"[MISSION] {state.name} 사유: {reason}"' in source

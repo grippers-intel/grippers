@@ -3,18 +3,27 @@ grippers_perception의 LearnedPerception이 이걸 구현한다."""
 
 from abc import ABC, abstractmethod
 
-from domain.values import BoxColor, BoxObservation, Clearance, Detection
+from domain.values import BoxColor, BoxObservation, Clearance, ScanResult
 
 
 class Perception(ABC):
     @abstractmethod
-    def scan_floor(self) -> list[Detection]:
-        """바닥을 전역 관측해 검출 목록을 반환한다.
-        더 처리할 대상이 없으면(상자 영역 마스킹 포함) **빈 리스트**를 반환해야 한다 —
-        `SCAN` 은 빈 리스트를 '남은 대상 없음'으로 해석해 `DONE` 으로 전이한다.
+    def scan_floor(self) -> ScanResult:
+        """바닥을 전역 관측해 **관측 성공 여부와 검출 목록을 함께** 반환한다.
 
-        **실패(서비스 부재 · 응답 없음)도 빈 리스트.** 관측이 안 되는데 계속 도는
-        것보다 미션을 끝내고 이유를 로그로 남기는 편이 낫다."""
+        - 관측했고 처리할 대상이 없으면(상자 영역 마스킹 포함)
+          `ScanResult.observed([])` — `SCAN` 이 '남은 대상 없음' 으로 읽고
+          기존 재스캔 정책을 거쳐 `DONE` 으로 갈 수 있다.
+        - **관측 자체를 못 했으면 `ScanResult.unavailable(reason)`.**
+          서비스 부재 · 응답 없음 · 프레임 없음이 여기 해당한다.
+
+        🔴 **실패를 빈 목록으로 돌려주면 안 된다 (이슈 #194).** 예전 계약은 둘 다
+        `[]` 여서 perception 이 통째로 죽어도 `SCAN` 이 `DONE` 으로 갔고, 센서
+        장애가 정상 완료로 기록됐다. `UNAVAILABLE` 은 `DONE` 으로 가지 않는다 —
+        `PERCEPTION_FAILED` 로 끝난다.
+
+        이건 **물리 E-STOP 과 다르다.** E-STOP 은 사람이 누른 인터럽트이고, 이건
+        "볼 수 없어서 미션을 이어갈 수 없다" 는 관측 실패다."""
 
     @abstractmethod
     def find_box(self, color: BoxColor) -> BoxObservation | None:

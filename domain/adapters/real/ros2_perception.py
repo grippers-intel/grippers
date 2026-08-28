@@ -13,7 +13,15 @@ from grippers_interfaces.srv import FindBox, MeasureOpening, MonitorClearance, S
 from domain.adapters.real._ros_call import SAFETY_TIMEOUT_SEC, call_service
 from domain.adapters.real._ros_convert import box_observation_from_msg, box_observation_to_msg
 from domain.ports.perception import Perception
-from domain.values import BoxColor, BoxObservation, Clearance, Detection, ObjectClass, Point3
+from domain.values import (
+    BoxColor,
+    BoxObservation,
+    Clearance,
+    Detection,
+    ObjectClass,
+    Point3,
+    ScanResult,
+)
 
 
 def _blind_clearance() -> Clearance:
@@ -48,14 +56,23 @@ class Ros2Perception(Perception):
             MonitorClearance, "perception/monitor_clearance"
         )
 
-    def scan_floor(self) -> list[Detection]:
-        """검출 목록. 서비스가 없거나 응답이 없으면 **빈 목록** — `SELECT` 가
-        고를 후보가 없어 `DONE` 으로 간다. 관측이 안 되는데 계속 도는 것보다
-        미션을 끝내고 이유를 로그로 남기는 편이 낫다."""
+    def scan_floor(self) -> ScanResult:
+        """관측 결과. 서비스가 없거나 응답이 없으면 **`ScanResult.unavailable()`** —
+        빈 목록으로 삼키지 않는다 (이슈 #194). 응답이 왔는데 검출이 0개인 것은
+        정상 관측이므로 `observed(())` 다.
+
+        `call_service()` 는 **서비스 부재와 응답 없음을 둘 다 `None`** 으로
+        돌려주고 구분은 그쪽 경고 로그(`scan_floor: 서비스 없음 …` /
+        `scan_floor: 응답 없음 …`)에만 남는다. 여기서 두 경우를 갈라 보려면
+        공통 호출 API 를 바꿔야 하는데 그건 이 이슈의 범위를 넘는다 — 그래서
+        `reason` 은 **아는 만큼만** 적고 상세는 그 로그를 가리킨다."""
         res = call_service(self._node, self._scan_client, ScanFloor.Request(), label="scan_floor")
         if res is None:
-            return []
-        return [_detection_from_msg(d) for d in res.detections.detections]
+            return ScanResult.unavailable(
+                "scan_floor 서비스가 응답하지 않음 (부재 또는 타임아웃) — "
+                "상세는 call_service 경고 로그"
+            )
+        return ScanResult.observed(_detection_from_msg(d) for d in res.detections.detections)
 
     def find_box(self, color: BoxColor) -> BoxObservation | None:
         """찾지 못했거나 서비스가 응답하지 않으면 **None** — `TRANSPORT` 가
