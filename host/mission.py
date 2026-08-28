@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import sys
+import time
 from enum import Enum, auto
 from pathlib import Path
 from typing import Optional
@@ -232,6 +233,10 @@ class MissionFSM:
         # NUDGE_BOX 가 이번에 갈 (거리 m, 방향). PLACE 가 Pi 의 라이다 판독을
         # 보고 채운다. None 이면 첫 진입이라 기존 BOX_NUDGE_M 만큼만 붙인다.
         self._nudge_plan: Optional[tuple] = None
+        # 진전 감시 — 마지막으로 인정한 이동량과 그 시각의 마감.
+        self._nudge_best = 0.0
+        self._nudge_stall_at = 0.0
+        self._nudge_stall_warned = False
         # 바구니 앞 폐루프가 지금까지 쓴 총 이동량 — 예산 한계선용.
         self._basket_creep_used = 0.0
 
@@ -520,6 +525,8 @@ class MissionFSM:
             self.nav_path = None
             if self._nudge_from is None:
                 self._nudge_from = robot_xy
+                self._nudge_best = 0.0
+                self._nudge_stall_at = time.monotonic() + mcfg.BASKET_NUDGE_STALL_SEC
             # 얼마나 어느 쪽으로 갈지. PLACE 가 Pi 판독을 보고 정해 두면
             # 그것을 쓰고, 없으면(첫 진입) 기존 5 cm 직진이다.
             want_m, axis = self._nudge_plan or (mcfg.BOX_NUDGE_M, "forward")
@@ -546,6 +553,21 @@ class MissionFSM:
                 mode, cmd = DriveMode.FORWARD, "back"
             else:
                 mode, cmd = DriveMode.FORWARD, "go"
+            # 진전이 멈추면 멈춘다. 안 움직이는데 계속 미는 것은 어느
+            # 원인(바퀴 정지·걸림)에서도 나아지지 않는다.
+            now = time.monotonic()
+            if moved > self._nudge_best + mcfg.BASKET_NUDGE_PROGRESS_M:
+                self._nudge_best = moved
+                self._nudge_stall_at = now + mcfg.BASKET_NUDGE_STALL_SEC
+            if not done and now >= self._nudge_stall_at:
+                mode, cmd = DriveMode.STOP, "stop"
+                if not self._nudge_stall_warned:
+                    self._nudge_stall_warned = True
+                    print(f"\n[NUDGE_BOX] {mcfg.BASKET_NUDGE_STALL_SEC:.0f}초 동안 "
+                          f"{moved * 1000:.0f}mm 밖에 못 갔습니다(목표 "
+                          f"{want_m * 1000:.0f}mm, 방향 {axis}) — 정지합니다. "
+                          f"바퀴 전원과 걸림을 확인하세요\n", flush=True)
+
             self.ready_to_advance = done
             nav = DriveCommand(
                 mode=mode, waypoint=goal, target_yaw_deg=mcfg.BOX_FACE_YAW_DEG,
