@@ -54,7 +54,11 @@ from domain.ports.baseline_ports import HostCommand, MissionState, Report
 
 # Host 저장소를 옆에 클론해 둔 자리. 없으면 안내하고 끝낸다 — 흉내로 대신하면
 # 이 시험의 존재 이유(진짜 코드끼리 붙인다)가 사라진다.
-TOPVIEW = pathlib.Path.home() / "Desktop/intel/grippers_topview"
+# Host 코드는 2026-08-27 에 이 저장소 host/ 로 들어왔다. 그걸 먼저 보고,
+# 없으면 예전처럼 따로 클론한 grippers_topview 를 찾는다.
+TOPVIEW = pathlib.Path(__file__).resolve().parent.parent / "host"
+if not (TOPVIEW / "vehicle_link.py").exists():
+    TOPVIEW = pathlib.Path.home() / "Desktop/intel/grippers_topview"
 
 BANNER = "=" * 70
 CMD_PORT, STATUS_PORT = 45005, 45006

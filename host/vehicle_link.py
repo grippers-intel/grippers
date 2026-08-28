@@ -45,6 +45,7 @@ Host 가 물체 좌표 · 차량 좌표와 방향 · 경로 계산 · 차량 제
 from __future__ import annotations
 
 import json
+import math
 import re
 import socket
 import sys
@@ -58,7 +59,14 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from domain.ports.baseline_ports import HostCommand, MissionState, Report
-from domain.task.motion import AGREED_LINEAR_MPS, AGREED_ROTATION_RAD_S
+from domain.task.motion import (AGREED_LINEAR_MPS, AGREED_ROTATION_RAD_S,
+                               BASKET_APPROACH_MPS)
+# Pi 가 `fix` 에 싣는 동작 이름. 문자열을 다시 적지 않고 정본에서 가져온다.
+from domain.task.corrections import (ADVANCE as _FIX_ADVANCE,
+                                     REACQUIRE as _FIX_REACQUIRE,
+                                     RETREAT as _FIX_RETREAT,
+                                     ROTATE as _FIX_ROTATE,
+                                     WAIT as _FIX_WAIT)
 
 
 @dataclass
@@ -184,6 +192,12 @@ class GraspCorrection:
     kind: str
     detail: str = ""
     lateral_mm: Optional[float] = None
+    #: Pi 가 `fix` 로 준 실제 오차량. 산문 파싱으로는 못 얻는 값이라 그때는 None.
+    #: **크기를 그대로 쓰지 말 것** — INSERT 의 forward 는 라이다 판독 기준이라
+    #: Pi 가 "줄어드는 방향으로 조금씩 움직이며 다시 물어라"라고 못박았다
+    #: (`domain/task/corrections.py::from_insert`). 부호를 믿는 데 쓴다.
+    forward_mm: Optional[float] = None
+    yaw_deg: Optional[float] = None
 
     @property
     def actionable(self) -> bool:
@@ -253,6 +267,44 @@ _INSERT_KEYS = (
 _YAW_RE = re.compile(r"yaw\s*([+-]?\d+(?:\.\d+)?)\s*rad")
 
 
+def correction_from_fix(fix: dict, *, insert: bool) -> Optional[GraspCorrection]:
+    """Pi 의 `fix` 필드 -> `GraspCorrection`. 모르는 action 이면 None.
+
+    **이것이 정식 경로다.** 아래 `classify_*` 두 함수는 `fix` 가 없는 보고를
+    위한 폴백일 뿐이다 — Pi 가 판정을 내린 자리에서 같이 만든 수치를 받는 쪽이,
+    사람이 읽으라고 쓴 문장을 정규식으로 뜯는 것보다 언제나 낫다.
+
+    `insert` 로 갈리는 곳이 하나 있다. Pi 의 `ROTATE` + `lateral_m` 은 "좌우로
+    이만큼 어긋나 있다"는 뜻이고 **없애는 경로는 Host 가 정한다**
+    (`corrections.py` 의 설계 원칙). 기물 앞에서는 회전이 맞다 — 턱을 물체 쪽으로
+    돌리는 것이다. 하지만 바구니 앞에서는 회전하면 거리와 yaw 가 같이 틀어져
+    여섯 조건을 동시에 흔들므로 **메카넘 횡이동**으로 없앤다.
+    """
+    action = fix.get("action")
+    lat_mm = float(fix.get("lateral_m", 0.0) or 0.0) * 1000.0
+    fwd_mm = float(fix.get("forward_m", 0.0) or 0.0) * 1000.0
+    yaw_deg = math.degrees(float(fix.get("yaw_rad", 0.0) or 0.0))
+    detail = f"fix={action} 좌우 {lat_mm:+.0f}mm 전후 {fwd_mm:+.0f}mm yaw {yaw_deg:+.1f}도"
+
+    if action == _FIX_WAIT:
+        return GraspCorrection(WAIT, detail, lat_mm, fwd_mm, yaw_deg)
+    if action == _FIX_ADVANCE:
+        return GraspCorrection(CREEP_IN, detail, lat_mm, fwd_mm, yaw_deg)
+    if action == _FIX_RETREAT:
+        return GraspCorrection(BACK_OFF, detail, lat_mm, fwd_mm, yaw_deg)
+    if action == _FIX_REACQUIRE:
+        # "다시 보이게 세워 달라" — 어느 쪽으로 세울지는 안 온다. 찍어서
+        # 움직이지 않는다(GRASP 는 보류, INSERT 는 정지로 간다).
+        return GraspCorrection(UNFIXABLE, detail, lat_mm, fwd_mm, yaw_deg)
+    if action == _FIX_ROTATE:
+        if abs(yaw_deg) > 0.0:
+            return GraspCorrection(RE_AIM, detail, yaw_deg, fwd_mm, yaw_deg)
+        if insert:
+            return GraspCorrection(SHIFT, detail, lat_mm, fwd_mm, yaw_deg)
+        return GraspCorrection(RE_AIM, detail, lat_mm, fwd_mm, yaw_deg)
+    return None
+
+
 def classify_insert_correction(detail: str) -> GraspCorrection:
     """Pi 의 INSERT_BLOCKED `detail` -> `GraspCorrection`. 모르면 UNFIXABLE.
 
@@ -296,10 +348,13 @@ def encode(cmd: MissionCommand) -> HostCommand:
 
     네 가지 동작이 속도 넷으로 어떻게 옮겨지는가:
 
-        go     -> linear_x = +AGREED_LINEAR_MPS
-        back   -> linear_x = -AGREED_LINEAR_MPS
-        left   -> linear_y = +AGREED_LINEAR_MPS       (메카넘 횡이동)
-        right  -> linear_y = -AGREED_LINEAR_MPS
+        go     -> linear_x = +속도
+        back   -> linear_x = -속도
+        left   -> linear_y = +속도                    (메카넘 횡이동)
+        right  -> linear_y = -속도
+
+    속도는 APPROACH_BOX 면 BASKET_APPROACH_MPS(0.06), 아니면
+    AGREED_LINEAR_MPS(0.1) 다 — Pi 의 `resolve_motion` 과 같은 규칙이다.
         stop   -> stop = True            (나머지 셋을 무시하는 가장 센 명령)
         yaw+   -> angular_z = +AGREED_ROTATION_RAD_S   (반시계)
         yaw-   -> angular_z = -AGREED_ROTATION_RAD_S   (시계)
@@ -318,20 +373,28 @@ def encode(cmd: MissionCommand) -> HostCommand:
         # 모르는 상태 이름을 추측해서 보내지 않는다. 정지가 안전하다.
         return HostCommand(state=MissionState.IDLE, stop=True)
 
+    # ⚠️ APPROACH_BOX 에서는 Pi 가 **더 낮은 상한**을 쓴다
+    # (`resolve_motion` 의 linear_cap). Host 가 0.1 을 보내도 0.06 으로 잘리는데,
+    # 그러면 차는 움직이지만 **Host 의 도착 예측이 어긋난다** — 조용히 틀리는
+    # 종류라 Pi 팀이 conformance 검사로 잡아 줬다(2026-08-28).
+    # 여기서도 같은 상수를 쓰면 보내는 값과 실제가 같아진다.
+    linear = (BASKET_APPROACH_MPS if state == MissionState.APPROACH_BOX
+              else AGREED_LINEAR_MPS)
+
     if cmd.cmd == "go":
-        return HostCommand(state=state, linear_x=AGREED_LINEAR_MPS)
+        return HostCommand(state=state, linear_x=linear)
     if cmd.cmd == "back":
         # 예전 4어휘(go/stop/yaw+/yaw-)에는 후진이 없었다. 속도 형식으로
         # 바뀌면서 부호만 뒤집으면 되는 것이 됐다 — Pi 의 `_clamp` 가
         # copysign 이라 음수 크기를 그대로 잘라 준다. GRASP_ALIGN 이 쓴다.
-        return HostCommand(state=state, linear_x=-AGREED_LINEAR_MPS)
+        return HostCommand(state=state, linear_x=-linear)
     if cmd.cmd == "left":
         # 메카넘 횡이동. 다섯 필드에 이미 있는 linear_y 라 프로토콜 확장이
         # 아니다. INSERT_ALIGN 이 쓴다 — 바구니 앞 좌우 오차는 회전으로 고치면
         # 거리와 yaw 가 같이 틀어져서 세 조건을 동시에 흔든다.
-        return HostCommand(state=state, linear_y=AGREED_LINEAR_MPS)
+        return HostCommand(state=state, linear_y=linear)
     if cmd.cmd == "right":
-        return HostCommand(state=state, linear_y=-AGREED_LINEAR_MPS)
+        return HostCommand(state=state, linear_y=-linear)
     if cmd.cmd == "yaw+":
         return HostCommand(state=state, angular_z=AGREED_ROTATION_RAD_S)
     if cmd.cmd == "yaw-":
@@ -539,10 +602,18 @@ class UdpVehicleLink(VehicleLink):
                 return "FAILED"
             return "PLACE_DONE"
 
-        if report == Report.GRASP_BLOCKED:
-            self.last_correction = classify_correction(detail)
+        # `fix` 가 있으면 그것이 정본이다. 없을 때만 문장을 뜯는다 — Pi 가
+        # 08-26 에 `fix` 를 넣어 두었는데 우리 스냅샷이 그 직전이라 08-28 까지
+        # 문장 파싱만 하고 있었다. 폴백을 남겨 두는 것은 옛 Pi 와도 붙기 위해서다.
+        fix = msg.get("fix")
+        if report in (Report.GRASP_BLOCKED, Report.GRASP_CENTERING):
+            c = (correction_from_fix(fix, insert=False)
+                 if isinstance(fix, dict) else None)
+            self.last_correction = c or classify_correction(detail)
         elif report == Report.INSERT_BLOCKED:
-            self.last_insert_correction = classify_insert_correction(detail)
+            c = (correction_from_fix(fix, insert=True)
+                 if isinstance(fix, dict) else None)
+            self.last_insert_correction = c or classify_insert_correction(detail)
 
         if report in _BLOCKING_REPORTS:
             # Pi 가 "조건이 안 맞는다, 수정된 명령을 달라"고 말하는 중이다.

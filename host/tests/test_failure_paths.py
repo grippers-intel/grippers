@@ -22,7 +22,8 @@ from localizer import Pose
 from mission import MissionFSM, State
 from vehicle_link import (BACK_OFF, CREEP_IN, RE_AIM, SHIFT, UNFIXABLE, WAIT,
                           GraspCorrection, MissionCommand, MissionState,
-                          VehicleLink, classify_insert_correction, encode)
+                          VehicleLink, classify_insert_correction,
+                          correction_from_fix, encode)
 
 POSE = Pose(x=1.0, y=0.8, yaw_deg=90.0, ok=True, n_cams=2, fresh=True)
 
@@ -207,6 +208,62 @@ def test_new_states_map_to_pi_states():
     """모르는 상태면 encode 가 IDLE+stop 으로 떨어진다 — 그러면 안 움직인다."""
     assert encode(MissionCommand("go", "INSERT_ALIGN", 0, 0, 0)).state != MissionState.IDLE
     assert encode(MissionCommand("stop", "HALTED", 0, 0, 0)).state != MissionState.IDLE
+
+
+# --- Pi 의 fix 필드 (정식 경로) ---------------------------------------------
+
+def test_fix_actions_map_to_kinds():
+    """Pi 가 판정 자리에서 만든 수치를 그대로 받는다 — 문장 파싱보다 우선한다."""
+    cases = [
+        ({"action": "wait", "lateral_m": 0.012}, False, WAIT),
+        ({"action": "advance", "forward_m": 0.031}, False, CREEP_IN),
+        ({"action": "retreat", "forward_m": -0.018}, True, BACK_OFF),
+        ({"action": "reacquire"}, True, UNFIXABLE),
+    ]
+    for fix, insert, want in cases:
+        got = correction_from_fix(fix, insert=insert)
+        assert got is not None and got.kind == want, f"{fix} -> {got}"
+
+
+def test_rotate_becomes_shift_only_at_the_basket():
+    """같은 lateral_m 이라도 없애는 경로가 다르다.
+
+    기물 앞은 회전(턱을 물체 쪽으로), 바구니 앞은 횡이동 — 회전하면 거리와
+    yaw 가 같이 틀어져 여섯 조건을 동시에 흔들기 때문이다."""
+    fix = {"action": "rotate", "lateral_m": 0.085}
+    assert correction_from_fix(fix, insert=False).kind == RE_AIM
+    assert correction_from_fix(fix, insert=True).kind == SHIFT
+
+
+def test_rotate_with_yaw_is_always_reaim():
+    c = correction_from_fix({"action": "rotate", "yaw_rad": 0.142}, insert=True)
+    assert c.kind == RE_AIM and c.lateral_mm > 0     # 부호가 회전 방향이 된다
+
+
+def test_unknown_fix_action_falls_back():
+    """모르는 action 을 추측해서 움직이지 않는다 — None 이면 문장 파싱으로 간다."""
+    assert correction_from_fix({"action": "허튼값"}, insert=True) is None
+
+
+def test_numbers_survive_the_conversion():
+    c = correction_from_fix({"action": "advance", "forward_m": 0.031}, insert=False)
+    assert abs(c.forward_mm - 31.0) < 0.01
+
+
+# --- APPROACH_BOX 속도 상한 --------------------------------------------------
+
+def test_basket_states_use_the_slower_cap():
+    """Pi 가 APPROACH_BOX 에서 0.06 으로 자른다. 같은 값을 보내야 도착 예측이 맞다."""
+    from domain.task.motion import AGREED_LINEAR_MPS, BASKET_APPROACH_MPS
+    for state in ("NUDGE_BOX", "INSERT_ALIGN"):
+        h = encode(MissionCommand("go", state, 0, 0, 0))
+        assert h.state == MissionState.APPROACH_BOX
+        assert abs(h.linear_x - BASKET_APPROACH_MPS) < 1e-9, state
+        assert abs(encode(MissionCommand("left", state, 0, 0, 0)).linear_y
+                   - BASKET_APPROACH_MPS) < 1e-9, state
+    for state in ("APPROACH_PIECE", "GRASP_ALIGN"):
+        h = encode(MissionCommand("go", state, 0, 0, 0))
+        assert abs(h.linear_x - AGREED_LINEAR_MPS) < 1e-9, state
 
 
 if __name__ == "__main__":
