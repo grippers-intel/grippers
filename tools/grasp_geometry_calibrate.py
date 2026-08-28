@@ -146,6 +146,10 @@ JAW_LINE_FOR_HINT = {
     "queen": 0.1969,
     "soccer": 0.1934,
     "box": 0.1820,
+    # 2026-08-28: star가 빠져 있었다 — 0.1912는 2026-08-27에 실측했는데 이
+    # 사본에만 안 들어갔다. tests/test_constant_copies.py가 이제 이 표와
+    # baseline_constants.JAW_LINE_DEPTH_FORWARD_M을 대조해서 막는다.
+    "star": 0.1912,
 }
 CURRENT_K = {
     # 2026-08-27: queen 28.3382 -> 38.3357로 동기화. perception_node.py는
