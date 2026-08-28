@@ -1,0 +1,128 @@
+{
+   "id": "6a8c092afc8b6831348389b0",
+   "name": "gripppers",
+   "creation_time": "2026-08-24T09:04:42.364000+00:00",
+   "creator_id": "e116229b-fe79-4201-b799-f9fce6eb9133",
+   "pipeline": {
+      "tasks": [
+         {
+            "id": "6a8c092afc8b6831348389b1",
+            "title": "Dataset",
+            "task_type": "dataset"
+         },
+         {
+            "id": "6a8c092afc8b6831348389b3",
+            "title": "Detection",
+            "task_type": "detection",
+            "labels": [
+               {
+                  "id": "6a8c092afc8b6831348389b5",
+                  "name": "star",
+                  "is_anomalous": false,
+                  "color": "#ff0000ff",
+                  "hotkey": "",
+                  "is_empty": false,
+                  "group": "Detection labels",
+                  "parent_id": null,
+                  "is_background": false
+               },
+               {
+                  "id": "6a8c092afc8b6831348389b6",
+                  "name": "soccer",
+                  "is_anomalous": false,
+                  "color": "#00ff73ff",
+                  "hotkey": "",
+                  "is_empty": false,
+                  "group": "Detection labels",
+                  "parent_id": null,
+                  "is_background": false
+               },
+               {
+                  "id": "6a8c092afc8b6831348389b7",
+                  "name": "box",
+                  "is_anomalous": false,
+                  "color": "#26518eff",
+                  "hotkey": "",
+                  "is_empty": false,
+                  "group": "Detection labels",
+                  "parent_id": null,
+                  "is_background": false
+               },
+               {
+                  "id": "6a8c092afc8b6831348389b8",
+                  "name": "knight",
+                  "is_anomalous": false,
+                  "color": "#f7fc00ff",
+                  "hotkey": "",
+                  "is_empty": false,
+                  "group": "Detection labels",
+                  "parent_id": null,
+                  "is_background": false
+               },
+               {
+                  "id": "6a8c092afc8b6831348389b9",
+                  "name": "queen",
+                  "is_anomalous": false,
+                  "color": "#ffffffff",
+                  "hotkey": "",
+                  "is_empty": false,
+                  "group": "Detection labels",
+                  "parent_id": null,
+                  "is_background": false
+               },
+               {
+                  "id": "6a8c092afc8b6831348389ba",
+                  "name": "rook",
+                  "is_anomalous": false,
+                  "color": "#000000ff",
+                  "hotkey": "",
+                  "is_empty": false,
+                  "group": "Detection labels",
+                  "parent_id": null,
+                  "is_background": false
+               },
+               {
+                  "id": "6a8c092afc8b6831348389be",
+                  "name": "No object",
+                  "is_anomalous": false,
+                  "color": "#000000ff",
+                  "hotkey": "",
+                  "is_empty": true,
+                  "group": "No object",
+                  "parent_id": null,
+                  "is_background": false
+               }
+            ],
+            "label_schema_id": "6a8c092afc8b6831348389c0"
+         }
+      ],
+      "connections": [
+         {
+            "from": "6a8c092afc8b6831348389b1",
+            "to": "6a8c092afc8b6831348389b3"
+         }
+      ]
+   },
+   "thumbnail": "/api/v1/organizations/67225ff1-4128-439c-97d6-a77828dcfe55/workspaces/6267ea62-b9f6-4b47-b9a2-28687ea3c927/projects/6a8c092afc8b6831348389b0/thumbnail",
+   "performance": {
+      "score": 0.9921259842519684,
+      "task_performances": [
+         {
+            "task_id": "6a8c092afc8b6831348389b3",
+            "score": {
+               "value": 0.9921259842519684,
+               "metric_type": "F-Measure"
+            }
+         }
+      ]
+   },
+   "storage_info": {},
+   "datasets": [
+      {
+         "id": "6a8c092afc8b6831348389bb",
+         "name": "Dataset",
+         "use_for_training": true,
+         "creation_time": "2026-08-24T09:04:42.363000+00:00"
+      }
+   ]
+}

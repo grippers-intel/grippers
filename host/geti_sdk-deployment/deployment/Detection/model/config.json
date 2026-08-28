@@ -1,0 +1,8 @@
+{
+   "model_parameters": {
+      "labels": "star soccer box knight queen rook",
+      "label_ids": "6a8c092afc8b6831348389b5 6a8c092afc8b6831348389b6 6a8c092afc8b6831348389b7 6a8c092afc8b6831348389b8 6a8c092afc8b6831348389b9 6a8c092afc8b6831348389ba"
+   },
+   "model_type": "ssd",
+   "task_type": "detection"
+}

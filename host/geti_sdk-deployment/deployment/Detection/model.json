@@ -1,0 +1,27 @@
+{
+   "id": "6a8c81d471283dadf679ee42",
+   "name": "RTDetr-R50 OpenVINO FP16",
+   "version": 1,
+   "creation_date": "2026-08-24T17:39:32.689000+00:00",
+   "model_format": "OpenVINO",
+   "precision": [
+      "FP16"
+   ],
+   "has_xai_head": false,
+   "target_device": "CPU",
+   "target_device_type": null,
+   "performance": {
+      "score": 0.9921259842519684
+   },
+   "size": 87115659,
+   "latency": 0,
+   "fps_throughput": 0,
+   "optimization_type": "MO",
+   "optimization_objectives": {},
+   "model_status": "SUCCESS",
+   "configurations": [],
+   "lifecycle_stage": "active",
+   "previous_revision_id": "6a8c81d471283dadf679ee3f",
+   "previous_trained_revision_id": "6a8c81d471283dadf679ee3f",
+   "optimization_methods": []
+}

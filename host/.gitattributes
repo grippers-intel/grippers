@@ -1,0 +1,12 @@
+# 줄바꿈을 LF 로 고정한다.
+# 이 저장소는 윈도우에서 개발하지만 파일이 전부 LF 라, core.autocrlf 설정이
+# 사람마다 다르면 아무도 고치지 않은 파일이 통째로 바뀐 것처럼 보인다.
+* text=auto eol=lf
+
+# 바이너리 — 줄바꿈 변환 금지
+*.png  binary
+*.jpg  binary
+*.npz  binary
+*.zip  binary
+*.bin  binary
+*.xml  -text
