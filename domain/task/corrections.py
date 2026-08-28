@@ -82,6 +82,32 @@ def from_alignment(verdict, jaw_line_m: float | None = None) -> Correction | Non
     return Correction(ROTATE, lateral_m=verdict.lateral_error_m)
 
 
+def from_grasp_precondition(inputs) -> Correction | None:
+    """GRASP 기본 전제 판정 -> 보정 요구. 움직여서 못 고치면 None.
+
+    전제 넷 중 **Host가 차를 움직여 고칠 수 있는 것은 하나뿐**이다 —
+    자기 뎁스캠이 목표를 못 본 경우다. 물체가 너무 가까워 화각 아래로
+    빠졌거나 가려졌을 수 있고, 그때는 물러나서 다시 보면 풀린다.
+
+    나머지 셋은 자리 문제가 아니다. E-STOP은 사람이 풀어야 하고, "아직 안
+    멈췄다"는 다음 사이클에 저절로 풀리며, 그리퍼가 안 비었다는 것은 어디로
+    가든 그대로다. 교시 자세가 없는 클래스도 마찬가지다.
+
+    ⚠️ 2026-08-28 이전에는 이 자리에서 보정을 하나도 안 보냈다. 그래서
+    Host가 "뎁스 카메라가 정면에서 목표를 찾지 못했다"를 고칠 수 없는 것으로
+    읽고 **기물을 통째로 포기했다**(run6 로그의 `rook 보류: 고칠 수 없음`).
+    실제로는 물러나면 되는 상황이었다."""
+    from domain.task import baseline_constants as bc
+
+    if inputs.estop_set or not inputs.base_stopped:
+        return None
+    if inputs.gripper_load > bc.EMPTY_LOAD_CEILING:
+        return None
+    if inputs.detected_label is None:
+        return Correction(REACQUIRE)
+    return None
+
+
 def from_insert(inputs) -> Correction | None:
     """INSERT 조건 판정 -> 보정 요구.
 

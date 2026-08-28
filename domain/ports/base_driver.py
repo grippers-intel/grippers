@@ -13,6 +13,18 @@ from abc import ABC, abstractmethod
 
 
 class BaseDriver(ABC):
+    def liveness(self):
+        """구동계가 명령을 받아 갈 상태인가. 판정할 수단이 없으면 None.
+
+        `domain.task.base_liveness.LivenessVerdict`를 돌려준다. 추상이 아닌
+        이유: 이것을 알 수 있는 것은 ROS 그래프를 볼 수 있는 실기 어댑터뿐이고,
+        테스트 더블은 알 수도 없고 알 필요도 없다. None은 "고장 아님"이 아니라
+        **"모른다"**이며, 미션은 그 둘을 구분해서 다룬다.
+
+        ⚠️ 이 판정은 `cmd_vel` 아래가 살아 있는지만 본다. **바퀴가 실제로
+        도는지는 아니다** — 그것을 아는 수단이 이 차량에 없다. 자세한 근거는
+        `base_liveness` 모듈 docstring 참고(2026-08-28 정지 실패 사고)."""
+        return None
     @abstractmethod
     def apply_velocity(self, linear_x: float, linear_y: float,
                        angular_z: float) -> None:

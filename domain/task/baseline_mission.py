@@ -55,6 +55,7 @@ from domain.task.floor_grasp_policy import (
     _close_width,
     _release_width,
 )
+from domain.task.base_liveness import LivenessLatch
 from domain.task.motion import resolve_motion
 from domain.task.state import State
 
@@ -130,6 +131,9 @@ class BaselinePorts:
     lidar: object
     estop: object
     watchdog: LinkWatchdog = field(default_factory=LinkWatchdog)
+    # 구동계 생존 판정의 래치. 워치독과 같은 이유로 여기 한 곳에 둔다 —
+    # 상태 객체는 전이마다 새로 만들어지므로 상태를 들고 있을 수 없다.
+    base_liveness: LivenessLatch = field(default_factory=LivenessLatch)
 
 
 # ── 공통 동작 ──────────────────────────────────────────────────────────────
@@ -152,6 +156,23 @@ def _drive(ports, command, state_name) -> bool:
                                   decision.motion.linear_y,
                                   decision.motion.angular_z)
     return True
+
+
+def _report_base_liveness(ports, state_name) -> None:
+    """구동계가 명령을 받아 갈 상태인지 보고한다 (2026-08-28 정지 실패 사고).
+
+    상태가 **바뀔 때만** 나간다(발생 1회, 복구 1회). 매 사이클 부르는 이유는
+    이 신호가 가장 필요한 순간이 정지를 지시하는 순간이기 때문이다 — 그때
+    조용하면 Host는 차가 섰다고 믿는다.
+
+    `liveness()`가 없는 어댑터(테스트 더블)는 그냥 지나간다. 모르는 것과
+    고장난 것은 다르고, 모를 때 경보를 울리면 아무도 경보를 안 보게 된다."""
+    probe = getattr(ports.base, "liveness", None)
+    if probe is None:
+        return
+    message = ports.base_liveness.observe(probe())
+    if message is not None:
+        ports.host.report(Report.BASE_UNRESPONSIVE, state_name, message)
 
 
 def _link_ok(ports, state_name, command) -> bool:
@@ -258,15 +279,19 @@ class BaselineApproachState(State):
         ports.base.stop()
         observation = ports.perception.identify_target()
         label = observation.label if observation is not None else None
-        report = pc.check_grasp(pc.GraspInputs(
+        inputs = pc.GraspInputs(
             estop_set=ports.estop.is_set(),
             base_stopped=_base_stopped(ports, command),
             gripper_load=ports.arm.get_load(),
             detected_label=label,
             profile_known=plan_for_label(label) is not None,
-        ))
+        )
+        report = pc.check_grasp(inputs)
         if not report.ok:
-            ports.host.report(Report.GRASP_BLOCKED, self.name, report.detail)
+            # 보정을 같이 실어 보낸다. 안 보내면 Host가 이 실패를 고칠 수
+            # 없는 것으로 읽고 기물을 포기한다 — 2026-08-28 run6이 그랬다.
+            ports.host.report(Report.GRASP_BLOCKED, self.name, report.detail,
+                              corrections.from_grasp_precondition(inputs))
             return self
 
         return self._judge_alignment(ports, observation, label)
@@ -571,5 +596,8 @@ class BaselineMission:
         while state is not None:
             if self.ports.estop.is_set():
                 state = BaselineEstopState()
+            # 상태와 무관하게 매 사이클 본다 — 이 신호가 가장 필요한 순간이
+            # 정지를 지시하는 순간이라, 특정 상태에만 걸면 놓친다.
+            _report_base_liveness(self.ports, state.name)
             yield state
             state = state.execute(self.ports)

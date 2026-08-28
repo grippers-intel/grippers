@@ -145,3 +145,54 @@ def test_Host가_못_고치는_미충족에는_보정을_안_준다():
     assert cx.from_insert(_insert(face_point_count=3)) is None
     assert cx.from_insert(_insert(distance_change_m=-0.02)) is None
     assert cx.from_insert(_insert(load_change=-0.05)) is None
+
+
+# ── GRASP 기본 전제 (2026-08-28) ────────────────────────────────────────────
+#
+# run6에서 Host가 `rook 보류: 고칠 수 없음 — 뎁스 카메라가 정면에서 목표를
+# 찾지 못했다`로 기물을 통째로 포기했다. Pi가 이 실패에 보정을 하나도 안
+# 실어 보냈기 때문이다. 실제로는 물러나서 다시 보면 되는 상황이었다.
+
+def _grasp(**overrides):
+    from domain.task.preconditions import GraspInputs
+    base = dict(
+        estop_set=False, base_stopped=True, gripper_load=0.03,
+        detected_label="rook", profile_known=True,
+    )
+    base.update(overrides)
+    return GraspInputs(**base)
+
+
+def test_목표를_못_보면_다시_보이게_세워_달라고_한다():
+    """물체가 너무 가까워 화각 아래로 빠졌을 수 있다 — 물러나면 풀린다."""
+    fix = cx.from_grasp_precondition(_grasp(detected_label=None))
+
+    assert fix is not None
+    assert fix.action == cx.REACQUIRE
+
+
+def test_전제가_다_맞으면_보정을_요구하지_않는다():
+    assert cx.from_grasp_precondition(_grasp()) is None
+
+
+def test_E_STOP_은_움직여서_못_고친다():
+    """사람이 풀어야 한다. 이때 차를 움직이라고 하면 위험하다."""
+    assert cx.from_grasp_precondition(
+        _grasp(estop_set=True, detected_label=None)) is None
+
+
+def test_아직_안_멈췄으면_보정을_요구하지_않는다():
+    """다음 사이클에 저절로 풀린다 — 여기서 움직이면 오히려 멀어진다."""
+    assert cx.from_grasp_precondition(
+        _grasp(base_stopped=False, detected_label=None)) is None
+
+
+def test_그리퍼가_안_비었으면_어디로_가든_그대로다():
+    assert cx.from_grasp_precondition(
+        _grasp(gripper_load=0.14, detected_label=None)) is None
+
+
+def test_교시_자세가_없는_클래스는_자리_문제가_아니다():
+    """봤는데 프로필이 없는 것은 물러나도 안 풀린다."""
+    assert cx.from_grasp_precondition(
+        _grasp(detected_label="pawn", profile_known=False)) is None

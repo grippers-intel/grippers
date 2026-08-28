@@ -87,8 +87,11 @@ class MissionOrchestratorNode(Node):
         # 'stop'`으로 죽었다(mission_orchestrator FSM 크래시의 원인). 도메인
         # pytest 스위트는 이 ROS 전용 파일을 안 건드리므로 여태 안 걸렸다.
         self._ports = BaselinePorts(
+            # quiet: `liveness`는 미션 루프가 매 사이클 부르는 폴링이라
+            # 로그에 남기면 초당 10줄씩 쌓여 정작 봐야 할 포트 호출을 묻는다.
+            # 판정 **결과**는 상태가 바뀔 때 BASE_UNRESPONSIVE 보고로 남는다.
             base=LoggedPort("base", FakeBase() if use_fake_base else Ros2MecanumBase(self),
-                            self.get_logger()),
+                            self.get_logger(), quiet={"liveness"}),
             arm=LoggedPort("arm", FakeArm() if use_fake_arm else Ros2ArmDriver(self),
                            self.get_logger()),
             perception=LoggedPort(
