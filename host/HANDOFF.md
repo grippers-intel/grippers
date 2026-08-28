@@ -1,11 +1,88 @@
-# Host 작업 인수인계 — 2026-08-27
+# Host 작업 인수인계 — 2026-08-27 (2026-08-28 갱신)
 
 탑뷰 Host 코드(`grippers_topview`)를 이 레포로 옮기고 Pi 와 프로토콜을 맞춘 날의
-기록. **0번(내일 먼저 할 것)부터 읽을 것.**
+기록. **0번(다음에 먼저 할 것)부터 읽을 것.**
 
 ---
 
-## 0. 할 일 — 1·2 완료 (2026-08-28)
+## 0. 2026-08-29 — 첫 실기 링크
+
+**08-28 항목은 전부 닫혔다(아래 `0-old`).** 남은 것은 하나뿐이고, 그것이
+양 팀 문서가 공통으로 지목한 최대 위험이다 — **Host 와 Pi 를 한 번도 붙여 본
+적이 없다.**
+
+```
+Pi    192.168.0.7    ping ✅  SSH ✅ (키 인증 없음, 비밀번호)
+Host  192.168.0.2
+코드  grippers-intel/grippers  브랜치 sysy009/hw-test-20260828-host-link  (7ec3af6)
+```
+
+### 0-1. 단계 — 앞 단계가 통과해야 다음으로 간다
+
+| | 무엇 | Pi 명령 | 움직임 |
+|---|---|---|---|
+| **준비** | 팔 배선 육안 점검 · 경로 비우기 · 전원 차단 가능 상태 | — | — |
+| **A** | 링크만 | `ros2 launch grippers_bringup bringup.launch.py` | **없음** |
+| **B** | 바퀴 | `... use_fake_base:=false` | 바퀴 (**띄워놓고**) |
+| **C** | 전체 | `... use_fake_base:=false use_fake_arm:=false use_fake_perception:=false arm_port:=/dev/soarm` | 전부 |
+
+Host 는 어느 단계든 `python run_mission.py --vehicle-ip 192.168.0.7`.
+
+**단계를 건너뛰지 말 것.** C 부터 하면 실패했을 때 링크·인식·구동·팔 중
+어디인지 못 가린다.
+
+### 0-2. A 단계에서 확인할 것
+
+| | 확인 | 통과 기준 |
+|---|---|---|
+| 1 | Pi 가 5005 에서 Host JSON 을 파싱 | Pi 로그에 명령 수신 |
+| 2 | **보고 대상이 우리에게 맞춰지는가** | Pi 로그 `보고 대상 변경: 192.168.0.10 -> 192.168.0.2:5006` |
+| 3 | Host 가 5006 에서 보고 수신 | FSM 이 `GRASP` 에서 안 멈추고 진행 |
+| 4 | 명령을 끊으면 3사이클 안에 정지 | Host 를 Ctrl+C → Pi 가 0.3초 안에 정지 보고 |
+| 5 | 회전+병진 혼합에 `REJECTED` | (Host 는 안 섞으므로 안 나오는 것이 정상) |
+| 6 | 7 Hz 에서 워치독이 안 걸리는가 | 워치독 발동 로그 0건 |
+
+2번이 핵심이다. 안 뜨면 **명령은 가는데 보고는 다른 PC 로 가는** 상태이고,
+차는 움직이는데 Host 만 아무것도 못 받아 GRASP 에서 영원히 멈춘다.
+
+### 0-3. B/C 단계에서만 잴 수 있는 것
+
+- **조준 오차 ③ — 구동 정지 오차.** `tools_aim_budget.py` 가 ①②(Host 관측)를
+  이미 쟀다(전후 ±4~15mm, 흔들리는 기물은 ±36mm). 남은 항은 "정렬하고 멈춘 뒤
+  실제로 몇 mm 어긋나는가"이고 차량이 있어야 잰다. Pi 에 숫자로 줘야 할 값이다
+- **회전 84.5% 손실이 실제로 어떻게 보이는가.** Pi 실측이다. 우리 정렬 걸음은
+  pose 로 재므로 자기보정되지만, 방위 수렴이 ~18% 오래 걸린다
+- **실패 경로가 실기에서 도는가.** `GRASP_FAILED` → 보류, `INSERT_BLOCKED` →
+  `INSERT_ALIGN`. 단위 테스트 23개는 통과했지만 실기 0회다
+
+### 0-4. 예상되는 실패와 대응
+
+| 증상 | 먼저 볼 곳 |
+|---|---|
+| Pi 가 명령을 아예 못 받음 | `ss -lunp | grep 5005` · Windows 방화벽 UDP 아웃바운드 |
+| 명령은 가는데 보고가 없음 | 0-2 의 2번 로그. 안 떴으면 코드가 안 갈아끼워진 것 |
+| Host 가 GRASP 에서 멈춤 | 위와 같은 원인. `poll_status()` 가 계속 IDLE |
+| 워치독이 자주 발동 | Host 사이클이 300ms 를 넘는지 — `[hz]` 줄 확인 |
+| 차가 예상보다 느림 | `APPROACH_BOX` 는 0.06 이 정상(어제 수정) |
+
+### 0-5. 코드 갈아끼우기 (Pi 호스트, 컨테이너 밖)
+
+```bash
+cd ~/docker/shared/grippers
+git remote -v && git branch --show-current && git status --short
+git stash push -m "hw-test 전 로컬 수정 보존"     # 커밋 안 된 게 있으면
+git fetch origin
+git checkout -b hw-test-20260828 origin/sysy009/hw-test-20260828-host-link
+grep -n follow_commander domain/adapters/real/udp_host_link.py   # 반영 확인
+```
+
+`--symlink-install` 이라 재빌드 없이 반영된다. ⚠️ 컨테이너 진입
+(`~/docker/exec_shell.sh`)은 **반드시 실제 대화형 터미널**에서 — TTY 가 없으면
+`cannot attach stdin to a TTY-enabled container` 로 실패한다.
+
+---
+
+## 0-old. 2026-08-28 에 닫은 것
 
 | | 할 것 | 상태 |
 |---|---|---|
