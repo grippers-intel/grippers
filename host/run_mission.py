@@ -115,6 +115,19 @@ def main() -> int:
 
     detector = make_detector()
     cams = [Camera.load(f"cam{i}", i) for i in args.cams]
+    # ⚠️ Camera.load() 는 npz 가 없어도 예외를 내지 않고 HFOV 근사 행렬로
+    # 조용히 넘어간다(config.py 주석 참고). run_localize.py 는 이 경고를
+    # 찍는데 여기에는 없었다 — 미션을 실제로 돌리는 쪽이라 더 중요한데도
+    # 근사값으로 도는지 사람이 알 방법이 없었다.
+    #
+    # 근사값과 실측의 차이는 작지 않다. C920 실측 fx=938.0 인데
+    # HFOV 70.4° 근사는 fx=907.3 이다 — 약 3.4% 로, 1.35 m 거리에서
+    # 4~5 cm 의 위치 오차가 된다.
+    for c in cams:
+        if not c.calibrated:
+            print(f"⚠️ {c.name}: calib/cam*.npz 가 없어 HFOV {cfg.HFOV_DEG}° "
+                  f"근사값을 씁니다 — 위치가 몇 cm 틀립니다. "
+                  f"calibrate_camera.py 를 먼저 돌리세요.")
     caps = open_cams(args.cams)
     if not any(c.isOpened() for c in caps):
         print("\n열린 카메라가 하나도 없습니다. --cams 로 인덱스를 바꿔 보세요.")
