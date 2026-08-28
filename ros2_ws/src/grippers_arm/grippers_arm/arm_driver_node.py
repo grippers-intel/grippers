@@ -164,6 +164,11 @@ FLOOR_POSE_START_TOLERANCE_RAW = 120
 # 앞 약 214mm에 있으므로 10mm는 약 2.7도 = 30 raw다. 즉 이 보정은 30 raw
 # 단위를 분간해야 하는 동작이라 120 raw 격자로는 원리적으로 불가능하다.
 BASE_YAW_TOLERANCE_RAW = 10  # 약 0.9도 = 214mm 거리에서 약 3.3mm
+# 좌우 보정 글라이드의 waypoint 간격(raw). 교시 자세 이동은 FLOOR_POSE_STEPS
+# (30)로 고정이지만, 이 보정은 5도짜리도 있고 15도짜리도 있어서 고정 단계
+# 수를 쓰면 짧은 이동에 같은 3.0초를 쓴다. 12 raw(약 1도)마다 한 점씩 찍으면
+# 5.2도 보정이 5단계 = 0.5초로 끝나 호출자의 3.0초 대기 안에 들어온다.
+BASE_YAW_RAW_PER_STEP = 12
 # recover_idle이 "지금 어느 등록 자세에서 시작하는가"를 판정하는 허용치.
 # 정상 경로의 게이트(120)보다 넉넉하다 — 복구가 필요한 상황은 정의상 팔이
 # 목표에 못 미친 상황이라 120으로는 아무 자세에도 안 붙는다. 대신 이 값을
@@ -640,7 +645,7 @@ class ArmDriverNode(Node):
 
     def _glide_to_raw_positions(
         self, backend, goal, defer_joints=(), speed_raw=FLOOR_POSE_SPEED_RAW,
-        tolerance_raw=FLOOR_POSE_START_TOLERANCE_RAW
+        tolerance_raw=FLOOR_POSE_START_TOLERANCE_RAW, steps=FLOOR_POSE_STEPS
     ) -> None:
         """servo 1..5 raw 목표로 이동한다.
 
@@ -655,7 +660,7 @@ class ArmDriverNode(Node):
         deferred = tuple(servo_id for servo_id in defer_joints if servo_id in goal)
         if not deferred:
             self._glide_phase(backend, goal, speed_raw=speed_raw,
-                              tolerance_raw=tolerance_raw)
+                              tolerance_raw=tolerance_raw, steps=steps)
             return
 
         start = self._read_joint_positions(backend)
@@ -665,15 +670,16 @@ class ArmDriverNode(Node):
         # 1구간: 지연 관절은 출발 위치에 **고정**하고 나머지만 목표로.
         hold_deferred = {**goal, **{servo_id: start[servo_id] for servo_id in deferred}}
         self._glide_phase(backend, hold_deferred, label="1/2 지연관절 고정", speed_raw=speed_raw,
-                          tolerance_raw=tolerance_raw)
+                          tolerance_raw=tolerance_raw, steps=steps)
         # 2구간: 나머지는 이미 목표에 있으므로 지연 관절만 실제로 움직인다.
         self._glide_phase(
             backend, goal, label=f"2/2 servo {list(deferred)} 단독", speed_raw=speed_raw,
-            tolerance_raw=tolerance_raw
+            tolerance_raw=tolerance_raw, steps=steps
         )
 
     def _glide_phase(self, backend, goal, label=None, speed_raw=FLOOR_POSE_SPEED_RAW,
-                     tolerance_raw=FLOOR_POSE_START_TOLERANCE_RAW) -> None:
+                     tolerance_raw=FLOOR_POSE_START_TOLERANCE_RAW,
+                     steps=FLOOR_POSE_STEPS) -> None:
         """한 번의 선형 보간 구간 — 목표에 이미 있으면 아무것도 하지 않는다.
 
         "이미 있다"의 기준은 `tolerance_raw`다. 미세 이동을 시키려면 이
@@ -710,13 +716,13 @@ class ArmDriverNode(Node):
             backend.drv.set_speed(servo_id, speed_raw)
             backend.drv.set_acceleration(servo_id, FLOOR_POSE_ACCEL_RAW)
 
-        for step_index in range(1, FLOOR_POSE_STEPS + 1):
-            ratio = step_index / FLOOR_POSE_STEPS
+        for step_index in range(1, steps + 1):
+            ratio = step_index / steps
             for servo_id in range(1, 6):
                 position = round(start[servo_id] + ratio * (goal[servo_id] - start[servo_id]))
                 if not backend.drv.set_position(servo_id, position):
                     raise ArmHardwareUnavailableError(
-                        f"servo {servo_id} write 실패 — step {step_index}/{FLOOR_POSE_STEPS}"
+                        f"servo {servo_id} write 실패 — step {step_index}/{steps}"
                     )
             time.sleep(FLOOR_POSE_STEP_SEC)
 
@@ -1388,18 +1394,19 @@ class ArmDriverNode(Node):
             # 기준으로 상대 회전을 하므로 같은 요청이 반복되면 servo 1이
             # 한 번에 15도를 넘지 않으면서도 얼마든지 멀리 걸어간다.
             #
-            # 그리고 그 반복은 예외가 아니라 지금의 기본 동작이다(2026-08-28
-            # 실기). 뎁스캠은 차체에 고정되어 있어 servo 1이 돌아도 물체를
-            # 보는 각이 안 변한다. 그래서 Pi는 보정 뒤에도 같은 좌우 오차를
-            # 다시 읽고 같은 보정을 또 건다. 좌우 영점
-            # (DEPTH_LATERAL_TO_JAW_CENTER_M)이 servo 1이 안 돌아간 상태를
-            # 전제한 고정 상수라서, 이미 준 보정만큼 영점을 옮겨 주기 전에는
-            # 이 폐루프가 닫히지 않는다.
+            # 반복은 정상 동작이다 — 이 보정은 "관측 -> 소이동 -> 재관측"
+            # 폐루프라 여러 사이클에 걸쳐 수렴한다(_judge_alignment 주석).
+            # 2026-08-28 실기에서 좌우 오차는 3회 보정(합 약 14도) 만에
+            # 56.9mm -> 26.7mm 로 줄어 READY 가 났다. 즉 루프는 닫힌다.
             #
-            # 그 설계 결정이 날 때까지, 이 한계가 팔이 걸어 나가는 것을
-            # 막는다. 한계에 걸리면 ok=False가 나가고 Pi는 "servo 1이
-            # 거부했다, 재회전 필요"로 Host에 차량 재정렬을 요청한다 —
-            # 이미 있는 대안 경로다.
+            # 문제는 수렴하지 못하는 경우다. 물체가 애초에 팔이 닿는 범위
+            # 밖이면 같은 방향 보정이 계속 나오는데, 상대 회전이라 한 번에
+            # 15도를 안 넘으면서 얼마든지 멀리 걸어갈 수 있다. 위 실측이
+            # 이미 14도까지 갔으니 여유가 크지 않다.
+            #
+            # 한계에 걸리면 ok=False 가 나가고 Pi 는 "servo 1이 거부했다,
+            # 재회전 필요"로 Host 에 차량 재정렬을 요청한다 — 팔로 못 고칠
+            # 만큼 틀어졌으면 차를 다시 세우는 것이 맞고, 이미 있는 경로다.
             drift_raw = target - IDLE_CRADLE_RAW[0]
             limit_raw = self.MAX_BASE_YAW_OFFSET_RAD * self.RAW_PER_RADIAN
             if abs(drift_raw) > limit_raw:
@@ -1417,8 +1424,17 @@ class ArmDriverNode(Node):
             # 몇 도짜리 정렬 보정이 통째로 버려진다(BASE_YAW_TOLERANCE_RAW
             # 주석의 2026-08-28 사례). 나머지 관절은 제자리를 지키기만
             # 하면 되므로 원래 게이트를 그대로 둔다.
+            # 단계 수를 이동 거리에 맞춘다. 교시 자세용 기본값
+            # FLOOR_POSE_STEPS(30)를 그대로 쓰면 5도짜리 보정에도 3.0초
+            # (30 x FLOOR_POSE_STEP_SEC)를 쓴다. 그러면 호출자의 서비스
+            # 대기(_ros_call.SERVICE_TIMEOUT_SEC = 3.0s)를 넘겨, 팔은 제대로
+            # 돌았는데 Pi 는 실패로 받는다 — 2026-08-28 실기에서 실제로
+            # 세 번 다 그렇게 나왔다.
+            move_raw = abs(target - actual[1])
+            steps = max(3, min(FLOOR_POSE_STEPS,
+                               int(math.ceil(move_raw / BASE_YAW_RAW_PER_STEP))))
             self._glide_to_raw_positions(
-                backend, goal, tolerance_raw={1: BASE_YAW_TOLERANCE_RAW})
+                backend, goal, tolerance_raw={1: BASE_YAW_TOLERANCE_RAW}, steps=steps)
 
             # 도달을 **확인하고** ok를 정한다. 예전에는 무조건 True였다 —
             # 그래서 위 버그로 팔이 한 raw도 안 움직였는데도 성공이 나갔고,

@@ -18,6 +18,22 @@ from domain.values import Point3
 # 것보다 안전하다 (arm_driver_node._read_load의 None 처리와 같은 논리).
 LOAD_UNKNOWN = 0.0
 
+# ── 느린 팔 서비스의 대기 시간 ─────────────────────────────────────────────
+#
+# 기본 SERVICE_TIMEOUT_SEC(3.0s)은 이 둘에게 너무 짧다. 서버가 일부러
+# **동작이 끝날 때까지 붙들고 있다가** 응답하기 때문이다. 짧게 잡으면 팔은
+# 제대로 움직였는데 호출자만 실패로 받는다 — 2026-08-28 실기에서
+# set_gripper 와 offset_base_yaw 가 매번 그렇게 나왔고, GRASP 가 "servo 1이
+# 거부했다"로 잘못 보고됐다. 조용한 오보라 로그만 봐서는 팔 고장처럼 보인다.
+#
+# 값은 서버 쪽 상한에서 거꾸로 잡는다(arm_driver_node 상수):
+#   set_gripper       = GRIPPER_MOTION_TIMEOUT_SEC(4.0) + GRASP_SETTLE_SEC(1.5)
+#                       = 5.5s 가 최악 -> 여유를 둬 8.0s
+#   offset_base_yaw   = 글라이드 + 도달 대기. 보정은 단계 수를 거리에 맞춰
+#                       0.5s 안팎이지만 정착이 느릴 수 있어 8.0s
+GRIPPER_TIMEOUT_SEC = 8.0
+BASE_YAW_TIMEOUT_SEC = 8.0
+
 
 class Ros2ArmDriver(ArmDriver):
     def __init__(self, node):
@@ -65,7 +81,8 @@ class Ros2ArmDriver(ArmDriver):
         이진화했다. 이제 width_mm(mm)을 그대로 실어 보낸다 — 각도 변환은
         arm_driver_node의 캘리브레이션 테이블 몫이지 여기서 하지 않는다."""
         req = SetGripper.Request(width_mm=width_mm)
-        call_service(self._node, self._gripper_client, req, label="set_gripper")
+        call_service(self._node, self._gripper_client, req, label="set_gripper",
+                     timeout_sec=GRIPPER_TIMEOUT_SEC)
 
     def get_load(self) -> float:
         """그리퍼 부하 비율(0~1). 서비스가 없거나 응답이 없으면
@@ -96,7 +113,8 @@ class Ros2ArmDriver(ArmDriver):
         """servo 1 좌우 보정. 서비스가 없거나 노드가 거부하면 **False** —
         그 경우 호출자가 Host에 다시 세워 달라고 넘긴다."""
         req = OffsetBaseYaw.Request(offset_rad=float(offset_rad))
-        res = call_service(self._node, self._yaw_client, req, label="offset_base_yaw")
+        res = call_service(self._node, self._yaw_client, req, label="offset_base_yaw",
+                           timeout_sec=BASE_YAW_TIMEOUT_SEC)
         if res is None:
             return False
         if not res.ok:
