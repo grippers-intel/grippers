@@ -6,5 +6,3 @@ dataset/
 *.log
 .DS_Store
 
-# 85MB 가중치. 원본 저장소도 ignore 중이며 LFS/별도배포 여부가 미정이라 따라간다.
-model.bin
