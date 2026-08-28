@@ -148,6 +148,22 @@ JOINT_READ_ATTEMPTS = 3
 JOINT_READ_RETRY_SEC = 0.05
 MAX_FLOOR_POSE_SERVO2_TEMP_C = 50
 FLOOR_POSE_START_TOLERANCE_RAW = 120
+# ⚠️ 위 120 raw(약 10.5도)는 **교시 자세 단계 사이**를 오갈 때 쓰라고 정한
+# 값이다(_wait_floor_pose_arrived 주석 참고: 다음 단계의 시작 자세 게이트와
+# 같은 값을 써야 한다). GRASP 좌우 정렬 보정처럼 몇 도짜리 미세 이동에
+# 그대로 쓰면 이동 자체가 "이미 도착"으로 걸러진다.
+#
+# 2026-08-28 실기에서 정확히 그 일이 났다. 뎁스캠이 룩을 좌우 +27mm로 보고
+# servo 1을 +5.2도(59 raw) 돌리라고 했는데, 59 < 120이라 _glide_phase가
+# 관절을 통째로 버렸다. 로그에는 `offset_base_yaw: servo 1 2067 -> 2067
+# (+5.2도)`가 찍히고 서비스는 ok=True를 냈다 — 움직이지 않았는데 성공이다.
+# Pi는 매 사이클 같은 +27mm를 다시 보고 같은 보정을 다시 걸어, 60초 내내
+# GRASP_CENTERING만 반복하고 하강으로 넘어가지 못했다.
+#
+# 좌우 정렬 허용오차는 GRASP_CENTERING_TOLERANCE_M = 10mm이고, 물체는 턱
+# 앞 약 214mm에 있으므로 10mm는 약 2.7도 = 30 raw다. 즉 이 보정은 30 raw
+# 단위를 분간해야 하는 동작이라 120 raw 격자로는 원리적으로 불가능하다.
+BASE_YAW_TOLERANCE_RAW = 10  # 약 0.9도 = 214mm 거리에서 약 3.3mm
 # recover_idle이 "지금 어느 등록 자세에서 시작하는가"를 판정하는 허용치.
 # 정상 경로의 게이트(120)보다 넉넉하다 — 복구가 필요한 상황은 정의상 팔이
 # 목표에 못 미친 상황이라 120으로는 아무 자세에도 안 붙는다. 대신 이 값을
@@ -610,8 +626,21 @@ class ArmDriverNode(Node):
         }
         self._glide_to_raw_positions(backend, goal)
 
+    @staticmethod
+    def _tolerance_for(tolerance_raw, servo_id: int) -> int:
+        """관절 하나의 허용오차. 정수면 전 관절 공통, dict면 관절별이다.
+
+        dict에 없는 관절은 기본값을 쓴다 — 미세 이동이 필요한 관절만
+        따로 조이고 나머지는 원래 게이트를 그대로 두려는 것이다. 전
+        관절을 같이 조이면, 실제로 움직이지 않는 관절(중력을 받는 어깨
+        같은)의 몇 raw짜리 처짐까지 실패로 잡는다."""
+        if isinstance(tolerance_raw, dict):
+            return tolerance_raw.get(servo_id, FLOOR_POSE_START_TOLERANCE_RAW)
+        return tolerance_raw
+
     def _glide_to_raw_positions(
-        self, backend, goal, defer_joints=(), speed_raw=FLOOR_POSE_SPEED_RAW
+        self, backend, goal, defer_joints=(), speed_raw=FLOOR_POSE_SPEED_RAW,
+        tolerance_raw=FLOOR_POSE_START_TOLERANCE_RAW
     ) -> None:
         """servo 1..5 raw 목표로 이동한다.
 
@@ -625,7 +654,8 @@ class ArmDriverNode(Node):
         관절 순서가 반대이기 때문이다 — 그래서 호출부가 정한다."""
         deferred = tuple(servo_id for servo_id in defer_joints if servo_id in goal)
         if not deferred:
-            self._glide_phase(backend, goal, speed_raw=speed_raw)
+            self._glide_phase(backend, goal, speed_raw=speed_raw,
+                              tolerance_raw=tolerance_raw)
             return
 
         start = self._read_joint_positions(backend)
@@ -634,14 +664,21 @@ class ArmDriverNode(Node):
 
         # 1구간: 지연 관절은 출발 위치에 **고정**하고 나머지만 목표로.
         hold_deferred = {**goal, **{servo_id: start[servo_id] for servo_id in deferred}}
-        self._glide_phase(backend, hold_deferred, label="1/2 지연관절 고정", speed_raw=speed_raw)
+        self._glide_phase(backend, hold_deferred, label="1/2 지연관절 고정", speed_raw=speed_raw,
+                          tolerance_raw=tolerance_raw)
         # 2구간: 나머지는 이미 목표에 있으므로 지연 관절만 실제로 움직인다.
         self._glide_phase(
-            backend, goal, label=f"2/2 servo {list(deferred)} 단독", speed_raw=speed_raw
+            backend, goal, label=f"2/2 servo {list(deferred)} 단독", speed_raw=speed_raw,
+            tolerance_raw=tolerance_raw
         )
 
-    def _glide_phase(self, backend, goal, label=None, speed_raw=FLOOR_POSE_SPEED_RAW) -> None:
-        """한 번의 선형 보간 구간 — 목표에 이미 있으면 아무것도 하지 않는다."""
+    def _glide_phase(self, backend, goal, label=None, speed_raw=FLOOR_POSE_SPEED_RAW,
+                     tolerance_raw=FLOOR_POSE_START_TOLERANCE_RAW) -> None:
+        """한 번의 선형 보간 구간 — 목표에 이미 있으면 아무것도 하지 않는다.
+
+        "이미 있다"의 기준은 `tolerance_raw`다. 미세 이동을 시키려면 이
+        값을 같이 줄여야 한다 — 안 그러면 이동이 조용히 버려진다
+        (BASE_YAW_TOLERANCE_RAW 주석의 2026-08-28 사례)."""
         start = self._read_joint_positions(backend)
         if start is None:
             raise ArmHardwareUnavailableError("시작 관절 위치 읽기 실패")
@@ -649,7 +686,8 @@ class ArmDriverNode(Node):
         moving = {
             servo_id: goal[servo_id] - start[servo_id]
             for servo_id in range(1, 6)
-            if abs(goal[servo_id] - start[servo_id]) > FLOOR_POSE_START_TOLERANCE_RAW
+            if abs(goal[servo_id] - start[servo_id])
+            > self._tolerance_for(tolerance_raw, servo_id)
         }
         if not moving:
             return  # 이미 도착해 있다 — 빈 구간에 시간을 쓰지 않는다
@@ -682,9 +720,10 @@ class ArmDriverNode(Node):
                     )
             time.sleep(FLOOR_POSE_STEP_SEC)
 
-        self._wait_floor_pose_arrived(backend, goal)
+        self._wait_floor_pose_arrived(backend, goal, tolerance_raw=tolerance_raw)
 
-    def _wait_floor_pose_arrived(self, backend, goal) -> None:
+    def _wait_floor_pose_arrived(self, backend, goal,
+                                 tolerance_raw=FLOOR_POSE_START_TOLERANCE_RAW) -> None:
         """보간이 끝난 뒤 servo 1..5가 실제로 goal에 도달할 때까지 기다린다.
 
         ⚠️ 2026-08-24 실기에서 확인한 문제: 예전에는 여기서 그냥
@@ -736,7 +775,8 @@ class ArmDriverNode(Node):
             residual = {
                 servo_id: actual[servo_id] - goal[servo_id] for servo_id in range(1, 6)
             }
-            if all(abs(error) <= FLOOR_POSE_START_TOLERANCE_RAW for error in residual.values()):
+            if all(abs(error) <= self._tolerance_for(tolerance_raw, servo_id)
+                   for servo_id, error in residual.items()):
                 return
 
             now = time.monotonic()
@@ -755,7 +795,7 @@ class ArmDriverNode(Node):
         raise ArmHardwareUnavailableError(
             f"{waited:.1f}s 기다렸으나 목표 자세에 도달하지 못했습니다({reason}) — "
             f"잔차(raw) {residual}, 최악 servo {worst} {residual[worst]:+d} "
-            f"(허용 ±{FLOOR_POSE_START_TOLERANCE_RAW})"
+            f"(허용 ±{self._tolerance_for(tolerance_raw, worst)})"
         )
 
     @staticmethod
@@ -1345,15 +1385,36 @@ class ArmDriverNode(Node):
 
             goal = {servo_id: actual[servo_id] for servo_id in range(1, 6)}
             goal[1] = target
-            self._glide_to_raw_positions(backend, goal)
+            # servo 1만 미세 허용오차로 옮긴다. 기본 120 raw를 그대로 쓰면
+            # 몇 도짜리 정렬 보정이 통째로 버려진다(BASE_YAW_TOLERANCE_RAW
+            # 주석의 2026-08-28 사례). 나머지 관절은 제자리를 지키기만
+            # 하면 되므로 원래 게이트를 그대로 둔다.
+            self._glide_to_raw_positions(
+                backend, goal, tolerance_raw={1: BASE_YAW_TOLERANCE_RAW})
 
+            # 도달을 **확인하고** ok를 정한다. 예전에는 무조건 True였다 —
+            # 그래서 위 버그로 팔이 한 raw도 안 움직였는데도 성공이 나갔고,
+            # Pi는 보정이 먹은 줄 알고 같은 관측·같은 보정을 무한히 반복했다.
+            # 못 돌렸으면 거부해야 Host가 차량을 다시 세우는 대안 경로
+            # (_judge_alignment 의 "servo 1이 거부했다, 재회전 필요")로 넘어간다.
             settled = self._read_joint_positions(backend)
-            response.position_raw = int(settled[1]) if settled else target
-            response.ok = True
+            if settled is None:
+                response.message = "보정 후 관절 위치 읽기 실패 — 돌았는지 확인 불가"
+                self.get_logger().error(f"offset_base_yaw: {response.message}")
+                return response
+            response.position_raw = int(settled[1])
+            error = response.position_raw - target
+            response.ok = abs(error) <= BASE_YAW_TOLERANCE_RAW
             response.message = (
                 f"servo 1 {actual[1]} -> {response.position_raw} "
-                f"({math.degrees(offset):+.1f}도)")
-            self.get_logger().info(f"offset_base_yaw: {response.message}")
+                f"(목표 {target}, 잔차 {error:+d} raw, {math.degrees(offset):+.1f}도)")
+            if response.ok:
+                self.get_logger().info(f"offset_base_yaw: {response.message}")
+            else:
+                self.get_logger().warn(
+                    f"offset_base_yaw: 도달 실패 — {response.message} "
+                    f"(허용 ±{BASE_YAW_TOLERANCE_RAW} raw)")
+            return response
         except Exception as exc:  # noqa: BLE001 -- 서비스 경계
             response.message = f"servo 1 보정 실패: {exc}"
             self.get_logger().error(response.message)
