@@ -21,7 +21,30 @@ geti-sdk 2.13.1          import OK
 opencv 4.14.0            CAP_AVFOUNDATION = 1200
 카메라                    system_profiler 열거 OK, 인덱스 0 실제로 열림
 vehicle_link             import OK, 합의 상수 정상 (0.1 / 0.25)
+geti 추론                 ✅ 실제로 검출됨 (아래)
 ```
+
+### geti 추론이 Apple Silicon 에서 실제로 돈다
+
+`model.bin` 을 구해 붙여서 확인했다. 배관만 도는 것이 아니라 **검출 결과가
+제대로 나온다.**
+
+```
+_annotated.jpg   star:0.86
+00001.jpg        star:0.87, rook:0.83, soccer:0.79
+00002.jpg        star:0.84, rook:0.81, soccer:0.79
+```
+
+**그리고 Windows 보다 빠르다.**
+
+| | 추론 1회 |
+|---|---|
+| Host 팀 Windows CPU | 364 ms |
+| Host 팀 Windows iGPU | 250 ms |
+| **Apple M1 Pro (CPU)** | **130 ms  (7.7 Hz)** |
+
+모델 로드 3.4초. Host 팀이 검출 불일치 때문에 iGPU 를 버리고 CPU 로 확정했는데,
+M1 Pro 의 CPU 가 그 iGPU 보다도 빠르므로 **디바이스 선택 문제 자체가 없다.**
 
 ---
 
@@ -113,19 +136,33 @@ Windows 는 DirectShow 열거 순서 = `cv2` 인덱스였다. macOS 에는 그�
 
 ---
 
-## ⚠️ 확인하지 못한 것
+## `model.bin` 은 이 저장소에 없다
 
-**geti 추론을 실제로 돌려 보지 못했다.** `host/geti_sdk-deployment/` 에
-`model.xml`(1.3MB)만 있고 **`model.bin`(85MB)이 없다.** 원본 저장소에서
-`.gitignore` 로 빠져 있기 때문이며, PR #44 본문도 "지금은 ignore 라
-`geti_sdk-deployment` 가 반쪽입니다" 라고 적고 있다.
+`host/geti_sdk-deployment/` 에는 `model.xml`(1.3MB)만 들어 있다. 가중치
+`model.bin`(85MB)은 원본 저장소가 ignore 하고 있고 LFS 로 올릴지 별도 배포로
+뺄지 **아직 미정**이라, 그 결정을 앞질러 가지 않으려고 여기서도 ignore 한다.
 
-즉 이건 macOS 문제가 아니라 **Windows 에서도 그대로인 문제**다. 가중치를
-받으면 그때 추론까지 확인할 수 있다. 런타임(OpenVINO)이 arm64 에서 CPU 장치를
-잡는 것까지는 위에 적은 대로 확인됐다.
+위 검증은 가중치를 따로 받아 아래 자리에 놓고 했다.
 
-Host 팀이 iGPU 대신 **CPU 로 확정**했으므로(디바이스 간 검출 불일치 8건),
-Apple Silicon 에 GPU 플러그인이 없는 것은 이 프로젝트에서 손해가 아니다.
+```
+host/geti_sdk-deployment/deployment/Detection/model/model.bin
+```
+
+같은 모델인지는 해시로 확인할 수 있다 — `model.xml` 과 `config.json` 이
+저장소 것과 일치해야 한다.
+
+## ⚠️ 아직 확인하지 못한 것
+
+**웹캠 두 대를 동시에 쓰는 경로.** 맥에 아직 C920 두 대가 안 붙어 있어서,
+`run_localize.py` 의 2 카메라 동시 캡처와 `resolve_indices()` 의 이름 매칭을
+실기로 못 봤다. macOS 는 인덱스 순서 보장이 없으므로(위 참고) **여기가 이식에서
+가장 불확실한 지점**이다. 카메라가 붙으면 다음 순서로 확인할 것.
+
+```
+python3 -c "import sys; sys.path.insert(0,'host'); import camera_backend as c; print(c.diagnose())"
+```
+
+두 대가 다 열리는지, 이름으로 고른 인덱스가 실제 인덱스와 맞는지를 본다.
 
 ---
 
