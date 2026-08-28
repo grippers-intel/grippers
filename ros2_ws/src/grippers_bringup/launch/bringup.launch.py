@@ -33,6 +33,8 @@ def launch_setup(context):
     use_fake_arm = LaunchConfiguration("use_fake_arm")
     use_fake_perception = LaunchConfiguration("use_fake_perception")
     use_fake_interpreter = LaunchConfiguration("use_fake_interpreter")
+    use_fake_host = LaunchConfiguration("use_fake_host")
+    host_ip = LaunchConfiguration("host_ip")
     scan_floor_enabled = LaunchConfiguration("scan_floor_enabled")
     record_bag = LaunchConfiguration("record_bag")
     bag_output = LaunchConfiguration("bag_output")
@@ -107,6 +109,8 @@ def launch_setup(context):
                     "use_fake_arm": use_fake_arm,
                     "use_fake_perception": use_fake_perception,
                     "use_fake_interpreter": use_fake_interpreter,
+                    "use_fake_host": use_fake_host,
+                    "host_ip": host_ip,
                 }
             ],
         ),
@@ -146,6 +150,25 @@ def generate_launch_description():
                 "use_fake_interpreter",
                 default_value="true",
                 description="true면 language 노드 없이 ScriptedInterpreter 사용",
+            ),
+            # ⚠️ 이 둘이 없어서 실기 통합이 막혀 있었다(2026-08-28 확인).
+            # host_ip 기본값이 작성자 개발 PC 주소라, 다른 사람이 Host를 띄우면
+            # **명령은 가는데 보고는 남의 PC로 갔다.** 명령이 단방향이라 차는
+            # 정상적으로 움직이고 Host만 아무것도 못 받는다 — 링크가 끊긴 것처럼
+            # 보이지만 절반만 연결된 상태다.
+            #
+            # 근본 해법은 UdpHostLink가 **명령을 보낸 쪽으로** 보고하게 한 것이고
+            # (같은 날 수정), 이 인자는 그것을 끄고 고정하고 싶을 때 쓴다.
+            DeclareLaunchArgument(
+                "use_fake_host",
+                default_value="false",
+                description="true면 UDP 없이 FakeHostLink 사용 (Host 없이 시험)",
+            ),
+            DeclareLaunchArgument(
+                "host_ip",
+                default_value="192.168.0.10",
+                description="보고를 보낼 Host 주소의 **초기값**. 첫 명령이 오면 "
+                            "그 명령을 보낸 주소로 자동으로 바뀐다",
             ),
             DeclareLaunchArgument(
                 "scan_floor_enabled",
