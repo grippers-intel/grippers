@@ -1,0 +1,22 @@
+# Host 코드 macOS(Apple Silicon) 의존성 — Python 3.11 전용.
+#
+# 파이썬 3.11 고정은 원본(Windows)과 같은 이유다. 2026-08-26 Host 팀 실측:
+#   3.14 -> geti-sdk 설치 불가 (requires_python <=3.13)
+#   3.13 -> pip 이 옛 geti-sdk 2.1.0 으로 되돌아가고 Pillow 소스빌드에서 깨진다
+#   3.11 -> geti-sdk 2.13.1 이 그대로 깔린다
+#
+# 2026-08-28 에 macOS 15.7.7 / arm64 (Apple M1 Pro) 에서 그대로 재현했다.
+# OpenVINO 는 macosx_11_0_arm64 휠이 있고, 장치 목록에 CPU 가 잡힌다:
+#
+#   openvino 2025.4.1   available_devices = ['CPU']   FULL_DEVICE_NAME = Apple M1 Pro
+#
+# 설치 (Homebrew 파이썬 기준):
+#   brew install python@3.11
+#   /opt/homebrew/opt/python@3.11/bin/python3.11 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -r requirements.txt
+
+geti-sdk==2.13.1
+opencv-python==4.14.0.94
+numpy==2.3.5
+matplotlib==3.11.1

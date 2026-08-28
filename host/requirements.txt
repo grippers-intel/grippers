@@ -1,0 +1,18 @@
+# 호스트 PC(시연용) 의존성 — Python 3.11 전용.
+#
+# ⚠️ 파이썬 버전을 3.11 로 고정한 이유 (2026-08-26 실측):
+#   · 3.14 → geti-sdk 설치 불가 (requires_python <=3.13)
+#   · 3.13 → pip 이 옛 geti-sdk 2.1.0 으로 되돌아가고, 그게 못박은
+#            Pillow==10.3.* 는 cp313 휠이 없어 소스빌드로 넘어가다 깨진다
+#   · 3.11 → geti-sdk 2.13.1 이 그대로 깔린다 (datumaro/Pillow 핀 없음)
+#
+#   설치:  py -3.11 -m venv .venv
+#          .\.venv\Scripts\Activate.ps1
+#          python -m pip install -r requirements.txt
+#
+# 실제로 깔린 전체 버전 목록은 requirements.lock.txt 참고.
+
+geti-sdk==2.13.1
+matplotlib==3.11.1
+numpy==2.3.5
+opencv-python==4.14.0.94

@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.ov_cache/
+dataset/
+*.log
+.DS_Store

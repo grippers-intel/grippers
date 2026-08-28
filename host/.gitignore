@@ -1,0 +1,20 @@
+# 가상환경 — 위치가 바뀌면 다시 만든다
+.venv/
+__pycache__/
+*.py[cod]
+
+# 학습 데이터셋 (118 MB) — 라벨링 원본은 Geti 프로젝트에 있다.
+# 여기 두는 건 재현용 사본이라 레포에 넣지 않는다.
+dataset/
+
+# Geti 내보내기 모델 — model.bin 이 85 MB 라 그대로 넣으면 clone 이 무거워진다.
+# LFS 로 올릴지 별도 배포로 뺄지 정해지기 전까지는 추적하지 않는다.
+geti_sdk-deployment/deployment/Detection/model/model.bin
+
+# 주행 실측 로그는 남긴다 (motion/*.csv, *.png — 합쳐서 536 KB)
+
+# OpenVINO 가 컴파일한 모델 커널 캐시 — 기계·드라이버마다 다르고 다시 만들면 된다
+.ov_cache/
+
+# OpenVINO iGPU 커널 컴파일러가 실패할 때 CWD 에 떨구는 덤프. 실행 부산물이다.
+kernel.errors.txt
