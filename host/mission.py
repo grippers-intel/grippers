@@ -340,14 +340,13 @@ class MissionFSM:
             return None
 
         if fix.distance_m is not None:
-            error = fix.distance_m - mcfg.BASKET_STOP_LIDAR_M
-            if error > mcfg.BASKET_STOP_TOLERANCE_M:
-                return (min(error, remaining), "forward")
-            if error < -mcfg.BASKET_STOP_TOLERANCE_M:
-                return (min(-error, remaining), "back")
+            error = fix.distance_m - mcfg.BASKET_TARGET_LIDAR_M
+            if abs(error) > mcfg.BASKET_DISTANCE_DEADBAND_M:
+                return (min(abs(error), remaining),
+                        "forward" if error > 0 else "back")
 
         if (fix.lateral_m is not None
-                and abs(fix.lateral_m) > mcfg.BASKET_LATERAL_TOLERANCE_M):
+                and abs(fix.lateral_m) > mcfg.BASKET_LATERAL_DEADBAND_M):
             # lateral_m 은 바구니 중심이 로봇 기준 어디 있는지다(+가 왼쪽) —
             # 그 방향으로 가야 가운데에 선다.
             return (min(abs(fix.lateral_m), remaining),

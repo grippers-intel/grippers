@@ -204,13 +204,30 @@ BOX_NUDGE_M = 0.05
 # 요구하는 방식 그대로다("Host는 이 값을 그대로 쓰지 말고 줄어드는
 # 방향으로 조금씩 움직이며 다시 물어야 한다").
 #
-# 아래 두 값은 Pi 의 baseline_constants 와 같은 것을 봐야 한다.
-#   BASKET_STOP_LIDAR_M      = Pi 0.140 + BASKET_STOP_TOLERANCE_M 0.015
-#   BASKET_LATERAL_TOLERANCE_M = Pi 와 동일
-# 갈라지면 Host 는 다 왔다고 믿고 Pi 는 계속 거부하는 교착이 된다.
-BASKET_STOP_LIDAR_M = 0.155
-BASKET_STOP_TOLERANCE_M = 0.015
-BASKET_LATERAL_TOLERANCE_M = 0.070
+# ⚠️ 겨냥하는 곳은 Pi 가 받아 주는 **창의 가장자리가 아니라 한가운데**다.
+#
+# 처음엔 목표를 0.155m 로 뒀다 — Pi 의 상한(BASKET_STOP_LIDAR_M 0.140 +
+# BASKET_STOP_TOLERANCE_M 0.015)이다. 그렇게 하면 폐루프가 0.155m 로
+# 수렴해 놓고 영원히 거부당한다. 상한에 정확히 서면 남는 여유가 0이라
+# 판독이 1mm 만 위로 튀어도 다시 "멀다"가 되고, 그때 계산되는 보정량은
+# 데드밴드보다 작아 아무 이동도 안 나온다. 하드웨어 없이 돌린 폐루프
+# 시험이 이 교착을 잡았다(tests/test_basket_close_loop.py).
+#
+# 그래서 목표는 창의 중심(Pi 의 BASKET_STOP_LIDAR_M)으로 두고, 데드밴드는
+# Pi 의 허용오차보다 **좁게** 잡는다. 그러면 수렴점이 창 한가운데라
+# 양쪽으로 여유가 남는다.
+#
+# 이 값들은 Pi 의 domain/task/baseline_constants.py 와 짝이다. 갈라지면
+# Host 는 다 왔다고 믿고 Pi 는 계속 거부하는 교착이 된다.
+BASKET_TARGET_LIDAR_M = 0.140       # Pi BASKET_STOP_LIDAR_M
+BASKET_ACCEPT_TOLERANCE_M = 0.015   # Pi BASKET_STOP_TOLERANCE_M (수용 반폭)
+BASKET_LATERAL_TOLERANCE_M = 0.070  # Pi BASKET_LATERAL_TOLERANCE_M (수용 반폭)
+
+# 보정을 걸 최소 오차. 수용 반폭의 절반쯤으로 잡아 수렴점이 창 한가운데
+# 오게 한다. 이보다 작은 오차는 무시한다 — 데드밴드가 없으면 판독 잡음을
+# 쫓아 미세이동이 끝나지 않는다.
+BASKET_DISTANCE_DEADBAND_M = 0.007
+BASKET_LATERAL_DEADBAND_M = 0.030
 # 이 폐루프가 쓸 수 있는 총 이동량. 판독이 이상해서 같은 방향 보정이 계속
 # 나오는 경우에 차가 바구니를 밀고 들어가는 것을 막는 한계선이다. 필요한
 # 보정이 20cm 남짓이므로 그 두 배를 준다.
