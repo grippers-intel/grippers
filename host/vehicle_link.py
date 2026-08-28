@@ -69,7 +69,8 @@ class MissionCommand:
     `robot_*` 와 `target_label` 은 화면 표시와 로그용으로 남아 있다.
     """
 
-    cmd: str                           # "go" | "stop" | "yaw+" | "yaw-"
+    cmd: str                           # "go" | "back" | "left" | "right"
+                                       #  | "stop" | "yaw+" | "yaw-"
     status: str                        # 지금 미션 단계 (mission.State 이름)
     robot_x: float
     robot_y: float
@@ -161,6 +162,44 @@ _CORRECTION_KEYS = (
 
 _LATERAL_RE = re.compile(r"좌우\s*([+-]?\d+(?:\.\d+)?)\s*mm")
 
+# INSERT_BLOCKED 의 문장에서 숫자를 되꺼낸다. GRASP 쪽과 같은 임시 다리다 —
+# 제대로 하려면 Pi 가 보정을 구조화해서 보내야 하고, 그건 양쪽 합의가 필요하다.
+# 아래 문구는 Pi `preconditions.check_insert()` 의 리터럴을 그대로 옮긴 것이니
+# 그 파일을 고치면 여기도 같이 고칠 것.
+#
+#   "바구니가 멀다 (라이다 0.351m > 0.155m) / 좌우로 밀려 있다 (-79mm > ±70mm)"
+#
+# ⚠️ "라이다 판독이 하한보다 가깝다" 쪽은 일부러 안 잡는다. 그 경우는
+# 테두리를 넘겨보고 있을 수 있어 판독 자체를 믿으면 안 되고, 더 붙이면
+# 상황이 나빠지기만 한다(Pi corrections.from_insert 주석).
+_BASKET_DIST_RE = re.compile(r"바구니가 멀다 \(라이다\s*([\d.]+)\s*m")
+_BASKET_LATERAL_RE = re.compile(r"좌우로 밀려 있다\s*\(([+-]?[\d.]+)\s*mm")
+
+
+@dataclass(frozen=True)
+class BasketFix:
+    """Pi 가 INSERT_BLOCKED 로 알려 준, 바구니 앞에서 고쳐야 할 양.
+
+    `distance_m` 은 **라이다 판독**이고 차체 기준 거리가 아니다. `lateral_m`
+    은 로봇 기준 좌우로 +가 왼쪽이며, 바구니 중심이 어디 있는지를 뜻한다 —
+    즉 로봇이 그 부호 방향으로 가야 가운데에 선다. 못 읽은 값은 None 이다.
+    """
+
+    distance_m: Optional[float] = None
+    lateral_m: Optional[float] = None
+
+
+def parse_basket_fix(detail: str) -> Optional[BasketFix]:
+    """INSERT_BLOCKED 의 detail -> BasketFix. 읽을 숫자가 없으면 None."""
+    d = _BASKET_DIST_RE.search(detail or "")
+    lat = _BASKET_LATERAL_RE.search(detail or "")
+    if d is None and lat is None:
+        return None
+    return BasketFix(
+        distance_m=float(d.group(1)) if d else None,
+        lateral_m=float(lat.group(1)) / 1000.0 if lat else None,
+    )
+
 
 @dataclass(frozen=True)
 class GraspCorrection:
@@ -206,7 +245,10 @@ def encode(cmd: MissionCommand) -> HostCommand:
     네 가지 동작이 속도 넷으로 어떻게 옮겨지는가:
 
         go     -> linear_x = +AGREED_LINEAR_MPS
-        stop   -> stop = True            (나머지 셋을 무시하는 가장 센 명령)
+        back   -> linear_x = -AGREED_LINEAR_MPS
+        left   -> linear_y = +AGREED_LINEAR_MPS       (메카넘 횡이동)
+        right  -> linear_y = -AGREED_LINEAR_MPS
+        stop   -> stop = True            (나머지를 무시하는 가장 센 명령)
         yaw+   -> angular_z = +AGREED_ROTATION_RAD_S   (반시계)
         yaw-   -> angular_z = -AGREED_ROTATION_RAD_S   (시계)
 
@@ -231,6 +273,16 @@ def encode(cmd: MissionCommand) -> HostCommand:
         # 바뀌면서 부호만 뒤집으면 되는 것이 됐다 — Pi 의 `_clamp` 가
         # copysign 이라 음수 크기를 그대로 잘라 준다. GRASP_ALIGN 이 쓴다.
         return HostCommand(state=state, linear_x=-AGREED_LINEAR_MPS)
+    if cmd.cmd in ("left", "right"):
+        # 메카넘 횡이동. 바구니 앞 좌우 정렬에만 쓴다 — 바구니와 나란한 채
+        # 옆으로 밀려 있으면 거리도 yaw 도 정상으로 나오는데 물체는 바구니
+        # 밖에 떨어진다(Pi basket_lidar_align.face_lateral_offset_m 주석).
+        # 돌아서 고치려 하면 거리와 yaw 가 같이 틀어지므로 옆으로 간다.
+        #
+        # 부호는 ROS 규약 그대로 +y = 왼쪽이다. Pi 의 실기 확인(2026-08-28)
+        # 으로 linear_y 는 0.03 m/s 까지 실제로 돈다.
+        sign = 1.0 if cmd.cmd == "left" else -1.0
+        return HostCommand(state=state, linear_y=sign * AGREED_LINEAR_MPS)
     if cmd.cmd == "yaw+":
         return HostCommand(state=state, angular_z=AGREED_ROTATION_RAD_S)
     if cmd.cmd == "yaw-":
@@ -249,6 +301,17 @@ class VehicleLink:
     #: GRASP_ALIGN 으로 넘어간다. **읽은 쪽이 지운다**(take_correction) —
     #: 한 번의 요청으로 한 번만 움직이기 위해서다.
     last_correction: Optional[GraspCorrection] = None
+
+    #: 마지막 INSERT_BLOCKED 가 알려 준 바구니 보정량. **읽은 쪽이 지운다**.
+    last_basket_fix: Optional[BasketFix] = None
+
+    def take_basket_fix(self) -> Optional[BasketFix]:
+        """마지막 바구니 보정량을 꺼내고 지운다.
+
+        지우는 이유는 GRASP 보정과 같다 — 한 번 읽은 값으로 두 번 움직이면
+        같은 오차를 두 배로 고치게 된다. 다음 판정은 다음 보고를 기다린다."""
+        f, self.last_basket_fix = self.last_basket_fix, None
+        return f
 
     def take_correction(self) -> Optional[GraspCorrection]:
         """보정 요청을 **소비한다.** 없으면 None.
@@ -427,6 +490,10 @@ class UdpVehicleLink(VehicleLink):
 
         if report in (Report.GRASP_BLOCKED, Report.INSERT_BLOCKED):
             self.last_correction = classify_correction(detail)
+            if report == Report.INSERT_BLOCKED:
+                fix = parse_basket_fix(detail)
+                if fix is not None:
+                    self.last_basket_fix = fix
 
         if report in _BLOCKING_REPORTS:
             # Pi 가 "조건이 안 맞는다, 수정된 명령을 달라"고 말하는 중이다.

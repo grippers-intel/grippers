@@ -229,6 +229,11 @@ class MissionFSM:
         self.last_nav: Optional[DriveCommand] = None
         self.last_cmd: Optional[str] = None   # 실제로 보낸 "go"/"stop"/"yaw+"/"yaw-"
         self._nudge_from: Optional[XY] = None   # NUDGE_BOX 진입 시점의 위치
+        # NUDGE_BOX 가 이번에 갈 (거리 m, 방향). PLACE 가 Pi 의 라이다 판독을
+        # 보고 채운다. None 이면 첫 진입이라 기존 BOX_NUDGE_M 만큼만 붙인다.
+        self._nudge_plan: Optional[tuple] = None
+        # 바구니 앞 폐루프가 지금까지 쓴 총 이동량 — 예산 한계선용.
+        self._basket_creep_used = 0.0
 
         # GRASP_ALIGN 용. _align 은 지금 수행 중인 보정, _align_from 은 그
         # 보정을 시작한 시점의 pose(얼마나 움직였는지 재는 기준),
@@ -282,6 +287,67 @@ class MissionFSM:
         self._path_planner.reset()
         self._drive.reset()
         self.state = State.SEARCH_TARGET
+
+    def begin_carrying(self, label: str) -> bool:
+        """차량이 이미 `label` 을 들고 있다고 보고 CARRY_TO_DEST 부터 시작한다.
+
+        중단된 실행을 이어서 끝낼 때 쓴다. 파지까지 성공해 놓고 투하에서
+        막히면, 기물은 그리퍼 안에 있어 오버헤드 카메라에 안 보인다 —
+        그 상태로 다시 돌리면 Host 는 "작업 영역에 기물 없음"으로 보고
+        SEARCH_TARGET 에 영원히 서 있는다. 2026-08-28 실기가 그랬다.
+
+        목적지 매핑이 없는 라벨이면 False. 그때는 어디로 나를지 모르므로
+        추측하지 않는다."""
+        dest_box = mcfg.PIECE_DEST_BOX.get(label)
+        if dest_box is None:
+            return False
+        self.target_label = label
+        self._target_xy = None
+        self.dest_xy = _box_front_xy(dest_box)
+        self._align_tries = 0
+        self._nudge_from = None
+        self._nudge_plan = None
+        self._basket_creep_used = 0.0
+        self.ready_to_advance = False
+        self._path_planner.reset()
+        self._drive.reset()
+        self.state = State.CARRY_TO_DEST
+        return True
+
+    def _plan_basket_fix(self, fix) -> Optional[tuple]:
+        """Pi 가 준 바구니 판독 -> (이동량 m, 방향). 고칠 게 없으면 None.
+
+        방향은 "forward" / "back" / "left" / "right" 다.
+
+        한 번에 하나만 고친다. 거리를 먼저 맞추고 그 다음에 좌우를 본다 —
+        Pi 의 좌우 추정은 바구니 가장자리가 방위각 창 안에 들어와야 나오는
+        값이라 멀리서는 정확도가 떨어지고(basket_lidar_align 주석), 가까이
+        붙고 나서 재는 쪽이 훨씬 믿을 만하다. Pi 의 corrections.from_insert
+        가 매기는 우선순위와도 같다.
+
+        총 이동량에 예산을 두는 이유: 판독이 이상해서 같은 방향 보정이 계속
+        나오면 차가 바구니를 밀고 들어간다. 예산을 다 쓰면 더 안 움직이고
+        Pi 의 거부를 그대로 사람에게 남긴다."""
+        if fix is None:
+            return None
+        remaining = mcfg.BASKET_CREEP_BUDGET_M - self._basket_creep_used
+        if remaining <= 0.01:
+            return None
+
+        if fix.distance_m is not None:
+            error = fix.distance_m - mcfg.BASKET_STOP_LIDAR_M
+            if error > mcfg.BASKET_STOP_TOLERANCE_M:
+                return (min(error, remaining), "forward")
+            if error < -mcfg.BASKET_STOP_TOLERANCE_M:
+                return (min(-error, remaining), "back")
+
+        if (fix.lateral_m is not None
+                and abs(fix.lateral_m) > mcfg.BASKET_LATERAL_TOLERANCE_M):
+            # lateral_m 은 바구니 중심이 로봇 기준 어디 있는지다(+가 왼쪽) —
+            # 그 방향으로 가야 가운데에 선다.
+            return (min(abs(fix.lateral_m), remaining),
+                    "left" if fix.lateral_m > 0 else "right")
+        return None
 
     def step(self, pose: Pose, piece_map: PieceMap, link: VehicleLink) -> State:
         if not pose.ok:
@@ -454,33 +520,45 @@ class MissionFSM:
             self.nav_path = None
             if self._nudge_from is None:
                 self._nudge_from = robot_xy
+            # 얼마나 어느 쪽으로 갈지. PLACE 가 Pi 판독을 보고 정해 두면
+            # 그것을 쓰고, 없으면(첫 진입) 기존 5 cm 직진이다.
+            want_m, axis = self._nudge_plan or (mcfg.BOX_NUDGE_M, "forward")
             heading = math.radians(mcfg.BOX_FACE_YAW_DEG)
-            goal = (self._nudge_from[0] + mcfg.BOX_NUDGE_M * math.cos(heading),
-                    self._nudge_from[1] + mcfg.BOX_NUDGE_M * math.sin(heading))
+            goal = (self._nudge_from[0] + want_m * math.cos(heading),
+                    self._nudge_from[1] + want_m * math.sin(heading))
             moved = math.hypot(robot_xy[0] - self._nudge_from[0],
                                robot_xy[1] - self._nudge_from[1])
             yaw_err = (mcfg.BOX_FACE_YAW_DEG - pose.yaw_deg + 180.0) % 360.0 - 180.0
             aligned = abs(yaw_err) <= mcfg.DRIVE_YAW_TOLERANCE_DEG
-            done = moved >= mcfg.BOX_NUDGE_M
-            # 전진 중에 방위가 틀어지면 다시 맞춘다 — 5 cm 라도 비스듬히
-            # 들어가면 상자 정면에 안 선다.
+            done = moved >= want_m
+            # 전후 이동 중에 방위가 틀어지면 다시 맞춘다 — 5 cm 라도 비스듬히
+            # 들어가면 상자 정면에 안 선다. 좌우 이동은 방위를 안 건드리므로
+            # (메카넘 횡이동) 회전으로 끊지 않는다 — 여기서 돌면 방금 맞춘
+            # 거리와 yaw 가 같이 틀어져 앞 단계를 되돌리게 된다.
             if done:
-                mode = DriveMode.STOP
+                mode, cmd = DriveMode.STOP, "stop"
+            elif axis in ("left", "right"):
+                mode, cmd = DriveMode.FORWARD, axis
             elif not aligned:
                 mode = DriveMode.ROTATE
+                cmd = "yaw+" if yaw_err >= 0 else "yaw-"
+            elif axis == "back":
+                mode, cmd = DriveMode.FORWARD, "back"
             else:
-                mode = DriveMode.FORWARD
+                mode, cmd = DriveMode.FORWARD, "go"
             self.ready_to_advance = done
             nav = DriveCommand(
                 mode=mode, waypoint=goal, target_yaw_deg=mcfg.BOX_FACE_YAW_DEG,
                 yaw_error_deg=yaw_err,
-                dist_to_target=max(mcfg.BOX_NUDGE_M - moved, 0.0), blocked_by=None,
+                dist_to_target=max(want_m - moved, 0.0), blocked_by=None,
             )
             self.last_nav = nav
-            self.last_cmd = _send_drive(link, pose, "NUDGE_BOX", nav)
+            link.send(MissionCommand(cmd, "NUDGE_BOX", pose.x, pose.y, pose.yaw_deg))
+            self.last_cmd = cmd
             if done and self._should_advance():
                 self.ready_to_advance = False
                 self._nudge_from = None
+                self._nudge_plan = None
                 self.state = State.PLACE
 
         elif self.state == State.PLACE:
@@ -490,8 +568,21 @@ class MissionFSM:
             self.last_nav = None
             self.last_cmd = "stop"
             link.send(MissionCommand("stop", "PLACE", pose.x, pose.y, pose.yaw_deg))
-            if not self.ready_to_advance and link.poll_status() == "PLACE_DONE":
+            status = link.poll_status() if not self.ready_to_advance else "IDLE"
+            if status == "PLACE_DONE":
                 self.ready_to_advance = True
+            else:
+                # Pi 가 "여기서는 못 넣는다"고 하면 그 이유에 실린 숫자를
+                # 보고 조금 움직인 뒤 다시 묻는다. 서서 기다리기만 하면
+                # 영원히 INSERT_BLOCKED 만 돌아온다 — 2026-08-28 실기가
+                # 정확히 그랬다(라이다 0.351m, 요구 0.155m).
+                plan = self._plan_basket_fix(link.take_basket_fix())
+                if plan is not None:
+                    self._nudge_plan = plan
+                    self._nudge_from = None
+                    self._basket_creep_used += plan[0]
+                    self.state = State.NUDGE_BOX
+                    return self.state
             if self.ready_to_advance and self._should_advance():
                 # 하나 끝났다고 멈추지 않는다 — 다음 기물을 다시 찾는다.
                 # 화면에 기물이 더 없으면 SEARCH_TARGET 에서 계속 대기한다.

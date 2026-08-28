@@ -93,6 +93,9 @@ def main() -> int:
     ap.add_argument("--step", action="store_true",
                      help="단계마다 자동으로 안 넘어가고 LiveMap 의 Next 버튼을 눌러야 진행 "
                           "(조건 충족 여부는 버튼 옆 표시등 초록/빨강으로 보여줌)")
+    ap.add_argument("--carrying", type=str, default=None,
+                    help="차량이 이미 이 기물을 들고 있다고 보고 운반부터 시작한다 "
+                         "(중단된 실행 이어가기. 예: --carrying rook)")
     ap.add_argument("--vehicle-ip", type=str, default=None,
                      help="차량(Pi) IP — 주면 실제 UDP로 전송(UdpVehicleLink), "
                           "안 주면 콘솔에만 찍는다(ConsoleVehicleLink)")
@@ -175,6 +178,17 @@ def main() -> int:
     live_map = (LiveMap(on_reset=_reset_all, on_next=fsm.request_advance,
                         on_back=fsm.request_back, on_toggle_mode=_toggle_mode)
                 if not args.no_view else None)
+
+    if args.carrying:
+        if fsm.begin_carrying(args.carrying):
+            print(f"[이어서] '{args.carrying}' 을 이미 들고 있다고 보고 "
+                  f"{fsm.state.name} 부터 시작합니다")
+        else:
+            print(f"'{args.carrying}' 의 목적지 상자를 모릅니다 — "
+                  f"mission_config.PIECE_DEST_BOX 를 확인하세요")
+            for c in caps:
+                c.release()
+            return 1
 
     print("\n시작 — 보이는 기물을 가까운 순서대로 라벨별 상자로 나릅니다"
           " (체스말→chess, 나머지→toy).")

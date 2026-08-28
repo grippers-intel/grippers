@@ -189,6 +189,33 @@ BOX_FACE_YAW_DEG = 90.0
 # 계획기를 거치지 않고 직접 전진하므로 DRIVE_AREA_Y 상한과는 무관하다.
 BOX_NUDGE_M = 0.05
 
+# ── 바구니 앞 최종 정렬 (2026-08-28) ──────────────────────────────────────
+#
+# 위 BOX_NUDGE_M(5cm)만으로는 INSERT 가 절대 안 난다. 2026-08-28 실기에서
+# 그 자리의 라이다 판독은 0.351m 였는데 Pi 가 요구하는 값은 0.155m 다 —
+# 약 20cm 모자란다. Host 는 라이다가 없으므로 이 거리를 자기가 알 방법이
+# 없고, 오버헤드 좌표로 환산하려 해도 바구니는 높이마다 앞뒤가 달라
+# "차체에서 바구니까지"라는 단일 거리가 정의되지 않는다(Pi 의
+# corrections.from_insert 주석: 판으로 잰 값과 바구니로 잰 값이 2.6cm
+# 어긋난 실측이 근거다).
+#
+# 그래서 상수를 하나 더 늘려 맞추는 대신, Pi 가 INSERT_BLOCKED 에 실어
+# 보내는 라이다 판독을 읽어 **조금 움직이고 다시 묻는다.** Pi 쪽 주석이
+# 요구하는 방식 그대로다("Host는 이 값을 그대로 쓰지 말고 줄어드는
+# 방향으로 조금씩 움직이며 다시 물어야 한다").
+#
+# 아래 두 값은 Pi 의 baseline_constants 와 같은 것을 봐야 한다.
+#   BASKET_STOP_LIDAR_M      = Pi 0.140 + BASKET_STOP_TOLERANCE_M 0.015
+#   BASKET_LATERAL_TOLERANCE_M = Pi 와 동일
+# 갈라지면 Host 는 다 왔다고 믿고 Pi 는 계속 거부하는 교착이 된다.
+BASKET_STOP_LIDAR_M = 0.155
+BASKET_STOP_TOLERANCE_M = 0.015
+BASKET_LATERAL_TOLERANCE_M = 0.070
+# 이 폐루프가 쓸 수 있는 총 이동량. 판독이 이상해서 같은 방향 보정이 계속
+# 나오는 경우에 차가 바구니를 밀고 들어가는 것을 막는 한계선이다. 필요한
+# 보정이 20cm 남짓이므로 그 두 배를 준다.
+BASKET_CREEP_BUDGET_M = 0.40
+
 # 라벨별 목적지 상자 (config.BOXES 의 키). mission.py 가 라벨마다 자동으로
 # 여기서 목적지를 찾는다 — 기물 하나 옮길 때마다 --dest 를 따로 안 줘도 됨.
 PIECE_DEST_BOX = {
