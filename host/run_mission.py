@@ -56,6 +56,7 @@ from localizer import Camera, RobotLocalizer, detect, make_detector
 
 import geti_detector
 import piece_map
+import window_layout
 from live_map import LiveMap
 from mission import MissionFSM, State
 from run_localize import draw, open_cams
@@ -70,23 +71,6 @@ def _on_sigint(signum, frame):
 
 
 
-def _screen_origin(index: int) -> tuple[int, int]:
-    """전역 데스크톱 좌표에서 해당 화면의 좌상단. 못 읽으면 (0, 0).
-
-    macOS 는 여러 화면을 하나의 좌표계에 늘어놓으므로, 확장 화면에 창을
-    띄우려면 그 화면의 origin 을 알아야 한다. Quartz 가 없으면 주 화면."""
-    try:
-        import Quartz
-    except ImportError:
-        return (0, 0)
-    _n, ids, _ = Quartz.CGGetActiveDisplayList(8, None, None)
-    ordered = sorted(ids, key=lambda d: Quartz.CGDisplayBounds(d).origin.x)
-    if index >= len(ordered):
-        return (0, 0)
-    b = Quartz.CGDisplayBounds(ordered[index])
-    return (int(b.origin.x), int(b.origin.y))
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cams", type=int, nargs="+", default=list(cfg.CAM_INDICES))
@@ -97,8 +81,10 @@ def main() -> int:
                     help="Enter 로 멈추는 감시를 끈다(기본은 켜짐)")
     ap.add_argument("--display", type=int, default=0,
                     help="창을 띄울 화면. 0=주 화면, 1=오른쪽 확장 화면")
-    ap.add_argument("--cam-width", type=int, default=900,
-                    help="--show-cams 창의 가로 크기(px)")
+    ap.add_argument("--no-tile", action="store_true",
+                    help="창 자동 배치를 끄고 OS 기본 위치에 맡긴다")
+    ap.add_argument("--cam-width", type=int, default=None,
+                    help="카메라 창 가로 크기(px). 안 주면 화면에 맞춰 자동으로 정한다")
     ap.add_argument("--show-cams", action="store_true",
                      help="카메라 원본 + ArUco/geti 오버레이 창도 같이 띄운다 (디버깅용)")
     ap.add_argument("--geti-device", type=str, default="CPU")
@@ -147,18 +133,21 @@ def main() -> int:
         geti_detector.load_deployment(device=args.geti_device), c.name) for c in cams]
     print("geti 모델 준비 완료.")
 
+    # 창 배치 계획. 실제로 옮기는 것은 첫 프레임을 그린 **뒤**다 —
+    # OpenCV 는 창에 처음 그림을 넣을 때 창 크기를 그림 크기로 되돌린다.
+    layout = None
+    if not args.no_tile:
+        layout = window_layout.plan(
+            args.display, len(cams) if args.show_cams else 0,
+            want_map=not args.no_view,
+            cam_aspect=cfg.IMG_W / cfg.IMG_H,
+            cam_width=args.cam_width)
+        if layout is None:
+            print("[display] 화면 정보를 못 읽어 자동 배치를 건너뜁니다 "
+                  "(pyobjc 미설치?)")
     if args.show_cams:
-        # 창을 지정한 화면에 나란히 놓는다. macOS 는 전역 데스크톱 좌표를
-        # 쓰므로 확장 화면의 origin 을 알아야 그쪽에 뜬다.
-        ox, oy = _screen_origin(args.display)
-        w = args.cam_width
-        h = int(w * cfg.IMG_H / cfg.IMG_W)
-        for n, cam in enumerate(cams):
+        for cam in cams:
             cv2.namedWindow(cam.name, cv2.WINDOW_NORMAL)
-            cv2.resizeWindow(cam.name, w, h)
-            cv2.moveWindow(cam.name, ox + 20 + n * (w + 20), oy + 20)
-        print(f"[display] 화면 {args.display} origin=({ox}, {oy}) 에 "
-              f"카메라 창 {len(cams)}개 ({w}x{h})")
 
     loc = RobotLocalizer()
     tracker = piece_map.PieceTracker()
@@ -219,6 +208,7 @@ def main() -> int:
     _deadline = (time.time() + args.seconds) if args.seconds else None
 
     frames_seen = 0
+    _placed = False
     # --- 루프 Hz 측정 (2026-08-28 HANDOFF §0-2) ---
     hz_n = 0
     hz_t0 = time.perf_counter()
@@ -290,6 +280,14 @@ def main() -> int:
                     cv2.imshow(cam.name, draw(disp, cam, det, pose))
                 if (cv2.waitKey(1) & 0xFF) == ord("q"):
                     break
+
+            if layout is not None and not _placed:
+                # 창이 다 뜬 지금 한 번만 옮긴다. 매 사이클 옮기면 사람이
+                # 손으로 옮겨 놓은 창을 계속 되돌려 버린다.
+                print(window_layout.apply(
+                    layout, [c.name for c in cams] if args.show_cams else [],
+                    live_map.fig if live_map is not None else None), flush=True)
+                _placed = True
     finally:
         # ⚠️ 링크를 그냥 닫으면 Pi 워치독(3사이클 = 0.3초)이 설 때까지
         # 바퀴가 돈다. 명시적으로 정지를 여러 번 보내 즉시 세운다.
