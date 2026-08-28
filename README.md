@@ -151,18 +151,43 @@ host/geti_sdk-deployment/deployment/Detection/model/model.bin
 같은 모델인지는 해시로 확인할 수 있다 — `model.xml` 과 `config.json` 이
 저장소 것과 일치해야 한다.
 
-## ⚠️ 아직 확인하지 못한 것
+## 웹캠 두 대 — 실기 확인 완료, 그리고 하드코딩이 실제로 틀렸다
 
-**웹캠 두 대를 동시에 쓰는 경로.** 맥에 아직 C920 두 대가 안 붙어 있어서,
-`run_localize.py` 의 2 카메라 동시 캡처와 `resolve_indices()` 의 이름 매칭을
-실기로 못 봤다. macOS 는 인덱스 순서 보장이 없으므로(위 참고) **여기가 이식에서
-가장 불확실한 지점**이다. 카메라가 붙으면 다음 순서로 확인할 것.
+C920 두 대를 붙여 `host/mac_live_view.py` 로 확인했다(2026-08-28).
+
+**`config.py` 의 `CAM_INDICES = (0, 1)` 은 이 맥에서 틀린 값이다.**
 
 ```
-python3 -c "import sys; sys.path.insert(0,'host'); import camera_backend as c; print(c.diagnose())"
+[0] FaceTime HD 카메라      <- 내장. 이것이 0번이다
+[1] HD Pro Webcam C920
+[2] HD Pro Webcam C920
 ```
 
-두 대가 다 열리는지, 이름으로 고른 인덱스가 실제 인덱스와 맞는지를 본다.
+Windows 는 DirectShow 열거 순서가 곧 cv2 인덱스라 `(0, 1)` 이 그냥 맞았다.
+macOS 에서 그대로 쓰면 **내장 카메라를 cam0 으로 잡는다.** 이름 기반
+`resolve_indices()` 는 정확히 `[1, 2]` 를 골랐다.
+
+실시간 결과:
+
+```
+이름으로 고른 인덱스: [1, 2]  (HD Pro Webcam C920, HD Pro Webcam C920)
+164 프레임, 평균 9.3 FPS  (카메라 2대 + ArUco 매 프레임 + geti 0.3초 주기)
+ArUco  cam0 = 4개
+geti   cam0 = star, rook, box, knight, rook, star, soccer, queen, soccer, queen, rook
+```
+
+여섯 클래스가 전부 나왔다. 예고한 초점 경고도 그대로 떴다.
+
+Host 팀 Windows 루프가 ~7.0 Hz 였으므로 이 값도 뒤지지 않는다.
+
+### 확장 디스플레이
+
+```
+python3 host/mac_live_view.py --display 1 --seconds 60
+```
+
+Quartz 로 전역 데스크톱 좌표를 읽어 그 화면의 origin 으로 창을 옮긴다 —
+화면 배치가 바뀌어도 맞는다.
 
 ---
 
