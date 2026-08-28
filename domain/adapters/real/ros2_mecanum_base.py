@@ -11,7 +11,6 @@
 from geometry_msgs.msg import Twist
 from std_srvs.srv import Trigger
 
-from domain.adapters.real._ros_call import ESTOP_TIMEOUT_SEC, call_service
 from domain.ports.base_driver import BaseDriver
 
 # 미세 전진을 나누는 버스트 길이(초)와 속도(m/s).
@@ -29,6 +28,8 @@ class Ros2MecanumBase(BaseDriver):
         self._node = node
         self._cmd_pub = node.create_publisher(Twist, "cmd_vel", 10)
         self._stop_client = node.create_client(Trigger, "base_driver/stop")
+        # 정지 서비스가 없다는 경고를 사이클마다 찍지 않기 위한 래치.
+        self._stop_service_missing = False
         # 테스트에서 실제로 잠들지 않게 주입할 수 있도록 열어 둔다.
         self._sleep = clock_sleep
 
@@ -85,8 +86,30 @@ class Ros2MecanumBase(BaseDriver):
         서비스는 base_driver_node가 자체 루프를 돌고 있을 때 그것까지 멈춘다.
         E-STOP 경로라 **응답을 기다리지 않는다.**"""
         self.apply_velocity(0.0, 0.0, 0.0)
-        if not self._stop_client.wait_for_service(timeout_sec=ESTOP_TIMEOUT_SEC):
+        # ⚠️ `wait_for_service`가 아니라 `service_is_ready`다. 둘의 차이가
+        # 이 노드의 제어 주기를 통째로 바꾼다.
+        #
+        # 2026-08-28 실기: base_driver_node를 안 띄운 구성에서 이 경로가
+        # 사이클마다 0.5초(_ros_call.ESTOP_TIMEOUT_SEC)를 꼬박 기다렸다. 오케스트레이터
+        # 루프는 설계상 10Hz인데 실측 1.6Hz로 떨어졌고, Host가 한두 사이클만
+        # 머무는 상태(APPROACH_PIECE)를 Pi가 통째로 놓쳤다 — 명령이 안 온 게
+        # 아니라 읽을 때가 되기 전에 다음 명령으로 덮인 것이다. 워치독
+        # 3사이클도 0.3초가 아니라 1.8초가 됐다.
+        #
+        # 이 함수의 계약은 원래 "응답을 기다리지 않는다"였다(아래 docstring).
+        # 기다림을 없애는 것이 그 계약을 지키는 쪽이다. 서비스가 있으면
+        # `service_is_ready()`가 True를 주므로 정상 구성의 동작은 그대로다.
+        if not self._stop_client.service_is_ready():
             # 서비스가 없어도 위의 cmd_vel 0은 이미 나갔다 — 치명적이지 않다.
-            self._node.get_logger().warn("stop: base_driver/stop 서비스 없음 — cmd_vel 0만 냄")
+            # 경고는 상태가 바뀔 때만 남긴다. 사이클마다 찍으면 로그가 이걸로
+            # 가득 차서 정작 봐야 할 줄이 묻힌다.
+            if not self._stop_service_missing:
+                self._node.get_logger().warn(
+                    "stop: base_driver/stop 서비스 없음 — cmd_vel 0만 냄 "
+                    "(서비스가 생기면 다시 알린다)")
+                self._stop_service_missing = True
             return
+        if self._stop_service_missing:
+            self._node.get_logger().info("stop: base_driver/stop 서비스 복구됨")
+            self._stop_service_missing = False
         self._stop_client.call_async(Trigger.Request())
