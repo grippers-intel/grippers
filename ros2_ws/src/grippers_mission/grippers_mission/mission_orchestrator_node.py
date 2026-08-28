@@ -122,8 +122,12 @@ class MissionOrchestratorNode(Node):
         `BaselineMission.run()`은 DONE에서 끝난다 — Host가 다음 미션을
         시작할 수 있어야 하므로 끝나면 새로 만들어 다시 돈다. 미션의
         시작과 끝을 정하는 것도 Host다."""
-        self._started = time.monotonic()
         while rclpy.ok():
+            # elapsed_s는 **이번 미션**의 경과 시간이다. 예전에는 이 대입이
+            # while 바깥에 있어서 노드 기동 이후의 총 시간이 실렸는데, 그러면
+            # 미션을 여러 번 도는 지금 구조에서 값이 계속 커지기만 해서
+            # "한 사이클에 몇 초 걸렸나"(이 프로젝트의 성공 지표)를 못 읽는다.
+            self._started = time.monotonic()
             try:
                 for state in BaselineMission(self._ports).run():
                     self._publish_state(state.name)
