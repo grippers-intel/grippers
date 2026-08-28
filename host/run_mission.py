@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -58,7 +59,7 @@ import piece_map
 from live_map import LiveMap
 from mission import MissionFSM, State
 from run_localize import draw, open_cams
-from vehicle_link import ConsoleVehicleLink, UdpVehicleLink
+from vehicle_link import ConsoleVehicleLink, MissionCommand, UdpVehicleLink
 
 _stop = False
 
@@ -90,6 +91,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cams", type=int, nargs="+", default=list(cfg.CAM_INDICES))
     ap.add_argument("--no-view", action="store_true")
+    ap.add_argument("--seconds", type=float, default=None,
+                    help="이 시간이 지나면 정지하고 종료한다. 예행연습 안전장치")
+    ap.add_argument("--no-stop-on-enter", action="store_true",
+                    help="Enter 로 멈추는 감시를 끈다(기본은 켜짐)")
     ap.add_argument("--display", type=int, default=0,
                     help="창을 띄울 화면. 0=주 화면, 1=오른쪽 확장 화면")
     ap.add_argument("--cam-width", type=int, default=900,
@@ -186,6 +191,33 @@ def main() -> int:
           " (체스말→chess, 나머지→toy).")
     print("q 또는 Ctrl+C 로 종료\n")
 
+    # --- Enter 로 즉시 정지 (2026-08-28, 실차 예행연습용) ---
+    #
+    # 실제로 바퀴가 도는 동안 사람이 손닿는 곳에 정지 수단이 있어야 한다.
+    # cv2 창의 q 는 창에 포커스가 있어야 먹으므로 터미널에서는 못 쓴다.
+    # ⚠️ stdin 이 TTY 가 아니면(백그라운드·nohup·파이프) readline 이 EOF 로
+    # 즉시 돌아온다. 그걸 Enter 로 오해하면 기동하자마자 멈춘다 — 실제로
+    # 그랬다. 사람이 칠 수 있는 터미널일 때만 감시를 건다.
+    _enter_armed = (not args.no_stop_on_enter) and sys.stdin.isatty()
+    if _enter_armed:
+        def _enter_watch():
+            global _stop
+            try:
+                line = sys.stdin.readline()
+            except Exception:
+                return
+            if line == "":
+                return          # EOF 는 Enter 가 아니다
+            _stop = True
+            print("\n[STOP] Enter — 정지합니다", flush=True)
+        threading.Thread(target=_enter_watch, daemon=True).start()
+        print("\n>>> Enter 를 치면 즉시 정지하고 종료합니다 <<<\n", flush=True)
+    elif not args.no_stop_on_enter:
+        print("\n[주의] stdin 이 터미널이 아니라 Enter 정지를 못 겁니다 — "
+              "--seconds 로 시간 제한을 두세요\n", flush=True)
+
+    _deadline = (time.time() + args.seconds) if args.seconds else None
+
     frames_seen = 0
     # --- 루프 Hz 측정 (2026-08-28 HANDOFF §0-2) ---
     hz_n = 0
@@ -194,6 +226,9 @@ def main() -> int:
     try:
         # 라벨을 다 옮겨도 안 끝난다 — 새 기물이 놓이면 계속 반복
         while not _stop:
+            if _deadline is not None and time.time() >= _deadline:
+                print("\n[STOP] 제한 시간 — 정지합니다", flush=True)
+                break
             _t = time.perf_counter()
             grabbed, dets = [], []
             for cap in caps:
@@ -256,6 +291,16 @@ def main() -> int:
                 if (cv2.waitKey(1) & 0xFF) == ord("q"):
                     break
     finally:
+        # ⚠️ 링크를 그냥 닫으면 Pi 워치독(3사이클 = 0.3초)이 설 때까지
+        # 바퀴가 돈다. 명시적으로 정지를 여러 번 보내 즉시 세운다.
+        # UDP 라 한 발이 유실될 수 있으므로 연발한다.
+        try:
+            for _ in range(8):
+                link.send(MissionCommand("stop", "SEARCH_TARGET", 0.0, 0.0, 0.0))
+                time.sleep(0.05)
+            print("[STOP] 정지 명령 8회 송신 완료")
+        except Exception as exc:
+            print(f"[STOP] 정지 명령 실패: {exc} — Pi 워치독이 0.3초 안에 세웁니다")
         for worker in workers:
             worker.stop()
         for cap in caps:
