@@ -1383,6 +1383,34 @@ class ArmDriverNode(Node):
                     f"servo 1 목표 {target}가 관절 범위(0~{POSITION_RAW_MAX}) 밖입니다")
                 return response
 
+            # ⚠️ 한계각은 **교시 정면(IDLE)으로부터의 절대 각도**로 본다.
+            # 예전에는 한 번의 요청 크기만 봤는데, 이 서비스는 현재 위치를
+            # 기준으로 상대 회전을 하므로 같은 요청이 반복되면 servo 1이
+            # 한 번에 15도를 넘지 않으면서도 얼마든지 멀리 걸어간다.
+            #
+            # 그리고 그 반복은 예외가 아니라 지금의 기본 동작이다(2026-08-28
+            # 실기). 뎁스캠은 차체에 고정되어 있어 servo 1이 돌아도 물체를
+            # 보는 각이 안 변한다. 그래서 Pi는 보정 뒤에도 같은 좌우 오차를
+            # 다시 읽고 같은 보정을 또 건다. 좌우 영점
+            # (DEPTH_LATERAL_TO_JAW_CENTER_M)이 servo 1이 안 돌아간 상태를
+            # 전제한 고정 상수라서, 이미 준 보정만큼 영점을 옮겨 주기 전에는
+            # 이 폐루프가 닫히지 않는다.
+            #
+            # 그 설계 결정이 날 때까지, 이 한계가 팔이 걸어 나가는 것을
+            # 막는다. 한계에 걸리면 ok=False가 나가고 Pi는 "servo 1이
+            # 거부했다, 재회전 필요"로 Host에 차량 재정렬을 요청한다 —
+            # 이미 있는 대안 경로다.
+            drift_raw = target - IDLE_CRADLE_RAW[0]
+            limit_raw = self.MAX_BASE_YAW_OFFSET_RAD * self.RAW_PER_RADIAN
+            if abs(drift_raw) > limit_raw:
+                response.message = (
+                    f"servo 1이 교시 정면에서 "
+                    f"{math.degrees(drift_raw / self.RAW_PER_RADIAN):+.1f}도까지 "
+                    f"벌어집니다 — 한계 ±{math.degrees(self.MAX_BASE_YAW_OFFSET_RAD):.0f}도. "
+                    "차량을 다시 세워야 합니다")
+                self.get_logger().warn(f"offset_base_yaw: {response.message}")
+                return response
+
             goal = {servo_id: actual[servo_id] for servo_id in range(1, 6)}
             goal[1] = target
             # servo 1만 미세 허용오차로 옮긴다. 기본 120 raw를 그대로 쓰면
