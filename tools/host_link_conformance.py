@@ -48,8 +48,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from domain.adapters.real.udp_host_link import UdpHostLink
 from domain.task import baseline_constants as bc
-from domain.task.motion import resolve_motion
-from domain.ports.baseline_ports import HostCommand
+from domain.task.motion import (AGREED_LINEAR_MPS, AGREED_ROTATION_RAD_S,
+                                BASKET_APPROACH_MPS, resolve_motion)
+from domain.ports.baseline_ports import HostCommand, MissionState, Report
 
 # Host 저장소를 옆에 클론해 둔 자리. 없으면 안내하고 끝낸다 — 흉내로 대신하면
 # 이 시험의 존재 이유(진짜 코드끼리 붙인다)가 사라진다.
@@ -149,6 +150,66 @@ def load_host_link():
     return vehicle_link
 
 
+# 두 저장소가 반드시 같은 값으로 들고 있어야 하는 것들.
+# (Pi 쪽 이름, Pi 값, Host 쪽 이름)
+AGREED_CONSTANTS = (
+    ("motion.AGREED_LINEAR_MPS", AGREED_LINEAR_MPS, "AGREED_LINEAR_MPS"),
+    ("motion.AGREED_ROTATION_RAD_S", AGREED_ROTATION_RAD_S, "AGREED_ROTATION_RAD_S"),
+    ("motion.BASKET_APPROACH_MPS", BASKET_APPROACH_MPS, "BASKET_APPROACH_MPS"),
+)
+
+
+def _check_agreed_constants(vl, result):
+    """Host 모듈이 들고 있는 합의값을 Pi의 것과 대조한다.
+
+    Host가 아직 상수 자체를 안 갖고 있으면(2026-08-26 확정 이전 코드) 그것도
+    실패로 본다 — 값이 어디에도 안 적혀 있다는 뜻이라, 어긋났는지조차 확인할
+    수 없다."""
+    mismatched, missing = [], []
+    for pi_name, pi_value, host_name in AGREED_CONSTANTS:
+        if not hasattr(vl, host_name):
+            missing.append(f"{host_name} (Pi {pi_name} = {pi_value})")
+            continue
+        host_value = getattr(vl, host_name)
+        if abs(float(host_value) - float(pi_value)) > 1e-9:
+            mismatched.append(f"{host_name}: Host {host_value} vs Pi {pi_value}")
+
+    detail = []
+    if missing:
+        detail.append("Host에 없는 상수: " + ", ".join(missing))
+    if mismatched:
+        detail.append("값이 다른 상수: " + ", ".join(mismatched))
+    if not detail:
+        detail.append("  ".join(f"{n.split('.')[-1]}={v}"
+                                for n, v, _h in AGREED_CONSTANTS))
+    else:
+        detail.append("")
+        detail.append("⚠️ 어긋나도 차량은 움직인다 — Pi가 자기 값으로 자르기")
+        detail.append("   때문이다. 대신 Host가 의도한 속도와 실제 속도가")
+        detail.append("   달라져서 Host의 도착 예측이 조용히 어긋난다.")
+
+    result.add("5. 합의 속도가 양쪽에서 같다", not (missing or mismatched),
+               "\n".join(detail))
+
+    # 상태·보고 어휘. 문자열 하나가 어긋나면 그 상태에서만 미션이 멈춘다 —
+    # 전부 도는 것처럼 보이다가 한 자리에서만 막히므로 찾기가 가장 어렵다.
+    if hasattr(vl, "_STATUS_TO_STATE"):
+        unknown = sorted(set(vl._STATUS_TO_STATE.values()) - set(MissionState.ALL))
+        result.add("5b. Host가 보내는 state 이름을 Pi가 전부 안다",
+                   not unknown,
+                   f"Pi가 모르는 이름: {unknown}" if unknown else
+                   f"{len(set(vl._STATUS_TO_STATE.values()))}개 전부 MissionState에 있다")
+
+    if hasattr(vl, "_REPORT_TO_HOST"):
+        pi_reports = {v for k, v in vars(Report).items() if not k.startswith("_")
+                      and isinstance(v, str)}
+        unknown = sorted(set(vl._REPORT_TO_HOST) - pi_reports)
+        result.add("5c. Host가 번역하는 보고 이름을 Pi가 실제로 보낸다",
+                   not unknown,
+                   f"Pi가 안 보내는 이름: {unknown}" if unknown else
+                   f"{len(vl._REPORT_TO_HOST)}개 전부 Report에 있다")
+
+
 def run(translated):
     vl = load_host_link()
     result = Result()
@@ -224,7 +285,15 @@ def run(translated):
             f"사유: {decision.reason}" if not decision.ok else
             "거부되지 않았다 — 규약이 헐거워졌다")
 
-        # --- 5. 어휘 공백 (정보) --------------------------------------------
+        # --- 5. 합의 상수가 양쪽에서 같은가 ---------------------------------
+        #
+        # 이 셋은 두 저장소가 **각자 들고 있는** 값이라 한쪽만 바꾸면 조용히
+        # 갈라진다. 갈라져도 "동작은 한다" — Pi가 자기 값으로 클램프하기
+        # 때문이다. 다만 Host가 의도한 속도와 실제로 나가는 속도가 달라져서,
+        # Host의 도착 예측이 어긋나고 그 원인을 로그로 찾을 수 없다.
+        _check_agreed_constants(vl, result)
+
+        # --- 6. 어휘 공백 (정보) --------------------------------------------
         print()
         print("  ℹ️  Host 어휘에 대응이 없는 Pi 보고:")
         for report in NO_HOST_EQUIVALENT:
@@ -259,8 +328,13 @@ def main():
 
     ok = run(args.translated)
     if args.as_is:
-        print("\n  (--as-is는 실패가 정상입니다 — 지금 어긋나 있다는 것을")
-        print("   실행으로 보여주는 것이 목적입니다. --translated로 다시 돌려 보세요.)")
+        if ok:
+            print("\n  ✅ Host 코드가 2026-08-26 확정 규격을 따르고 있습니다 —")
+            print("     이대로 실기 루프백으로 넘어가도 됩니다.")
+            return 0
+        print("\n  (--as-is가 실패하면 Host 코드가 아직 확정 규격 이전입니다.")
+        print("   --translated로 돌려 '변환만 넣으면 붙는다'를 확인한 뒤,")
+        print("   grippers_docs/grippers_host_requests_20260827.md를 전달하세요.)")
         return 0
     if not ok:
         print("\n  남은 실패가 '2. 보고'뿐이라면 Host의 poll_status() 한 줄입니다.")
