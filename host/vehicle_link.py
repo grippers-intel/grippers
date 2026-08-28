@@ -148,7 +148,32 @@ _TERMINAL = {"GRASP_DONE", "PLACE_DONE", "FAILED"}
 BACK_OFF = "BACK_OFF"      # 물체가 턱 선보다 가깝다 -> 뒤로
 CREEP_IN = "CREEP_IN"      # 물체가 전진 거리 밖이다 -> 앞으로
 RE_AIM = "RE_AIM"          # 물체가 턱 폭 밖이다 -> 좌우로 다시 겨눔
+RE_LOOK = "RE_LOOK"        # Pi 가 목표를 못 봤다 -> 물러나서 다시 보인다
+WAIT = "WAIT"              # Pi 가 스스로 고치는 중 -> 차를 움직이면 안 된다
 UNFIXABLE = "UNFIXABLE"    # Host 가 움직여서 고칠 수 있는 게 아니다
+
+# ---------------------------------------------------------------------------
+# 구조화된 보정 — Pi 는 이것을 **이미 보내고 있었다**
+# ---------------------------------------------------------------------------
+#
+# 아래 `_CORRECTION_KEYS` 는 Pi 의 한글 사유를 정규식으로 뜯는 임시 다리였고,
+# 그 주석은 "제대로 된 해법은 Pi 가 보정 코드를 함께 보내는 것"이라고 적어
+# 두었다. 확인해 보니 **Pi 쪽은 그 일을 이미 끝냈다** — `domain/task/
+# corrections.py` 가 `Correction` 을 만들고 `udp_host_link.report()` 가 그것을
+# 보고 JSON 의 `fix` 필드로 실어 보낸다. Host 만 그것을 안 읽고 있었다.
+#
+# 그래서 이제 `fix` 를 먼저 읽고, 없을 때만 문장 파싱으로 내려간다. 문장
+# 파싱을 지우지 않는 이유는 현장의 Pi 가 옛 빌드일 수 있기 때문이다 —
+# 내일 실기에서 그것 때문에 못 움직이는 일은 없어야 한다.
+#
+# `corrections.py` 의 동작 이름 -> Host 어휘.
+_FIX_TO_KIND = {
+    "retreat":   BACK_OFF,
+    "advance":   CREEP_IN,
+    "rotate":    RE_AIM,
+    "reacquire": RE_LOOK,
+    "wait":      WAIT,
+}
 
 _CORRECTION_KEYS = (
     ("후진 필요", BACK_OFF),
@@ -187,6 +212,38 @@ class BasketFix:
 
     distance_m: Optional[float] = None
     lateral_m: Optional[float] = None
+    #: Pi 가 직접 계산한 전후 오차(m, +면 더 가야 한다). 구조화된 `fix` 에서
+    #: 나오며, 있으면 `distance_m` 보다 이쪽이 우선이다 — 라이다 판독에서
+    #: 목표를 빼는 계산을 Host 가 다시 하지 않아도 되고, 두 목표값이 갈라질
+    #: 여지도 없어진다.
+    forward_m: Optional[float] = None
+
+
+def basket_fix_from_fix(fix) -> Optional[BasketFix]:
+    """Pi 의 구조화된 `fix` -> BasketFix. 못 읽으면 None.
+
+    ⚠️ **너무 가까운 경우가 여기서만 살아난다.** 아래 문장 파서는 "바구니가
+    멀다"만 잡고 "하한보다 가깝다"는 일부러 안 잡는다 — 그래서 바구니에
+    너무 붙어 서면 Host 가 아무 보정도 못 받고 그 자리에 영원히 서 있었다.
+    Pi 의 `corrections.from_insert` 는 그 경우에 `retreat` 를 정확히 계산해
+    보내고 있었고, 읽기만 하면 된다.
+
+    `forward_m` 은 Pi 가 이미 계산해 둔 오차(판독 - 목표)다. 그대로 실어
+    보낸다 — 거리로 되돌렸다가 Host 가 자기 목표로 다시 빼면 같은 계산을 두
+    번 하는 셈이고, 두 목표값이 갈라지는 순간 조용히 어긋난다.
+
+    이 모듈은 `mission_config` 를 import 하지 않는다. 여기는 전선 계층이고,
+    무엇을 목표로 삼을지는 미션의 판단이다."""
+    if not isinstance(fix, dict):
+        return None
+    action = fix.get("action")
+    forward = fix.get("forward_m")
+    lateral = fix.get("lateral_m")
+    if action in ("advance", "retreat") and isinstance(forward, (int, float)):
+        return BasketFix(forward_m=float(forward))
+    if action == "rotate" and isinstance(lateral, (int, float)):
+        return BasketFix(lateral_m=float(lateral))
+    return None
 
 
 def parse_basket_fix(detail: str) -> Optional[BasketFix]:
@@ -213,19 +270,56 @@ class GraspCorrection:
     kind: str
     detail: str = ""
     lateral_mm: Optional[float] = None
+    #: Pi 가 알려 준 전후 오차(mm, +면 더 가야 한다). 구조화된 `fix` 에서만
+    #: 나온다 — 지금은 진단·로그용이고, 실제 이동량은 한 걸음 고정이다
+    #: (`mission_config.GRASP_ALIGN_STEP_M`). 이 저장소의 접근 제어가 전부
+    #: "관측 -> 소이동 -> 재관측"이라, 한 번 받은 값으로 끝까지 가지 않는다.
+    forward_mm: Optional[float] = None
 
     @property
     def actionable(self) -> bool:
         """Host 가 차를 움직여 고칠 수 있는가."""
         if self.kind == UNFIXABLE:
             return False
+        if self.kind == WAIT:
+            # Pi 가 servo 1 로 고치는 중이다. 이때 차가 움직이면 Pi 의 보정과
+            # 겹쳐 오히려 어긋난다 — 기다리는 것이 할 일이다.
+            return False
         if self.kind == RE_AIM and self.lateral_mm is None:
             return False   # 방향을 모른다 — 찍어서 돌지 않는다
         return True
 
 
-def classify_correction(detail: str) -> GraspCorrection:
-    """Pi 의 `detail` 문장 -> `GraspCorrection`. 모르면 UNFIXABLE."""
+def correction_from_fix(fix, detail: str = "") -> Optional[GraspCorrection]:
+    """Pi 가 보낸 구조화된 `fix` -> `GraspCorrection`. 못 읽으면 None.
+
+    문장 파싱과 달리 여기서는 **추측이 없다.** 모르는 동작 이름이 오면
+    UNFIXABLE 로 떨어뜨리지 않고 None 을 돌려준다 — 그래야 호출부가 문장
+    파싱으로 내려가 볼 수 있다. 모르는 것을 "고칠 수 없다"로 굳히면 옛
+    Pi 빌드와 붙었을 때 기물을 통째로 포기한다."""
+    if not isinstance(fix, dict):
+        return None
+    kind = _FIX_TO_KIND.get(fix.get("action"))
+    if kind is None:
+        return None
+
+    def _mm(key):
+        value = fix.get(key)
+        if not isinstance(value, (int, float)):
+            return None
+        return float(value) * 1000.0
+
+    return GraspCorrection(kind, detail, lateral_mm=_mm("lateral_m"),
+                            forward_mm=_mm("forward_m"))
+
+
+def classify_correction(detail: str, fix=None) -> GraspCorrection:
+    """Pi 의 보고 -> `GraspCorrection`. 모르면 UNFIXABLE.
+
+    구조화된 `fix` 가 있으면 그것을 쓰고, 없을 때만 문장을 파싱한다."""
+    structured = correction_from_fix(fix, detail)
+    if structured is not None:
+        return structured
     m = _LATERAL_RE.search(detail or "")
     lateral = float(m.group(1)) if m else None
     for key, kind in _CORRECTION_KEYS:
@@ -296,6 +390,11 @@ class VehicleLink:
 
     #: 마지막으로 받은 Pi 보고 (report, state, detail). 아직 없으면 None.
     last_report: Optional[tuple[str, str, str]] = None
+
+    #: 구동계가 명령을 받아 갈 상태가 아니라고 Pi 가 알려 온 마지막 사유.
+    #: 한 번 뜨면 지우지 않는다 — 실행이 끝난 뒤에도 "그 실행에서 구동계
+    #: 경보가 있었다"가 남아 있어야 로그를 읽는 사람이 원인을 짚는다.
+    base_alarm: Optional[str] = None
 
     #: 마지막 GRASP_BLOCKED 가 요청한 재정렬. mission.py 의 GRASP 가 읽고
     #: GRASP_ALIGN 으로 넘어간다. **읽은 쪽이 지운다**(take_correction) —
@@ -380,6 +479,7 @@ class UdpVehicleLink(VehicleLink):
         self.cmd_port = cmd_port
         self.verbose = verbose
         self.last_report: Optional[tuple[str, str, str]] = None
+        self.base_alarm: Optional[str] = None
         self._warn_seen: dict[str, tuple[float, int]] = {}
 
         # INSERT 는 두 번 보고된다: INSERT_DONE(또는 INSERT_FAILED) 다음에
@@ -488,10 +588,27 @@ class UdpVehicleLink(VehicleLink):
                 return "FAILED"
             return "PLACE_DONE"
 
+        if report == Report.BASE_UNRESPONSIVE:
+            # 구동계가 명령을 받아 갈 상태가 아니다 — **소프트웨어로는 차를
+            # 세울 수 없다.** 2026-08-28에 정지를 836회 보내고도 못 세운
+            # 상태가 이것이다. 미션을 자동으로 중단하지는 않는다: 명령이 안
+            # 닿는 상태라 중단해도 차가 서지 않고, 복구되면 그대로 이어가는
+            # 편이 낫다. 대신 사람이 못 지나치게 크게 찍는다.
+            self.base_alarm = detail
+            self._warn(f"\n{'=' * 64}\n"
+                       f"🚨 구동계 이상 [{state}] {detail}\n"
+                       f"   소프트웨어 정지가 바퀴까지 닿지 않을 수 있습니다.\n"
+                       f"   ▶ 차체 전원 스위치를 쓰세요. 그게 진짜 비상정지입니다.\n"
+                       f"{'=' * 64}")
+            return "BUSY"
+
         if report in (Report.GRASP_BLOCKED, Report.INSERT_BLOCKED):
-            self.last_correction = classify_correction(detail)
+            # 구조화된 `fix` 를 먼저 본다 — Pi 는 이것을 이미 보내고 있다.
+            structured = msg.get("fix")
+            self.last_correction = classify_correction(detail, structured)
             if report == Report.INSERT_BLOCKED:
-                fix = parse_basket_fix(detail)
+                fix = (basket_fix_from_fix(structured)
+                       or parse_basket_fix(detail))
                 if fix is not None:
                     self.last_basket_fix = fix
 

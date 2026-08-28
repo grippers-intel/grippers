@@ -36,7 +36,8 @@ sys.path.insert(0, str(Path(__file__).parent / "aruco"))
 import config as cfg
 from localizer import Pose, box_pose
 from navigator import GridPathPlanner, DriveCommand, DriveMode, DriveSequencer
-from vehicle_link import BACK_OFF, CREEP_IN, RE_AIM, MissionCommand, VehicleLink
+from vehicle_link import (BACK_OFF, CREEP_IN, RE_AIM, RE_LOOK, MissionCommand,
+                           VehicleLink)
 
 XY = tuple[float, float]
 PieceMap = dict[str, list[XY]]
@@ -339,8 +340,13 @@ class MissionFSM:
         if remaining <= 0.01:
             return None
 
-        if fix.distance_m is not None:
+        # Pi 가 오차를 직접 계산해 줬으면 그것을 쓴다. 없으면 라이다 판독에서
+        # Host 목표를 빼서 낸다(옛 Pi 빌드 대비). 부호는 둘 다 +가 "더 가야
+        # 한다"이고, **-면 후진**이다 — 바구니에 너무 붙어 선 경우다.
+        error = fix.forward_m
+        if error is None and fix.distance_m is not None:
             error = fix.distance_m - mcfg.BASKET_TARGET_LIDAR_M
+        if error is not None:
             if abs(error) > mcfg.BASKET_DISTANCE_DEADBAND_M:
                 return (min(abs(error), remaining),
                         "forward" if error > 0 else "back")
@@ -465,8 +471,11 @@ class MissionFSM:
             else:
                 moved = math.hypot(pose.x - fx, pose.y - fy)
                 done = moved >= mcfg.GRASP_ALIGN_STEP_M
-                cmd = "stop" if done else ("back" if self._align.kind == BACK_OFF
-                                           else "go")
+                # RE_LOOK 도 후진이다 — Pi 가 목표를 아예 못 본 경우이고,
+                # 너무 가까워 화각 아래로 빠졌을 때가 대표적이라 물러나야
+                # 다시 보인다. 앞으로 가면 더 안 보인다.
+                backing = self._align.kind in (BACK_OFF, RE_LOOK)
+                cmd = "stop" if done else ("back" if backing else "go")
 
             link.send(MissionCommand(cmd, "GRASP_ALIGN", pose.x, pose.y,
                                       pose.yaw_deg, target_label=self.target_label))

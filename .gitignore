@@ -6,3 +6,5 @@ dataset/
 *.log
 .DS_Store
 
+host/logs/
+*.jsonl

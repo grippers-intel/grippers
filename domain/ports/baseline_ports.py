@@ -81,6 +81,13 @@ class Report:
     # 섞인 명령 등 — 추측해서 움직이지 않고 되돌려준다.
     REJECTED = "REJECTED"
 
+    # 구동계가 명령을 받아 갈 상태가 아니다 (2026-08-28 정지 실패 사고).
+    # `cmd_vel`을 아무도 안 듣거나, 컨트롤러가 물려 자기 발행을 멈춘 경우다.
+    # **이 보고가 오면 소프트웨어로는 차를 세울 수 없다** — Host는 사람을
+    # 불러야 하고, 사람은 차체 전원 스위치를 써야 한다. 상태가 바뀔 때만
+    # 나온다(발생 1회, 복구 1회).
+    BASE_UNRESPONSIVE = "BASE_UNRESPONSIVE"
+
 
 @dataclass(frozen=True)
 class HostCommand:

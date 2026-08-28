@@ -55,6 +55,7 @@ import config as cfg
 from localizer import Camera, RobotLocalizer, detect, make_detector
 
 import geti_detector
+import mission_log
 import piece_map
 import window_layout
 from live_map import LiveMap
@@ -103,6 +104,17 @@ def main() -> int:
     ap.add_argument("--vehicle-status-port", type=int, default=5006)
     ap.add_argument("--hz-every", type=int, default=20,
                     help="N 사이클마다 루프 Hz 와 단계별 소요를 출력한다(0이면 끄기)")
+    # --- 기록과 모니터링 (2026-08-29 실기 준비) ---
+    ap.add_argument("--log-file", type=str, default=None,
+                    help="상태 전이·Pi 보고를 이 경로에 남긴다(.jsonl 도 같이 생김). "
+                         "안 주면 host/logs/ 아래에 시각으로 자동 생성")
+    ap.add_argument("--no-log", action="store_true",
+                    help="파일 기록을 끈다(기본은 켜짐)")
+    ap.add_argument("--quiet-monitor", action="store_true",
+                    help="상태 전이·Pi 보고를 터미널에 안 찍는다(파일에는 남는다)")
+    ap.add_argument("--manual", action="store_true",
+                    help="터미널에서 Enter 를 칠 때마다 다음 단계로 넘어간다. "
+                         "b+Enter 는 한 단계 되돌리기, q+Enter 는 정지 후 종료")
     args = ap.parse_args()
 
     signal.signal(signal.SIGINT, _on_sigint)
@@ -154,7 +166,7 @@ def main() -> int:
 
     loc = RobotLocalizer()
     tracker = piece_map.PieceTracker()
-    fsm = MissionFSM(manual_mode=args.step)
+    fsm = MissionFSM(manual_mode=args.step or args.manual)
     if args.vehicle_ip:
         link = UdpVehicleLink(args.vehicle_ip, cmd_port=args.vehicle_cmd_port,
                               status_port=args.vehicle_status_port)
@@ -201,7 +213,37 @@ def main() -> int:
     # ⚠️ stdin 이 TTY 가 아니면(백그라운드·nohup·파이프) readline 이 EOF 로
     # 즉시 돌아온다. 그걸 Enter 로 오해하면 기동하자마자 멈춘다 — 실제로
     # 그랬다. 사람이 칠 수 있는 터미널일 때만 감시를 건다.
-    _enter_armed = (not args.no_stop_on_enter) and sys.stdin.isatty()
+    # 수동 모드에서 Enter 는 "정지"가 아니라 "다음 단계"다. 두 의미를 같은
+    # 키에 걸 수 없으므로 감시를 통째로 바꿔 단다.
+    if args.manual and sys.stdin.isatty():
+        def _manual_watch():
+            global _stop
+            while not _stop:
+                try:
+                    line = sys.stdin.readline()
+                except Exception:
+                    return
+                if line == "":
+                    return                      # EOF 는 입력이 아니다
+                key = line.strip().lower()
+                if key in ("q", "quit", "exit"):
+                    _stop = True
+                    print("\n[STOP] q — 정지하고 종료합니다", flush=True)
+                    return
+                if key == "b":
+                    fsm.request_back()
+                    print("\n[수동] 한 단계 되돌립니다", flush=True)
+                    continue
+                fsm.request_advance()
+        threading.Thread(target=_manual_watch, daemon=True).start()
+        print("\n>>> 수동 모드 — Enter: 다음 단계 / b: 되돌리기 / q: 정지 <<<\n",
+              flush=True)
+    elif args.manual:
+        print("\n[주의] stdin 이 터미널이 아니라 수동 진행을 못 겁니다\n",
+              flush=True)
+
+    _enter_armed = (not args.no_stop_on_enter) and sys.stdin.isatty() \
+        and not args.manual
     if _enter_armed:
         def _enter_watch():
             global _stop
@@ -215,14 +257,23 @@ def main() -> int:
             print("\n[STOP] Enter — 정지합니다", flush=True)
         threading.Thread(target=_enter_watch, daemon=True).start()
         print("\n>>> Enter 를 치면 즉시 정지하고 종료합니다 <<<\n", flush=True)
-    elif not args.no_stop_on_enter:
+    elif not args.no_stop_on_enter and not args.manual:
         print("\n[주의] stdin 이 터미널이 아니라 Enter 정지를 못 겁니다 — "
               "--seconds 로 시간 제한을 두세요\n", flush=True)
+
+    # --- 기록 ---
+    _log_path = None
+    if not args.no_log:
+        _log_path = (Path(args.log_file) if args.log_file
+                     else mission_log.default_log_path())
+    logger = mission_log.MissionLogger(path=_log_path,
+                                       echo=not args.quiet_monitor)
 
     _deadline = (time.time() + args.seconds) if args.seconds else None
 
     frames_seen = 0
     _placed = False
+    _last_hz = None
     # --- 루프 Hz 측정 (2026-08-28 HANDOFF §0-2) ---
     hz_n = 0
     hz_t0 = time.perf_counter()
@@ -261,6 +312,13 @@ def main() -> int:
             _t_fsm = time.perf_counter(); hz_acc["fsm"] += _t_fsm - _t_geti
             frames_seen += 1
 
+            # 사이클마다 넘긴다 — 무엇이 사건인지는 logger 가 판단한다.
+            logger.record(
+                state=fsm.state.name, pose=pose, cmd=fsm.last_cmd,
+                target=fsm.target_label, report=link.last_report,
+                base_alarm=getattr(link, "base_alarm", None),
+                ready=fsm.ready_to_advance, hz=_last_hz)
+
             if fsm.state == State.SEARCH_TARGET and frames_seen % 10 == 0:
                 print(f"\r[SEARCH_TARGET] 작업 영역에 남은 기물 없음 — {pose}   ",
                       end="", flush=True)
@@ -279,6 +337,7 @@ def main() -> int:
             if args.hz_every and hz_n >= args.hz_every:
                 _el = time.perf_counter() - hz_t0
                 _ms = {k: v / hz_n * 1000 for k, v in hz_acc.items()}
+                _last_hz = hz_n / _el
                 print(f"\n[hz] {hz_n / _el:.2f} Hz  ({_el / hz_n * 1000:.0f} ms/사이클)"
                       f"  캡처+ArUco {_ms['cap']:.0f}  geti {_ms['geti']:.0f}"
                       f"  FSM {_ms['fsm']:.0f}  화면 {_ms['view']:.0f} ms", flush=True)
@@ -322,6 +381,7 @@ def main() -> int:
             live_map.close()
         if isinstance(link, UdpVehicleLink):
             link.close()
+        logger.close()
 
     print(f"\n\n종료 — 마지막 상태: {fsm.state.name}")
     return 0
