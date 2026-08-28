@@ -9,6 +9,7 @@ arm_driver_node는 rclpy·grippers_interfaces와 실제 SO-ARM101 의존성이 �
 
 import ast
 import importlib.util
+import math
 import pathlib
 
 ARM_NODE = (
@@ -836,3 +837,65 @@ def test_carry_is_an_accepted_stage_and_reachable_from_safe():
     source = ast.unparse(_function("_move_floor_stage"))
     # INSERT는 carry에서 곧장 drop으로 간다.
     assert "drop 이동은 idle/safe/carry 자세에서만 시작할 수 있습니다" in source
+
+def test_좌우_보정_허용오차가_정렬_허용치를_분간할_수_있다():
+    """2026-08-28 실기 회귀 — 보정이 서보 격자에 걸려 통째로 버려졌다.
+
+    `_glide_phase` 는 목표까지의 차이가 허용오차보다 작으면 그 관절을
+    "이미 도착"으로 보고 이동 대상에서 뺀다. 교시 자세용 기본값
+    FLOOR_POSE_START_TOLERANCE_RAW(120 raw ≈ 10.5도)를 좌우 보정에도 쓰면,
+    분간해야 할 단위보다 격자가 커서 **어떤 보정도 실행되지 않는다.**
+    그때 로그는 이렇게 남았고 서비스는 성공을 보고했다.
+
+        offset_base_yaw: servo 1 2067 -> 2067 (+5.2도)
+
+    분간해야 하는 단위는 좌우 허용치 GRASP_CENTERING_TOLERANCE_M(10mm)를
+    servo 1 회전각으로 옮긴 값이다. 그보다 격자가 크면 원리적으로 못 맞춘다.
+    """
+    arm = _module_constants(ARM_NODE, {"BASE_YAW_TOLERANCE_RAW",
+                                       "FLOOR_POSE_START_TOLERANCE_RAW"})
+    domain = _module_constants(
+        DOMAIN_MISSION.with_name("baseline_constants.py"),
+        {"GRASP_CENTERING_TOLERANCE_M", "SERVO1_AXIS_TO_JAW_MM"})
+
+    # STS3215 는 한 바퀴가 4096 카운트다(arm_driver_node.RAW_PER_RADIAN).
+    raw_per_rad = 4096.0 / (2.0 * math.pi)
+    tolerance_rad = math.atan2(domain["GRASP_CENTERING_TOLERANCE_M"],
+                               domain["SERVO1_AXIS_TO_JAW_MM"] / 1000.0)
+    tolerance_raw = tolerance_rad * raw_per_rad
+
+    assert arm["BASE_YAW_TOLERANCE_RAW"] < tolerance_raw, (
+        f"보정 허용오차 {arm['BASE_YAW_TOLERANCE_RAW']} raw 가 "
+        f"정렬 허용치 {tolerance_raw:.0f} raw 보다 크다 — 보정이 버려진다")
+    # 그리고 교시 자세용 격자를 그대로 쓰면 안 된다는 것도 같이 못 박는다.
+    assert arm["FLOOR_POSE_START_TOLERANCE_RAW"] > tolerance_raw
+
+
+def test_좌우_보정은_전용_허용오차로_움직인다():
+    """`_on_offset_base_yaw` 가 기본 격자를 그대로 쓰면 위 계산이 무의미하다."""
+    fn = _function("_on_offset_base_yaw")
+    source = ast.unparse(fn)
+
+    assert "tolerance_raw=" in source, "허용오차를 안 넘긴다 — 기본 격자로 간다"
+    assert "BASE_YAW_TOLERANCE_RAW" in source
+
+
+def test_좌우_보정은_도달을_확인하고_답한다():
+    """예전엔 무조건 ok=True 였다. 안 움직였는데 성공이 나가면 Pi 는 보정이
+    먹은 줄 알고 같은 관측·같은 보정을 무한히 반복한다."""
+    fn = _function("_on_offset_base_yaw")
+    source = ast.unparse(fn)
+
+    assert "response.ok = abs(" in source or "abs(error) <= BASE_YAW_TOLERANCE_RAW" in source, (
+        "도달 확인 없이 ok 를 정하고 있다")
+    assert "response.ok = True" not in source, "무조건 성공을 반환하면 안 된다"
+
+
+def test_한계각은_교시_정면_기준_절대각이다():
+    """이 서비스는 현재 위치 기준 **상대** 회전이다. 한 번의 요청 크기만
+    보면 같은 요청이 반복될 때 servo 1 이 얼마든지 멀리 걸어간다."""
+    fn = _function("_on_offset_base_yaw")
+    source = ast.unparse(fn)
+
+    assert "IDLE_CRADLE_RAW" in source, "교시 정면을 기준으로 안 잡는다"
+    assert "MAX_BASE_YAW_OFFSET_RAD" in source
