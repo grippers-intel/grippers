@@ -1330,14 +1330,29 @@ class ArmDriverNode(Node):
         return response
 
     def _on_fold_to_cradle(self, request, response):
+        """팔을 교시 IDLE(IDLE_CRADLE_RAW)로 접는다. 도달을 확인하고 답한다.
+
+        ⚠️ 예전 구현은 IDLE 로 가지 않았다. CRADLE_XYZ_M([0.15, 0, 0.20])
+        으로 역기구학 이동을 한 뒤 1.2초 자고 **무조건** success=True 를
+        냈다. 그 좌표에는 "INSERT 후 복귀 경로 별도 실측 필요"라는 TODO 가
+        달려 있었다 — 교시된 자세가 아니라 자리표시자다.
+
+        2026-08-28 실기에서 그 대가를 치렀다. 이 서비스가 성공을 반환한
+        직후 팔은 IDLE 에서 s3=-856 s5=-935 raw(각각 약 75도, 82도)
+        떨어진 자세에 서 있었다. 성공을 믿고 다음 동작을 시키면 자세
+        게이트에서 거부되거나, 더 나쁘게는 그 자세에서 바닥으로 내려간다.
+
+        이제 `_auto_align_to_idle()` 에 위임한다. 그 함수는 어디서
+        시작하든 안전한 경로를 고르고(바닥 높이면 safe 를 경유해 들어
+        올린다), 열린 그리퍼를 접기 전에 닫고, **도달할 때까지 기다렸다가**
+        잔차를 로그로 남긴다. 도달 못 하면 예외가 나므로 success=False 가
+        정직하게 나간다."""
         try:
             self._require_operational_servos(range(1, 6))
-
-            soarm.go(CRADLE_XYZ_M, grip=None, real=True, down=False, secs=1.2)
-            time.sleep(1.2)
-
+            self._auto_align_to_idle()
             self._require_operational_servos(range(1, 6))
             response.success = True
+            response.message = "IDLE 복귀 완료"
         except Exception as e:
             self.get_logger().error(f"fold_to_cradle 실패: {e}")
             response.success = False

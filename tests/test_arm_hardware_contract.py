@@ -165,11 +165,20 @@ def test_floor_stage_freezes_servo1_for_safe_and_grasp_but_not_idle_or_drop():
 
 
 def test_fold_to_cradle_checks_servos_before_and_after_motion():
+    """접기는 서보 상태를 앞뒤로 확인하고 **검증된 IDLE 경로**로 가야 한다.
+
+    ⚠️ 이 테스트는 예전에 `soarm.go` 호출을 요구했다 — 즉 결함을 고정하고
+    있었다. 그 구현은 CRADLE_XYZ_M(자리표시자 좌표, "실측 필요" TODO 가
+    달린)으로 역기구학 이동을 한 뒤 무조건 성공을 반환했고, 2026-08-28
+    실기에서 성공을 반환한 직후 팔이 IDLE 에서 s3=-856 s5=-935 raw 떨어진
+    자세에 서 있었다. 지금은 `_auto_align_to_idle` 에 위임한다 — 안전한
+    경로를 고르고 도달까지 기다렸다가 답하는 유일한 경로다."""
     fn = _function("_on_fold_to_cradle")
     names = [_called_name(call) for call in _calls(fn)]
 
     assert names.count("_require_operational_servos") >= 2
-    assert "go" in names
+    assert "_auto_align_to_idle" in names
+    assert "go" not in names
 
 
 def test_gripper_checks_servo_and_position_write_result():
