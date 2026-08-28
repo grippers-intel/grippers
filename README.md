@@ -151,45 +151,71 @@ host/geti_sdk-deployment/deployment/Detection/model/model.bin
 같은 모델인지는 해시로 확인할 수 있다 — `model.xml` 과 `config.json` 이
 저장소 것과 일치해야 한다.
 
-## 웹캠 두 대 — 실기 확인 완료, 그리고 하드코딩이 실제로 틀렸다
+## 웹캠 두 대 — 실기 확인 완료. 그리고 내 첫 판단이 틀렸다
 
-C920 두 대를 붙여 `host/mac_live_view.py` 로 확인했다(2026-08-28).
+C920 두 대를 USB 허브에 붙여 확인했다(2026-08-28).
 
-**`config.py` 의 `CAM_INDICES = (0, 1)` 은 이 맥에서 틀린 값이다.**
+**결론: macOS 에서는 이름으로 카메라를 고를 수 없다. `CAM_INDICES` 가 맞다.**
 
-```
-[0] FaceTime HD 카메라      <- 내장. 이것이 0번이다
-[1] HD Pro Webcam C920
-[2] HD Pro Webcam C920
-```
-
-Windows 는 DirectShow 열거 순서가 곧 cv2 인덱스라 `(0, 1)` 이 그냥 맞았다.
-macOS 에서 그대로 쓰면 **내장 카메라를 cam0 으로 잡는다.** 이름 기반
-`resolve_indices()` 는 정확히 `[1, 2]` 를 골랐다.
-
-실시간 결과:
+처음에는 반대로 판단했다. 열거 결과가 이렇게 나와서
 
 ```
-이름으로 고른 인덱스: [1, 2]  (HD Pro Webcam C920, HD Pro Webcam C920)
-164 프레임, 평균 9.3 FPS  (카메라 2대 + ArUco 매 프레임 + geti 0.3초 주기)
-ArUco  cam0 = 4개
-geti   cam0 = star, rook, box, knight, rook, star, soccer, queen, soccer, queen, rook
+AVFoundation / system_profiler :  [0] FaceTime  [1] C920  [2] C920
 ```
 
-여섯 클래스가 전부 나왔다. 예고한 초점 경고도 그대로 떴다.
-
-Host 팀 Windows 루프가 ~7.0 Hz 였으므로 이 값도 뒤지지 않는다.
-
-### 확장 디스플레이
+"`CAM_INDICES = (0, 1)` 은 내장 카메라를 잡는 틀린 값이고, 이름으로 골라야
+한다" 고 적고 그렇게 구현했다. **실제로 열어 보니 정반대였다.**
 
 ```
-python3 host/mac_live_view.py --display 1 --seconds 60
+실제 cv2.VideoCapture           :  [0] C920  [1] C920  [2] FaceTime
 ```
 
-Quartz 로 전역 데스크톱 좌표를 읽어 그 화면의 origin 으로 창을 옮긴다 —
-화면 배치가 바뀌어도 맞는다.
+OpenCV 는 외장을 먼저 놓는다. 그래서 원본의 `(0, 1)` 이 이 맥에서도 맞는
+값이었고, 내 "이름 기반" 코드가 `[1, 2]`(C920 한 대 + 내장 카메라)를 골라
+**오른쪽 화면에 사람 얼굴이 나왔다.**
 
----
+`AVCaptureDeviceDiscoverySession` 에 외장 타입을 먼저 요구해도 macOS 가 제
+순서대로 돌려주므로, **열거 결과로는 cv2 인덱스를 복원할 수 없다.** 그래서
+`list_video_devices()` 는 macOS 에서 빈 목록을 돌려주고, 호출부가
+`config.CAM_INDICES` 로 떨어지게 했다.
+
+인덱스를 확정하는 유일하게 확실한 방법은 찍어 보는 것이다.
+
+```
+python3 -c "import sys; sys.path.insert(0,'host'); import camera_backend as c; print(c.save_shots())"
+```
+
+`/tmp/camshot/idx*.png` 를 눈으로 보고 `config.CAM_INDICES` 를 정한다.
+
+### run_mission.py 실기 결과
+
+```
+python3 run_mission.py --cams 0 1 --show-cams --display 1 --cam-width 900 --mock-complete
+```
+
+```
+[display] 화면 1 origin=(1352, 0) 에 카메라 창 2개 (900x506)
+[SEARCH_TARGET] x=1346.0mm y=661.8mm yaw=88.3deg cams=2
+[APPROACH_PIECE] target=rook -> [GRASP] -> [CARRY_TO_DEST]
+[hz] 10.14 Hz (99 ms/사이클)  캡처+ArUco 49  geti 1  FSM 4  화면 21 ms
+```
+
+카메라 두 대로 로봇 포즈를 잡고 FSM 이 전이한다. **Windows 보다 빠르다.**
+
+| | 루프 |
+|---|---|
+| Host 팀 Windows | 7.0 Hz (143 ms) |
+| macOS / M1 Pro | **9.6~10.1 Hz (99~104 ms)** |
+
+Host 팀은 143 ms 중 90 ms 가 화면 렌더라고 했는데 여기서는 21 ms 다.
+
+`CARRY_TO_DEST` 에서 멈춰 있는 것은 정상이다 — `--mock-complete` 는 차량이
+없는 상태라 로봇이 실제로 안 움직여서 목적지에 영영 도착하지 않는다.
+
+### 창 크기와 위치
+
+`--display 1` 로 확장 화면에, `--cam-width` 로 크기를 정한다. 지도 크기는
+`LIVEMAP_SIZE_IN` 환경변수로 조절한다(기본 9인치, 원본은 6인치였다).
 
 ## 설치
 

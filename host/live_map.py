@@ -37,6 +37,7 @@ Pi 쪽 워치독은 명령이 0.3초 안 오면 링크가 끊긴 것으로 보�
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -148,7 +149,10 @@ class LiveMap:
         self._on_back = on_back
         self._on_toggle_mode = on_toggle_mode
 
-        self.fig, self.ax = plt.subplots(figsize=(6, 6))
+        # 지도 크기. 확장 디스플레이(1920x1080)에서 6x6 인치는 작아서
+        # 기물 라벨이 겹친다. 환경변수로 조절할 수 있게 열어 둔다.
+        _size = float(os.environ.get("LIVEMAP_SIZE_IN", "9"))
+        self.fig, self.ax = plt.subplots(figsize=(_size, _size))
         try:
             self.fig.canvas.manager.set_window_title("Live Map")
         except Exception:

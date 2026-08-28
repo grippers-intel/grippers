@@ -83,7 +83,22 @@ def list_video_devices() -> list[tuple[int, str, str]]:
     같다는 보장이 없다 — 이름이 안 맞으면 `camera_backend.probe_indices()`
     로 실제로 열어 보고 확인할 것."""
     if _backend.IS_MACOS:
-        return _backend._macos_devices()
+        # ⚠️ macOS 에서는 **빈 목록을 돌려준다.** 이름은 읽을 수 있지만
+        # 그 순번이 cv2 인덱스가 아니기 때문이다.
+        #
+        # 2026-08-28 실측. AVFoundation 도 system_profiler 도 이렇게 준다:
+        #     [0] FaceTime HD 카메라   [1] C920   [2] C920
+        # 그런데 cv2 로 실제로 열어 보면 이렇다:
+        #     [0] C920 탑뷰   [1] C920 탑뷰   [2] FaceTime HD
+        # OpenCV 는 외장을 먼저 놓는데, AVCaptureDeviceDiscoverySession 에
+        # 외장 타입을 먼저 요구해도 macOS 가 제 순서대로 돌려주므로 열거
+        # 결과로는 그 매핑을 복원할 수 없다.
+        #
+        # 순번을 인덱스로 쓰면 조용히 틀린 카메라를 연다 — 실제로 이 이식에서
+        # 그랬다(C920 한 대 + 내장 카메라를 골랐다). 이름으로 못 고른다는
+        # 사실을 그대로 알리고, 호출부가 config.CAM_INDICES 로 떨어지게 한다.
+        # 어느 인덱스가 무엇인지는 `mac_live_view.py --shots` 로 눈으로 확인한다.
+        return []
     if not sys.platform.startswith("win"):
         return []
     ole32 = ctypes.windll.ole32

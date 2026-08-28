@@ -32,12 +32,22 @@ C920 은 초점이 움직이면 초점거리가 같이 변해서, 캘리브레�
 회피 방법은 카메라 쪽에 있다 — C920 은 웹캠 설정 유틸리티나 UVC 명령으로
 초점을 고정해 둘 수 있고, 한 번 고정하면 OpenCV 가 안 건드린다.
 
-## ⚠️ 장치 인덱스 순서
+## ⚠️ macOS 에서는 이름으로 카메라를 고를 수 없다
 
-Windows 에서는 DirectShow 열거 순서가 곧 `cv2.VideoCapture` 인덱스였다.
-macOS 에는 그런 보장이 없다. `list_devices()` 는 `system_profiler` 로 이름을
-읽지만, 그 순서가 cv2 인덱스와 같다는 보장은 없으므로 **실제로 열어 보는
-방식(`probe_indices`)** 을 같이 제공한다.
+Windows 에서는 DirectShow 열거 순서가 곧 `cv2.VideoCapture` 인덱스라
+"C920 이라는 이름의 카메라" 를 이름으로 찾을 수 있었다.
+
+**macOS 에서는 그 매핑을 복원할 방법이 없다.** 2026-08-28 실측:
+
+    AVFoundation / system_profiler :  [0] FaceTime  [1] C920  [2] C920
+    실제 cv2.VideoCapture          :  [0] C920      [1] C920  [2] FaceTime
+
+OpenCV 는 외장을 먼저 놓는데, `AVCaptureDeviceDiscoverySession` 에 외장
+타입을 먼저 요구해도 macOS 가 제 순서대로 돌려주므로 열거로는 못 맞춘다.
+
+그래서 `_macos_devices()` 가 주는 순번을 **인덱스로 쓰면 안 된다.** 이름은
+사람이 읽는 참고용이고, 인덱스는 `config.CAM_INDICES` 를 쓰거나
+`save_shots()` 로 한 장씩 찍어 눈으로 확인한다.
 """
 from __future__ import annotations
 
@@ -158,6 +168,35 @@ def diagnose() -> str:
     elif not opened:
         lines.append("카메라 연결과 다른 프로그램의 점유를 확인할 것.")
     return "\n".join(lines)
+
+
+def save_shots(out_dir: str = "/tmp/camshot", limit: int = 4) -> list[str]:
+    """인덱스마다 한 장씩 찍어 저장한다. **이것이 macOS 에서 인덱스를 확정하는
+    유일하게 확실한 방법이다** — 이름 열거로는 못 맞춘다(위 참고).
+
+    저장된 그림을 보고 `config.CAM_INDICES` 를 정하면 된다."""
+    import os
+    os.makedirs(out_dir, exist_ok=True)
+    saved = []
+    for i in range(limit):
+        cap = open_capture(i)
+        try:
+            if not cap.isOpened():
+                continue
+            frame = None
+            for _ in range(8):
+                ok, f = cap.read()
+                if ok:
+                    frame = f
+            if frame is None:
+                continue
+            path = os.path.join(out_dir, f"idx{i}.png")
+            h, w = frame.shape[:2]
+            cv2.imwrite(path, cv2.resize(frame, (640, int(640 * h / w))))
+            saved.append(path)
+        finally:
+            cap.release()
+    return saved
 
 
 def platform_note() -> str:

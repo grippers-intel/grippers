@@ -68,10 +68,32 @@ def _on_sigint(signum, frame):
     _stop = True
 
 
+
+def _screen_origin(index: int) -> tuple[int, int]:
+    """전역 데스크톱 좌표에서 해당 화면의 좌상단. 못 읽으면 (0, 0).
+
+    macOS 는 여러 화면을 하나의 좌표계에 늘어놓으므로, 확장 화면에 창을
+    띄우려면 그 화면의 origin 을 알아야 한다. Quartz 가 없으면 주 화면."""
+    try:
+        import Quartz
+    except ImportError:
+        return (0, 0)
+    _n, ids, _ = Quartz.CGGetActiveDisplayList(8, None, None)
+    ordered = sorted(ids, key=lambda d: Quartz.CGDisplayBounds(d).origin.x)
+    if index >= len(ordered):
+        return (0, 0)
+    b = Quartz.CGDisplayBounds(ordered[index])
+    return (int(b.origin.x), int(b.origin.y))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cams", type=int, nargs="+", default=list(cfg.CAM_INDICES))
     ap.add_argument("--no-view", action="store_true")
+    ap.add_argument("--display", type=int, default=0,
+                    help="창을 띄울 화면. 0=주 화면, 1=오른쪽 확장 화면")
+    ap.add_argument("--cam-width", type=int, default=900,
+                    help="--show-cams 창의 가로 크기(px)")
     ap.add_argument("--show-cams", action="store_true",
                      help="카메라 원본 + ArUco/geti 오버레이 창도 같이 띄운다 (디버깅용)")
     ap.add_argument("--geti-device", type=str, default="CPU")
@@ -108,8 +130,17 @@ def main() -> int:
     print("geti 모델 준비 완료.")
 
     if args.show_cams:
-        for cam in cams:
+        # 창을 지정한 화면에 나란히 놓는다. macOS 는 전역 데스크톱 좌표를
+        # 쓰므로 확장 화면의 origin 을 알아야 그쪽에 뜬다.
+        ox, oy = _screen_origin(args.display)
+        w = args.cam_width
+        h = int(w * cfg.IMG_H / cfg.IMG_W)
+        for n, cam in enumerate(cams):
             cv2.namedWindow(cam.name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(cam.name, w, h)
+            cv2.moveWindow(cam.name, ox + 20 + n * (w + 20), oy + 20)
+        print(f"[display] 화면 {args.display} origin=({ox}, {oy}) 에 "
+              f"카메라 창 {len(cams)}개 ({w}x{h})")
 
     loc = RobotLocalizer()
     tracker = piece_map.PieceTracker()
