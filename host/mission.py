@@ -113,6 +113,49 @@ def _box_front_xy(box_name: str) -> XY:
     return (bx, by - offset)
 
 
+class _ObstacleHold:
+    """장애물이 한두 프레임 사라져도 잠시 있는 것으로 친다.
+
+    **왜 필요한가** — 2026-08-29 첫 실기에서 로봇이 목표 앞에서 제자리 왕복만
+    했다. 목표 기물도 부호 규약도 정상이었고, 흔들린 것은 **경로**였다:
+
+        막힘=piece  ->  웨이포인트 (0.42~0.52, 0.63~0.75)
+        막힘=None   ->  웨이포인트 (0.55~0.63, 0.66~0.92)     26사이클 중 8:18
+
+    두 경로의 방위각 차이가 50~60도라, 한쪽으로 거의 다 돌면 반대로 뒤집혀
+    영원히 수렴하지 않는다. 뒤집히는 이유는 회피 알고리즘이 아니라 **입력**이다 —
+    옆 기물 검출이 흔들리면 장애물 집합이 매 사이클 바뀌고, 격자 탐색은 매번
+    성실하게 다른 답을 낸다.
+
+    그래서 이력을 "막힘 판정"이 아니라 그 입력에 건다. **사라진 장애물을 잠시
+    붙들어 두는 쪽**이 안전하기도 하다 — 지도에서 사라졌다고 실물이 사라진 것은
+    아니기 때문이다.
+    """
+
+    def __init__(self) -> None:
+        # [(x, y), 남은 사이클]
+        self._held: list[list] = []
+
+    def reset(self) -> None:
+        self._held.clear()
+
+    def update(self, seen: list[XY]) -> list[XY]:
+        for entry in self._held:
+            entry[1] -= 1
+        for sx, sy in seen:
+            for entry in self._held:
+                (hx, hy), _ = entry
+                if math.hypot(hx - sx, hy - sy) <= mcfg.OBSTACLE_MATCH_M:
+                    # 위치는 최신 관측으로 갱신하고 수명을 되살린다.
+                    entry[0] = (sx, sy)
+                    entry[1] = mcfg.OBSTACLE_HOLD_CYCLES
+                    break
+            else:
+                self._held.append([(sx, sy), mcfg.OBSTACLE_HOLD_CYCLES])
+        self._held = [e for e in self._held if e[1] > 0]
+        return [e[0] for e in self._held]
+
+
 def _send_drive(link: VehicleLink, pose: Pose, status: str, nav: DriveCommand,
                  target_label: Optional[str] = None) -> str:
     """DriveSequencer/FACE_BOX 가 낸 명령을 MissionCommand 로 옮겨 보내고,
@@ -151,6 +194,7 @@ class MissionFSM:
         self._insert_tries = 0
         self.halt_reason = None
         self._path_planner = GridPathPlanner()
+        self._obstacles = _ObstacleHold()
         self._drive = DriveSequencer()
         self.reset()
 
@@ -264,6 +308,7 @@ class MissionFSM:
 
         self._path_planner.reset()
         self._drive.reset()
+        self._obstacles.reset()
 
     def _approach(self, pose: Pose, robot_xy: XY, target_xy: XY,
                   obstacles: list[XY], target_label: Optional[str],
@@ -277,8 +322,9 @@ class MissionFSM:
         # DriveSequencer/next_waypoint 쪽엔 장애물을 안 넘긴다. 거기 회피
         # 로직은 가장 가까운 장애물 하나만 보고 우회점을 잡아서, 서로 밀어내는
         # 장애물 두 개 사이에서 영원히 왕복하는 버그가 있었다.
+        # 흔들리는 검출을 그대로 넘기면 경로가 매 사이클 뒤집힌다(위 클래스 참고).
         sub_goal, corner, blocked_by = self._path_planner.update(
-            robot_xy, pose.yaw_deg, target_xy, obstacles)
+            robot_xy, pose.yaw_deg, target_xy, self._obstacles.update(obstacles))
         self.nav_corner = corner
         self.nav_path = self._path_planner.last_path
         nav = self._drive.update(robot_xy, pose.yaw_deg, sub_goal, [])
