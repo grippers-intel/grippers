@@ -54,7 +54,9 @@ from .floor_grasp_profiles import (
     HORIZONTAL_GRASP_POSES_DEG,
     HORIZONTAL_SAFE_145_RAW,
     IDLE_CRADLE_RAW,
+    TAUGHT_HOMING_OFFSETS,
 )
+from . import calib_identity
 
 WRIST_SERVO_ID = 4
 GRIPPER_SERVO_ID = 6
@@ -231,6 +233,14 @@ class ArmPortConflictError(RuntimeError):
     main()이 잡아서 노드를 띄우지 않고 종료한다."""
 
 
+class ArmCalibrationMismatchError(RuntimeError):
+    """팔에 실린 캘리브레이션이 교시 자세와 다르다.
+
+    하드웨어 고장이 아니다 — 팔은 멀쩡하고, 다만 이 코드가 아는 자세가
+    아니다. 그래서 ArmHardwareUnavailableError 와 따로 둔다: 사람이 할 일이
+    '고치기'가 아니라 '오프셋 되돌리기 또는 다시 교시하기'다."""
+
+
 class ArmHardwareUnavailableError(RuntimeError):
     """SO-ARM101 또는 서보 버스가 응답하지 않거나 동작 불가 상태일 때 발생한다."""
 
@@ -243,6 +253,9 @@ class ArmDriverNode(Node):
         self.declare_parameter("arm_port", "/dev/soarm")
         self.declare_parameter("enable_torque_on_start", False)
         self.declare_parameter("auto_align_on_first_move", True)
+        # 교시 자세와 다른 캘리브레이션에서 기동을 거부한다. 끄는 것은
+        # 팔을 다시 교시하는 중처럼 자세가 무효인 줄 알고 있을 때만이다.
+        self.declare_parameter("verify_calibration", True)
         # 그리퍼 명령 폭의 하한. 기본값은 파지 전용 하한이고, 지금은 그것이
         # GRIPPER_CLOSED_MM과 같아 동작이 바뀌지 않는다
         # (gripper_calibration.GRIPPER_GRASP_MIN_MM 주석 참고).
@@ -272,6 +285,7 @@ class ArmDriverNode(Node):
             soarm._real,
             enable_torque_on_start=enable_torque_on_start,
         )
+        self._check_taught_calibration(soarm._real)
         self._log_idle_offset(soarm._real)
 
         self._move_action_server = ActionServer(
@@ -373,6 +387,34 @@ class ArmDriverNode(Node):
                 "ps -eo pid,args | grep arm_driver | grep -v grep"
             ) from e
         self.get_logger().info(f"{arm_port} 배타 잠금 확보")
+
+    def _check_taught_calibration(self, backend) -> None:
+        """이 팔의 Homing_Offset 이 교시 당시와 같은지 본다.
+
+        ⚠️ 2026-08-29 에 VLA 시연 수집을 준비하며 LeRobot 캘리브레이션을
+        돌렸고, 그때 서보의 Homing_Offset 이 덮여 썼다. 오프셋이 바뀌면
+        floor_grasp_profiles.py 의 RAW 자세가 **같은 숫자로 다른 물리
+        자세**를 가리킨다.
+
+        오프셋은 서보 EEPROM 에 있지 git 에 있지 않아서, 브랜치를 바꿔도
+        팔은 안 바뀐다. 코드는 베이스라인인데 팔은 VLA 캘리브레이션인
+        조합이 아무 경고 없이 만들어진다 — 그 상태로 움직이면 차체·라이다에
+        막히는 범위로 들어간다(shoulder_pan 가동폭 2493 -> 2087, sysy009
+        실측 2026-08-29).
+
+        그래서 경고가 아니라 거부다."""
+        if not bool(self.get_parameter("verify_calibration").value):
+            self.get_logger().warn(
+                "verify_calibration=false — 교시 자세가 유효한지 확인하지 않습니다")
+            return
+
+        current = calib_identity.read_offsets(
+            backend.drv, sorted(TAUGHT_HOMING_OFFSETS))
+        result = calib_identity.verdict(current, TAUGHT_HOMING_OFFSETS)
+        if result.ok:
+            self.get_logger().info(f"캘리브레이션 확인 — {result.message()}")
+            return
+        raise ArmCalibrationMismatchError(result.message())
 
     def _check_startup_torque(
         self,

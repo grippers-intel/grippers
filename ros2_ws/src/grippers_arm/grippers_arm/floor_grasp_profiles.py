@@ -13,6 +13,36 @@ from dataclasses import dataclass
 # "attempted relative import with no known parent package"로 깨진다.
 from grippers_arm.gripper_calibration import GRIPPER_GRASP_MIN_MM, GRIPPER_OPEN_MM
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 이 파일의 RAW 자세가 유효하려면 팔이 이 캘리브레이션이어야 한다
+#
+# 아래 자세들은 전부 RAW 서보값이다. 그런데 RAW 값이 가리키는 물리 자세는
+# 서보 EEPROM 의 Homing_Offset 에 달려 있다.
+#
+#     Present_Position = Actual_Position - Homing_Offset
+#
+# 즉 오프셋이 바뀌면 **같은 숫자가 다른 자세**가 된다. 그래서 자세만 적어
+# 두는 것으로는 부족하다 — 어떤 오프셋 아래에서 잰 값인지 같이 적는다.
+#
+# 아래 값은 2026-08-29 18:11:24 에 팔로워(COM8)에서 읽은 것으로,
+# **LeRobot 캘리브레이션을 돌리기 직전**의 상태다. 원본은
+# tools/arm/servo_backup/servo_COM8_20260829_181124.json 에 있다.
+#
+# arm_driver_node 가 기동할 때 이 값과 대조한다(calib_identity.py). 다르면
+# 기동을 거부한다 — sysy009 실측으로 shoulder_pan 가동폭이 2493 -> 2087 로
+# 줄어 있어(차체·라이다에 막힘), 어긋난 채 움직이면 부딪힌다.
+#
+# 팔을 다시 교시했다면 이 값도 같이 갱신할 것. 둘은 한 쌍이다.
+# ═══════════════════════════════════════════════════════════════════════════
+TAUGHT_HOMING_OFFSETS = {
+    1: -1945,   # shoulder_pan
+    2: -1762,   # shoulder_lift
+    3: 1307,    # elbow_flex
+    4: 1760,    # wrist_flex
+    5: -1848,   # wrist_roll
+    6: 1343,    # gripper
+}
+
 
 @dataclass(frozen=True)
 class FloorGraspProfile:

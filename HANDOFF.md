@@ -1,4 +1,42 @@
-# Grippers Pi — 인수인계 (2026-08-28 갱신)
+# Grippers Pi — 인수인계 (2026-08-30 갱신)
+
+> ## ⚠️ 먼저 — 이 팔이 지금 어느 캘리브레이션인지 확인하세요
+>
+> 2026-08-29 에 VLA 시연 수집을 준비하며 **LeRobot 캘리브레이션이 서보의
+> `Homing_Offset` 을 덮어썼습니다.**
+>
+> ```
+> Present_Position = Actual_Position - Homing_Offset
+> ```
+>
+> `floor_grasp_profiles.py` 의 교시 자세는 RAW 서보값이라, 오프셋이 바뀌면
+> **같은 숫자가 다른 물리 자세**가 됩니다.
+>
+> **오프셋은 서보 EEPROM 에 있지 git 에 있지 않습니다.** `git checkout` 으로
+> 바뀌지 않습니다. 그래서 두 갈래를 이렇게 나눠 씁니다.
+>
+> | 하는 일 | 브랜치 | 팔의 캘리브레이션 |
+> |---|---|---|
+> | 베이스라인 미션 | `kica927/baseline_mission` | **교시 당시** (되돌린 상태) |
+> | VLA 시연 수집·추론 | `kica927/smolVLA-version` | **LeRobot 새 캘리브레이션** |
+>
+> 확인:
+> ```
+> python3 tools/arm/restore_taught_offsets.py
+> ```
+>
+> 베이스라인으로 되돌리기 (**팔이 중력으로 내려옵니다 — 아래를 비우고**):
+> ```
+> python3 tools/arm/restore_taught_offsets.py --apply --yes
+> ```
+>
+> `arm_driver_node` 가 기동할 때 이것을 대조하고, 다르면 **기동을
+> 거부합니다**(`ArmCalibrationMismatchError`). 경고가 아니라 거부인 이유는
+> shoulder_pan 가동폭이 2493 → 2087 로 줄어 있어(차체·라이다에 막힘)
+> 어긋난 채 움직이면 부딪히기 때문입니다.
+>
+> 팔을 다시 교시했다면 `floor_grasp_profiles.TAUGHT_HOMING_OFFSETS` 도 같이
+> 갱신하세요. 자세와 오프셋은 한 쌍입니다.
 
 이 파일은 **짧은 진입점**이다. 상세 이력·실측·근거는 `grippers_docs/`
 (맥 `~/Desktop/intel/grippers_docs`)의 다음 두 문서가 현행이다.

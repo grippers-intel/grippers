@@ -1,0 +1,42 @@
+{
+  "port": "COM7",
+  "when": "2026-08-29T18:11:41",
+  "motors": {
+    "shoulder_pan": {
+      "Homing_Offset": -1945,
+      "Min_Position_Limit": 932,
+      "Max_Position_Limit": 3425,
+      "Present_Position": 3221
+    },
+    "shoulder_lift": {
+      "Homing_Offset": -1762,
+      "Min_Position_Limit": 817,
+      "Max_Position_Limit": 3196,
+      "Present_Position": 1113
+    },
+    "elbow_flex": {
+      "Homing_Offset": 1307,
+      "Min_Position_Limit": 889,
+      "Max_Position_Limit": 3101,
+      "Present_Position": 3018
+    },
+    "wrist_flex": {
+      "Homing_Offset": 1760,
+      "Min_Position_Limit": 870,
+      "Max_Position_Limit": 3224,
+      "Present_Position": 454
+    },
+    "wrist_roll": {
+      "Homing_Offset": -1848,
+      "Min_Position_Limit": 129,
+      "Max_Position_Limit": 3995,
+      "Present_Position": 2607
+    },
+    "gripper": {
+      "Homing_Offset": 1351,
+      "Min_Position_Limit": 2047,
+      "Max_Position_Limit": 3526,
+      "Present_Position": 2529
+    }
+  }
+}
