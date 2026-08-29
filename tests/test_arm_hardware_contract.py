@@ -899,3 +899,93 @@ def test_한계각은_교시_정면_기준_절대각이다():
 
     assert "IDLE_CRADLE_RAW" in source, "교시 정면을 기준으로 안 잡는다"
     assert "MAX_BASE_YAW_OFFSET_RAD" in source
+
+
+# ── servo 1이 틀어진 채로 GRASP를 도는가 (2026-08-29) ──────────────────────
+
+
+def _class_constant(name):
+    """`MissionArmDriverNode` 클래스 몸통의 상수. `math.radians(...)`도 푼다.
+
+    `_module_constants`는 모듈 최상위의 리터럴만 읽는다 — 한계각은 클래스
+    속성이고 값도 호출식이라 그쪽으로는 안 잡힌다."""
+    tree = ast.parse(ARM_NODE.read_text(encoding="utf-8"), filename=str(ARM_NODE))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == name):
+            return eval(ast.unparse(node.value), {"math": math})   # noqa: S307
+    raise AssertionError(f"{name} 을 찾지 못했다")
+
+
+def test_한계각까지_틀어진_servo1은_교시_자세_게이트를_통과할_수_없다():
+    """**freeze 가 왜 필수인지**를 못 박는다.
+
+    `_move_floor_stage`는 단계마다 `_near_pose`(±FLOOR_POSE_START_TOLERANCE_RAW)
+    로 "지금 등록된 이전 자세에 있는가"를 검사한다. servo 1을 좌우 보정으로
+    돌려 놓으면 그 값이 교시 절대값에서 그만큼 벌어지므로, freeze 없이 교시
+    자세를 그대로 비교하면 **보정을 건 회차는 GRASP 전 단계가 통째로 거부된다**
+    ("safe 이동 시작 자세가 등록된 ... 이 아닙니다").
+
+    한계각 15도 = 171 raw 는 게이트 120 raw 보다 크다. 즉 이 충돌은 이론이
+    아니라 한계각 안의 정상 보정에서 실제로 일어난다."""
+    limit_rad = _class_constant("MAX_BASE_YAW_OFFSET_RAD")
+    gate = _module_constants(ARM_NODE, {"FLOOR_POSE_START_TOLERANCE_RAW"})
+    limit_raw = limit_rad * 4096.0 / (2.0 * math.pi)
+
+    assert limit_raw > gate["FLOOR_POSE_START_TOLERANCE_RAW"], (
+        f"한계각 {math.degrees(limit_rad):.0f}도 = {limit_raw:.0f} raw 가 게이트 "
+        f"{gate['FLOOR_POSE_START_TOLERANCE_RAW']} raw 보다 작아졌다 — 그렇다면 "
+        "freeze 없이도 통과하므로 이 테스트의 전제를 다시 확인할 것")
+
+
+def test_GRASP_이_밟는_세_자세가_전부_현재_servo1을_물려받는다():
+    """safe -> grasp -> midpoint -> safe 가 GRASP 하강 경로다.
+
+    셋 중 하나라도 교시 절대값을 쓰면 그 단계에서 팔이 정면으로 홱 돌아가고,
+    이미 겨눠 둔 좌우 정렬이 그 순간 사라진다. midpoint 는 grasp 와 safe 의
+    관절별 평균이라 둘이 얼어 있으면 자동으로 따라온다."""
+    source = ast.unparse(_function("_move_floor_stage"))
+
+    assert "safe = _freeze_servo1(" in source
+    assert "grasp = _freeze_servo1(" in source
+    assert "midpoint = {" in source and "(grasp[servo_id] + safe[servo_id])" in source
+
+
+def test_carry_는_교시_절대값이라_servo1이_정면으로_돌아온다():
+    """GRASP 의 마지막 단계는 carry 이고, 여기서 보정이 풀리는 것이 **맞다.**
+
+    carry 는 물체를 들고 주행하는 전달 자세다. 좌우로 돌아간 채 접으면
+    그리퍼가 라이다 시야로 들어와 바구니를 못 본다(CARRY_RAW 주석). 파지가
+    끝난 뒤에는 물체가 이미 턱 안에 있으므로 정면으로 되돌려도 잃을 것이 없다.
+
+    즉 보정의 수명은 `offset_base_yaw` 부터 `carry` 까지다."""
+    source = ast.unparse(_function("_move_floor_stage"))
+
+    assert "carry = self._tuple_goals(CARRY_RAW)" in source
+    assert "carry = _freeze_servo1(" not in source
+    # idle·drop 도 같은 이유로 절대값이다.
+    assert "idle = self._tuple_goals(IDLE_CRADLE_RAW)" in source
+    assert "drop = self._tuple_goals(BASKET_DROP_195_RAW)" in source
+
+
+def test_팔_길이_주석이_실측값과_어긋나지_않는다():
+    """2026-08-29 정정 — 주석 세 곳이 실측 전 어림값(214mm·240mm)을 들고 있었다.
+
+    코드는 안 틀렸지만 그 숫자를 근거로 한계각이나 허용오차를 조정하면
+    틀린 값이 퍼진다. 팔 길이의 단일 출처는 baseline_constants 다."""
+    domain = _module_constants(
+        DOMAIN_MISSION.with_name("baseline_constants.py"), {"SERVO1_AXIS_TO_JAW_MM"})
+    assert domain["SERVO1_AXIS_TO_JAW_MM"] == 294.0
+
+    # 옛 값이 **이력으로** 남는 것은 좋다 — 왜 바뀌었는지가 다음 사람에게
+    # 필요하다. 막으려는 것은 그것이 다시 **현재 근거**로 쓰이는 것이다.
+    # 그래서 줄 단위로 보고, 이력 표식이 있는 줄만 봐준다.
+    stale_claims = [
+        line.strip()
+        for line in ARM_NODE.read_text(encoding="utf-8").splitlines()
+        if ("214mm" in line or "240mm" in line) and "적혀 있었다" not in line
+    ]
+    assert not stale_claims, (
+        f"팔 길이 실측은 {domain['SERVO1_AXIS_TO_JAW_MM']:.0f}mm 인데 실측 전 값을 "
+        f"현재 근거로 쓰는 줄이 있다:\n  " + "\n  ".join(stale_claims))
