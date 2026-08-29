@@ -3,6 +3,28 @@
 Object geometry is kept separate from the named, hardware-tested arm poses so
 that a low GABE pose is not accidentally reused for taller chess pieces.
 """
+# ═══════════════════════════════════════════════════════════════════════════
+# ⚠️ 2026-08-29 — 아래 RAW 값들이 **현재 팔에서 무효다.**
+#
+# VLA 시연 수집을 위해 LeRobot 캘리브레이션을 새로 돌렸고, 그 과정에서 서보의
+# Homing_Offset 이 덮여 썼다(lerobot/motors/feetech/feetech.py:275).
+#
+#     Present_Position = Actual_Position - Homing_Offset
+#
+# 즉 **같은 RAW 값이 다른 물리 자세**가 된다. 실기로 얻은 파지 자세가 전부
+# 어긋나므로, 그리퍼 미션을 다시 돌리기 전에 둘 중 하나를 해야 한다.
+#
+#   (a) 원래 값으로 되돌린다 — 캘리브레이션 직전 백업이 있다
+#         python tools/arm/backup_servo_offsets.py COM8 #                --restore tools/arm/servo_backup/servo_COM8_20260829_181124.json
+#
+#   (b) 이 자세들을 새 기준으로 다시 교시한다
+#
+# 왜 다시 쟀는가: 책상에서 잡은 옛 캘리브레이션은 "팔이 베이스 아래로 안
+# 내려간다"를 전제했는데, 차량 위에서는 바닥 물체를 집으러 베이스보다 아래로
+# 내려가야 한다. 실제로 shoulder_pan 가동폭이 2493 -> 2087 로 줄었다(차체·라이다에
+# 막힘). 자세한 경위는 tools/arm/ 의 도구들과 servo_backup/ 참고.
+# ═══════════════════════════════════════════════════════════════════════════
+
 
 from dataclasses import dataclass
 

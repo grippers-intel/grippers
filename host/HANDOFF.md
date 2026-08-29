@@ -5,7 +5,20 @@
 
 ---
 
-## 0. 2026-08-29 — 첫 실기 링크
+## 0. 2026-08-29 — 첫 실기 링크 · ⚠️ 교시 자세 무효
+
+> [!경고] **그리퍼 미션을 다시 돌리기 전에 읽을 것**
+>
+> VLA 시연 수집을 준비하며 **LeRobot 캘리브레이션을 새로 돌렸고, 서보의
+> `Homing_Offset` 이 덮여 썼다.** `floor_grasp_profiles.py` 의 RAW 교시 자세가
+> 전부 무효다 — 같은 숫자가 다른 물리 자세가 된다.
+>
+> 되돌리려면:
+> ```
+> python tools/arm/backup_servo_offsets.py COM8 >        --restore tools/arm/servo_backup/servo_COM8_20260829_181124.json
+> ```
+> 왜 다시 쟀는지와 상세는 `floor_grasp_profiles.py` 머리말 참고.
+
 
 **08-28 항목은 전부 닫혔다(아래 `0-old`).** 남은 것은 하나뿐이고, 그것이
 양 팀 문서가 공통으로 지목한 최대 위험이다 — **Host 와 Pi 를 한 번도 붙여 본
