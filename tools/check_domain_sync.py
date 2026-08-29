@@ -31,7 +31,11 @@ import hashlib
 import pathlib
 import sys
 
-FILES = ("domain/ports/baseline_ports.py", "domain/task/motion.py")
+FILES = ("domain/ports/baseline_ports.py", "domain/task/motion.py",
+         # 2026-08-29 추가 — `vehicle_link` 가 Pi 의 보정 동작 이름을 여기서
+         # 직접 가져온다. 문자열을 Host 에 다시 적으면 Pi 가 이름을 바꾸는
+         # 순간 조용히 안 맞는다(sysy009 의 설계를 따랐다).
+         "domain/task/corrections.py")
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 

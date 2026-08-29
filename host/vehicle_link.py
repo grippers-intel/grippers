@@ -45,6 +45,7 @@ Host 가 물체 좌표 · 차량 좌표와 방향 · 경로 계산 · 차량 제
 from __future__ import annotations
 
 import json
+import math
 import re
 import socket
 import sys
@@ -59,6 +60,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from domain.ports.baseline_ports import HostCommand, MissionState, Report
 from domain.task.motion import AGREED_LINEAR_MPS, AGREED_ROTATION_RAD_S
+# Pi 가 `fix` 에 싣는 동작 이름. 문자열을 다시 적지 않고 정본에서 가져온다
+# (sysy009 설계, 2026-08-28). 여기 문자열을 복사해 두면 Pi 가 이름을 바꾸는
+# 순간 Host 가 조용히 못 알아듣는다 — `tools/check_domain_sync.py` 가 이
+# 파일의 동기화를 검사한다.
+from domain.task.corrections import (ADVANCE as _FIX_ADVANCE,
+                                     REACQUIRE as _FIX_REACQUIRE,
+                                     RETREAT as _FIX_RETREAT,
+                                     ROTATE as _FIX_ROTATE,
+                                     WAIT as _FIX_WAIT)
 
 
 @dataclass
@@ -148,32 +158,9 @@ _TERMINAL = {"GRASP_DONE", "PLACE_DONE", "FAILED"}
 BACK_OFF = "BACK_OFF"      # 물체가 턱 선보다 가깝다 -> 뒤로
 CREEP_IN = "CREEP_IN"      # 물체가 전진 거리 밖이다 -> 앞으로
 RE_AIM = "RE_AIM"          # 물체가 턱 폭 밖이다 -> 좌우로 다시 겨눔
-RE_LOOK = "RE_LOOK"        # Pi 가 목표를 못 봤다 -> 물러나서 다시 보인다
-WAIT = "WAIT"              # Pi 가 스스로 고치는 중 -> 차를 움직이면 안 된다
+SHIFT = "SHIFT"            # 좌우로 밀렸다 -> 메카넘 횡이동. lateral_mm 부호로 방향
+WAIT = "WAIT"              # 기다리면 풀린다. 움직이면 오히려 나빠진다
 UNFIXABLE = "UNFIXABLE"    # Host 가 움직여서 고칠 수 있는 게 아니다
-
-# ---------------------------------------------------------------------------
-# 구조화된 보정 — Pi 는 이것을 **이미 보내고 있었다**
-# ---------------------------------------------------------------------------
-#
-# 아래 `_CORRECTION_KEYS` 는 Pi 의 한글 사유를 정규식으로 뜯는 임시 다리였고,
-# 그 주석은 "제대로 된 해법은 Pi 가 보정 코드를 함께 보내는 것"이라고 적어
-# 두었다. 확인해 보니 **Pi 쪽은 그 일을 이미 끝냈다** — `domain/task/
-# corrections.py` 가 `Correction` 을 만들고 `udp_host_link.report()` 가 그것을
-# 보고 JSON 의 `fix` 필드로 실어 보낸다. Host 만 그것을 안 읽고 있었다.
-#
-# 그래서 이제 `fix` 를 먼저 읽고, 없을 때만 문장 파싱으로 내려간다. 문장
-# 파싱을 지우지 않는 이유는 현장의 Pi 가 옛 빌드일 수 있기 때문이다 —
-# 내일 실기에서 그것 때문에 못 움직이는 일은 없어야 한다.
-#
-# `corrections.py` 의 동작 이름 -> Host 어휘.
-_FIX_TO_KIND = {
-    "retreat":   BACK_OFF,
-    "advance":   CREEP_IN,
-    "rotate":    RE_AIM,
-    "reacquire": RE_LOOK,
-    "wait":      WAIT,
-}
 
 _CORRECTION_KEYS = (
     ("후진 필요", BACK_OFF),
@@ -260,21 +247,22 @@ def parse_basket_fix(detail: str) -> Optional[BasketFix]:
 
 @dataclass(frozen=True)
 class GraspCorrection:
-    """Pi 가 요청한 재정렬. `kind` 는 위 네 상수 중 하나다.
+    """Pi 가 요청한 재정렬. `kind` 는 위 여섯 상수 중 하나다.
 
     `lateral_mm` 은 **+ 가 왼쪽**이다(Pi `TargetObservation.lateral_m` 규약).
-    RE_AIM 일 때 회전 방향이 여기서 나온다 — 부호를 못 읽으면 어느 쪽으로
-    돌지 모르므로 보정하지 않는 편이 낫다(반대로 돌면 더 나빠진다).
+    RE_AIM/SHIFT 일 때 방향이 여기서 나온다 — 부호를 못 읽으면 어느 쪽으로
+    갈지 모르므로 보정하지 않는 편이 낫다(반대로 가면 더 나빠진다).
     """
 
     kind: str
     detail: str = ""
     lateral_mm: Optional[float] = None
-    #: Pi 가 알려 준 전후 오차(mm, +면 더 가야 한다). 구조화된 `fix` 에서만
-    #: 나온다 — 지금은 진단·로그용이고, 실제 이동량은 한 걸음 고정이다
-    #: (`mission_config.GRASP_ALIGN_STEP_M`). 이 저장소의 접근 제어가 전부
-    #: "관측 -> 소이동 -> 재관측"이라, 한 번 받은 값으로 끝까지 가지 않는다.
+    #: Pi 가 `fix` 로 준 실제 오차량. 산문 파싱으로는 못 얻는 값이라 그때는 None.
+    #: **크기를 그대로 쓰지 말 것** — INSERT 의 forward 는 라이다 판독 기준이라
+    #: Pi 가 "줄어드는 방향으로 조금씩 움직이며 다시 물어라"라고 못박았다
+    #: (`domain/task/corrections.py::from_insert`). 부호를 믿는 데 쓴다.
     forward_mm: Optional[float] = None
+    yaw_deg: Optional[float] = None
 
     @property
     def actionable(self) -> bool:
@@ -282,44 +270,64 @@ class GraspCorrection:
         if self.kind == UNFIXABLE:
             return False
         if self.kind == WAIT:
-            # Pi 가 servo 1 로 고치는 중이다. 이때 차가 움직이면 Pi 의 보정과
-            # 겹쳐 오히려 어긋난다 — 기다리는 것이 할 일이다.
-            return False
-        if self.kind == RE_AIM and self.lateral_mm is None:
-            return False   # 방향을 모른다 — 찍어서 돌지 않는다
+            return False   # 움직여서 고치는 게 아니다. 기다린다
+        if self.kind in (RE_AIM, SHIFT) and self.lateral_mm is None:
+            return False   # 방향을 모른다 — 찍어서 움직이지 않는다
         return True
 
 
-def correction_from_fix(fix, detail: str = "") -> Optional[GraspCorrection]:
-    """Pi 가 보낸 구조화된 `fix` -> `GraspCorrection`. 못 읽으면 None.
+def correction_from_fix(fix, *, insert: bool) -> Optional[GraspCorrection]:
+    """Pi 의 `fix` 필드 -> `GraspCorrection`. 모르는 action 이면 None.
 
-    문장 파싱과 달리 여기서는 **추측이 없다.** 모르는 동작 이름이 오면
-    UNFIXABLE 로 떨어뜨리지 않고 None 을 돌려준다 — 그래야 호출부가 문장
-    파싱으로 내려가 볼 수 있다. 모르는 것을 "고칠 수 없다"로 굳히면 옛
-    Pi 빌드와 붙었을 때 기물을 통째로 포기한다."""
+    **이것이 정식 경로다.** `classify_correction` 은 `fix` 가 없는 보고를 위한
+    폴백일 뿐이다 — Pi 가 판정을 내린 자리에서 같이 만든 수치를 받는 쪽이,
+    사람이 읽으라고 쓴 문장을 정규식으로 뜯는 것보다 언제나 낫다.
+
+    `insert` 로 갈리는 곳이 하나 있다. Pi 의 `ROTATE` + `lateral_m` 은 "좌우로
+    이만큼 어긋나 있다"는 뜻이고 **없애는 경로는 Host 가 정한다**
+    (`corrections.py` 의 설계 원칙). 기물 앞에서는 회전이 맞다 — 턱을 물체 쪽으로
+    돌리는 것이다. 하지만 바구니 앞에서는 회전하면 거리와 yaw 가 같이 틀어져
+    여섯 조건을 동시에 흔들므로 **메카넘 횡이동**으로 없앤다.
+
+    ⚠️ `REACQUIRE` 는 UNFIXABLE 이다. "판정할 수 없으니 다시 보이게 세워
+    달라"에는 **방향이 없어서**, 여기서 움직이면 찍는 것이다. 방향을 아는
+    경우에 Pi 는 REACQUIRE 가 아니라 RETREAT/ADVANCE 를 보낸다 — 2026-08-29
+    에 "뎁스캠이 목표를 못 봄"이 그렇게 바뀌었다(`from_grasp_precondition`).
+
+    이 함수는 sysy009 가 grippers 저장소에 쓴 것과 같은 설계다(2026-08-28,
+    커밋 48b782f). 같은 일을 두 벌로 두지 않으려고 그쪽에 맞췄다.
+    """
     if not isinstance(fix, dict):
         return None
-    kind = _FIX_TO_KIND.get(fix.get("action"))
-    if kind is None:
-        return None
+    action = fix.get("action")
+    lat_mm = float(fix.get("lateral_m", 0.0) or 0.0) * 1000.0
+    fwd_mm = float(fix.get("forward_m", 0.0) or 0.0) * 1000.0
+    yaw_deg = math.degrees(float(fix.get("yaw_rad", 0.0) or 0.0))
+    detail = (f"fix={action} 좌우 {lat_mm:+.0f}mm 전후 {fwd_mm:+.0f}mm "
+              f"yaw {yaw_deg:+.1f}도")
 
-    def _mm(key):
-        value = fix.get(key)
-        if not isinstance(value, (int, float)):
-            return None
-        return float(value) * 1000.0
+    if action == _FIX_WAIT:
+        return GraspCorrection(WAIT, detail, lat_mm, fwd_mm, yaw_deg)
+    if action == _FIX_ADVANCE:
+        return GraspCorrection(CREEP_IN, detail, lat_mm, fwd_mm, yaw_deg)
+    if action == _FIX_RETREAT:
+        return GraspCorrection(BACK_OFF, detail, lat_mm, fwd_mm, yaw_deg)
+    if action == _FIX_REACQUIRE:
+        return GraspCorrection(UNFIXABLE, detail, lat_mm, fwd_mm, yaw_deg)
+    if action == _FIX_ROTATE:
+        if abs(yaw_deg) > 0.0:
+            return GraspCorrection(RE_AIM, detail, yaw_deg, fwd_mm, yaw_deg)
+        if insert:
+            return GraspCorrection(SHIFT, detail, lat_mm, fwd_mm, yaw_deg)
+        return GraspCorrection(RE_AIM, detail, lat_mm, fwd_mm, yaw_deg)
+    return None
 
-    return GraspCorrection(kind, detail, lateral_mm=_mm("lateral_m"),
-                            forward_mm=_mm("forward_m"))
 
+def classify_correction(detail: str) -> GraspCorrection:
+    """Pi 의 `detail` 문장 -> `GraspCorrection`. 모르면 UNFIXABLE.
 
-def classify_correction(detail: str, fix=None) -> GraspCorrection:
-    """Pi 의 보고 -> `GraspCorrection`. 모르면 UNFIXABLE.
-
-    구조화된 `fix` 가 있으면 그것을 쓰고, 없을 때만 문장을 파싱한다."""
-    structured = correction_from_fix(fix, detail)
-    if structured is not None:
-        return structured
+    **폴백이다.** `fix` 가 실려 오면 `correction_from_fix` 가 정식 경로이고,
+    이 함수는 그것이 없는 옛 Pi 빌드와 붙기 위해서만 남는다."""
     m = _LATERAL_RE.search(detail or "")
     lateral = float(m.group(1)) if m else None
     for key, kind in _CORRECTION_KEYS:
@@ -395,6 +403,11 @@ class VehicleLink:
     #: 한 번 뜨면 지우지 않는다 — 실행이 끝난 뒤에도 "그 실행에서 구동계
     #: 경보가 있었다"가 남아 있어야 로그를 읽는 사람이 원인을 짚는다.
     base_alarm: Optional[str] = None
+
+    #: 마지막 INSERT_BLOCKED 가 요청한 재정렬. GRASP 쪽과 칸을 나눠 두는
+    #: 이유: 한 칸에 두면 GRASP 의 `take_correction()` 이 바구니 보정을 집어
+    #: 가서 기물 앞에서 엉뚱하게 움직인다(sysy009 도 같은 이유로 나눴다).
+    last_insert_correction: Optional[GraspCorrection] = None
 
     #: 마지막 GRASP_BLOCKED 가 요청한 재정렬. mission.py 의 GRASP 가 읽고
     #: GRASP_ALIGN 으로 넘어간다. **읽은 쪽이 지운다**(take_correction) —
@@ -479,6 +492,7 @@ class UdpVehicleLink(VehicleLink):
         self.cmd_port = cmd_port
         self.verbose = verbose
         self.last_report: Optional[tuple[str, str, str]] = None
+        self.last_insert_correction: Optional[GraspCorrection] = None
         self.base_alarm: Optional[str] = None
         self._warn_seen: dict[str, tuple[float, int]] = {}
 
@@ -602,15 +616,20 @@ class UdpVehicleLink(VehicleLink):
                        f"{'=' * 64}")
             return "BUSY"
 
-        if report in (Report.GRASP_BLOCKED, Report.INSERT_BLOCKED):
-            # 구조화된 `fix` 를 먼저 본다 — Pi 는 이것을 이미 보내고 있다.
-            structured = msg.get("fix")
-            self.last_correction = classify_correction(detail, structured)
-            if report == Report.INSERT_BLOCKED:
-                fix = (basket_fix_from_fix(structured)
-                       or parse_basket_fix(detail))
-                if fix is not None:
-                    self.last_basket_fix = fix
+        # `fix` 가 있으면 그것이 정본이다. 없을 때만 문장을 뜯는다 — 폴백을
+        # 남겨 두는 것은 옛 Pi 빌드와도 붙기 위해서다.
+        fix = msg.get("fix")
+        if report in (Report.GRASP_BLOCKED, Report.GRASP_CENTERING):
+            self.last_correction = (correction_from_fix(fix, insert=False)
+                                    or classify_correction(detail))
+        elif report == Report.INSERT_BLOCKED:
+            self.last_insert_correction = (correction_from_fix(fix, insert=True)
+                                           or classify_correction(detail))
+            # 바구니 폐루프는 예산·데드밴드·정체 감시를 들고 있어서 별도
+            # 경로를 그대로 쓴다. 입력만 구조화된 값에서 받는다.
+            basket = basket_fix_from_fix(fix) or parse_basket_fix(detail)
+            if basket is not None:
+                self.last_basket_fix = basket
 
         if report in _BLOCKING_REPORTS:
             # Pi 가 "조건이 안 맞는다, 수정된 명령을 달라"고 말하는 중이다.

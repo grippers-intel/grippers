@@ -36,8 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent / "aruco"))
 import config as cfg
 from localizer import Pose, box_pose
 from navigator import GridPathPlanner, DriveCommand, DriveMode, DriveSequencer
-from vehicle_link import (BACK_OFF, CREEP_IN, RE_AIM, RE_LOOK, MissionCommand,
-                           VehicleLink)
+from vehicle_link import BACK_OFF, CREEP_IN, RE_AIM, MissionCommand, VehicleLink
 
 XY = tuple[float, float]
 PieceMap = dict[str, list[XY]]
@@ -471,11 +470,12 @@ class MissionFSM:
             else:
                 moved = math.hypot(pose.x - fx, pose.y - fy)
                 done = moved >= mcfg.GRASP_ALIGN_STEP_M
-                # RE_LOOK 도 후진이다 — Pi 가 목표를 아예 못 본 경우이고,
-                # 너무 가까워 화각 아래로 빠졌을 때가 대표적이라 물러나야
-                # 다시 보인다. 앞으로 가면 더 안 보인다.
-                backing = self._align.kind in (BACK_OFF, RE_LOOK)
-                cmd = "stop" if done else ("back" if backing else "go")
+                # 뎁스캠이 목표를 못 본 경우도 여기로 온다 — Pi 가 그때
+                # RETREAT 를 보내기 때문이다(방향을 아는 쪽이 방향을 말한다,
+                # domain/task/corrections.from_grasp_precondition). 그래서
+                # Host 는 BACK_OFF 하나만 알면 된다.
+                cmd = "stop" if done else ("back" if self._align.kind == BACK_OFF
+                                           else "go")
 
             link.send(MissionCommand(cmd, "GRASP_ALIGN", pose.x, pose.y,
                                       pose.yaw_deg, target_label=self.target_label))

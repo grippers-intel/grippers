@@ -36,7 +36,7 @@ sys.path.insert(0, str(_HOST / "aruco"))
 
 import mission_config as mcfg                                    # noqa: E402
 from mission import MissionFSM, State                            # noqa: E402
-from vehicle_link import (BACK_OFF, CREEP_IN, RE_AIM, RE_LOOK,    # noqa: E402
+from vehicle_link import (BACK_OFF, CREEP_IN, RE_AIM, SHIFT,      # noqa: E402
                           UNFIXABLE, WAIT, basket_fix_from_fix,
                           classify_correction, correction_from_fix)
 
@@ -50,33 +50,47 @@ from conftest import PiSim                                        # noqa: E402
     ("retreat",   BACK_OFF),
     ("advance",   CREEP_IN),
     ("rotate",    RE_AIM),
-    ("reacquire", RE_LOOK),
+    ("reacquire", UNFIXABLE),
     ("wait",      WAIT),
 ])
 def test_Pi_동작이_Host_어휘로_옮겨진다(action, kind):
     fix = correction_from_fix({"action": action, "lateral_m": 0.02,
-                                "forward_m": 0.0, "yaw_rad": 0.0})
+                                "forward_m": 0.0, "yaw_rad": 0.0},
+                               insert=False)
     assert fix is not None and fix.kind == kind
 
 
 def test_모르는_동작은_None_이라_문장_파싱으로_내려간다():
     """UNFIXABLE 로 굳히면 옛 Pi 빌드와 붙었을 때 기물을 포기한다."""
-    assert correction_from_fix({"action": "teleport"}) is None
-    assert correction_from_fix(None) is None
-    assert correction_from_fix("retreat") is None      # dict 가 아니다
+    assert correction_from_fix({"action": "teleport"}, insert=False) is None
+    assert correction_from_fix(None, insert=False) is None
+    assert correction_from_fix("retreat", insert=False) is None   # dict 가 아니다
 
 
 def test_숫자를_mm_로_옮긴다():
     fix = correction_from_fix({"action": "rotate", "lateral_m": -0.095,
-                                "forward_m": 0.012})
+                                "forward_m": 0.012}, insert=False)
     assert fix.lateral_mm == pytest.approx(-95.0)
     assert fix.forward_mm == pytest.approx(12.0)
 
 
-def test_숫자가_없어도_동작은_살아_있다():
-    """`Correction(REACQUIRE)` 는 값이 전부 0이거나 없는 채로 온다."""
-    fix = correction_from_fix({"action": "reacquire"})
-    assert fix.kind == RE_LOOK and fix.actionable is True
+def test_바구니_앞_좌우_어긋남은_횡이동으로_없앤다():
+    """기물 앞에서는 회전이 맞다 — 턱을 물체 쪽으로 돌리는 것이다. 바구니
+    앞에서는 회전하면 거리와 yaw 가 같이 틀어져 여섯 조건을 동시에 흔든다."""
+    piece = correction_from_fix({"action": "rotate", "lateral_m": -0.079},
+                                 insert=False)
+    basket = correction_from_fix({"action": "rotate", "lateral_m": -0.079},
+                                  insert=True)
+
+    assert piece.kind == RE_AIM
+    assert basket.kind == SHIFT
+
+
+def test_yaw_가_실려_오면_바구니_앞에서도_회전이다():
+    """면의 법선이 틀어진 것은 옆으로 밀어서 못 고친다."""
+    fix = correction_from_fix({"action": "rotate", "yaw_rad": 0.09},
+                               insert=True)
+    assert fix.kind == RE_AIM
 
 
 # ── 우선순위: 구조화 > 문장 ────────────────────────────────────────────────
@@ -85,7 +99,9 @@ def test_숫자가_없어도_동작은_살아_있다():
 def test_구조화된_값이_문장보다_우선이다():
     """문장은 사람용이다. 기계는 기계용 값을 읽어야 한다."""
     detail = "물체가 전진 거리 밖이다 — 재직진 필요"
-    fix = classify_correction(detail, {"action": "retreat", "forward_m": -0.01})
+    fix = (correction_from_fix({"action": "retreat", "forward_m": -0.01},
+                                insert=False)
+           or classify_correction(detail))
     assert fix.kind == BACK_OFF          # 문장(CREEP_IN)이 아니라 fix 를 따랐다
 
 
@@ -104,18 +120,18 @@ def test_둘_다_모르면_고칠_수_없는_것으로_본다():
 
 def test_Pi_가_스스로_고치는_중이면_차를_움직이지_않는다():
     """WAIT 는 servo 1 보정 중이다 — 이때 차가 움직이면 보정과 겹쳐 어긋난다."""
-    fix = correction_from_fix({"action": "wait", "lateral_m": 0.027})
+    fix = correction_from_fix({"action": "wait", "lateral_m": 0.027},
+                               insert=False)
     assert fix.actionable is False
 
 
-def test_방향을_모르는_회전은_하지_않는다():
-    """반대로 돌면 더 나빠진다 — 찍어서 돌지 않는다."""
-    fix = correction_from_fix({"action": "rotate"})
-    assert fix.lateral_mm is None and fix.actionable is False
+def test_다시_보기는_방향이_없으므로_움직이지_않는다():
+    """REACQUIRE 에는 방향이 없다 — 여기서 움직이면 찍는 것이다.
 
-
-def test_다시_보기는_움직일_수_있는_요구다():
-    assert correction_from_fix({"action": "reacquire"}).actionable is True
+    방향을 아는 경우에 Pi 는 REACQUIRE 가 아니라 RETREAT 를 보낸다
+    (2026-08-29, corrections.from_grasp_precondition)."""
+    fix = correction_from_fix({"action": "reacquire"}, insert=False)
+    assert fix.kind == UNFIXABLE and fix.actionable is False
 
 
 # ── 바구니 보정 ────────────────────────────────────────────────────────────
@@ -169,14 +185,15 @@ class BlindPi(PiSim):
     """뎁스캠이 목표를 못 보는 Pi.
 
     물체가 너무 가까워 화각 아래로 빠진 상황이다. 실기 Pi 는 이때
-    `corrections.from_grasp_precondition` 이 만든 `reacquire` 를 함께 보낸다.
+    `corrections.from_grasp_precondition` 이 만든 **`retreat`** 를 함께 보낸다
+    — REACQUIRE 가 아니다. REACQUIRE 에는 방향이 없어서 Host 가 움직일 수
+    없는데, 이 경우는 Pi 가 방향을 안다(더 붙으면 어느 경우에도 나빠진다).
     """
 
     def poll_status(self) -> str:
-        self.last_correction = classify_correction(
-            "뎁스 카메라가 정면에서 목표를 찾지 못했다",
-            {"action": "reacquire", "lateral_m": 0.0,
-             "forward_m": 0.0, "yaw_rad": 0.0})
+        self.last_correction = correction_from_fix(
+            {"action": "retreat", "lateral_m": 0.0,
+             "forward_m": 0.0, "yaw_rad": 0.0}, insert=False)
         return "BUSY"
 
 
@@ -199,7 +216,7 @@ def test_목표를_못_봐도_기물을_포기하지_않는다():
     assert fsm.target_label == "rook", "기물을 놓지 않았어야 한다"
 
 
-def test_다시_보기는_후진으로_실행된다():
+def test_목표를_못_봤을_때는_후진으로_실행된다():
     """앞으로 가면 더 안 보인다 — 방향이 반대면 고쳐지지 않는다."""
     fsm = MissionFSM()
     fsm.state = State.GRASP
