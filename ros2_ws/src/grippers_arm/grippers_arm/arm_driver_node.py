@@ -408,8 +408,14 @@ class ArmDriverNode(Node):
                 "verify_calibration=false — 교시 자세가 유효한지 확인하지 않습니다")
             return
 
-        current = calib_identity.read_offsets(
-            backend.drv, sorted(TAUGHT_HOMING_OFFSETS))
+        # 단발 읽기로는 안 된다. 이 버스는 패킷을 이따금 흘리고, 서보 6개
+        # 연속 읽기라 묶음이 깨질 확률이 그만큼 쌓인다(_read_with_retry 주석
+        # 참고). 재시도가 없으면 패킷 하나 유실이 그대로 기동 거부가 되는데,
+        # 그건 이 검사가 막으려는 위험과 아무 상관이 없는 실패다.
+        current = {
+            servo_id: self._read_with_retry(backend.drv.get_homing_offset, servo_id)
+            for servo_id in sorted(TAUGHT_HOMING_OFFSETS)
+        }
         result = calib_identity.verdict(current, TAUGHT_HOMING_OFFSETS)
         if result.ok:
             self.get_logger().info(f"캘리브레이션 확인 — {result.message()}")

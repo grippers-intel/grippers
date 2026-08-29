@@ -98,6 +98,39 @@ def test_기본_허용치는_0이다():
     assert ci.TOLERANCE_DEFAULT == 0
 
 
+def test_read_offsets_도_재시도한다():
+    """노드 밖 도구(restore_taught_offsets.py)도 같은 버스를 쓴다."""
+
+    class Flaky:
+        def __init__(self):
+            self.calls = 0
+
+        def get_homing_offset(self, sid):
+            self.calls += 1
+            return None if self.calls == 1 else TAUGHT[sid]
+
+    drv = Flaky()
+    out = ci.read_offsets(drv, [1, 2], attempts=3)
+
+    assert out == {1: TAUGHT[1], 2: TAUGHT[2]}, "첫 유실을 재시도로 넘겨야 한다"
+
+
+def test_끝까지_못_읽으면_None_이다():
+    """재시도해도 안 되면 그건 진짜 모르는 것이다 — 지어내지 않는다."""
+
+    class Dead:
+        def get_homing_offset(self, sid):
+            return None
+
+    assert ci.read_offsets(Dead(), [1], attempts=2) == {1: None}
+
+
+def test_재시도_횟수가_노드와_같다():
+    node = NODE.read_text(encoding="utf-8")
+
+    assert f"JOINT_READ_ATTEMPTS = {ci.READ_ATTEMPTS_DEFAULT}" in node
+
+
 # ── 사람이 읽는 메시지 ─────────────────────────────────────────────────────
 
 
@@ -221,6 +254,23 @@ def test_하드웨어_고장과_다른_예외를_쓴다():
 
     assert "ArmCalibrationMismatchError" in names
     assert "ArmHardwareUnavailableError" in names
+
+
+def test_오프셋_읽기에_재시도를_건다():
+    """이 버스는 패킷을 이따금 흘린다 — 서보 6개 연속 읽기라 묶음이 깨질
+    확률이 쌓인다(arm_driver_node._read_with_retry 주석, 2026-08-25).
+
+    재시도가 없으면 패킷 하나 유실이 그대로 기동 거부가 된다. 그건 이
+    검사가 막으려는 위험(어긋난 캘리브레이션)과 아무 상관이 없는 실패이고,
+    실기 당일에 원인을 찾느라 시간을 태우게 된다."""
+    tree = _node_tree()
+    check = next(n for n in ast.walk(tree)
+                 if isinstance(n, ast.FunctionDef)
+                 and n.name == "_check_taught_calibration")
+    body = ast.dump(check)
+
+    assert "_read_with_retry" in body
+    assert "get_homing_offset" in body
 
 
 def test_검사를_끌_수_있다():

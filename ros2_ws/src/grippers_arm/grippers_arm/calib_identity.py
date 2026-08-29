@@ -96,6 +96,29 @@ def verdict(current, taught, tolerance: int = TOLERANCE_DEFAULT) -> CalibVerdict
     return CalibVerdict(MATCH)
 
 
-def read_offsets(driver, servo_ids):
-    """`driver.get_homing_offset` 으로 한 벌 읽는다. 부르는 쪽 편의용."""
-    return {sid: driver.get_homing_offset(sid) for sid in servo_ids}
+# 이 버스는 패킷을 이따금 흘린다. 서보 6개 연속 읽기라 묶음이 깨질 확률이
+# 그만큼 쌓이므로, 단발 읽기로는 '못 읽었다'가 자주 나온다 — 그리고 못 읽은
+# 것은 거부 사유다. 재시도가 없으면 패킷 하나 유실이 기동 거부가 된다.
+# (arm_driver_node.JOINT_READ_ATTEMPTS 와 같은 값·같은 이유)
+READ_ATTEMPTS_DEFAULT = 3
+READ_RETRY_SEC = 0.05
+
+
+def read_offsets(driver, servo_ids, attempts: int = READ_ATTEMPTS_DEFAULT):
+    """`driver.get_homing_offset` 으로 한 벌 읽는다 — 실패하면 다시 시도한다.
+
+    arm_driver_node 는 자기 `_read_with_retry` 를 쓴다(그쪽 계약과 로그를
+    맞추려고). 이 함수는 노드 밖 도구용이다."""
+    import time
+
+    out = {}
+    for sid in servo_ids:
+        value = None
+        for attempt in range(max(1, attempts)):
+            value = driver.get_homing_offset(sid)
+            if value is not None:
+                break
+            if attempt + 1 < attempts:
+                time.sleep(READ_RETRY_SEC)
+        out[sid] = value
+    return out
