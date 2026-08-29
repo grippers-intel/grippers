@@ -247,7 +247,13 @@ def test_목표_식별_실패는_GRASP를_막는다():
 
 
 def test_미세_전진_실패는_파지를_중단시킨다():
-    """`creep_forward()`의 False를 무시하면 물체가 턱 사이에 없는 채로 닫는다."""
+    """`creep_forward()`의 False를 무시하면 물체가 턱 사이에 없는 채로 닫는다.
+
+    ⚠️ 2026-08-29 순서 변경 전에는 여기서 `arm.floor_pose_calls == []`를
+    확인했다 — 전진이 팔보다 먼저였으므로 전진이 실패하면 팔은 한 번도 안
+    움직였다. 이제 전진은 **팔이 내려가 그리퍼가 열린 뒤**라, 전진이
+    실패하는 시점에 팔은 이미 grasp 자세에 있다. 확인해야 할 것은 "팔이 안
+    움직였다"가 아니라 **"닫지 않고 멈췄다"**로 바뀐다."""
     import threading
 
     from domain.adapters.fake.fake_host_link import FakeHostLink as _Host
@@ -271,4 +277,11 @@ def test_미세_전진_실패는_파지를_중단시킨다():
 
     assert Report.GRASP_FAILED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
-    assert arm.floor_pose_calls == []
+
+    stages = [stage for _profile, stage in arm.floor_pose_calls]
+    assert stages == ["safe", "grasp"], (
+        "전진 실패 뒤에도 계속 진행했다 — midpoint/carry 로 가면 안 된다")
+    # 물체가 턱 사이에 안 들어왔으므로 닫으면 안 된다. 여는 폭은 내려가기
+    # 전에 이미 나갔으므로 그 한 번만 있어야 한다.
+    assert len(arm.gripper_widths) == 1, (
+        f"전진이 실패했는데 그리퍼를 또 움직였다: {arm.gripper_widths}")

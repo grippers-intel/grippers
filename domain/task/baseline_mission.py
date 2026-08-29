@@ -356,39 +356,44 @@ class BaselineGraspState(State):
         gp = plan_for_label(self.label)
         ports.base.stop()
 
-        # ⚠️ 미해결 — 전진 시점이 문서화된 설계와 다르다 (2026-08-29 확인).
-        #
-        # 사용자 설명(2026-08-26, baseline_constants.GRASP_CREEP_FORWARD_MM
-        # 주석)은 "팔은 이미 바닥 교시 자세로 내려와 있고 그리퍼는 열린
-        # 상태다. 그 상태로 차체가 전진하면 물체가 손가락 사이로 들어온다"
-        # 이다. base_driver.creep_forward 의 포트 계약과 이 클래스 docstring
-        # 도 같은 순서를 적고 있다 — 벌리고, 내려가고, 밀어 넣고, 닫고.
-        #
-        # 그런데 아래 코드는 **전진을 먼저 하고 팔을 나중에 내린다.** 그래서
-        # 실제 동작은 물체를 턱 사이로 밀어 넣는 것이 아니라 물체 위로
-        # 내려가 감싸는 것이고, 평행 턱의 넓은 목이 낸다는 좌우 자기정렬
-        # 효과는 생기지 않는다.
-        #
-        # 이 순서는 최초 커밋(241003a) 이후 바뀐 적이 없고, 2026-08-28 실기
-        # run3 의 유일한 GRASP 성공이 이 순서에서 났다. 그래서 시험 당일
-        # 아침에 바꾸지 않기로 했다(사용자 판단 2026-08-29: "지금은 두고
-        # 시험 먼저"). 바꿀 때는 remember_target 시점도 같이 옮겨야 한다 —
-        # 지금은 전진 뒤에 기준 프레임을 뜨는데, 전진을 뒤로 미루면 기준
-        # 프레임과 confirm_grasp 관측의 차체 자세가 달라진다.
-        #
         # 전진 거리는 관측에서 나온다 — 상수를 그대로 밀면 이미 가까운 물체를
         # 턱 안쪽으로 처박는다(grasp_alignment.creep_distance_m 참고).
+        #
+        # 거리를 **팔을 내리기 전에** 확인한다. 모르는 채로 내려가 봐야 그
+        # 자리에서 실패하고 팔만 바닥에 남는다.
         if self.creep_m is None:
             return self._failed(ports, "전진 거리를 모른다 — 관측 실패")
-        if not ports.base.creep_forward(self.creep_m):
-            return self._failed(ports, "미세 전진 실패")
+
+        # 정면을 볼 수 있는 마지막 순간이다 — grasp 자세로 내려가면 팔이
+        # 뎁스 카메라를 가린다(tools/demo_rook_run.py 2단계와 같은 이유).
+        ports.perception.remember_target(self.label)
 
         if not ports.arm.move_to_floor_pose(gp.profile, "safe"):
             return self._failed(ports, "safe 자세 실패")
+        # 내려가기 전에 연다 — 닫힌 손가락이 물체가 있는 공간을 통과해
+        # 내려가면 물체를 밀어낸다(사용자 지시 2026-08-24).
         ports.arm.set_gripper(gp.preopen_width_mm)
-        ports.perception.remember_target(self.label)
         if not ports.arm.move_to_floor_pose(gp.profile, "grasp"):
             return self._failed(ports, "grasp 자세 실패")
+
+        # ⚠️ 전진은 **팔이 내려가 그리퍼가 열린 뒤**다 (사용자 지시 2026-08-24,
+        # 재확인 2026-08-29). 이 전진의 목적은 "물체 가까이 가는 것"이 아니라
+        # **물체를 벌어진 턱 사이로 밀어 넣는 것**이고, 그래야 평행 턱의 넓은
+        # 목이 좌우 자기정렬 효과를 낸다(grasp_alignment 모듈 docstring).
+        #
+        # 2026-08-29까지 이 호출이 `safe` 앞에 있었다 — 차체가 먼저 가고 팔이
+        # 나중에 내려오는 순서라, 밀어 넣는 것이 아니라 물체 위로 내려가
+        # 감싸는 동작이었고 자기정렬 효과가 없었다. 최초 커밋(241003a) 이후
+        # 아무도 안 건드린 자리인데, 실기로 검증된 tools/demo_rook_run.py 는
+        # 처음부터 이 순서였다(2단계 팔 내리기 -> 3단계 미세 전진).
+        #
+        # ⚠️ 이 구간에서는 **회전이 절대 금지**다. 그리퍼가 바닥에서 2.6cm
+        # 위에 열린 채 떠 있어서, 제자리 회전은 그것을 바닥과 물체를 가로질러
+        # 옆으로 쓴다. `creep_forward` 는 직진만 내므로 계약상 지켜진다 —
+        # 여기에 회전을 섞는 구현으로 바꾸면 안 된다(demo_rook_run.py 의
+        # CREEP_KEYMAP 이 회전 키를 일부러 뺀 것과 같은 이유).
+        if not ports.base.creep_forward(self.creep_m):
+            return self._failed(ports, "미세 전진 실패")
 
         ports.arm.set_gripper(gp.close_width_mm)
         load = ports.arm.get_load()
