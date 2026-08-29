@@ -17,7 +17,6 @@ Geti 플랫폼에서 export 한 zip 을 풀어 넣은 뒤, run_mission.py 를 �
     python check_geti.py --cam 0           # 이 카메라 프레임으로 추론 (기본: 카메라 안 씀)
 """
 
-import camera_backend as _backend
 from __future__ import annotations
 
 import argparse
@@ -27,6 +26,8 @@ import time
 from pathlib import Path
 
 import numpy as np
+
+import camera_backend as _backend
 
 # config.py 는 aruco/ 하위폴더에 있다(팀원이 동기화하는 파일이라 건드리지 않는다).
 sys.path.insert(0, str(Path(__file__).parent / "aruco"))
