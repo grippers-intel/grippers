@@ -104,7 +104,9 @@ class MotionDecision:
 
 
 def _clamp(value: float, limit: float) -> float:
-    """부호는 두고 크기만 limit로 자른다."""
+    """부호는 두고 크기만 limit로 자른다. 비유한값(NaN/Inf)은 정지로 본다 — RoboSec F1 패치(2026-08-30)."""
+    if not math.isfinite(value):
+        return 0.0
     if abs(value) < EPSILON:
         return 0.0
     return math.copysign(min(abs(value), limit), value)
