@@ -69,6 +69,47 @@ def _other_pieces(piece_map: PieceMap, exclude_xy: Optional[XY] = None,
     return [p for p in pts if math.hypot(p[0] - exclude_xy[0], p[1] - exclude_xy[1]) > tol]
 
 
+def _in_workspace(p: XY) -> bool:
+    """작업 영역 안인가. y 가 밖이면 상자 자리(이미 옮긴 것), x 가 밖이면
+    물리적으로 있을 수 없는 자리(오검출)다 — 자세한 근거는 _nearest_piece 주석."""
+    wx0, wx1 = cfg.WORKSPACE_X
+    wy0, wy1 = cfg.WORKSPACE_Y
+    return wx0 <= p[0] <= wx1 and wy0 <= p[1] <= wy1
+
+
+def visible_labels(piece_map: PieceMap) -> list[str]:
+    """작업 영역 안에 실제로 보이는 라벨만 정렬해서 돌려준다.
+
+    run_mission.py 가 자연어 지시를 Claude 로 해석시킬 때 후보 목록으로 넘긴다 —
+    화면에 없는 라벨을 후보로 주면 안 보이는 걸 골라 버린다
+    (instruction_resolver.InstructionResolver.submit 참고)."""
+    return sorted({label for label, pts in piece_map.items()
+                   if any(_in_workspace(p) for p in pts)})
+
+
+def _find_label(piece_map: PieceMap, label: str, robot_xy: XY,
+                skip: Optional[list[XY]] = None) -> Optional[tuple[str, XY]]:
+    """그 라벨만 대상으로 로봇과 가장 가까운 것 하나. 없으면 None.
+
+    같은 라벨이 PIECE_MAX_PER_LABEL 개까지 있을 수 있어 그중 가까운 걸 고른다.
+
+    ⚠️ skip 을 반드시 받는다 — _nearest_piece 와 같은 이유다. 재정렬을 다 써도
+    못 집은 기물이 여기서 되살아나면, 지시 때문에 **같은 기물 앞에서 영원히
+    맴돈다**(팀원 브랜치에는 skip 개념이 없어 이 인자가 없었다)."""
+    best_xy: Optional[XY] = None
+    best_d = math.inf
+    for p in piece_map.get(label, []):
+        if not _in_workspace(p):
+            continue
+        if skip and any(math.hypot(p[0] - s[0], p[1] - s[1]) <= mcfg.SKIP_RADIUS_M
+                        for s in skip):
+            continue
+        d = (p[0] - robot_xy[0]) ** 2 + (p[1] - robot_xy[1]) ** 2
+        if d < best_d:
+            best_xy, best_d = p, d
+    return (label, best_xy) if best_xy is not None else None
+
+
 def _nearest_piece(piece_map: PieceMap, robot_xy: XY,
                    skip: Optional[list[XY]] = None) -> Optional[tuple[str, XY]]:
     """작업 영역(WORKSPACE_X x WORKSPACE_Y) 안에 있는 기물 중 로봇과 가장
@@ -79,13 +120,11 @@ def _nearest_piece(piece_map: PieceMap, robot_xy: XY,
     WORKSPACE_X(=방 전체 폭 0~1.8m) 밖이면 물리적으로 있을 수 없는 자리라
     오검출로 보고 뺀다.
     """
-    wx0, wx1 = cfg.WORKSPACE_X
-    wy0, wy1 = cfg.WORKSPACE_Y
     best: Optional[tuple[str, XY]] = None
     best_d = math.inf
     for label, pts in piece_map.items():
         for p in pts:
-            if not (wx0 <= p[0] <= wx1 and wy0 <= p[1] <= wy1):
+            if not _in_workspace(p):
                 continue
             # 재정렬을 다 써도 못 집은 기물은 후보에서 뺀다 — 안 그러면 같은
             # 기물 앞에서 영원히 재정렬만 반복한다. 라벨이 아니라 좌표로 빼는
@@ -204,6 +243,45 @@ class MissionFSM:
         순간 바로 다음 상태로 넘어간다."""
         self._advance_requested = True
 
+    def set_instruction(self, target_label: str) -> bool:
+        """자연어 지시로 정해진 라벨을 처리 대상으로 삼는다.
+
+        **손이 비어 있으면**(SEARCH_TARGET / APPROACH_PIECE) 지금 쫓던 걸 버리고
+        즉시 이 라벨로 전환한다. **이미 들고 옮기는 중이면**(GRASP 이후) 끼어들지
+        않고 큐에 쌓아 두었다가, 상자에 넣는 것까지 마치고 SEARCH_TARGET 으로
+        돌아오는 시점에 자동 적용한다 — 들고 있던 걸 그냥 놓아 버리는 위험한
+        동작을 피하기 위해서다.
+
+        반환값: 즉시 반영이면 True, 큐에 쌓였으면 False (run_mission.py 가 이
+        값으로 화면 피드백 문구를 다르게 보여준다).
+
+        ⚠️ 비상 정지 중에는 큐에만 쌓인다 — step() 이 halted 를 먼저 보므로
+        어차피 진행하지 않는데, 상태만 바꿔 두면 reset() 뒤에 사람이 의도하지
+        않은 대상으로 갑자기 움직이게 된다."""
+        if not self.halted and self.state in (State.SEARCH_TARGET, State.APPROACH_PIECE):
+            self._instructed_label = target_label
+            if self.state == State.APPROACH_PIECE:
+                # 쫓던 기물을 버리고 즉시 재탐색.
+                self.state = State.SEARCH_TARGET
+                self.target_label = None
+                self._target_xy = None
+                self.dest_xy = None
+                self.ready_to_advance = False
+                self._path_planner.reset()
+                self._drive.reset()
+            return True
+        self._queued_instruction_label = target_label
+        return False
+
+    def request_halt(self) -> None:
+        """비상 정지 버튼 — 이후 step() 은 state 와 무관하게 매 사이클 stop 만
+        보낸다. 오직 reset() 으로만 풀린다.
+
+        Reset 버튼만으로는 이걸 대신할 수 없다 — reset() 은 Host 쪽 목표만
+        지우고 차량에 정지를 보내지 않는다(reset 주석 참고). 즉 이 버튼이
+        생기기 전에는 "지금 당장 멈춰"라고 시킬 방법이 아예 없었다."""
+        self.halted = True
+
     def request_back(self) -> None:
         """"이전" 버튼 — 한 단계 전 상태로 되돌아간다. ready_to_advance
         조건과 무관하게 항상 즉시 적용된다(자동 모드에서도 동작 — 뒤로가기는
@@ -233,6 +311,8 @@ class MissionFSM:
             self.target_label = None
             self._target_xy = None
             self.dest_xy = None
+            # 뒤로가기는 사람의 수동 개입이다 — 원래 지시를 계속 쫓지 않는다.
+            self._instructed_label = None
         self._path_planner.reset()
         self._drive.reset()
         self.nav_goal = None
@@ -299,6 +379,20 @@ class MissionFSM:
         self._insert_align_from: Optional[tuple[float, float, float]] = None
         self._insert_align_tries = 0
         self._insert_tries = 0        # INSERT_FAILED 재시도 횟수
+
+        # 비상 정지(LiveMap 빨간 버튼). State.HALTED 와 **다른 것**이다 —
+        # State.HALTED 는 "코드가 막혔다"(물체를 든 채 갈 곳이 없다)이고,
+        # 이 플래그는 "사람이 지금 멈추라고 했다"다. 둘 다 Pi 로는 "HALTED"
+        # 를 보내지만 푸는 방법이 다르다: State.HALTED 는 Prev 로 FACE_BOX
+        # 복귀, 이 플래그는 **오직 reset() 만** 푼다(실수로 재개되는 걸 막으려
+        # 별도 "재개" 버튼을 두지 않기로 함).
+        self.halted = False
+
+        # 자연어 지시(instruction_resolver 가 해석한 라벨).
+        # _instructed_label 은 지금 쫓을 라벨, _queued_ 는 지금 든 것을
+        # 내려놓은 뒤에 적용할 라벨이다.
+        self._instructed_label: Optional[str] = None
+        self._queued_instruction_label: Optional[str] = None
 
         # HALTED 로 멈춘 이유. 화면과 콘솔에 그대로 보여준다.
         self.halt_reason: Optional[str] = None
@@ -376,6 +470,19 @@ class MissionFSM:
         self.state = State.HALTED
 
     def step(self, pose: Pose, piece_map: PieceMap, link: VehicleLink) -> State:
+        if self.halted:
+            # 비상 정지. **pose 를 보기 전에** 건다 — 로봇을 잃은 상태에서도
+            # 정지는 나가야 한다. robot_x/y/yaw 는 참고용 필드라 부정확해도
+            # 무방하다(VEHICLE_LINK_PROTOCOL.md).
+            self.nav_goal = None
+            self.nav_corner = None
+            self.nav_path = None
+            self.last_nav = None
+            self.last_cmd = "stop"
+            self.ready_to_advance = False
+            link.send(MissionCommand("stop", "HALTED", pose.x, pose.y, pose.yaw_deg))
+            return self.state
+
         if not pose.ok:
             # 로봇을 잃으면 이번 사이클은 그냥 넘어간다 — 명령을 안 보내면
             # 차량 쪽 워치독이 알아서 멈춘다(마지막 좌표로 계속 가면 안 됨).
@@ -394,7 +501,19 @@ class MissionFSM:
             self.nav_path = None
             self.last_nav = None
             self.last_cmd = None
-            found = _nearest_piece(piece_map, robot_xy, self.skipped)
+            if self._instructed_label is not None:
+                found = _find_label(piece_map, self._instructed_label,
+                                    robot_xy, self.skipped)
+                if found is None and self._instructed_label in piece_map:
+                    # 라벨은 보이는데 고를 게 없다 = 그 기물이 전부 보류됐다는
+                    # 뜻이다(재정렬을 다 썼다). 지시를 붙들고 있으면 영원히
+                    # 대기하므로 놓아 주고 평소대로 최근접으로 돌아간다.
+                    print(f"[mission] 지시 취소: {self._instructed_label} 은(는) "
+                          f"보류된 기물뿐이다")
+                    self._instructed_label = None
+                    found = _nearest_piece(piece_map, robot_xy, self.skipped)
+            else:
+                found = _nearest_piece(piece_map, robot_xy, self.skipped)
             self.ready_to_advance = found is not None
             if found is not None and self._should_advance():
                 label, xy = found
@@ -409,6 +528,7 @@ class MissionFSM:
                     # 첫 기물이 예산을 다 쓴 뒤 나머지가 전부 첫 시도에서
                     # 보류된다. 되돌리는 자리는 대상이 바뀌는 여기 하나뿐이다.
                     self._align_tries = 0
+                    self._instructed_label = None   # 소비했다
                     self._path_planner.reset()   # 새 구간 시작
                     self._drive.reset()
                     self.ready_to_advance = False
@@ -645,6 +765,10 @@ class MissionFSM:
                 self.dest_xy = None
                 self._insert_tries = 0
                 self._insert_align_tries = 0
+                if self._queued_instruction_label is not None:
+                    # 내려놓는 동안 쌓아 둔 지시를 이제 적용한다.
+                    self._instructed_label = self._queued_instruction_label
+                    self._queued_instruction_label = None
                 self.state = State.SEARCH_TARGET
 
         elif self.state == State.INSERT_ALIGN:

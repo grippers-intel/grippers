@@ -147,8 +147,10 @@ class DriveCommand:
 class DriveSequencer:
     """FORWARD/STOP/ROTATE 상태를 들고 있다가 매 사이클 하나씩 낸다."""
 
-    def __init__(self, yaw_tolerance_deg: float = mcfg.DRIVE_YAW_TOLERANCE_DEG) -> None:
+    def __init__(self, yaw_tolerance_deg: float = mcfg.DRIVE_YAW_TOLERANCE_DEG,
+                 min_heading_dist_m: float = mcfg.MIN_HEADING_DIST_M) -> None:
         self.yaw_tolerance_deg = yaw_tolerance_deg
+        self.min_heading_dist_m = min_heading_dist_m
         self._mode: Optional[DriveMode] = None   # None = 이번이 구간의 첫 update()
         self._next_after_stop = DriveMode.FORWARD
 
@@ -175,7 +177,12 @@ class DriveSequencer:
 
         dx = nav.waypoint[0] - robot_xy[0]
         dy = nav.waypoint[1] - robot_xy[1]
-        if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+        # 잔여 거리가 위치 노이즈 수준(min_heading_dist_m)까지 줄면 atan2(dy,dx)
+        # 는 "가야 할 방향"이 아니라 순전히 노이즈의 방향이다. 예전 가드는
+        # 1e-9(사실상 정확히 0)이라 실제 노이즈 범위에서는 전혀 안 걸렸고,
+        # 그래서 로봇이 목표 앞에 멈춰 있어도 회전 방향이 계속 뒤집혔다.
+        # (2026-08-30 팀원 발견 — mission_config.MIN_HEADING_DIST_M 주석 참고)
+        if math.hypot(dx, dy) < self.min_heading_dist_m:
             target_yaw = robot_yaw_deg   # 이미 도착 — 방향 계산 의미 없음
         else:
             target_yaw = float(np.degrees(np.arctan2(dy, dx)))
