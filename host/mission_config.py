@@ -94,7 +94,16 @@ WAYPOINT_HZ = 10                # 좌표를 다시 계산해서 내보내는 주
 # 값을 작게 잡을수록 더 정면을 보고 달리지만(경로가 더 정확), ArUco yaw
 # 노이즈(대략 1도 미만, config.py 참고)보다는 커야 오차가 없는데도 계속
 # 정지<->회전을 반복하는 떨림이 안 생긴다.
-DRIVE_YAW_TOLERANCE_DEG = 5.0
+#
+# ⚠️ 2026-08-30: 5.0 은 너무 좁아 실기에서 제자리 헌팅("두리번두리번")이
+# 났다. 회전은 bang-bang(고정 각속도로 "stop" 올 때까지 회전)이라, "정렬됨->
+# stop" 판정 뒤 UDP 왕복+Pi 적용 지연(~0.7s) 동안 관성으로 약 10도를 더 돈다
+# (coast = 각속도 x 지연). 밴드 폭(2*tol)이 이 coast 보다 좁으면 밴드를 매번
+# 지나쳐 aligned 가 영원히 False -> FORWARD 전환이 안 일어난다. 각속도를
+# 낮추면 바닥 정지마찰로 회전이 안 걸릴 위험이 있어, 대신 밴드를 coast(약
+# 10도)보다 넉넉히 넓혀 안착시킨다. 최종 파지 조준은 Pi 측 GRASP_ALIGN 이
+# 따로 잡으므로 이 정도 조준 여유는 접근 구간에서 문제되지 않는다.
+DRIVE_YAW_TOLERANCE_DEG = 12.0
 
 # 경로 한 구간을 "다 왔다"고 보는 거리(navigator.GridPathPlanner).
 AXIS_LEG_TOLERANCE_M = 0.03
