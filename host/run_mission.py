@@ -54,12 +54,29 @@ sys.path.insert(0, str(Path(__file__).parent / "aruco"))
 import config as cfg
 from localizer import Camera, RobotLocalizer, detect, make_detector
 
+import inspect
+
 import geti_detector
 import piece_map
 from live_map import LiveMap
-from mission import MissionFSM, State
+from mission import MissionFSM, State, visible_labels
 from run_localize import draw, open_cams
 from vehicle_link import ConsoleVehicleLink, UdpVehicleLink
+
+# 자연어/음성 지시는 **선택 기능**이다. 패키지가 없어도 미션 전체는 그대로
+# 돌아가야 하므로(시연 중에 이것 때문에 못 뜨면 최악이다) import 자체를
+# 감싼다. 필요한 것: pip install anthropic faster-whisper sounddevice soundfile
+try:
+    from instruction_resolver import InstructionResolver
+except ImportError as _exc:
+    InstructionResolver = None
+    _instruction_resolver_import_error = _exc
+
+try:
+    from voice_input import VoiceRecorder
+except ImportError as _exc:
+    VoiceRecorder = None
+    _voice_input_import_error = _exc
 
 _stop = False
 
@@ -141,6 +158,29 @@ def main() -> int:
     else:
         link = ConsoleVehicleLink(auto_complete=args.mock_complete)
 
+    # 자연어 지시(Claude API) — 키나 패키지가 없으면 이 기능만 꺼진다.
+    resolver = None
+    if InstructionResolver is None:
+        print(f"[run_mission] anthropic 없음(pip install anthropic) — "
+              f"자연어 지시 꺼짐: {_instruction_resolver_import_error}")
+    else:
+        try:
+            resolver = InstructionResolver()
+        except Exception as exc:
+            print(f"[run_mission] Claude API 초기화 실패(ANTHROPIC_API_KEY 확인) — "
+                  f"자연어 지시 꺼짐: {exc}")
+
+    # 음성 지시(로컬 Whisper) — 마찬가지.
+    voice_recorder = None
+    if VoiceRecorder is None:
+        print(f"[run_mission] faster-whisper/sounddevice 없음 — "
+              f"음성 지시 꺼짐: {_voice_input_import_error}")
+    else:
+        try:
+            voice_recorder = VoiceRecorder()
+        except Exception as exc:
+            print(f"[run_mission] 마이크 초기화 실패 — 음성 지시 꺼짐: {exc}")
+
     def _reset_all() -> None:
         # LiveMap 리셋 버튼 콜백 — 화면뿐 아니라 기물 추적/미션 상태도 같이 지운다.
         tracker.reset()
@@ -153,15 +193,67 @@ def main() -> int:
         tracker.reset()
         print(f"\n[live_map] 모드 전환 -> {'MANUAL' if fsm.manual_mode else 'AUTO'} (초기화됨)\n")
 
-    live_map = (LiveMap(on_reset=_reset_all, on_next=fsm.request_advance,
-                        on_back=fsm.request_back, on_toggle_mode=_toggle_mode)
-                if not args.no_view else None)
+    def _feedback(text: str, ok: bool = True) -> None:
+        """지시 패널 피드백 줄. 아직 그 패널이 없는 LiveMap 이면 콘솔로 뺀다.
+
+        ⚠️ 이 우회는 **한시적**이다. GUI 개편(팀원 브랜치 live_map.py)을
+        얹기 전이라 set_instruction_feedback 이 아직 없다. 얹고 나면
+        hasattr 이 True 가 되어 저절로 화면으로 간다 — run_mission 은
+        다시 안 고쳐도 된다."""
+        if live_map is not None and hasattr(live_map, "set_instruction_feedback"):
+            live_map.set_instruction_feedback(text, ok=ok)
+        else:
+            print(f"\n[지시] {'' if ok else '⚠ '}{text}")
+
+    def _handle_instruction(text: str) -> None:
+        """지시 패널의 전송/Enter 콜백.
+
+        API 호출을 여기서 직접 하지 않는다 — 수백ms~수초가 걸리는데 그동안
+        메인 루프가 멈추면 **차량에 명령이 하나도 안 나가서 워치독이
+        걸린다**(3 사이클 = 0.3초). 백그라운드 스레드에 맡기고 결과는
+        메인 루프에서 논블로킹으로 받는다."""
+        if resolver is None:
+            _feedback("Claude API 미설정 — ANTHROPIC_API_KEY 를 확인하세요.", ok=False)
+            return
+        labels = visible_labels(pmap)
+        if not labels:
+            _feedback("지금 화면에 보이는 기물이 없어요.", ok=False)
+            return
+        _feedback("처리 중...")
+        resolver.submit(text, labels)
+
+    def _handle_voice() -> None:
+        """음성 버튼 콜백 — 토글이다. 첫 클릭 녹음 시작, 다음 클릭 종료 +
+        백그라운드 변환. 결과는 **자동 전송하지 않고** 입력창에 채우기만
+        한다(Whisper 가 "기물"을 "김을"로 듣는 오인식이 실측으로 확인됨)."""
+        if voice_recorder is None:
+            _feedback("음성 인식 미설정(faster-whisper 설치 확인).", ok=False)
+            return
+        recording = voice_recorder.toggle()
+        if live_map is not None and hasattr(live_map, "set_mic_recording"):
+            live_map.set_mic_recording(recording)
+        _feedback("녹음 중... (다시 누르면 종료)" if recording else "음성 인식 중...")
+
+    # 새 콜백 3개는 GUI 개편이 들어온 뒤에만 받는다 — 지금 LiveMap 은 아직
+    # 인자를 모른다. 얹고 나면 이 분기가 저절로 위쪽을 탄다.
+    _lm_kwargs = dict(on_reset=_reset_all, on_next=fsm.request_advance,
+                      on_back=fsm.request_back, on_toggle_mode=_toggle_mode)
+    if "on_halt" in inspect.signature(LiveMap.__init__).parameters:
+        _lm_kwargs.update(on_halt=fsm.request_halt,
+                          on_instruction=_handle_instruction,
+                          on_voice=_handle_voice)
+    else:
+        print("[run_mission] LiveMap 에 지시/비상정지 패널이 아직 없습니다 "
+              "— 지시 기능은 콘솔로만 보고됩니다.")
+    live_map = LiveMap(**_lm_kwargs) if not args.no_view else None
 
     print("\n시작 — 보이는 기물을 가까운 순서대로 라벨별 상자로 나릅니다"
           " (체스말→chess, 나머지→toy).")
     print("q 또는 Ctrl+C 로 종료\n")
 
     frames_seen = 0
+    # 지시 콜백(_handle_instruction)이 첫 프레임 전에 눌릴 수 있어 미리 둔다.
+    pmap: dict = {}
     # --- 루프 Hz 측정 (2026-08-28 HANDOFF §0-2) ---
     hz_n = 0
     hz_t0 = time.perf_counter()
@@ -196,6 +288,34 @@ def main() -> int:
             fsm.step(pose, pmap, link)
             _t_fsm = time.perf_counter(); hz_acc["fsm"] += _t_fsm - _t_geti
             frames_seen += 1
+
+            # 백그라운드 워커 결과 회수 — 둘 다 논블로킹이고 한 번만 준다.
+            if resolver is not None:
+                result = resolver.poll_result()
+                if result is not None:
+                    if result.error:
+                        _feedback(f"API 오류: {result.error}", ok=False)
+                    elif result.matched and result.target_label:
+                        now = fsm.set_instruction(result.target_label)
+                        note = ("지금 바로 이동" if now
+                                else "옮기던 기물 내려놓은 뒤 이동")
+                        _feedback(f"이해: 대상={result.target_label} ({note})")
+                    else:
+                        _feedback(f"어떤 기물인지 확실하지 않아요: "
+                                  f"{result.reasoning}", ok=False)
+
+            if voice_recorder is not None:
+                heard = voice_recorder.poll_result()
+                if heard is not None:
+                    if heard.error:
+                        _feedback(f"음성 인식 실패: {heard.error}", ok=False)
+                    else:
+                        # **자동 전송하지 않는다.** 입력창에 채우기만 하고
+                        # 사람이 확인·수정한 뒤 직접 전송하게 한다.
+                        if live_map is not None and hasattr(
+                                live_map, "set_instruction_text"):
+                            live_map.set_instruction_text(heard.text)
+                        _feedback(f'음성 인식: "{heard.text}" (확인 후 전송)')
 
             if fsm.state == State.SEARCH_TARGET and frames_seen % 10 == 0:
                 print(f"\r[SEARCH_TARGET] 작업 영역에 남은 기물 없음 — {pose}   ",
