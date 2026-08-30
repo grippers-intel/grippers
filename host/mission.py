@@ -399,13 +399,26 @@ class MissionFSM:
 
         elif self.state == State.APPROACH_PIECE:
             assert self._target_xy is not None
-            obstacles = _other_pieces(piece_map, exclude_xy=self._target_xy)
-            dist = self._approach(pose, robot_xy, self._target_xy, obstacles,
-                                   self.target_label, link)
-            self.ready_to_advance = dist <= mcfg.GRASP_TRIGGER_DIST_M
-            if self.ready_to_advance and self._should_advance():
+            dist = math.hypot(self._target_xy[0] - robot_xy[0],
+                              self._target_xy[1] - robot_xy[1])
+            if dist <= mcfg.GRASP_TRIGGER_DIST_M:
+                # 트리거 거리 도달 — 여기서 더 다가가면 기물을 밀어낸다.
+                # 정지를 보내 제자리에 세우고 GRASP 를(수동 모드면 Next 를)
+                # 기다린다. 이 사이클엔 절대 전진 명령을 보내지 않는다.
+                self.ready_to_advance = True
+                self.last_cmd = "stop"
+                link.send(MissionCommand(
+                    "stop", "APPROACH_PIECE", pose.x, pose.y, pose.yaw_deg,
+                    target_label=self.target_label,
+                ))
+                if self._should_advance():
+                    self.ready_to_advance = False
+                    self.state = State.GRASP
+            else:
+                obstacles = _other_pieces(piece_map, exclude_xy=self._target_xy)
+                self._approach(pose, robot_xy, self._target_xy, obstacles,
+                               self.target_label, link)
                 self.ready_to_advance = False
-                self.state = State.GRASP
 
         elif self.state == State.GRASP:
             self.nav_goal = None
