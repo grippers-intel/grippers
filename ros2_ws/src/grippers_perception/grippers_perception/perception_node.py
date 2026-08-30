@@ -41,6 +41,7 @@ from grippers_perception.cpu_yolo_scan_mapping import (
 )
 from grippers_perception.floor_consensus import CONF_THRESHOLD, confirmed_tracks, track_bbox_xyxy
 from grippers_perception.hailo_scan_mapping import HAILO_CLASS_NAMES, object_class_for_hailo_id
+from grippers_perception.gripper_cam_geometry import orient
 
 try:
     from sensor_msgs.msg import CameraInfo, Image
@@ -946,6 +947,9 @@ class PerceptionNode(Node):
             self._grasp_cam.release()
             self._grasp_cam = None
             return None
+        # 장착이 뒤집혀 있다. 여기서 돌려야 GRIPPER_CAM_ROI(하단 중앙)가
+        # 계속 손가락을 가리킨다 — gripper_cam_geometry 참고.
+        frame = orient(frame)
         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     @staticmethod

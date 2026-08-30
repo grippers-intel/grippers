@@ -16,6 +16,8 @@ from cv_bridge import CvBridge
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
+from grippers_perception.gripper_cam_geometry import orient
+
 DEVICE_DEFAULT = "/dev/gripper_cam"
 OUTPUT_TOPIC_DEFAULT = "gripper_cam/image_raw"
 WIDTH = 640
@@ -52,6 +54,9 @@ class GripperCamPublisherNode(Node):
         if not ok or frame is None:
             self.get_logger().warn("gripper_cam: 프레임 읽기 실패")
             return
+        # 장착이 뒤집혀 있다 — 읽자마자 돌려서 하류가 방향을 몰라도 되게 한다.
+        # 근거와 VLA 정책과의 계약은 gripper_cam_geometry 참고.
+        frame = orient(frame)
         msg = self._bridge.cv2_to_imgmsg(frame, encoding="bgr8")
         msg.header.stamp = self.get_clock().now().to_msg()
         self._publisher.publish(msg)
