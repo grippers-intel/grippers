@@ -5,19 +5,38 @@
 
 ---
 
-## 0. 2026-08-29 — 첫 실기 링크 · ⚠️ 교시 자세 무효
+## 0. 2026-08-30 — 교시 자세 복구됨 · 첫 실기 링크
 
-> [!경고] **그리퍼 미션을 다시 돌리기 전에 읽을 것**
+> [!정보] **8/29 의 "교시 자세 무효" 경고는 해소됐다**
 >
-> VLA 시연 수집을 준비하며 **LeRobot 캘리브레이션을 새로 돌렸고, 서보의
-> `Homing_Offset` 이 덮여 썼다.** `floor_grasp_profiles.py` 의 RAW 교시 자세가
-> 전부 무효다 — 같은 숫자가 다른 물리 자세가 된다.
+> LeRobot 캘리브레이션이 서보의 `Homing_Offset` 을 덮어써서 RAW 교시 자세가
+> 전부 어긋났는데, **캘리브레이션 직전 EEPROM 백업 덕에 다시 교시하지 않고
+> 계산으로 옮겼다.** 12개 자세 + 그리퍼 폭 표 전부 갱신했고, 현재 서보 위치
+> 한계 안에 있는 것도 확인했다.
+>
+> 실제로 손으로 다시 잡은 것은 `IDLE_CRADLE_RAW` 하나뿐이다
+> (`tools/arm/reteach_idle_win.py`). 팔이 노트북(COM8)에 붙어 있어 Pi 판
+> `reteach_idle_pose.py` 를 못 써서 윈도우판을 새로 만들었다.
+>
+> 🔴 **`CARRY_RAW` 만 실기 확인이 남았다.** 새 IDLE 은 손목이 142 카운트
+> (12.5도) 다르다. 확인할 것은 **뎁스캠 시야**다 — `confirm_grasp()` 가
+> "CARRY 에서 팔이 뎁스캠 프레임 밖"을 전제하고(`domain/ports/perception.py:64`),
+> 파지 성공을 판정하는 독립적인 두 신호 중 하나가 거기 걸려 있다. 팔이
+> 프레임에 들어오면 `GRASP_DONE`/`GRASP_FAILED` 가 안 나가고 Host 의 실패
+> 경로가 통째로 멈춘다. **VLA 로 파지를 옮겨도 그대로 필요하다.**
+>
+> 재는 법: 물체를 든 채 CARRY 자세로 두고 뎁스캠 프레임 한 장 — 팔이 안
+> 보이고 바닥이 보이면 통과.
+>
+> (라이다 정면 가림도 손목에 걸려 있지만 우선순위가 낮다. 라이다는 바구니
+> 정면 판정에만 쓰이고, 그 판정을 탑뷰로 옮기는 안이 검토 중이다.)
 >
 > 되돌리려면:
 > ```
-> python tools/arm/backup_servo_offsets.py COM8 >        --restore tools/arm/servo_backup/servo_COM8_20260829_181124.json
+> python tools/arm/backup_servo_offsets.py COM8 >        --restore tools/arm/servo_backup/servo_COM8_20260830_141033.json
 > ```
-> 왜 다시 쟀는지와 상세는 `floor_grasp_profiles.py` 머리말 참고.
+> 변환 근거와 검증은 `floor_grasp_profiles.py` 머리말 참고.
+
 
 
 **08-28 항목은 전부 닫혔다(아래 `0-old`).** 남은 것은 하나뿐이고, 그것이

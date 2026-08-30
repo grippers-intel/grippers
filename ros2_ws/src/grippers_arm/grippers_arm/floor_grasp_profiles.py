@@ -4,25 +4,59 @@ Object geometry is kept separate from the named, hardware-tested arm poses so
 that a low GABE pose is not accidentally reused for taller chess pieces.
 """
 # ═══════════════════════════════════════════════════════════════════════════
-# ⚠️ 2026-08-29 — 아래 RAW 값들이 **현재 팔에서 무효다.**
+# 2026-08-30 — 아래 자세들은 **새 영점 기준으로 옮겨졌다.** (2026-08-29 경고 해소)
 #
-# VLA 시연 수집을 위해 LeRobot 캘리브레이션을 새로 돌렸고, 그 과정에서 서보의
-# Homing_Offset 이 덮여 썼다(lerobot/motors/feetech/feetech.py:275).
+# 8/29 VLA 시연 준비로 LeRobot 캘리브레이션을 다시 돌리면서 서보의
+# Homing_Offset 이 덮여 써졌다(lerobot/motors/feetech/feetech.py:275).
 #
 #     Present_Position = Actual_Position - Homing_Offset
 #
-# 즉 **같은 RAW 값이 다른 물리 자세**가 된다. 실기로 얻은 파지 자세가 전부
-# 어긋나므로, 그리퍼 미션을 다시 돌리기 전에 둘 중 하나를 해야 한다.
+# 그래서 같은 RAW 가 다른 물리 자세를 가리키게 됐는데, **캘리브레이션 직전에
+# EEPROM 을 백업해 둔 덕에 다시 교시하지 않고 계산으로 옮길 수 있었다.**
 #
-#   (a) 원래 값으로 되돌린다 — 캘리브레이션 직전 백업이 있다
-#         python tools/arm/backup_servo_offsets.py COM8 #                --restore tools/arm/servo_backup/servo_COM8_20260829_181124.json
+#     관절별 영점 이동(새-옛)   pan +28  lift +5  elbow +31  wrist_flex +34
+#                                wrist_roll +976   (gripper -953)
+#     저장된 RAW 에서 이만큼 빼면 새 기준이 된다.
 #
-#   (b) 이 자세들을 새 기준으로 다시 교시한다
+# ⚠️ _DEG 값도 같이 옮겼다. degrees_to_position() 이 POS_CENTER(2048) 고정
+#    기준이라 각도 표기도 영점 이동의 영향을 그대로 받는다.
 #
-# 왜 다시 쟀는가: 책상에서 잡은 옛 캘리브레이션은 "팔이 베이스 아래로 안
-# 내려간다"를 전제했는데, 차량 위에서는 바닥 물체를 집으러 베이스보다 아래로
-# 내려가야 한다. 실제로 shoulder_pan 가동폭이 2493 -> 2087 로 줄었다(차체·라이다에
-# 막힘). 자세한 경위는 tools/arm/ 의 도구들과 servo_backup/ 참고.
+# 검증
+#   * 변환식을 크래들 자세로 대조 — pan 0 / elbow -1 / lift +4 카운트 오차.
+#     기구가 붙잡는 세 관절이 ±4 안에서 맞았다.
+#   * 12개 자세 전부 현재 서보 위치 한계 안에 있음을 확인.
+#
+# 직접 실측한 것 (계산이 아님)
+#   IDLE_CRADLE_RAW — tools/arm/reteach_idle_win.py 로 재교시.
+#     확정 후 6초간 오차 0 / 부하 0 — 크래들이 받쳐 주고 있다.
+#   elbow_flex Max_Position_Limit 을 3041 -> 3070 으로 넓혔다(EEPROM +
+#     캘리브레이션 파일 양쪽). 8/29 캘리브레이션이 팔꿈치를 크래들만큼 깊이
+#     접지 않아 한계가 실제보다 좁게 잡혔고, 그대로 두면 IDLE 명령이 잘렸다.
+#
+# 🔴 아직 실기로 확인 안 된 것 — CARRY_RAW
+#   새 IDLE 은 손목이 옛것보다 142 카운트(12.5도) 다르다. 확인할 것이 둘인데
+#   **중요도가 다르다.**
+#
+#   ① 뎁스캠 시야 — 🔴 **이쪽이 먼저다**
+#      confirm_grasp() 가 "CARRY 에서 팔이 뎁스캠 프레임 밖"을 전제한다
+#      (domain/ports/perception.py:64, 2026-08-25 실기 확인). 파지 성공을
+#      판정하는 **독립적인 두 신호 중 하나**가 여기 걸려 있다 — 물체가 있던
+#      자리를 다시 봐서 사라졌으면 집힌 것이다. 팔이 프레임에 들어오면 이
+#      판정이 통째로 죽고, 그러면 GRASP_DONE/GRASP_FAILED 가 안 나가 Host 의
+#      실패 경로 전체가 멈춘다.
+#      ⚠️ VLA 로 파지를 옮겨도 **그대로 남는다.** 오히려 더 중요해진다 —
+#         정책은 자기가 성공했는지 모른다.
+#      원래 8/26 손목을 20.8도 올릴 때부터 미확인이던 항목이다.
+#      재는 법: 물체를 든 채 CARRY 자세로 두고 뎁스캠 프레임 한 장 —
+#              팔이 안 보이고 바닥이 보이면 통과.
+#
+#   ② 라이다 정면 가림 — 🟠 낮음
+#      -237 은 라이다 가림을 79% -> 0% 로 만든 실측값이다. 다만 라이다는
+#      **바구니 정면 판정에만** 쓰이고(baseline_ports.py:165), 그 판정을
+#      탑뷰로 옮기는 안이 검토 중이다. 옮기면 이 확인은 불필요해진다.
+#
+# 되돌리려면:
+#     python tools/arm/backup_servo_offsets.py COM8 #            --restore tools/arm/servo_backup/servo_COM8_20260830_141033.json
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -66,6 +100,29 @@ class FloorGraspProfile:
 # 3양자(0.0117)뿐이라 기존 여유는 성공/실패 경계 위에 놓여 있었다.
 GRIPPER_SQUEEZE_MM = 15.0
 
+
+# 2026-08-30: 파지 직전 개구 폭. GRIPPER_OPEN_MM(168, 기구 상한)에서 내렸다.
+#
+# 이유 — **168mm 로 열면 턱이 손목캠 프레임 밖으로 나간다.** 실측으로 확인했다:
+#   40mm 양쪽 턱 또렷 / 65mm 잘 보임 / 80mm 화면 가장자리에 걸침 / 120·168mm 안 보임
+#
+# 손목캠의 존재 이유가 **턱과 물체의 mm 관계**를 담는 것인데, 턱이 프레임 밖이면
+# 그 관계가 영상에 아예 없다. 사람이 시연할 때 조준을 못 하고, VLA 정책도
+# 같은 이유로 못 배운다.
+#
+# 65 인 이유: 투하 폭 최대값(soccer 61mm)을 덮는 가장 좁은 값이다. 이보다
+# 좁히면 soccer 를 놓을 수 없다.
+#
+# ⚠️ 팔로워 gripper 의 range_max 도 같은 raw(2378)로 맞춰 뒀다. 텔레옵에서
+#    **리더 트리거를 끝까지 밀면 정확히 이 폭**이 되게 하기 위해서다 —
+#    사람은 중간값을 재현할 수 없고 기구 끝만 재현할 수 있다(사용자 지적).
+#    그래서 시연의 "완전 개방"과 미션의 preopen 이 정의상 같아진다.
+#
+# 8/24 에 80.0 -> 168.0 으로 올렸던 것을 되돌리는 셈이다. 그때 닫힘 행정이
+# 319 -> 820 raw 로 2.6배 길어져 GRASP_SETTLE_SEC 이 모자라는 사고가 났는데,
+# 좁히면 그 위험도 같이 줄어든다.
+GRIPPER_PREOPEN_MM = 65.0
+
 # 투하 시 벌릴 여유 — 물체 폭보다 이만큼만 더 연다.
 #
 # 2026-08-25 사용자 지시: "물체를 놓을 때 완전히 벌리지 말고 물체가 그리퍼
@@ -106,12 +163,12 @@ def _close_width(object_width_mm: float) -> float:
 # 2026-08-24: 낮은 물체 3종(cube/star_column/soccer_polyhedron)의 파지 중심
 # 높이를 20.0 -> 26.0mm로 올림. 아래 HORIZONTAL_GABE_LOW_26_DEG 주석 참고.
 FLOOR_GRASP_PROFILES = {
-    "cube": FloorGraspProfile(40.0, 26.0, GRIPPER_OPEN_MM, _close_width(40.0), _release_width(40.0)),
-    "star_column": FloorGraspProfile(45.0, 26.0, GRIPPER_OPEN_MM, _close_width(45.0), _release_width(45.0)),
-    "soccer_polyhedron": FloorGraspProfile(46.0, 26.0, GRIPPER_OPEN_MM, _close_width(46.0), _release_width(46.0)),
-    "chess_knight": FloorGraspProfile(22.0, 60.0, GRIPPER_OPEN_MM, _close_width(22.0), _release_width(22.0)),
-    "chess_rook": FloorGraspProfile(24.5, 45.0, GRIPPER_OPEN_MM, _close_width(24.5), _release_width(24.5)),
-    "chess_queen": FloorGraspProfile(17.0, 50.0, GRIPPER_OPEN_MM, _close_width(17.0), _release_width(17.0)),
+    "cube": FloorGraspProfile(40.0, 26.0, GRIPPER_PREOPEN_MM, _close_width(40.0), _release_width(40.0)),
+    "star_column": FloorGraspProfile(45.0, 26.0, GRIPPER_PREOPEN_MM, _close_width(45.0), _release_width(45.0)),
+    "soccer_polyhedron": FloorGraspProfile(46.0, 26.0, GRIPPER_PREOPEN_MM, _close_width(46.0), _release_width(46.0)),
+    "chess_knight": FloorGraspProfile(22.0, 60.0, GRIPPER_PREOPEN_MM, _close_width(22.0), _release_width(22.0)),
+    "chess_rook": FloorGraspProfile(24.5, 45.0, GRIPPER_PREOPEN_MM, _close_width(24.5), _release_width(24.5)),
+    "chess_queen": FloorGraspProfile(17.0, 50.0, GRIPPER_PREOPEN_MM, _close_width(17.0), _release_width(17.0)),
 }
 
 # GRASP 단계의 물체 배치 전제 — 차체 전면에서 물체 **중심**까지, 정면으로.
@@ -142,12 +199,12 @@ MIN_GRIPPER_CLEARANCE_MM = 140.0
 # 2026-08-20 재실측: raw (2029, 2492, 2513, 1133, 3007)에서 실제 파지
 # 중심 높이 145 mm, 차체 전면 기준 전방 185 mm, 중심선 기준 좌측 20 mm.
 # 최소 140 mm 계약에 측정 여유 5 mm를 둔다.
-HORIZONTAL_SAFE_145_DEG = (-1.67, 39.02, 40.87, -80.42, 84.29)
-HORIZONTAL_SAFE_145_RAW = (2029, 2492, 2513, 1133, 3007)
+HORIZONTAL_SAFE_145_DEG = (-4.13, 38.58, 38.14, -83.41, -1.51)
+HORIZONTAL_SAFE_145_RAW = (2001, 2487, 2482, 1099, 2031)
 # 2026-08-20 빈손 실측: 중심 높이 195 mm, 테두리 위 약 80 mm,
 # 차체 전면 기준 전방 200 mm. SAFE_145와 같은 수평 손가락 방향을 유지한다.
-BASKET_DROP_195_RAW = (2029, 2192, 2601, 1345, 3007)
-HORIZONTAL_CHESS_MID_40_DEG = (-1.67, 96.57, -9.79, -87.29, 84.30)
+BASKET_DROP_195_RAW = (2001, 2187, 2570, 1311, 2031)
+HORIZONTAL_CHESS_MID_40_DEG = (-4.13, 96.13, -12.52, -90.28, -1.5)
 
 # ⚠️ 2026-08-24 폐기. 사용자 보고: "큐브랑 축구공은 파지 높이를 맞추기 위해서
 # 내려와 로봇암이 바닥에 약간 닿아."
@@ -176,17 +233,17 @@ HORIZONTAL_CHESS_MID_40_DEG = (-1.67, 96.57, -9.79, -87.29, 84.30)
 # 파지 자체는 위태롭지 않다 — 이 자세를 쓰는 물체는 폭 40/45/46mm라 실제
 # 중심이 20.0/22.5/23.0mm이고, 26mm는 그보다 3~6mm 위일 뿐 손가락 판이
 # 물체를 충분히 감싼다. 오히려 star/soccer는 기존 20mm가 중심보다 낮았다.
-HORIZONTAL_GABE_LOW_26_DEG = (-1.39, 95.70, -18.16, -71.05, 84.18)
-HORIZONTAL_CHESS_ROOK_45_DEG = (-1.67, 93.87, -6.32, -88.06, 84.30)
-HORIZONTAL_CHESS_QUEEN_50_DEG = (-1.67, 91.23, -3.04, -88.70, 84.30)
-HORIZONTAL_CHESS_KNIGHT_60_DEG = (-1.67, 86.10, 3.06, -89.67, 84.30)
+HORIZONTAL_GABE_LOW_26_DEG = (-3.85, 95.26, -20.89, -74.04, -1.62)
+HORIZONTAL_CHESS_ROOK_45_DEG = (-4.13, 93.43, -9.05, -91.05, -1.5)
+HORIZONTAL_CHESS_QUEEN_50_DEG = (-4.13, 90.79, -5.77, -91.69, -1.5)
+HORIZONTAL_CHESS_KNIGHT_60_DEG = (-4.13, 85.66, 0.33, -92.66, -1.5)
 
 # 2026-08-20 실측 저부하 빈손 이동 자세. servo 1..5 raw를 그대로 보존한다.
 # torque를 현재 위치에 latch한 뒤 관절 load가 모두 0인 것을 확인했다.
 #
 # 2026-08-24: servo 1-5 전체를 reteach_idle_pose.py로 손으로 다시 잡음 —
 # torque 해제 후 팔 전체를 원하는 IDLE 자세로 재포즈(그리퍼 정면 정렬 포함).
-IDLE_CRADLE_RAW = (2066, 829, 3092, 2751, 3071)
+IDLE_CRADLE_RAW = (2038, 828, 3060, 2859, 2001)
 
 # 물체를 **든 채 주행할 때만** 쓰는 자세. IDLE에서 servo 4(손목)만 들어올린다.
 #
@@ -205,11 +262,11 @@ IDLE_CRADLE_RAW = (2066, 829, 3092, 2751, 3071)
 # 재지 않았다 — 주행 진동으로 손목이 처지면 다시 막힐 수 있다.
 # ⚠️ depth 카메라 시야는 아직 확인 안 했다. confirm_grasp()가 "CARRY에서 팔이
 # 프레임 밖"을 전제하는데 20.8도 올린 뒤에도 그런지 봐야 한다.
-CARRY_RAW = (2066, 829, 3092, 2514, 3071)
+CARRY_RAW = (2038, 828, 3060, 2480, 2001)
 
 # IDLE_CRADLE과 수평 자세 사이에서 차체 접촉 없이 검증한 중간 waypoint.
-VERTICAL_SAFE_OVERHEAD_DEG = (0.0, 9.2, 20.8, 55.3, 0.4)
-HORIZONTAL_OVERHEAD_RAW = (2044, 2712, 2380, 1000, 3006)
+VERTICAL_SAFE_OVERHEAD_DEG = (-2.46, 8.76, 18.07, 52.31, -85.4)
+HORIZONTAL_OVERHEAD_RAW = (2016, 2707, 2349, 966, 2030)
 
 HORIZONTAL_GRASP_POSES_DEG = {
     "cube": HORIZONTAL_GABE_LOW_26_DEG,
