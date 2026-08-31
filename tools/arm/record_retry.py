@@ -47,46 +47,16 @@ range 2040~2054, raw 2047 부근 ±7틱). **그것만으로는 부족하다** �
 
 ⚠️ 대화형이다. **진짜 터미널 창**에서 실행할 것.
 """
+import os
 import sys
-import time
 
-from lerobot.motors.feetech import FeetechMotorsBus
-
-RETRY = 5
-BACKOFF_S = 0.02
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from feetech_retry import RETRY, patch_bus
 
 #: 리더가 읽힌 wrist_roll 을 이 값으로 덮는다. 팔로워 서보 가동범위
 #: (raw 2040~2054, 정중앙 2047)가 가리키는 자세와 같은 0도.
 #: None 으로 두면 덮지 않는다(관절을 다시 쓰게 되면 그렇게 바꾼다).
 WRIST_ROLL_FREEZE_DEG: float | None = 0.0
-
-
-def _patch_bus() -> None:
-    """write / sync_read / sync_write 에 재시도를 씌운다.
-
-    calibrate_retry.py 와 같은 패치다. 한쪽만 고치는 일이 없도록 둘을 같이
-    볼 것.
-    """
-    for name in ("write", "sync_read", "sync_write"):
-        original = getattr(FeetechMotorsBus, name, None)
-        if original is None:
-            continue
-
-        def make(orig, label):
-            def wrapper(self, *a, **kw):
-                last = None
-                for attempt in range(RETRY):
-                    try:
-                        return orig(self, *a, **kw)
-                    except ConnectionError as e:
-                        last = e
-                        time.sleep(BACKOFF_S)
-                        if attempt == 0:
-                            print(f"    [재시도] {label} 실패 — 다시 시도합니다")
-                raise last
-            return wrapper
-
-        setattr(FeetechMotorsBus, name, make(original, name))
 
 
 def _patch_leader_wrist_roll() -> bool:
@@ -118,7 +88,7 @@ def main() -> int:
         print(__doc__)
         return 2
 
-    _patch_bus()
+    patch_bus()
     print(f"모터 통신을 재시도 {RETRY}회로 감쌌습니다.")
     if _patch_leader_wrist_roll():
         print(f"wrist_roll 을 {WRIST_ROLL_FREEZE_DEG}도로 고정합니다 (리더 입력을 덮어씀).")

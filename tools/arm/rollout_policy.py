@@ -149,6 +149,12 @@ def main() -> int:
     ap.add_argument("--max-rel", type=float, default=5.0, help="스텝당 최대 이동(도). 유일한 안전장치")
     args = ap.parse_args()
 
+    # 모터 통신 재시도. LeRobot 기본값이 0 이라 패킷 하나 어긋나면 죽는다 —
+    # 롤아웃 도중에 죽으면 팔이 중간 자세로 남는다. feetech_retry.py 참고.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from feetech_retry import patch_bus
+    patch_bus()
+
     import torch
     from lerobot.cameras.configs import Cv2Rotation
     from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig

@@ -20,37 +20,11 @@ LeRobot 의 모터 통신은 `num_retry` 기본값이 **0** 이다. 즉 **한 �
 
 ⚠️ 대화형이다. **진짜 터미널 창**에서 실행할 것 (Enter 입력이 필요하다).
 """
+import os
 import sys
-import time
 
-from lerobot.motors.feetech import FeetechMotorsBus
-
-RETRY = 5
-BACKOFF_S = 0.02
-
-
-def _patch_bus() -> None:
-    """write / sync_read / sync_write 에 재시도를 씌운다."""
-    for name in ("write", "sync_read", "sync_write"):
-        original = getattr(FeetechMotorsBus, name, None)
-        if original is None:
-            continue
-
-        def make(orig, label):
-            def wrapper(self, *a, **kw):
-                last = None
-                for attempt in range(RETRY):
-                    try:
-                        return orig(self, *a, **kw)
-                    except ConnectionError as e:
-                        last = e
-                        time.sleep(BACKOFF_S)
-                        if attempt == 0:
-                            print(f"    [재시도] {label} 실패 — 다시 시도합니다")
-                raise last
-            return wrapper
-
-        setattr(FeetechMotorsBus, name, make(original, name))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from feetech_retry import RETRY, patch_bus
 
 
 def main() -> int:
@@ -59,7 +33,7 @@ def main() -> int:
         return 2
     kind, port, dev_id = sys.argv[1], sys.argv[2], sys.argv[3]
 
-    _patch_bus()
+    patch_bus()
     print(f"재시도 {RETRY}회로 감싸고 시작합니다.\n")
 
     if kind == "follower":
