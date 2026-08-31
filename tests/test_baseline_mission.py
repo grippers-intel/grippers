@@ -475,6 +475,67 @@ def test_턱_선_미실측이면_정렬_판정을_포기하고_Host에_넘긴다
     assert isinstance(nxt, BaselineApproachState)
 
 
+# ── 강제 파지 (Host 지시, 2026-08-31) ───────────────────────────────────────
+#
+# Host 가 재정렬을 GRASP_ALIGN_MAX_TRIES 훨씬 넘게 반복해도 계속 영역
+# 밖이면, mission_config.GRASP_FORCE_AFTER_TRIES 문턱에서 MissionState.
+# GRASP_FORCE 로 한 번 강제 진행한다. 여기서 지키려는 성질: **정렬 창
+# (HOST_CORRECTION)만 건너뛴다, 기본 전제와 UNKNOWN(위치를 아예 모름)은
+# 절대 안 건너뛴다.**
+
+
+def test_GRASP_FORCE는_턱_폭_밖이어도_내려간다():
+    """정상 GRASP 라면 재회전을 요구했을 관측인데, FORCE 는 그대로 진행한다."""
+    host = FakeHostLink([HostCommand(MissionState.GRASP_FORCE, stop=True)])
+    perception = ScriptedPerception(
+        script=[TargetObservation("queen", JAW_LINE_M + 0.02, 0.090, True)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD), perception=perception)
+
+    nxt = BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_READY in host.reported_kinds
+    assert "강제" in host.reports[-1][2]
+    assert isinstance(nxt, BaselineGraspState)
+
+
+def test_GRASP_FORCE도_위치를_아예_모르면_안_내려간다():
+    """UNKNOWN(거리 환산 실패)은 force 로도 못 건너뛴다 — 어디 있는지조차 모른다."""
+    host = FakeHostLink([HostCommand(MissionState.GRASP_FORCE, stop=True)])
+    perception = ScriptedPerception(script=[TargetObservation("queen", 0.0, 0.0, False)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD), perception=perception)
+
+    nxt = BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_BLOCKED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
+def test_GRASP_FORCE도_기본_전제는_안_건너뛴다():
+    """E-STOP 처럼 정렬과 무관한 안전 전제는 force 여도 그대로 막는다."""
+    estop = threading.Event()
+    estop.set()
+    host = FakeHostLink([HostCommand(MissionState.GRASP_FORCE, stop=True)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD),
+                   perception=_centered(), estop=estop)
+
+    nxt = BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_BLOCKED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
+def test_GRASP_FORCE도_영역_안이면_그냥_평소대로_내려간다():
+    """이미 READY 인 경우엔 force 문구가 안 붙는다 — 진짜로 강제한 경우만 표시."""
+    host = FakeHostLink([HostCommand(MissionState.GRASP_FORCE, stop=True)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD), perception=_centered())
+
+    nxt = BaselineApproachState().execute(ports)
+
+    assert Report.GRASP_READY in host.reported_kinds
+    assert "강제" not in host.reports[-1][2]
+    assert isinstance(nxt, BaselineGraspState)
+
+
 # ── 두 신호 파지 판정 (사용자 지시 2026-08-26) ─────────────────────────────
 
 

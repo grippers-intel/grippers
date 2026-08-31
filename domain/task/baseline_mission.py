@@ -252,6 +252,8 @@ class BaselineApproachState(State):
 
         if command.state == MissionState.GRASP:
             return self._judge_grasp(ports, command)
+        if command.state == MissionState.GRASP_FORCE:
+            return self._judge_grasp(ports, command, force=True)
 
         if not _drive(ports, command, self.name):
             return self
@@ -261,11 +263,13 @@ class BaselineApproachState(State):
             return BaselineDoneState()
         return self
 
-    def _judge_grasp(self, ports, command):
+    def _judge_grasp(self, ports, command, force: bool = False):
         """임무 2번 — 조건 판정 후 보고. 충족이면 GRASP로, 아니면 제자리.
 
         판정은 두 겹이다. 먼저 기본 전제(E-STOP·정지·빈 그리퍼·식별)를 보고,
-        통과하면 **물체가 턱이 쓸고 갈 영역 안에 있는지**를 본다.
+        통과하면 **물체가 턱이 쓸고 갈 영역 안에 있는지**를 본다. `force`
+        는 이 중 두 번째 겹(정렬 창)만 건너뛴다 — 첫 겹(기본 전제)은
+        force 여도 그대로 지킨다(2026-08-31, MissionState.GRASP_FORCE 참고).
 
         ⚠️ 이 한 번의 판정에 약 1.7초가 든다(2026-08-26 실측). identify_target이
         오검출을 거르려고 5프레임 합의를 쓰고 CPU 추론이 프레임당 0.3초쯤
@@ -290,13 +294,15 @@ class BaselineApproachState(State):
         if not report.ok:
             # 보정을 같이 실어 보낸다. 안 보내면 Host가 이 실패를 고칠 수
             # 없는 것으로 읽고 기물을 포기한다 — 2026-08-28 run6이 그랬다.
+            # force 는 이 전제를 건너뛰지 않는다 — E-STOP·안 빈 그리퍼
+            # 상태에서는 강제로도 안 내려간다.
             ports.host.report(Report.GRASP_BLOCKED, self.name, report.detail,
                               corrections.from_grasp_precondition(inputs))
             return self
 
-        return self._judge_alignment(ports, observation, label)
+        return self._judge_alignment(ports, observation, label, force=force)
 
-    def _judge_alignment(self, ports, observation, label):
+    def _judge_alignment(self, ports, observation, label, force: bool = False):
         """좌우·전후 정렬 판정 (사용자 지시 2026-08-26).
 
         영역 안이면 내려가고, 영역 안인데 치우쳤으면 **Pi가 servo 1로 고친
@@ -305,14 +311,22 @@ class BaselineApproachState(State):
         보정 직후에 곧장 내려가지 않고 한 사이클 더 관측하는 이유: 이
         저장소의 접근 제어가 전부 "관측 -> 소이동 -> 재관측" 폐루프다.
         한 번 계산한 값으로 열린 루프를 돌면 오차가 쌓인다는 것이 이미
-        실기로 확인됐다."""
+        실기로 확인됐다.
+
+        `force=True` 면 HOST_CORRECTION(영역 밖) 이라도 READY 처럼 내려간다
+        — **UNKNOWN(뎁스캠이 아예 못 잰 경우)은 건너뛰지 않는다.** Host 가
+        재정렬을 충분히 반복했다는 건 매번 유효한 관측이 있었다는 뜻이라
+        HOST_CORRECTION 만 대상이다. 어디 있는지조차 모르는 상태를 강제로
+        내려보내는 것과는 다르다."""
         verdict = ga.judge(observation, object_width_mm(label))
 
-        if verdict.action == ga.READY:
+        if verdict.action == ga.READY or (force and verdict.action == ga.HOST_CORRECTION):
             creep_m = ga.creep_distance_m(observation)
-            ports.host.report(
-                Report.GRASP_READY, self.name,
-                f"{label} {verdict.reason} · 전진 {creep_m * 1000:.0f}mm")
+            reason = (verdict.reason if verdict.action == ga.READY
+                      else f"Host 지시로 강제 진행 — {verdict.reason}")
+            detail = (f"{label} {reason} · 전진 {creep_m * 1000:.0f}mm"
+                      if creep_m is not None else f"{label} {reason}")
+            ports.host.report(Report.GRASP_READY, self.name, detail)
             return BaselineGraspState(label, creep_m, self.retries)
 
         if verdict.action == ga.PI_CENTER:

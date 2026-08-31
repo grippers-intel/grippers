@@ -46,13 +46,21 @@ class MissionState:
     IDLE = "IDLE"
     APPROACH = "APPROACH"
     GRASP = "GRASP"
+    # GRASP 와 같지만 정렬 판정(grasp_alignment.judge)의 HOST_CORRECTION
+    # 문턱을 건너뛰라는 뜻이다 — Host 가 재정렬을 충분히 반복했는데도 계속
+    # 영역 밖이면(mission_config.GRASP_FORCE_AFTER_TRIES), 잔여 오차가
+    # 파지 가능한 수준까지 좁혀졌다고 보고 한 번 강제로 시도한다(사용자
+    # 지시, 2026-08-31). 기본 전제(E-STOP·정지·빈 그리퍼·라벨 식별)는
+    # 그대로 지킨다 — 건너뛰는 건 정렬 창 판정뿐이다. 성공/실패 판정은
+    # 기존 파지 시퀀스의 두 신호(부하값+뎁스캠 확인)를 그대로 쓴다.
+    GRASP_FORCE = "GRASP_FORCE"
     CARRY = "CARRY"
     APPROACH_BOX = "APPROACH_BOX"
     INSERT = "INSERT"
     DONE = "DONE"
     ESTOP = "ESTOP"
 
-    ALL = (IDLE, APPROACH, GRASP, CARRY, APPROACH_BOX, INSERT, DONE, ESTOP)
+    ALL = (IDLE, APPROACH, GRASP, GRASP_FORCE, CARRY, APPROACH_BOX, INSERT, DONE, ESTOP)
 
 
 class Report:
