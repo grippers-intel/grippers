@@ -104,7 +104,13 @@ class MotionDecision:
 
 
 def _clamp(value: float, limit: float) -> float:
-    """부호는 두고 크기만 limit로 자른다. 비유한값(NaN/Inf)은 정지로 본다 — RoboSec F1 패치(2026-08-30)."""
+    """부호는 두고 크기만 limit로 자른다.
+
+    비유한값(NaN/Inf)은 **정지(0.0)로 본다.** 손상·조작된 Host 명령이 NaN 을
+    실어 오면 `abs(nan) < EPSILON` 도 `min(nan, limit)` 도 nan 을 그대로
+    돌려줘 베이스까지 샜다(RoboSec F1, 2026-08-30 실기 확증). 쓰레기 수치가
+    최대속도가 되어서도 안 되므로 Inf 도 같이 정지로 접는다 — fail-safe.
+    """
     if not math.isfinite(value):
         return 0.0
     if abs(value) < EPSILON:
