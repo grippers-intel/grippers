@@ -247,4 +247,4 @@ def test_목표를_못_보면_GRASP_BLOCKED_에_보정이_실린다():
     assert blocked, "GRASP_BLOCKED 가 나와야 한다"
     _kind, fix = blocked[-1]
     assert fix is not None, "보정이 없으면 Host 가 기물을 포기한다"
-    assert fix.action == cx.REACQUIRE
+    assert fix.action == cx.RETREAT

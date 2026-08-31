@@ -247,7 +247,13 @@ def test_목표_식별_실패는_GRASP를_막는다():
 
 
 def test_미세_전진_실패는_파지를_중단시킨다():
-    """`creep_forward()`의 False를 무시하면 물체가 턱 사이에 없는 채로 닫는다."""
+    """`creep_forward()`의 False를 무시하면 물체가 턱 사이에 없는 채로 닫는다.
+
+    ⚠️ 2026-08-29 순서 변경 전에는 여기서 `arm.floor_pose_calls == []`를
+    확인했다 — 전진이 팔보다 먼저였으므로 전진이 실패하면 팔은 한 번도 안
+    움직였다. 이제 전진은 **팔이 내려가 그리퍼가 열린 뒤**라, 전진이
+    실패하는 시점에 팔은 이미 grasp 자세에 있다. 확인해야 할 것은 "팔이 안
+    움직였다"가 아니라 **"닫지 않고 멈췄다"**로 바뀐다."""
     import threading
 
     from domain.adapters.fake.fake_host_link import FakeHostLink as _Host
@@ -271,4 +277,86 @@ def test_미세_전진_실패는_파지를_중단시킨다():
 
     assert Report.GRASP_FAILED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
-    assert arm.floor_pose_calls == []
+
+    stages = [stage for _profile, stage in arm.floor_pose_calls]
+    assert stages == ["safe", "grasp", "recover_idle"], (
+        f"전진 실패 뒤의 경로가 틀렸다: {stages}\n"
+        "  · midpoint/carry 로 가면 안 된다(물체가 턱 사이에 없다)\n"
+        "  · 팔을 바닥에 둔 채 끝내도 안 된다(Host 가 곧 주행을 지시한다)")
+    # 물체가 턱 사이에 안 들어왔으므로 닫으면 안 된다. 여는 폭은 내려가기
+    # 전에 이미 나갔으므로 그 한 번만 있어야 한다.
+    assert len(arm.gripper_widths) == 1, (
+        f"전진이 실패했는데 그리퍼를 또 움직였다: {arm.gripper_widths}")
+
+
+def test_파지_실패는_팔을_바닥에_두고_끝내지_않는다():
+    """실패 뒤 Host 는 곧바로 주행을 지시한다 — 그때 팔이 바닥에 있으면
+    그리퍼가 바닥과 물체를 가로질러 쓸린다.
+
+    파지 경로의 실패는 대부분 팔이 **이미 내려간 뒤** 난다(전진·닫기·
+    들어올리기). 실기로 검증된 도구들은 전부 recover_idle 로 팔을 올린다
+    (tools/grasp_test_console.recover_to_idle) — FSM 만 안 하고 있었다.
+    """
+    import threading
+
+    from domain.adapters.fake.fake_host_link import FakeHostLink as _Host
+    from domain.ports.baseline_ports import Report
+    from domain.task.baseline_mission import (
+        BaselineApproachState,
+        BaselineGraspState,
+        BaselinePorts,
+        LinkWatchdog,
+    )
+
+    host = _Host()
+    # 부하가 안 오르는 팔 — 닫았는데 아무것도 안 물린 경우다.
+    arm = FakeArm(load_ratio=0.03)
+    ports = BaselinePorts(
+        base=FakeBase(), arm=arm, perception=ScriptedPerception(),
+        host=host, lidar=FakeLidar(), estop=threading.Event(),
+        watchdog=LinkWatchdog(),
+    )
+
+    nxt = BaselineGraspState("queen", 0.030).execute(ports)
+
+    assert Report.GRASP_FAILED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+    stages = [stage for _profile, stage in arm.floor_pose_calls]
+    assert stages[-1] == "recover_idle", (
+        f"팔을 바닥에 둔 채 Host 에 돌려줬다: {stages}")
+
+
+def test_복구도_실패하면_붙잡고_사람에게_알린다():
+    """복구 경로가 원래 실패를 덮으면 안 된다 — 진짜 원인이 로그에서 묻힌다."""
+    import threading
+
+    from domain.adapters.fake.fake_host_link import FakeHostLink as _Host
+    from domain.ports.baseline_ports import Report
+    from domain.task.baseline_mission import (
+        BaselineGraspState,
+        BaselinePorts,
+        LinkWatchdog,
+    )
+
+    class StuckArm(FakeArm):
+        """내려가기는 하는데 복구는 못 하는 팔."""
+
+        def move_to_floor_pose(self, profile: str, stage: str) -> bool:
+            ok = super().move_to_floor_pose(profile, stage)
+            return False if stage == "recover_idle" else ok
+
+    host = _Host()
+    arm = StuckArm(load_ratio=0.03)
+    ports = BaselinePorts(
+        base=FakeBase(), arm=arm, perception=ScriptedPerception(),
+        host=host, lidar=FakeLidar(), estop=threading.Event(),
+        watchdog=LinkWatchdog(),
+    )
+
+    BaselineGraspState("queen", 0.030).execute(ports)
+
+    assert arm.hold_calls > 0, "복구에 실패했으면 최소한 붙잡아야 한다"
+    failed = [detail for kind, _s, detail, _f in host.reports
+              if kind == Report.GRASP_FAILED]
+    assert failed and "수동 정렬" in failed[-1], (
+        f"팔이 어디 있는지 사람에게 안 알렸다: {failed}")

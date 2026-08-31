@@ -358,17 +358,42 @@ class BaselineGraspState(State):
 
         # 전진 거리는 관측에서 나온다 — 상수를 그대로 밀면 이미 가까운 물체를
         # 턱 안쪽으로 처박는다(grasp_alignment.creep_distance_m 참고).
+        #
+        # 거리를 **팔을 내리기 전에** 확인한다. 모르는 채로 내려가 봐야 그
+        # 자리에서 실패하고 팔만 바닥에 남는다.
         if self.creep_m is None:
             return self._failed(ports, "전진 거리를 모른다 — 관측 실패")
-        if not ports.base.creep_forward(self.creep_m):
-            return self._failed(ports, "미세 전진 실패")
+
+        # 정면을 볼 수 있는 마지막 순간이다 — grasp 자세로 내려가면 팔이
+        # 뎁스 카메라를 가린다(tools/demo_rook_run.py 2단계와 같은 이유).
+        ports.perception.remember_target(self.label)
 
         if not ports.arm.move_to_floor_pose(gp.profile, "safe"):
             return self._failed(ports, "safe 자세 실패")
+        # 내려가기 전에 연다 — 닫힌 손가락이 물체가 있는 공간을 통과해
+        # 내려가면 물체를 밀어낸다(사용자 지시 2026-08-24).
         ports.arm.set_gripper(gp.preopen_width_mm)
-        ports.perception.remember_target(self.label)
         if not ports.arm.move_to_floor_pose(gp.profile, "grasp"):
             return self._failed(ports, "grasp 자세 실패")
+
+        # ⚠️ 전진은 **팔이 내려가 그리퍼가 열린 뒤**다 (사용자 지시 2026-08-24,
+        # 재확인 2026-08-29). 이 전진의 목적은 "물체 가까이 가는 것"이 아니라
+        # **물체를 벌어진 턱 사이로 밀어 넣는 것**이고, 그래야 평행 턱의 넓은
+        # 목이 좌우 자기정렬 효과를 낸다(grasp_alignment 모듈 docstring).
+        #
+        # 2026-08-29까지 이 호출이 `safe` 앞에 있었다 — 차체가 먼저 가고 팔이
+        # 나중에 내려오는 순서라, 밀어 넣는 것이 아니라 물체 위로 내려가
+        # 감싸는 동작이었고 자기정렬 효과가 없었다. 최초 커밋(241003a) 이후
+        # 아무도 안 건드린 자리인데, 실기로 검증된 tools/demo_rook_run.py 는
+        # 처음부터 이 순서였다(2단계 팔 내리기 -> 3단계 미세 전진).
+        #
+        # ⚠️ 이 구간에서는 **회전이 절대 금지**다. 그리퍼가 바닥에서 2.6cm
+        # 위에 열린 채 떠 있어서, 제자리 회전은 그것을 바닥과 물체를 가로질러
+        # 옆으로 쓴다. `creep_forward` 는 직진만 내므로 계약상 지켜진다 —
+        # 여기에 회전을 섞는 구현으로 바꾸면 안 된다(demo_rook_run.py 의
+        # CREEP_KEYMAP 이 회전 키를 일부러 뺀 것과 같은 이유).
+        if not ports.base.creep_forward(self.creep_m):
+            return self._failed(ports, "미세 전진 실패")
 
         ports.arm.set_gripper(gp.close_width_mm)
         load = ports.arm.get_load()
@@ -417,9 +442,36 @@ class BaselineGraspState(State):
         정보라 detail에 실어 보낸다(2026-08-28)."""
         attempt = self.retries + 1
         ports.base.stop()
-        ports.arm.hold_position()
+
+        # ⚠️ 팔을 바닥에 둔 채 Host 에 돌려주면 안 된다 (2026-08-29).
+        #
+        # 이 함수는 APPROACH 로 돌아가고, 거기서 Host 는 곧바로 주행을
+        # 지시한다. 그런데 파지 경로의 실패는 대부분 팔이 **이미 내려간 뒤**
+        # 난다(전진 실패·닫기 실패·들어올리기 실패). 그 상태로 차가 움직이면
+        # 바닥 2.6cm 위에 열려 있는 그리퍼가 바닥과 물체를 가로질러 쓸린다 —
+        # "팔이 바닥 높이에서 옆으로 쓸리는 움직임은 절대 안 된다"가 이
+        # 프로젝트의 확립된 안전 규칙이다(사용자 지시 2026-08-24).
+        #
+        # 실기로 검증된 도구들은 전부 실패 시 recover_idle 로 팔을 올린다
+        # (tools/grasp_test_console.recover_to_idle). FSM 만 안 하고 있었다.
+        #
+        # "idle" 이 아니라 "recover_idle" 인 이유: 이동이 실패하면 팔은 정의상
+        # 등록된 자세들 **사이**에 멈춰 서는데, 그 상태가 "idle" 의 시작 자세
+        # 게이트에 걸려 거부된다 — 정작 복구가 필요한 순간에만 복구가 막힌다.
+        #
+        # 복구가 실패해도 원래 실패를 덮지 않는다. 팔을 붙잡아 두고, 무슨 일이
+        # 있었는지 둘 다 Host 에 보낸다 — 여기서 예외를 올리면 진짜 원인이
+        # 로그에서 묻힌다.
+        gp = plan_for_label(self.label)
+        recovered = False
+        if gp is not None:
+            recovered = ports.arm.move_to_floor_pose(gp.profile, "recover_idle")
+        if not recovered:
+            ports.arm.hold_position()
+
+        note = "" if recovered else " · ⚠️ 팔이 중간 자세에 멈춰 있다(수동 정렬 필요)"
         ports.host.report(Report.GRASP_FAILED, MissionState.APPROACH,
-                          f"{attempt}번째 시도 실패 — {detail}")
+                          f"{attempt}번째 시도 실패 — {detail}{note}")
         return BaselineApproachState(self.retries + 1)
 
 

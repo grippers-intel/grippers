@@ -104,7 +104,19 @@ def from_grasp_precondition(inputs) -> Correction | None:
     if inputs.gripper_load > bc.EMPTY_LOAD_CEILING:
         return None
     if inputs.detected_label is None:
-        return Correction(REACQUIRE)
+        # RETREAT 이지 REACQUIRE 가 아니다 (2026-08-29).
+        #
+        # REACQUIRE 는 "판정할 수 없으니 다시 보이게 세워 달라"이고 **방향이
+        # 없다** — Host 는 그것을 받으면 찍어서 움직이지 않고 대상을 보류하는
+        # 것이 맞다. 하지만 여기서는 Pi 가 방향을 안다. 정면에서 목표가 안
+        # 보이는 상황에서 물러나는 것은 추측이 아니라 **유일하게 나아지는
+        # 방향**이다: 물체가 너무 가까워 화각 아래로 빠졌으면 물러나야 다시
+        # 들어오고, 더 붙으면 어느 경우에도 나빠지기만 한다.
+        #
+        # 방향을 아는 쪽이 방향을 말한다 — 그것이 이 모듈의 설계 원칙이다.
+        # 크기는 안 싣는다. 얼마나 물러나야 하는지는 모르고, 지어낸 크기를
+        # 주면 Host 가 그만큼 움직인다. Host 는 한 걸음 물러난 뒤 다시 묻는다.
+        return Correction(RETREAT)
     return None
 
 

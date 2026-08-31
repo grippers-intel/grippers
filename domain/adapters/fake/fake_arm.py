@@ -37,6 +37,9 @@ class FakeArm(ArmDriver):
         self.floor_pose_calls = []
         self.gripper_widths = []
         self.yaw_offsets = []
+        # 붙잡기는 안전 경로다 — 복구가 실패했을 때 최소한 이건 불렸는지
+        # 테스트가 확인할 수 있어야 한다(2026-08-29).
+        self.hold_calls = 0
 
     def move_to_floor_pose(self, profile: str, stage: str) -> bool:
         self.floor_pose_calls.append((profile, stage))
@@ -66,4 +69,4 @@ class FakeArm(ArmDriver):
         return self._yaw_offset_ok
 
     def hold_position(self) -> None:
-        pass
+        self.hold_calls += 1

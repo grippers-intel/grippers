@@ -163,12 +163,25 @@ def _grasp(**overrides):
     return GraspInputs(**base)
 
 
-def test_목표를_못_보면_다시_보이게_세워_달라고_한다():
-    """물체가 너무 가까워 화각 아래로 빠졌을 수 있다 — 물러나면 풀린다."""
+def test_목표를_못_보면_물러나라고_한다():
+    """물체가 너무 가까워 화각 아래로 빠졌을 수 있다 — 물러나면 풀린다.
+
+    REACQUIRE 가 아니라 RETREAT 인 것이 중요하다. REACQUIRE 에는 방향이 없어서
+    Host 가 그것을 받으면 움직이지 않고 대상을 보류한다(정당한 처리다 — 찍어서
+    움직이면 안 된다). 여기서는 Pi 가 방향을 안다: 정면에서 안 보이는데 더
+    붙으면 어느 경우에도 나빠지기만 한다. 방향을 아는 쪽이 방향을 말한다."""
     fix = cx.from_grasp_precondition(_grasp(detected_label=None))
 
     assert fix is not None
-    assert fix.action == cx.REACQUIRE
+    assert fix.action == cx.RETREAT
+
+
+def test_물러나라는_요구에_크기는_싣지_않는다():
+    """얼마나 물러나야 하는지는 모른다 — 지어낸 크기를 주면 Host 가 그만큼
+    움직인다. Host 는 한 걸음 물러난 뒤 다시 묻는다."""
+    fix = cx.from_grasp_precondition(_grasp(detected_label=None))
+
+    assert fix.forward_m == 0.0
 
 
 def test_전제가_다_맞으면_보정을_요구하지_않는다():

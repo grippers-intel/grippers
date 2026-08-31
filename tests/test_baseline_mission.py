@@ -511,3 +511,111 @@ def test_두_신호가_모두_있어야_성공이다():
 
     assert Report.GRASP_DONE in host.reported_kinds
     assert isinstance(nxt, BaselineCarryState)
+
+
+# ── 미세 전진 시점 (2026-08-29) ────────────────────────────────────────────
+#
+# 이 전진의 목적은 "물체 가까이 가는 것"이 아니라 **물체를 벌어진 턱 사이로
+# 밀어 넣는 것**이다(사용자 설명 2026-08-26). 그래야 평행 턱의 넓은 목이
+# 좌우 자기정렬 효과를 낸다.
+#
+# 2026-08-29까지 코드는 전진을 **먼저** 하고 팔을 나중에 내렸다 — 밀어 넣는
+# 것이 아니라 물체 위로 내려가 감싸는 동작이었다. 최초 커밋(241003a) 이후
+# 아무도 안 건드린 자리인데, 실기로 검증된 tools/demo_rook_run.py 는 처음부터
+# 팔을 내린 뒤 전진했다(2단계 팔 내리기 -> 3단계 미세 전진).
+#
+# 순서는 문서 세 곳이 이미 옳게 적고 있었는데도 코드만 달랐다. 그래서
+# 문자열이 아니라 **실제 호출 순서**로 고정한다.
+
+
+class _OrderSpy:
+    """포트 호출을 한 줄로 엮어 순서를 본다.
+
+    포트가 여럿이라 각자의 호출 목록만 봐서는 서로의 앞뒤를 알 수 없다 —
+    바로 그 틈에서 이 결함이 살아남았다."""
+
+    def __init__(self, delegate, name, log):
+        self._delegate, self._name, self._log = delegate, name, log
+
+    def __getattr__(self, method):
+        attribute = getattr(self._delegate, method)
+        if not callable(attribute):
+            return attribute
+
+        def recorded(*args, **kwargs):
+            if method in ("move_to_floor_pose", "set_gripper",
+                          "creep_forward", "remember_target"):
+                detail = args[1] if method == "move_to_floor_pose" else None
+                self._log.append(f"{method}:{detail}" if detail else method)
+            return attribute(*args, **kwargs)
+
+        return recorded
+
+
+def _grasp_call_order():
+    from domain.task.baseline_mission import BaselineGraspState
+
+    log = []
+    arm = FakeArm(load_ratio=HOLDING_LOAD)
+    base = FakeBase()
+    perception = ScriptedPerception()
+    ports = BaselinePorts(
+        base=_OrderSpy(base, "base", log),
+        arm=_OrderSpy(arm, "arm", log),
+        perception=_OrderSpy(perception, "perception", log),
+        host=FakeHostLink(), lidar=FakeLidar(), estop=threading.Event(),
+    )
+    BaselineGraspState("queen", 0.030).execute(ports)
+    return log
+
+
+def test_미세_전진은_팔이_내려가_그리퍼가_열린_뒤에_일어난다():
+    """전진이 grasp 자세 도달 **뒤**여야 물체가 턱 사이로 들어온다."""
+    order = _grasp_call_order()
+
+    assert "creep_forward" in order, "미세 전진이 아예 안 일어났다"
+    creep = order.index("creep_forward")
+    descended = order.index("move_to_floor_pose:grasp")
+    opened = order.index("set_gripper")
+
+    assert opened < descended, "내려가기 전에 열어야 한다(사용자 지시 2026-08-24)"
+    assert descended < creep, (
+        f"전진이 하강보다 먼저다 — 밀어 넣는 것이 아니라 감싸는 동작이 된다\n"
+        f"실제 순서: {order}")
+
+
+def test_전진은_그리퍼를_닫기_전에_끝난다():
+    """턱 사이에 물체가 들어오기 전에 닫으면 빈손으로 물거나 물체를 친다."""
+    order = _grasp_call_order()
+
+    creep = order.index("creep_forward")
+    closes = [i for i, call in enumerate(order) if call == "set_gripper"]
+    assert len(closes) >= 2, f"열기/닫기가 둘 다 있어야 한다: {order}"
+    assert creep < closes[1], f"닫은 뒤에 전진했다: {order}"
+
+
+def test_기준_프레임은_팔이_카메라를_가리기_전에_뜬다():
+    """grasp 자세로 내려가면 팔이 뎁스 카메라를 가린다 — confirm_grasp 의
+    기준 관측은 그 전에 떠야 한다(tools/demo_rook_run.py 2단계와 같은 이유)."""
+    order = _grasp_call_order()
+
+    assert order.index("remember_target") < order.index("move_to_floor_pose:grasp")
+
+
+def test_전진_구간에_회전이_섞이지_않는다():
+    """이 구간에서 그리퍼는 바닥 2.6cm 위에 열린 채 떠 있다. 제자리 회전은
+    그것을 바닥과 물체를 가로질러 옆으로 쓴다 — 이 프로젝트의 확립된 안전
+    규칙 위반이다(demo_rook_run.py 의 CREEP_KEYMAP 이 회전 키를 뺀 이유)."""
+    from domain.task.baseline_mission import BaselineGraspState
+
+    arm = FakeArm(load_ratio=HOLDING_LOAD)
+    base = FakeBase()
+    ports = BaselinePorts(
+        base=base, arm=arm, perception=ScriptedPerception(),
+        host=FakeHostLink(), lidar=FakeLidar(), estop=threading.Event(),
+    )
+    BaselineGraspState("queen", 0.030).execute(ports)
+
+    for linear_x, linear_y, angular_z in base.velocity_calls:
+        assert angular_z == 0.0, f"파지 중 회전 명령이 나갔다: {base.velocity_calls}"
+        assert linear_y == 0.0, f"파지 중 횡이동 명령이 나갔다: {base.velocity_calls}"
