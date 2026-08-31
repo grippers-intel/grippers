@@ -237,6 +237,9 @@ class MissionFSM:
         self._nudge_best = 0.0
         self._nudge_stall_at = 0.0
         self._nudge_stall_warned = False
+        # CARRY_TO_DEST 회전 정지-감시 경고를 세션당 한 번만 찍는다
+        # (NUDGE_BOX 의 _nudge_stall_warned 와 같은 규칙).
+        self._carry_stall_warned = False
         # 바구니 앞 폐루프가 지금까지 쓴 총 이동량 — 예산 한계선용.
         self._basket_creep_used = 0.0
 
@@ -278,7 +281,10 @@ class MissionFSM:
         """지금 대상을 보류하고 SEARCH_TARGET 으로 돌아간다.
 
         좌표를 `skipped` 에 남기는 것이 핵심이다 — 안 남기면 SEARCH_TARGET 이
-        같은 기물을 또 "가장 가까운 것"으로 골라 무한 반복한다."""
+        같은 기물을 또 "가장 가까운 것"으로 골라 무한 반복한다. 회전이
+        막혀서 보류하는 경우(APPROACH_PIECE 의 rotate_stalled)엔 특히 더
+        그렇다 — 여기서 지우면 다음 사이클에 같은 자리로 되돌아가 똑같이
+        걸려서 영원히 반복한다."""
         if self._target_xy is not None:
             self.skipped.append(self._target_xy)
         print(f"[mission] {self.target_label} 보류: {why}")
@@ -419,6 +425,15 @@ class MissionFSM:
                 self._approach(pose, robot_xy, self._target_xy, obstacles,
                                self.target_label, link)
                 self.ready_to_advance = False
+                # 회전이 진전 없이 멈춰 있으면(navigator.DriveSequencer,
+                # mcfg.ROTATE_STALL_SEC) 이 기물은 보류하고 다음으로 간다 —
+                # 2026-08-31 실기에서 yaw- 를 58초 연속 보냈는데 전혀 안 돈
+                # 사례(팔이 가벽에 걸렸을 가능성)가 있었다. 아직 GRASP 전이라
+                # 아무것도 안 들고 있으므로 그냥 버려도 안전하다.
+                if self.last_nav is not None and self.last_nav.rotate_stalled:
+                    self._skip_target(
+                        f"{mcfg.ROTATE_STALL_SEC:.0f}초 넘게 회전이 안 됨 — "
+                        f"바퀴 걸림/팔이 벽에 걸림/전원을 확인하세요")
 
         elif self.state == State.GRASP:
             self.nav_goal = None
@@ -505,7 +520,21 @@ class MissionFSM:
             obstacles = _other_pieces(piece_map)
             dist = self._approach(pose, robot_xy, self.dest_xy, obstacles, None, link)
             self.ready_to_advance = dist <= mcfg.PLACE_TRIGGER_DIST_M
-            if self.ready_to_advance and self._should_advance():
+            if self.last_nav is not None and self.last_nav.rotate_stalled:
+                # 뭔가 들고 옮기는 중이라 APPROACH_PIECE 처럼 그냥 포기(스킵)
+                # 하지 않는다 — 들고 있던 걸 놓아버리는 것과 같아 안전하지
+                # 않다. NUDGE_BOX 와 같은 방식으로 그 자리에 세우고 사람이
+                # 봐 줄 때까지 기다린다.
+                self.ready_to_advance = False
+                self.last_cmd = "stop"
+                link.send(MissionCommand("stop", "CARRY_TO_DEST", pose.x, pose.y,
+                                         pose.yaw_deg, target_label=self.target_label))
+                if not self._carry_stall_warned:
+                    self._carry_stall_warned = True
+                    print(f"\n[CARRY_TO_DEST] {mcfg.ROTATE_STALL_SEC:.0f}초 넘게 "
+                          f"회전이 안 됩니다 — 바퀴 걸림/전원을 확인하세요. "
+                          f"정지합니다\n", flush=True)
+            elif self.ready_to_advance and self._should_advance():
                 self.ready_to_advance = False
                 self.state = State.FACE_BOX
 

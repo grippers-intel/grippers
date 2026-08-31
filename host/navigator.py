@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import heapq
 import math
+import time
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Optional
@@ -142,6 +143,7 @@ class DriveCommand:
     yaw_error_deg: float    # 지금 로봇 yaw 와 target_yaw_deg 의 차 (-180~180)
     dist_to_target: float
     blocked_by: Optional[str] = None
+    rotate_stalled: bool = False   # ROTATE 가 진전 없이 멈춰 있음 — 아래 DriveSequencer 참고
 
 
 class DriveSequencer:
@@ -151,6 +153,12 @@ class DriveSequencer:
         self.yaw_tolerance_deg = yaw_tolerance_deg
         self._mode: Optional[DriveMode] = None   # None = 이번이 구간의 첫 update()
         self._next_after_stop = DriveMode.FORWARD
+        # 회전 진전 감시 — NUDGE_BOX 의 _nudge_best/_nudge_stall_at 과 같은
+        # 패턴. _rotate_best_err 는 이번 ROTATE 구간에서 본 가장 작은
+        # |yaw_err|, _rotate_stall_at 은 그 기록이 안 깨지면 멈췄다고 볼
+        # 시각이다. mission_config.ROTATE_STALL_SEC/PROGRESS_DEG 참고.
+        self._rotate_best_err: Optional[float] = None
+        self._rotate_stall_at = 0.0
 
     def reset(self) -> None:
         """새 구간(다른 기물/상자로 향할 때)을 시작할 때 부른다.
@@ -162,6 +170,7 @@ class DriveSequencer:
         """
         self._mode = None
         self._next_after_stop = DriveMode.FORWARD
+        self._rotate_best_err = None
 
     def update(
         self,
@@ -188,6 +197,20 @@ class DriveSequencer:
 
         out_mode = self._mode   # 이번 사이클에 내보낼 모드(전이 전 값)
 
+        # out_mode 기준으로 감시한다 — 실제로 이번 사이클에 ROTATE 를
+        # 내보낼 때만 의미가 있다(STOP 은 전환 신호 한 번뿐이라 스킵).
+        rotate_stalled = False
+        if out_mode == DriveMode.ROTATE:
+            now = time.monotonic()
+            if (self._rotate_best_err is None
+                    or abs(yaw_err) < self._rotate_best_err - mcfg.ROTATE_STALL_PROGRESS_DEG):
+                self._rotate_best_err = abs(yaw_err)
+                self._rotate_stall_at = now + mcfg.ROTATE_STALL_SEC
+            elif now >= self._rotate_stall_at:
+                rotate_stalled = True
+        else:
+            self._rotate_best_err = None
+
         if self._mode == DriveMode.FORWARD and not aligned:
             self._mode, self._next_after_stop = DriveMode.STOP, DriveMode.ROTATE
         elif self._mode == DriveMode.ROTATE and aligned:
@@ -198,7 +221,7 @@ class DriveSequencer:
         return DriveCommand(
             mode=out_mode, waypoint=nav.waypoint, target_yaw_deg=target_yaw,
             yaw_error_deg=yaw_err, dist_to_target=nav.dist_to_target,
-            blocked_by=nav.blocked_by,
+            blocked_by=nav.blocked_by, rotate_stalled=rotate_stalled,
         )
 
 

@@ -105,6 +105,20 @@ WAYPOINT_HZ = 10                # 좌표를 다시 계산해서 내보내는 주
 # 따로 잡으므로 이 정도 조준 여유는 접근 구간에서 문제되지 않는다.
 DRIVE_YAW_TOLERANCE_DEG = 12.0
 
+# 회전(ROTATE)이 안 먹히고 있다고 볼 시간·최소 진전각 — NUDGE_BOX 의
+# 정지-감시(BASKET_NUDGE_STALL_SEC/PROGRESS_M)와 같은 이유다. yaw 오차가
+# 안 줄어드는데 계속 yaw+/- 만 내보내는 건 원인이 뭐든(바퀴 걸림·정지마찰·
+# 팔이 벽에 걸림) 나아지지 않는다.
+#
+# 2026-08-31 실기: APPROACH_PIECE 에서 yaw- 명령을 58초(602사이클) 연속
+# 보냈는데 pose.yaw 가 ArUco 잡음 범위(<1도) 안에서만 흔들리고 전혀 안
+# 돌았다(x/y 도 mm 단위로 고정) — 위치가 DRIVE_AREA_Y 하한(0.30)에 가까워
+# ROBOT_RADIUS_WALL_M(팔 스윙 포함 반경)이 가벽에 걸렸을 가능성이 유력.
+# 이 값들은 그 사고를 재현하지 않기 위한 안전장치이지, 회전 자체를 더
+# 잘 되게 고치는 게 아니다 — 실물 원인(걸림)은 직접 확인이 필요하다.
+ROTATE_STALL_SEC = 8.0
+ROTATE_STALL_PROGRESS_DEG = 3.0   # ArUco yaw 잡음(<1도)보다 넉넉히 크게
+
 # 경로 한 구간을 "다 왔다"고 보는 거리(navigator.GridPathPlanner).
 AXIS_LEG_TOLERANCE_M = 0.03
 
