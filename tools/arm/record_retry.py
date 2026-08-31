@@ -11,6 +11,31 @@
 30 에피소드를 찍는 도중에 죽으면 그때까지가 날아간다(`--resume=true` 로
 이어붙일 수는 있지만 그 에피소드는 버려진다). 그래서 처음부터 감싼다.
 
+## wrist_roll 을 상수로 못 박는다
+
+5번 관절(wrist_roll)은 이 과제에서 쓰지 않는다. v3 데이터셋에서도 실제 범위가
+-15.16 ~ 8.31 로 사실상 고정이었다. 그런데 교시 중 손이 스치면 값이 흔들리고,
+그 흔들림이 학습 데이터에 그대로 들어간다.
+
+팔로워 쪽은 서보 가동범위를 좁혀 막아 두었다(`grippers_arm.json` 의 wrist_roll
+range 2040~2054, raw 2047 부근 ±7틱). **그것만으로는 부족하다** —
+`lerobot_record.py:399-411` 이 데이터셋에 기록하는 `action` 은 실제로 전송된
+값이 아니라 **리더가 읽힌 값**이기 때문이다(코드에도 TODO 로 남아 있다).
+
+    action_values  = act_processed_teleop      # 리더가 읽힌 값 → 기록됨
+    _sent_action   = robot.send_action(...)    # 실제 전송값 → 버려짐
+
+그대로 두면 `observation.state` 의 wrist_roll 은 고정인데 `action` 만 흔들리는
+데이터가 된다. 없애려던 잡음이 남는 데다 **상태-액션 불일치**까지 더해진다.
+정책은 "wrist_roll 을 명령해도 아무 일도 안 일어난다"를 배운다.
+
+그래서 리더가 읽는 값 자체를 여기서 상수로 덮는다. 기록·전송·실제 동작 셋이
+같아진다.
+
+⚠️ 값을 바꾸려면 `WRIST_ROLL_FREEZE_DEG` 하나만 고칠 것. 서보 가동범위와
+   **같은 자세**를 가리켜야 한다 — 어긋나면 리더가 팔로워가 갈 수 없는 곳을
+   명령하고, 그 명령이 데이터에 남는다.
+
 ## 쓰는 법
 
 `lerobot-record` 의 인자를 **그대로** 준다.
@@ -29,6 +54,11 @@ from lerobot.motors.feetech import FeetechMotorsBus
 
 RETRY = 5
 BACKOFF_S = 0.02
+
+#: 리더가 읽힌 wrist_roll 을 이 값으로 덮는다. 팔로워 서보 가동범위
+#: (raw 2040~2054, 정중앙 2047)가 가리키는 자세와 같은 0도.
+#: None 으로 두면 덮지 않는다(관절을 다시 쓰게 되면 그렇게 바꾼다).
+WRIST_ROLL_FREEZE_DEG: float | None = 0.0
 
 
 def _patch_bus() -> None:
@@ -59,13 +89,42 @@ def _patch_bus() -> None:
         setattr(FeetechMotorsBus, name, make(original, name))
 
 
+def _patch_leader_wrist_roll() -> bool:
+    """리더가 읽힌 wrist_roll 을 상수로 덮는다.
+
+    `SOLeader.get_action()` 은 `{"<motor>.pos": val}` 를 돌려주고, record 루프가
+    그 값을 **그대로 데이터셋에 기록**한다. 그러니 여기서 덮으면 기록·전송이
+    한꺼번에 상수가 된다. 팔로워 서보 가동범위 제한과 짝이다 — 위 docstring 참고.
+    """
+    if WRIST_ROLL_FREEZE_DEG is None:
+        return False
+
+    from lerobot.teleoperators.so_leader.so_leader import SOLeader
+
+    original = SOLeader.get_action
+
+    def wrapper(self):
+        action = original(self)
+        if "wrist_roll.pos" in action:
+            action["wrist_roll.pos"] = WRIST_ROLL_FREEZE_DEG
+        return action
+
+    SOLeader.get_action = wrapper
+    return True
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
         return 2
 
     _patch_bus()
-    print(f"모터 통신을 재시도 {RETRY}회로 감쌌습니다.\n")
+    print(f"모터 통신을 재시도 {RETRY}회로 감쌌습니다.")
+    if _patch_leader_wrist_roll():
+        print(f"wrist_roll 을 {WRIST_ROLL_FREEZE_DEG}도로 고정합니다 (리더 입력을 덮어씀).")
+    else:
+        print("wrist_roll 고정: 꺼짐 (WRIST_ROLL_FREEZE_DEG=None)")
+    print()
 
     # draccus 가 sys.argv 를 그대로 읽으므로 우리 인자를 그 자리에 둔다.
     from lerobot.scripts.lerobot_record import main as record_main
