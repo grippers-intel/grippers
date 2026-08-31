@@ -285,6 +285,21 @@ BOX_APPROACH_MARGIN_M = 0.15
 GRASP_ALIGN_STEP_M = 0.03        # 전/후진 한 걸음. 턱 쓸기 구간 폭보다 작아야 한다
 GRASP_ALIGN_YAW_STEP_DEG = 3.0   # 좌우 겨눔 한 걸음. DRIVE_YAW_TOLERANCE_DEG(5도)보다 작다
 GRASP_ALIGN_MAX_TRIES = 5        # 이만큼 해도 안 되면 그 기물은 보류하고 다음으로
+# ⚠️ 2026-08-31 임시 변경(반복 테스트용) 으로 지금은 이 값을 안 쓴다 —
+# mission.py GRASP 블록 주석 참고.
+
+# 재정렬(GRASP_ALIGN)을 이만큼 반복해도 여전히 영역 밖이면, 잔여 오차가
+# 파지 가능한 수준까지 좁혀졌다고 보고 Pi 에 한 번 강제로 파지를 시도하게
+# 한다(state="GRASP_FORCE", 사용자 지시, 2026-08-31). Pi 는 정렬 창 판정만
+# 건너뛰고, 기본 전제(E-STOP·정지·빈 그리퍼)와 파지 성공 판정(부하값+
+# 뎁스캠 확인)은 그대로 지킨다 — grippers 저장소 domain/task/baseline_mission.py
+# 의 MissionState.GRASP_FORCE 참고.
+#
+# 재정렬 한 번(~1.7초 판정 주기 기준)이 아니라 실제 걸리는 시간을 감안해서
+# 정할 것 — 30회면 최소 약 50초다. 강제도 실패하면 재정렬 한 번을 더 거쳐
+# 재시도하고, 그마저 실패하면 그 기물을 포기한다(GRASP_FORCE_MAX_ATTEMPTS).
+GRASP_FORCE_AFTER_TRIES = 30
+GRASP_FORCE_MAX_ATTEMPTS = 2
 
 # 보류한 기물을 다시 후보로 보지 않을 반경. PIECE_MERGE_DIST_M 과 같은 척도다.
 SKIP_RADIUS_M = 0.10

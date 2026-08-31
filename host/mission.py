@@ -246,6 +246,15 @@ class MissionFSM:
         self._align = None
         self._align_from: Optional[tuple[float, float, float]] = None
         self._align_tries = 0
+        # 강제 파지(GRASP_FORCE, 2026-08-31) 용. _forcing_grasp 는 지금
+        # Pi 에 강제 시도를 보내 놓고 결과를 기다리는 중인지, _forced_grasp_tries
+        # 는 이 기물에 몇 번 강제했는지, _align_tries_at_last_force 는
+        # 마지막으로 강제했을 때의 _align_tries 값이다(그 뒤로 재정렬이
+        # 최소 한 번은 더 있어야 다시 강제한다 — 안 그러면 실패 직후 바로
+        # 또 강제해서 GRASP_FORCE_MAX_ATTEMPTS 를 순식간에 다 쓴다).
+        self._forcing_grasp = False
+        self._forced_grasp_tries = 0
+        self._align_tries_at_last_force: Optional[int] = None
         # 재정렬을 다 쓰고도 못 집은 기물 좌표. SEARCH_TARGET 후보에서 뺀다.
         self.skipped: list[XY] = []
 
@@ -392,6 +401,9 @@ class MissionFSM:
                     # 첫 기물이 예산을 다 쓴 뒤 나머지가 전부 첫 시도에서
                     # 보류된다. 되돌리는 자리는 대상이 바뀌는 여기 하나뿐이다.
                     self._align_tries = 0
+                    self._forcing_grasp = False
+                    self._forced_grasp_tries = 0
+                    self._align_tries_at_last_force = None
                     self._path_planner.reset()   # 새 구간 시작
                     self._drive.reset()
                     self.ready_to_advance = False
@@ -426,14 +438,31 @@ class MissionFSM:
             self.nav_path = None
             self.last_nav = None
             self.last_cmd = "stop"
-            link.send(MissionCommand("stop", "GRASP", pose.x, pose.y, pose.yaw_deg,
+            # 재정렬을 GRASP_FORCE_AFTER_TRIES 회 넘게 반복해도 여전히
+            # 영역 밖이면, "GRASP" 대신 "GRASP_FORCE" 를 보내 Pi 의 정렬
+            # 창 판정을 한 번 건너뛰게 한다(사용자 지시, 2026-08-31 —
+            # grippers 저장소 MissionState.GRASP_FORCE 참고). 성공/실패
+            # 판정 자체는 Pi 의 기존 두 신호(부하값+뎁스캠 확인) 그대로다.
+            status = "GRASP_FORCE" if self._forcing_grasp else "GRASP"
+            link.send(MissionCommand("stop", status, pose.x, pose.y, pose.yaw_deg,
                                       target_label=self.target_label))
             # poll_status() 는 한 번 물으면 그 응답을 소비한다(다시 물으면
             # IDLE) — 그래서 GRASP_DONE 을 본 뒤로는 다시 안 묻고 그 사실을
             # ready_to_advance 에 붙들어 둔다(수동 모드에서 버튼 누를 때까지
             # 여러 사이클 걸릴 수 있어서, 매번 새로 물으면 신호를 놓친다).
-            if not self.ready_to_advance and link.poll_status() == "GRASP_DONE":
+            poll = link.poll_status() if not self.ready_to_advance else "IDLE"
+            if not self.ready_to_advance and poll == "GRASP_DONE":
                 self.ready_to_advance = True
+            elif self._forcing_grasp and poll == "FAILED":
+                # 강제 시도가 실제로 실패했다(부하 미달·뎁스캠에서 확인
+                # 안 됨 등, Pi 가 GRASP_FAILED 로 보고). 강제 모드를 풀고
+                # Pi 의 다음 재관측(정상 GRASP_ALIGN 한 걸음)을 기다린다
+                # — 사용자 지시: 실패하면 재정렬 후 재시도, 그래도 안
+                # 되면 포기.
+                self._forcing_grasp = False
+                print(f"[mission] {self.target_label} 강제 파지 "
+                      f"{self._forced_grasp_tries}/{mcfg.GRASP_FORCE_MAX_ATTEMPTS}회 실패 "
+                      f"— 재정렬 후 재시도합니다")
 
             # Pi 가 "조건이 안 맞는다, 수정된 명령을 달라"고 했으면 재정렬로
             # 넘어간다. 여기서 아무것도 안 하면 Pi 는 계속 기다리고 Host 는
@@ -442,19 +471,31 @@ class MissionFSM:
             correction = link.take_correction()
             if correction is not None and not self.ready_to_advance:
                 # ⚠️ 2026-08-31 임시 변경(반복 테스트용): 원래는 여기서
-                # _skip_target 으로 이 기물을 포기하고 SEARCH_TARGET 으로
-                # 돌아갔다(actionable=False 이거나 재정렬 GRASP_ALIGN_MAX_TRIES
-                # 회 소진). 그런데 필드에 기물이 하나뿐일 때 포기하면
-                # SEARCH_TARGET 이 갈 데가 없어 테스트가 그대로 멈춘다. 그래서
-                # 지금은 포기하지 않고 계속 재정렬을 시도한다 — actionable
-                # 이면 시도 횟수 제한 없이 GRASP_ALIGN 으로, actionable 이
-                # 아니면(방향을 모름·E-STOP 등) 그냥 기다린다(Pi 가 다음
-                # 관측에서 다른 판정을 주면 그때 반응). 필드에 기물이 여럿인
-                # 정식 시험으로 돌아가면 이 블록을 원래대로(_skip_target 호출)
-                # 되돌릴 것.
+                # actionable=False 면 바로 _skip_target 으로 포기했다.
+                # 필드에 기물이 하나뿐인 지금은 포기하면 SEARCH_TARGET 이
+                # 갈 데가 없어 테스트가 멈춘다 — 그래서 방향을 모르는 경우는
+                # 포기 대신 그냥 기다린다. 필드에 기물이 여럿인 정식 시험
+                # 으로 돌아가면 이 분기를 원래대로 되돌릴 것.
                 if not correction.actionable:
                     print(f"[mission] {self.target_label} 고칠 수 없음(포기 안 하고 "
                           f"대기) — {correction.detail}")
+                elif self._forced_grasp_tries >= mcfg.GRASP_FORCE_MAX_ATTEMPTS:
+                    # 강제 시도를 다 썼는데 재정렬로도 여전히 안 맞다 —
+                    # 여기는 포기한다(사용자 지시 — 반복 테스트 예외 대상이
+                    # 아니다. 강제까지 다 쓰고도 안 되면 정말 못 집는 것).
+                    self._skip_target(
+                        f"강제 파지 {self._forced_grasp_tries}회 소진 — {correction.detail}")
+                elif (self._align_tries >= mcfg.GRASP_FORCE_AFTER_TRIES
+                      and (self._align_tries_at_last_force is None
+                           or self._align_tries > self._align_tries_at_last_force)):
+                    # 재정렬을 충분히 반복했다(그리고 지난 강제 시도 뒤로
+                    # 최소 한 걸음은 더 정렬했다) — 한 번 강제로 시도한다.
+                    self._forcing_grasp = True
+                    self._forced_grasp_tries += 1
+                    self._align_tries_at_last_force = self._align_tries
+                    print(f"[mission] {self.target_label} 재정렬 {self._align_tries}회 — "
+                          f"강제 파지 시도 {self._forced_grasp_tries}/"
+                          f"{mcfg.GRASP_FORCE_MAX_ATTEMPTS} ({correction.detail})")
                 else:
                     self._align = correction
                     self._align_from = (pose.x, pose.y, pose.yaw_deg)
