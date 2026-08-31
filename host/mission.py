@@ -441,13 +441,20 @@ class MissionFSM:
             # 고쳐서 진행하지 않는다"이므로 움직이는 쪽은 Host 뿐이다.
             correction = link.take_correction()
             if correction is not None and not self.ready_to_advance:
+                # ⚠️ 2026-08-31 임시 변경(반복 테스트용): 원래는 여기서
+                # _skip_target 으로 이 기물을 포기하고 SEARCH_TARGET 으로
+                # 돌아갔다(actionable=False 이거나 재정렬 GRASP_ALIGN_MAX_TRIES
+                # 회 소진). 그런데 필드에 기물이 하나뿐일 때 포기하면
+                # SEARCH_TARGET 이 갈 데가 없어 테스트가 그대로 멈춘다. 그래서
+                # 지금은 포기하지 않고 계속 재정렬을 시도한다 — actionable
+                # 이면 시도 횟수 제한 없이 GRASP_ALIGN 으로, actionable 이
+                # 아니면(방향을 모름·E-STOP 등) 그냥 기다린다(Pi 가 다음
+                # 관측에서 다른 판정을 주면 그때 반응). 필드에 기물이 여럿인
+                # 정식 시험으로 돌아가면 이 블록을 원래대로(_skip_target 호출)
+                # 되돌릴 것.
                 if not correction.actionable:
-                    # E-STOP·미실측 상수·그리퍼가 안 비었음 등. 차를 움직여도
-                    # 안 풀리므로 이 기물은 보류하고 다음으로 간다.
-                    self._skip_target(f"고칠 수 없음 — {correction.detail}")
-                elif self._align_tries >= mcfg.GRASP_ALIGN_MAX_TRIES:
-                    self._skip_target(
-                        f"재정렬 {self._align_tries}회 소진 — {correction.detail}")
+                    print(f"[mission] {self.target_label} 고칠 수 없음(포기 안 하고 "
+                          f"대기) — {correction.detail}")
                 else:
                     self._align = correction
                     self._align_from = (pose.x, pose.y, pose.yaw_deg)

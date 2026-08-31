@@ -232,6 +232,10 @@ def test_목표를_못_봤을_때는_후진으로_실행된다():
     assert commands and commands[0] == "back"
 
 
+@pytest.mark.skip(
+    reason="2026-08-31 임시 변경(반복 테스트용, mission.py GRASP 블록 주석 참고) — "
+           "재정렬 예산을 다 써도 지금은 포기하지 않고 계속 시도한다. "
+           "그 변경을 되돌리면 이 테스트도 같이 켤 것.")
 def test_재정렬_예산을_다_쓰면_그때는_보류한다():
     """무한히 물러나지는 않는다 — 한계는 그대로 지킨다."""
     fsm = MissionFSM()
