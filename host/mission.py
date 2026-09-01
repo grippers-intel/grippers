@@ -77,25 +77,42 @@ def _nearest_piece(piece_map: PieceMap, robot_xy: XY,
     뺀다 — 안 그러면 방금 내려놓은 기물을 바로 또 집으러 간다. x 가
     WORKSPACE_X(=방 전체 폭 0~1.8m) 밖이면 물리적으로 있을 수 없는 자리라
     오검출로 보고 뺀다.
+
+    skip(재정렬/파지를 다 써도 못 집은 기물, MissionFSM.skipped)은 1순위
+    후보에서 뺀다 — 안 그러면 같은 기물 앞에서 영원히 재정렬만 반복한다.
+    라벨이 아니라 좌표로 빼는 이유는 _other_pieces 와 같다(같은 라벨의
+    다른 개체는 살려둔다).
+
+    ⚠️ 다만 **그것 말고 후보가 하나도 없을 때만** skip 을 무시하고 다시
+    찾는다(사용자 지시, 2026-09-01) — 다른 기물이 남아 있는 동안은 실패
+    직후 같은 기물을 또 들이미는 낭비를 막고, 그것만 남았을 때는 영원히
+    손 놓지 않고 다시 시도한다. 두 번째 시도도 실패하면 skip 에 다시
+    쌓이므로(_skip_target), 다음 라운드도 "다른 후보가 없을 때만" 조건을
+    똑같이 거쳐 재시도된다 — 여러 기물이 있는 정상 상황에서는 계속
+    미뤄지고, 그것 하나만 남은 상황에서만 반복 시도가 벌어진다.
     """
-    wx0, wx1 = cfg.WORKSPACE_X
-    wy0, wy1 = cfg.WORKSPACE_Y
-    best: Optional[tuple[str, XY]] = None
-    best_d = math.inf
-    for label, pts in piece_map.items():
-        for p in pts:
-            if not (wx0 <= p[0] <= wx1 and wy0 <= p[1] <= wy1):
-                continue
-            # 재정렬을 다 써도 못 집은 기물은 후보에서 뺀다 — 안 그러면 같은
-            # 기물 앞에서 영원히 재정렬만 반복한다. 라벨이 아니라 좌표로 빼는
-            # 이유는 _other_pieces 와 같다(같은 라벨의 다른 개체는 살려둔다).
-            if skip and any(math.hypot(p[0] - s[0], p[1] - s[1]) <= mcfg.SKIP_RADIUS_M
-                            for s in skip):
-                continue
-            d = (p[0] - robot_xy[0]) ** 2 + (p[1] - robot_xy[1]) ** 2
-            if d < best_d:
-                best, best_d = (label, p), d
-    return best
+    def _search(use_skip: bool) -> Optional[tuple[str, XY]]:
+        wx0, wx1 = cfg.WORKSPACE_X
+        wy0, wy1 = cfg.WORKSPACE_Y
+        best: Optional[tuple[str, XY]] = None
+        best_d = math.inf
+        for label, pts in piece_map.items():
+            for p in pts:
+                if not (wx0 <= p[0] <= wx1 and wy0 <= p[1] <= wy1):
+                    continue
+                if use_skip and skip and any(
+                        math.hypot(p[0] - s[0], p[1] - s[1]) <= mcfg.SKIP_RADIUS_M
+                        for s in skip):
+                    continue
+                d = (p[0] - robot_xy[0]) ** 2 + (p[1] - robot_xy[1]) ** 2
+                if d < best_d:
+                    best, best_d = (label, p), d
+        return best
+
+    found = _search(use_skip=True)
+    if found is None and skip:
+        found = _search(use_skip=False)
+    return found
 
 
 def _find_label(piece_map: PieceMap, label: str, robot_xy: XY,
@@ -103,24 +120,34 @@ def _find_label(piece_map: PieceMap, label: str, robot_xy: XY,
     """특정 라벨만 대상으로 로봇과 가장 가까운 것 하나를 고른다 — 사용자
     지시(instruction_resolver.py 가 해석한 라벨)로 라벨이 정해졌을 때
     쓴다. 같은 라벨이 여러 개일 수 있어(예: 폰) 그중 가까운 걸 고른다.
-    그 라벨이 지금 안 보이면(또는 전부 skip 대상이면) None.
+    그 라벨이 지금 안 보이면 None.
 
-    `_nearest_piece`와 조건(작업영역·skip)을 그대로 맞춘다 — 라벨을
-    지정했다고 해서 재정렬을 다 쓰고 포기한 기물을 다시 들이밀면 안
-    된다(2026-09-01)."""
-    wx0, wx1 = cfg.WORKSPACE_X
-    wy0, wy1 = cfg.WORKSPACE_Y
-    best_xy: Optional[XY] = None
-    best_d = math.inf
-    for p in piece_map.get(label, []):
-        if not (wx0 <= p[0] <= wx1 and wy0 <= p[1] <= wy1):
-            continue
-        if skip and any(math.hypot(p[0] - s[0], p[1] - s[1]) <= mcfg.SKIP_RADIUS_M
-                        for s in skip):
-            continue
-        d = (p[0] - robot_xy[0]) ** 2 + (p[1] - robot_xy[1]) ** 2
-        if d < best_d:
-            best_xy, best_d = p, d
+    `_nearest_piece`와 조건(작업영역·skip)을 그대로 맞춘다 — 이 라벨의
+    다른(skip 안 된) 개체가 남아 있는 동안은 포기한 것을 다시 들이밀지
+    않되, **이 라벨에 그것 말고 후보가 하나도 없으면** skip 을 무시하고
+    다시 찾는다(사용자 지시, 2026-09-01 — _nearest_piece 와 같은 이유).
+    안 그러면 지시받은 라벨의 유일한 개체가 한 번 포기됐을 때 그 라벨이
+    다시 보일 때까지(=영원히) 기다리게 된다."""
+    def _search(use_skip: bool) -> Optional[XY]:
+        wx0, wx1 = cfg.WORKSPACE_X
+        wy0, wy1 = cfg.WORKSPACE_Y
+        best_xy: Optional[XY] = None
+        best_d = math.inf
+        for p in piece_map.get(label, []):
+            if not (wx0 <= p[0] <= wx1 and wy0 <= p[1] <= wy1):
+                continue
+            if use_skip and skip and any(
+                    math.hypot(p[0] - s[0], p[1] - s[1]) <= mcfg.SKIP_RADIUS_M
+                    for s in skip):
+                continue
+            d = (p[0] - robot_xy[0]) ** 2 + (p[1] - robot_xy[1]) ** 2
+            if d < best_d:
+                best_xy, best_d = p, d
+        return best_xy
+
+    best_xy = _search(use_skip=True)
+    if best_xy is None and skip:
+        best_xy = _search(use_skip=False)
     return (label, best_xy) if best_xy is not None else None
 
 
@@ -357,7 +384,10 @@ class MissionFSM:
         # (mcfg.GRASP_FAIL_MAX_RETRIES, 2026-09-01 사용자 지시). GRASP_BLOCKED
         # 는 위 align_tries/forcing 쪽이 이미 상한을 관리하므로 겹치지 않는다.
         self._grasp_fail_tries = 0
-        # 재정렬을 다 쓰고도 못 집은 기물 좌표. SEARCH_TARGET 후보에서 뺀다.
+        # 재정렬/파지를 다 쓰고도 못 집은 기물 좌표. 다른 후보가 남아 있는
+        # 동안은 SEARCH_TARGET 후보에서 뺀다 — 단 그것 말고 후보가 하나도
+        # 없어지면 다시 후보로 본다(_nearest_piece/_find_label 의 2단계
+        # 탐색 참고, 사용자 지시 2026-09-01).
         self.skipped: list[XY] = []
 
         self._path_planner.reset()
