@@ -151,6 +151,8 @@ class DriveSequencer:
         self.yaw_tolerance_deg = yaw_tolerance_deg
         self._mode: Optional[DriveMode] = None   # None = 이번이 구간의 첫 update()
         self._next_after_stop = DriveMode.FORWARD
+        # ROTATE 진입 시점에 한 번 정한 목표각(2026-09-02, 아래 update() 참고).
+        self._rotate_target_yaw: Optional[float] = None
 
     def reset(self) -> None:
         """새 구간(다른 기물/상자로 향할 때)을 시작할 때 부른다.
@@ -162,6 +164,7 @@ class DriveSequencer:
         """
         self._mode = None
         self._next_after_stop = DriveMode.FORWARD
+        self._rotate_target_yaw = None
 
     def update(
         self,
@@ -176,15 +179,31 @@ class DriveSequencer:
         dx = nav.waypoint[0] - robot_xy[0]
         dy = nav.waypoint[1] - robot_xy[1]
         if abs(dx) < 1e-9 and abs(dy) < 1e-9:
-            target_yaw = robot_yaw_deg   # 이미 도착 — 방향 계산 의미 없음
+            fresh_target_yaw = robot_yaw_deg   # 이미 도착 — 방향 계산 의미 없음
         else:
-            target_yaw = float(np.degrees(np.arctan2(dy, dx)))
-        yaw_err = (target_yaw - robot_yaw_deg + 180.0) % 360.0 - 180.0
-        aligned = abs(yaw_err) <= self.yaw_tolerance_deg
+            fresh_target_yaw = float(np.degrees(np.arctan2(dy, dx)))
 
         if self._mode is None:
             # 구간의 첫 사이클 — STOP 전이 신호 없이 바로 알맞은 모드로 시작.
-            self._mode = DriveMode.FORWARD if aligned else DriveMode.ROTATE
+            yaw_err = (fresh_target_yaw - robot_yaw_deg + 180.0) % 360.0 - 180.0
+            self._mode = (DriveMode.FORWARD
+                          if abs(yaw_err) <= self.yaw_tolerance_deg
+                          else DriveMode.ROTATE)
+            if self._mode == DriveMode.ROTATE:
+                self._rotate_target_yaw = fresh_target_yaw
+
+        # 회전 중엔 매 사이클 다시 잰 목표각을 쫓지 않는다(2026-09-02 실기
+        # — GRASP_REPLAN/RETURN_HOME에서 76도로 시작해 같은 방향으로
+        # 250도+ 돈 사례). 부분목표(GridPathPlanner sub-goal)가 로봇 시작
+        # 칸 근처에서 살짝 흔들리면 목표각이 사이클마다 바뀌고, 도는
+        # 도중에 그걸 계속 쫓으면 방향이 안정적으로 안 잡힌다. ROTATE에
+        # 들어간 시점에 한 번 정한 목표각을 그대로 쓰고, 정렬이 끝나야
+        # (STOP 을 거쳐) 다시 잰다.
+        target_yaw = (self._rotate_target_yaw
+                     if self._mode == DriveMode.ROTATE and self._rotate_target_yaw is not None
+                     else fresh_target_yaw)
+        yaw_err = (target_yaw - robot_yaw_deg + 180.0) % 360.0 - 180.0
+        aligned = abs(yaw_err) <= self.yaw_tolerance_deg
 
         out_mode = self._mode   # 이번 사이클에 내보낼 모드(전이 전 값)
 
@@ -192,8 +211,11 @@ class DriveSequencer:
             self._mode, self._next_after_stop = DriveMode.STOP, DriveMode.ROTATE
         elif self._mode == DriveMode.ROTATE and aligned:
             self._mode, self._next_after_stop = DriveMode.STOP, DriveMode.FORWARD
+            self._rotate_target_yaw = None
         elif self._mode == DriveMode.STOP:
             self._mode = self._next_after_stop
+            if self._mode == DriveMode.ROTATE:
+                self._rotate_target_yaw = fresh_target_yaw
 
         return DriveCommand(
             mode=out_mode, waypoint=nav.waypoint, target_yaw_deg=target_yaw,

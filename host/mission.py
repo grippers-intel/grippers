@@ -783,6 +783,17 @@ class MissionFSM:
             # 고쳐서 진행하지 않는다"이므로 움직이는 쪽은 Host 뿐이다.
             correction = link.take_correction()
             if correction is not None and not self.ready_to_advance:
+                # 이미 실제 파지(팔 내려가 그리퍼 닫기)를 한 번 이상
+                # 시도한 뒤에 "정면에서 못 찾음"(BACK_OFF)이 왔다면,
+                # 물체가 사라진 게 아니라 이미 턱 사이에 물려 있어서
+                # 뎁스캠 화각·거리 판독이 어긋난 것일 수 있다(2026-09-02
+                # 실기 — GRASP_REPLAN이 이 경우를 그대로 물러나며 헐겁게
+                # 물린 rook을 떨어뜨렸다). 뎁스캠만으로는 "사라짐"과
+                # "물렸음"을 가를 수 없으니, 차체를 물러나게 하는 쪽
+                # (BACK_OFF 걸음도 GRASP_REPLAN도)은 전부 막고 제자리에서
+                # 다시 묻는다 — 아래 두 자리(REPLAN 분기, else 분기)에서 씀.
+                grasp_might_be_held = (
+                    self._grasp_fail_tries > 0 and correction.kind == BACK_OFF)
                 # ⚠️ 2026-08-31 임시 변경(반복 테스트용): 원래는 여기서
                 # actionable=False 면 바로 _skip_target 으로 포기했다.
                 # 필드에 기물이 하나뿐인 지금은 포기하면 SEARCH_TARGET 이
@@ -798,7 +809,8 @@ class MissionFSM:
                     # 아니다. 강제까지 다 쓰고도 안 되면 정말 못 집는 것).
                     self._skip_target(
                         f"강제 파지 {self._forced_grasp_tries}회 소진 — {correction.detail}")
-                elif (self._replan_tries < mcfg.GRASP_REPLAN_MAX_ATTEMPTS
+                elif (not grasp_might_be_held
+                      and self._replan_tries < mcfg.GRASP_REPLAN_MAX_ATTEMPTS
                       and self._align_tries >= mcfg.GRASP_REPLAN_AFTER_TRIES
                       and (self._align_tries_at_last_replan is None
                            or self._align_tries >= self._align_tries_at_last_replan
@@ -835,6 +847,16 @@ class MissionFSM:
                     print(f"[mission] {self.target_label} 재정렬 {self._align_tries}회 — "
                           f"강제 파지 시도 {self._forced_grasp_tries}/"
                           f"{mcfg.GRASP_FORCE_MAX_ATTEMPTS} ({correction.detail})")
+                elif grasp_might_be_held:
+                    # BACK_OFF지만 물러나지 않는다 — 위 grasp_might_be_held
+                    # 계산 참고. 강제 파지/포기 사다리는 그대로 타야 하니
+                    # _align_tries는 세되, 차체는 움직이지 않고 제자리에서
+                    # 다시 판정을 받는다(다음 사이클에 그대로 "GRASP" 재전송).
+                    print(f"[mission] {self.target_label} 파지 시도 이력 있음 "
+                          f"— 물러나지 않고 제자리에서 재확인 ({correction.detail})")
+                    self._align_tries += 1
+                    self.ready_to_advance = False
+                    return self.state
                 else:
                     if correction.kind == RE_AIM:
                         self._reaim_tries += 1
