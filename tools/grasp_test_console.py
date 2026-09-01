@@ -348,12 +348,16 @@ class KeyReader:
 
     def wait_enter(self, prompt: str):
         """Enter 키 대기 — 이 호출 동안만 cooked 모드로 잠깐 되돌린다(입력
-        에코·줄 단위 편집이 필요해서다). q 입력 시 종료 신호로 KeyboardInterrupt."""
+        에코·줄 단위 편집이 필요해서다). q 입력 시 종료 신호로 KeyboardInterrupt.
+
+        복귀도 ensure_cbreak()과 같은 방식(cbreak + tcflush)이다 — 예전에는
+        `tty.setcbreak`만 하고 안 비웠는데, 그 사이 쌓인 입력이 있으면 다음
+        단계에서 엉뚱한 키로 소비된다(ensure_cbreak 쪽 docstring과 같은 문제)."""
         termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old)
         try:
             line = input(prompt)
         finally:
-            tty.setcbreak(self._fd)
+            self.ensure_cbreak()
         if line.strip().lower() == "q":
             raise KeyboardInterrupt
 
@@ -607,7 +611,38 @@ def _bgr_from_image_msg(msg: Image) -> np.ndarray:
     raise ValueError(f"지원하지 않는 인코딩: {msg.encoding}")
 
 
-def save_yolo_annotated(node: GraspTestNode, raw_cls: str, out_dir: str = YOLO_CAPTURE_DIR):
+def load_yolo_model():
+    """YOLO 모델을 미리 로드한다 — `main()`이 `KeyReader`로 들어가기 **전에**
+    불러야 한다(2026-09-01, 재발 방지).
+
+    ⚠️ 2026-08-24 실기: 예전에는 이 로딩을 1단계 안(save_yolo_annotated)에서
+    지연 import했는데, ultralytics는 import·초기화 과정에서 서브프로세스
+    (git/pip 확인 등)를 띄우고 그 자식이 stdin을 물려받아 터미널 속성을
+    되돌려 놓는다 — 그게 cbreak 모드였다면 풀려버린다. 처음엔 "주행 루프에
+    들어가기 직전 항상 cbreak를 다시 건다"로 우회했지만(ensure_cbreak),
+    2026-09-01 실기에서 같은 증상(키 입력 무반응)이 재발했다 — 우회가 모든
+    경로를 못 덮는다는 뜻이다. 근본 원인(cbreak가 걸린 채로 ultralytics를
+    부르는 것) 자체를 없앤다: cbreak가 걸리기 전, 즉 이 함수가 `with
+    KeyReader()` 진입 전에 불리면 애초에 망가뜨릴 raw 모드가 없다.
+
+    실패(모델 없음)는 예외를 올리지 않고 None을 돌려준다 — 1단계 YOLO 캡처는
+    진단용 부가 기능이라 본 테스트를 막으면 안 된다."""
+    try:
+        from ultralytics import YOLO
+    except ImportError:
+        print("[준비] ultralytics 미설치 — 1단계 YOLO 캡처는 건너뜁니다")
+        return None
+    print("[준비] YOLO 모델 로딩 중...")
+    model = YOLO(YOLO_MODEL_PATH)
+    print("[준비] YOLO 모델 로딩 완료.")
+    return model
+
+
+_MODEL_NOT_PASSED = object()  # save_yolo_annotated의 model 기본값 — 아래 참고
+
+
+def save_yolo_annotated(node: GraspTestNode, raw_cls: str, model=_MODEL_NOT_PASSED,
+                         out_dir: str = YOLO_CAPTURE_DIR):
     """1단계 관측 시점의 RGB 프레임에 YOLO 검출을 그려 저장한다.
 
     관측(observe_target)이 왜 그 결과를 냈는지 눈으로 확인하기 위한 것이다 —
@@ -616,10 +651,27 @@ def save_yolo_annotated(node: GraspTestNode, raw_cls: str, out_dir: str = YOLO_C
     (YOLO_CAPTURE_CONF) 잡아 **탈락한 검출까지** 그린다. 목표 클래스는 초록,
     나머지는 회색으로 구분한다.
 
-    ultralytics는 여기서만 import한다 — 모델 로딩이 수 초 걸려서, 이 기능을
-    안 쓰는 다른 단계까지 느려지면 안 된다. 실패(모델 없음·프레임 없음)는
-    예외를 올리지 않고 None을 돌려준다 — 진단용 부가 기능이 본 테스트를
-    중단시키면 안 된다."""
+    `model`은 `load_yolo_model()`이 **`KeyReader` 진입 전에** 미리 로드해
+    넘긴 것이어야 한다 — 왜 여기서 지연 import하면 안 되는지는
+    load_yolo_model()의 docstring 참고(cbreak 중 ultralytics 로딩이 키
+    입력을 죽였던 문제, 2026-09-01). `None`이면(ultralytics 미설치) 조용히
+    건너뛴다.
+
+    `model`을 아예 안 넘긴 옛 호출부(auto_grasp_sequence.py·grasp_cycle.py,
+    아직 이 함수 안에서 지연 import하던 시절 그대로 쓴다)를 위해 그 경우만
+    예전처럼 여기서 지연 import한다 — **이 경로는 여전히 같은 위험에
+    노출돼 있다.** 그 두 도구에서도 같은 증상(키 입력 무반응)이 나오면
+    load_yolo_model()을 각자의 KeyReader 진입 전으로 옮기고 여기도 필수
+    인자로 좁힐 것."""
+    if model is _MODEL_NOT_PASSED:
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            print("  [캡처] ultralytics 미설치 — YOLO 캡처 건너뜀")
+            return None
+        model = YOLO(YOLO_MODEL_PATH)
+    elif model is None:
+        return None
     # ⚠️ 이 콘솔은 상시 스핀하지 않는다 — 구독 콜백은 node.pump()나
     # spin_until_future_complete()가 도는 동안에만 처리된다. 1단계에서
     # observe_target 서비스가 없으면 그 경로마저 거의 안 돌아서 _latest_rgb가
@@ -634,14 +686,7 @@ def save_yolo_annotated(node: GraspTestNode, raw_cls: str, out_dir: str = YOLO_C
               "depth_cam_rotate_node / ascamera_node가 떠 있는지 확인할 것")
         return None
     try:
-        from ultralytics import YOLO
-    except ImportError:
-        print("  [캡처] ultralytics 미설치 — YOLO 캡처 건너뜀")
-        return None
-
-    try:
         frame = _bgr_from_image_msg(node._latest_rgb).copy()
-        model = YOLO(YOLO_MODEL_PATH)
         result = model.predict(frame, verbose=False, conf=YOLO_CAPTURE_CONF)[0]
     except Exception as exc:  # noqa: BLE001 -- 진단 기능이 테스트를 막지 않는다
         print(f"  [캡처] YOLO 실행 실패({exc}) — 건너뜀")
@@ -852,21 +897,24 @@ def main():
     log = RunLog(args.raw_cls, profile)
     print(f"분석용 로그 파일: {log.path}  (끝나면 이 파일을 Claude에게 넘길 것)")
 
-    # ⚠️ 이 콘솔은 3단계에서 그리퍼캠을 넘겨받으려고 perception_node를 죽인다
-    # (아래 subprocess.run(pkill) 참고). 그래서 **한 번 3단계까지 간 뒤 다시
-    # 실행하면** observe_target이 없어 1·2단계가 통째로 무력해진다 —
-    # 2026-08-24 실기에서 실제로 겪었고, 화면상으로는 "물체를 못 찾음"으로만
-    # 보여 원인을 알기 어려웠다. 시작 시점에 미리 확인해 준다.
+    # 2026-09-01부터 이 콘솔은 3단계에서 perception_node를 죽이지 않는다
+    # (구 confirm_grasp의 그리퍼캠 독점이 죽은 코드였다 — perception_node.py
+    # 2026-09-01 정리 참고). 그래도 다른 이유로 안 떠 있을 수 있으니 확인은
+    # 남겨둔다.
     if subprocess.run(
         ["pgrep", "-f", "grippers_perception/perception_node"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     ).returncode != 0:
         print(
             "\n⚠️  perception_node가 떠 있지 않습니다 — 1·2단계 관측과 YOLO 캡처가\n"
-            "    전부 실패합니다(이 콘솔이 이전 실행 3단계에서 죽였을 수 있습니다).\n"
-            "    다른 터미널에서 먼저 띄우고 다시 실행하세요:\n"
+            "    전부 실패합니다. 다른 터미널에서 먼저 띄우고 다시 실행하세요:\n"
             "        ros2 run grippers_perception perception_node > /tmp/perception.log 2>&1 &\n"
         )
+
+    # KeyReader(cbreak 모드) 진입 전에 미리 로드한다 — load_yolo_model()
+    # docstring 참고(cbreak 중 ultralytics 로딩이 키 입력을 죽였던 문제,
+    # 2026-09-01 재발 후 근본 수정).
+    yolo_model = load_yolo_model()
 
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = GraspTestNode()
@@ -877,7 +925,7 @@ def main():
             log.log("step1_observe", **print_position(node, args.raw_cls, "1단계 관측"))
             # 관측 결과와 같은 프레임에 YOLO를 그려 남긴다 — found=False일 때
             # 원인을 눈으로 가르기 위한 진단용(save_yolo_annotated 참고).
-            capture = save_yolo_annotated(node, args.raw_cls)
+            capture = save_yolo_annotated(node, args.raw_cls, yolo_model)
             if capture is not None:
                 log.log("step1_yolo_capture", **capture)
 
