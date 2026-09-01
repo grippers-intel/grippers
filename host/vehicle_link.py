@@ -115,6 +115,10 @@ _STATE_TO_PI = {
     #     Host 속도대로 주행만 하고, 다시 GRASP 가 올 때 한 번만 판정한다 —
     #     "관측 -> 소이동 -> 재관측" 폐루프가 성립하는 것이 이 매핑 덕이다.
     "GRASP_ALIGN":    MissionState.APPROACH,
+    # GRASP_REPLAN -> APPROACH : 오버헤드 재계획(2026-09-02, mission.py
+    #     GRASP_REPLAN_AFTER_TRIES 참고)도 GRASP_ALIGN과 같은 이유로
+    #     APPROACH다 — Pi 쪽엔 순수 주행이고 파지 판정은 필요 없다.
+    "GRASP_REPLAN":   MissionState.APPROACH,
     "CARRY_TO_DEST":  MissionState.CARRY,
     "FACE_BOX":       MissionState.CARRY,
     "NUDGE_BOX":      MissionState.APPROACH_BOX,

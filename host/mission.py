@@ -48,6 +48,7 @@ class State(Enum):
     APPROACH_PIECE = auto()    # 목표 기물 앞까지 접근(회피 포함)
     GRASP = auto()             # 차량이 SmolVLA 로 집는 동안 대기
     GRASP_ALIGN = auto()       # Pi 가 "영역 밖이다, 다시 세워 달라"(GRASP_BLOCKED) 해서 재정렬 중
+    GRASP_REPLAN = auto()      # GRASP_ALIGN이 반복되면 오버헤드 카메라로 크게 다시 세운다 (2026-09-02)
     CARRY_TO_DEST = auto()     # 목적지까지 이동(회피 포함)
     FACE_BOX = auto()          # 상자 앞 도착 후 정해진 방향(BOX_FACE_YAW_DEG)으로 제자리 회전
     NUDGE_BOX = auto()         # 그 방향으로 BOX_NUDGE_M 만큼만 더 전진하고 정지
@@ -390,6 +391,19 @@ class MissionFSM:
         self._forcing_grasp = False
         self._forced_grasp_tries = 0
         self._align_tries_at_last_force: Optional[int] = None
+        # 오버헤드 재계획(GRASP_REPLAN, 2026-09-02) 용 — GRASP_ALIGN 을
+        # GRASP_REPLAN_AFTER_TRIES 번 반복해도 안 풀리면, Pi 의 좁은 정면
+        # 뎁스캠 대신 오버헤드 카메라로 크게 물러났다 다시 세운다(07:12
+        # rook 실기: yaw 52도로 어긋난 채 GRASP 에 들어가 정면 시야를
+        # 완전히 벗어났고, 그 뒤 3cm 후진+스윕을 30번 반복해도 못 고쳤다).
+        # _replan_tries/_align_tries_at_last_replan 은 강제 파지 카운터와
+        # 같은 이유로 나뉜다 — 재계획 한 번 뒤 최소 한 다발(3회)은 더
+        # 재정렬해 봐야 다음 재계획을 허용한다. _tight_yaw_gate 는 재계획
+        # 뒤 재접근에서만 켜진다 — 평소 APPROACH_PIECE 는 거리만 본다.
+        self._replan_tries = 0
+        self._align_tries_at_last_replan: Optional[int] = None
+        self._tight_yaw_gate = False
+        self._replan_backoff_xy: Optional[XY] = None
         # 정렬 문제가 아니라 "순수 물리적"으로 파지가 반복 실패한 횟수
         # (mcfg.GRASP_FAIL_MAX_RETRIES, 2026-09-01 사용자 지시). GRASP_BLOCKED
         # 는 위 align_tries/forcing 쪽이 이미 상한을 관리하므로 겹치지 않는다.
@@ -424,6 +438,35 @@ class MissionFSM:
         self.last_nav = nav
         self.last_cmd = _send_drive(link, pose, self.state.name, nav, target_label=target_label)
         return math.hypot(target_xy[0] - robot_xy[0], target_xy[1] - robot_xy[1])
+
+    def _yaw_error_to_target_deg(self, pose: Pose, robot_xy: XY) -> float:
+        """target_xy 를 정면으로 보려면 지금 헤딩에서 얼마나 더 돌아야 하는가.
+
+        `_send_drive`의 ROTATE 관례와 부호를 맞춘다 — 목표-현재, CCW가
+        양수. GRASP_REPLAN 재접근의 타이트한 yaw 게이트(_facing_target)와
+        그 겨눔 동작(_aim_at_target)이 같이 쓴다."""
+        assert self._target_xy is not None
+        desired = math.degrees(math.atan2(self._target_xy[1] - robot_xy[1],
+                                          self._target_xy[0] - robot_xy[0]))
+        return (desired - pose.yaw_deg + 180.0) % 360.0 - 180.0
+
+    def _facing_target(self, pose: Pose, robot_xy: XY) -> bool:
+        """지금 헤딩이 target_xy 방향으로 GRASP_REPLAN_YAW_TOLERANCE_DEG
+        안에 들어와 있는가."""
+        return (abs(self._yaw_error_to_target_deg(pose, robot_xy))
+                <= mcfg.GRASP_REPLAN_YAW_TOLERANCE_DEG)
+
+    def _aim_at_target(self, pose: Pose, robot_xy: XY, link: VehicleLink) -> None:
+        """전후진 없이 제자리에서 target_xy 방향으로 돈다.
+
+        경로 재계산(_approach)을 쓰지 않는 이유: 이미 GRASP_TRIGGER_DIST_M
+        안이라 그걸 다시 목표로 걸면 더 다가가 기물을 밀어낼 수 있다.
+        필요한 건 방향뿐이다."""
+        err = self._yaw_error_to_target_deg(pose, robot_xy)
+        cmd = "yaw+" if err >= 0 else "yaw-"
+        self.last_cmd = cmd
+        link.send(MissionCommand(cmd, "APPROACH_PIECE", pose.x, pose.y,
+                                 pose.yaw_deg, target_label=self.target_label))
 
     def _skip_target(self, why: str) -> None:
         """지금 대상을 보류하고 기본 위치(mcfg.DEFAULT_HOME_XY)로 돌아간 뒤
@@ -630,6 +673,10 @@ class MissionFSM:
                     self._forcing_grasp = False
                     self._forced_grasp_tries = 0
                     self._align_tries_at_last_force = None
+                    self._replan_tries = 0
+                    self._align_tries_at_last_replan = None
+                    self._tight_yaw_gate = False
+                    self._replan_backoff_xy = None
                     self._grasp_fail_tries = 0
                     self._path_planner.reset()   # 새 구간 시작
                     self._drive.reset()
@@ -641,6 +688,15 @@ class MissionFSM:
             dist = math.hypot(self._target_xy[0] - robot_xy[0],
                               self._target_xy[1] - robot_xy[1])
             if dist <= mcfg.GRASP_TRIGGER_DIST_M:
+                if self._tight_yaw_gate and not self._facing_target(pose, robot_xy):
+                    # GRASP_REPLAN 이 보낸 재접근이다 — 여느 때처럼 거리만
+                    # 보고 트리거하면 또 어긋난 각도로 GRASP 에 들어가
+                    # 오늘과 같은 사고가 반복된다(GRASP_REPLAN_AFTER_TRIES
+                    # 주석 참고). yaw 가 허용치 안에 들어올 때까지 전후진
+                    # 없이 제자리에서 겨눈다.
+                    self._aim_at_target(pose, robot_xy, link)
+                    self.ready_to_advance = False
+                    return self.state
                 # 트리거 거리 도달 — 여기서 더 다가가면 기물을 밀어낸다.
                 # 정지를 보내 제자리에 세우고 GRASP 를(수동 모드면 Next 를)
                 # 기다린다. 이 사이클엔 절대 전진 명령을 보내지 않는다.
@@ -658,6 +714,22 @@ class MissionFSM:
                 self._approach(pose, robot_xy, self._target_xy, obstacles,
                                self.target_label, link)
                 self.ready_to_advance = False
+
+        elif self.state == State.GRASP_REPLAN:
+            # GRASP_ALIGN 을 국소 보정만으로 너무 오래 반복해서, 오버헤드
+            # 카메라로 크게 물러났다 다시 세우는 중이다(GRASP_REPLAN_AFTER_
+            # TRIES 주석 참고). _approach() 를 그대로 재사용하므로 다른
+            # 물체 회피는 평소와 똑같이 GridPathPlanner 가 처리한다.
+            assert self._replan_backoff_xy is not None and self._target_xy is not None
+            obstacles = _other_pieces(piece_map, exclude_xy=self._target_xy)
+            dist = self._approach(pose, robot_xy, self._replan_backoff_xy,
+                                  obstacles, self.target_label, link)
+            if dist <= mcfg.GRASP_REPLAN_ARRIVE_TOL_M:
+                self._replan_backoff_xy = None
+                self._tight_yaw_gate = True
+                self._path_planner.reset()   # 새 구간 시작(재접근)
+                self._drive.reset()
+                self.state = State.APPROACH_PIECE
 
         elif self.state == State.GRASP:
             self.nav_goal = None
@@ -726,6 +798,32 @@ class MissionFSM:
                     # 아니다. 강제까지 다 쓰고도 안 되면 정말 못 집는 것).
                     self._skip_target(
                         f"강제 파지 {self._forced_grasp_tries}회 소진 — {correction.detail}")
+                elif (self._replan_tries < mcfg.GRASP_REPLAN_MAX_ATTEMPTS
+                      and self._align_tries >= mcfg.GRASP_REPLAN_AFTER_TRIES
+                      and (self._align_tries_at_last_replan is None
+                           or self._align_tries >= self._align_tries_at_last_replan
+                                                    + mcfg.GRASP_REPLAN_AFTER_TRIES)):
+                    # GRASP_ALIGN 을 이미 한 다발 반복했다 — Pi 의 좁은 정면
+                    # 뎁스캠 국소 보정 대신 오버헤드 카메라로 크게 다시
+                    # 세운다(GRASP_REPLAN_AFTER_TRIES 주석 참고). 목표에서
+                    # 여유 있게 물러난 지점만 계산해 두고, 장애물 회피는
+                    # GRASP_REPLAN 상태의 _approach() 가 평소처럼 처리한다.
+                    back_dist = mcfg.GRASP_TRIGGER_DIST_M + mcfg.GRASP_REPLAN_BACKOFF_M
+                    dx = robot_xy[0] - self._target_xy[0]
+                    dy = robot_xy[1] - self._target_xy[1]
+                    away = math.hypot(dx, dy) or 1.0
+                    self._replan_backoff_xy = (
+                        self._target_xy[0] + dx / away * back_dist,
+                        self._target_xy[1] + dy / away * back_dist)
+                    self._replan_tries += 1
+                    self._align_tries_at_last_replan = self._align_tries
+                    print(f"[mission] {self.target_label} 재정렬 {self._align_tries}회 — "
+                          f"오버헤드 재계획 {self._replan_tries}/"
+                          f"{mcfg.GRASP_REPLAN_MAX_ATTEMPTS} ({correction.detail})")
+                    self._align = None
+                    self._align_from = None
+                    self.ready_to_advance = False
+                    self.state = State.GRASP_REPLAN
                 elif (self._align_tries >= mcfg.GRASP_FORCE_AFTER_TRIES
                       and (self._align_tries_at_last_force is None
                            or self._align_tries > self._align_tries_at_last_force)):

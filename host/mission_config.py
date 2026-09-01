@@ -328,6 +328,29 @@ GRASP_SWEEP_RIGHT_SEC = 2.0      # 우회전 누적 예산 (좌 다음, 좌보�
 # 다시 겨눈다(mission.py GRASP 블록 참고).
 GRASP_REAIM_ESCALATE_AFTER_TRIES = 3
 
+# GRASP_ALIGN 을 이만큼 반복해도 안 풀리면, Pi 의 좁은 정면 뎁스캠에 맡기는
+# 대신 아레나 전체를 보는 오버헤드 카메라(Host)로 한 번 크게 다시 세운다
+# (State.GRASP_REPLAN, 사용자 지시 2026-09-02).
+#
+# 07:12 rook 실기가 이유다 — APPROACH_PIECE -> GRASP 전이가 거리(
+# GRASP_TRIGGER_DIST_M)만 보고 yaw 는 전혀 확인하지 않아, 회전이 덜 정리된
+# 채(그날은 52도) GRASP 에 들어갔다. 그 결과 Pi 뎁스캠 화각을 완전히
+# 벗어났고, 뒤이은 BACK_OFF(3cm 후진)+스윕을 30번(GRASP_FORCE_AFTER_TRIES)
+# 반복해도 다시 정면에 세우지 못했다 — 국소적으로 찔끔찔끔 고치는 방식이
+# 애초에 각도 문제를 못 푸는 규모였다는 뜻이다.
+#
+# 그래서 이번엔 목표에서 여유 있게 물러난 뒤(장애물은 GridPathPlanner가
+# _approach() 안에서 평소처럼 피한다) 다시 접근하되, 이번 재접근에서만
+# yaw 가 이 허용치 안에 들어올 때까지 GRASP 진입을 미룬다(mission.py
+# APPROACH_PIECE 의 _tight_yaw_gate 참고). GRASP_FORCE 와 같은 이유로
+# _align_tries_at_last_replan 를 둔다 — 재계획 한 번 뒤 최소 한 다발은
+# 더 재정렬해 봐야 다음 재계획을 허용한다.
+GRASP_REPLAN_AFTER_TRIES = 3
+GRASP_REPLAN_BACKOFF_M = 0.15          # GRASP_TRIGGER_DIST_M 보다 이만큼 더 물러난다
+GRASP_REPLAN_ARRIVE_TOL_M = 0.05       # 물러난 지점 도착 판정 여유
+GRASP_REPLAN_YAW_TOLERANCE_DEG = 6.0   # DRIVE_YAW_TOLERANCE_DEG(12도)보다 타이트하게
+GRASP_REPLAN_MAX_ATTEMPTS = 2          # 그래도 안 되면 원래 예산(GRASP_FORCE 등)으로
+
 # 재정렬(GRASP_ALIGN)을 이만큼 반복해도 여전히 영역 밖이면, 잔여 오차가
 # 파지 가능한 수준까지 좁혀졌다고 보고 Pi 에 한 번 강제로 파지를 시도하게
 # 한다(state="GRASP_FORCE", 사용자 지시, 2026-08-31). Pi 는 정렬 창 판정만
