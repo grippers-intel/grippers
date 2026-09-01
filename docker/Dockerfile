@@ -90,11 +90,23 @@ RUN pip3 install --no-cache-dir \
 #                     팀 규칙: ros2 명령은 컨테이너 안에서만 실행 (미결 #13 해소).
 #    PYTHONPATH     : /grippers                    — domain 계층 (ROS2 비의존)
 #                     /third_party/soarm_provided_d — soarm_lab
+#    need_compile   : odom_publisher.launch.py · depth_camera.launch.py 가
+#                     os.environ['need_compile']을 기본값 없이 직접 읽습니다
+#                     — 빠지면 KeyError 로 launch 전체가 죽습니다. False 는
+#                     "설치된 공유 경로 대신 벤더 소스트리 경로를 그대로
+#                     쓴다"는 뜻으로, 이 이미지의 실제 마운트 구조와
+#                     맞습니다(bringup.launch.py 의 기본 분기와 동일).
+#    DEPTH_CAMERA_TYPE : depth_camera.launch.py 가 같은 방식으로 직접
+#                     읽습니다. 이 로봇의 실측 카메라 종류(ascamera)로 고정.
+#                     (2026-09-01: 실기 확인 결과 매번 손으로 export 하던
+#                     값이라 이미지에 박아 컨테이너를 새로 만들어도 남게 함)
 # ─────────────────────────────────────────────────────────────────────────────
 ENV MACHINE_TYPE=MentorPi_Mecanum \
     SOARM_HEADLESS=1 \
     ROS_DOMAIN_ID=42 \
-    PYTHONPATH=/grippers:/third_party/soarm_provided_d
+    PYTHONPATH=/grippers:/third_party/soarm_provided_d \
+    need_compile=False \
+    DEPTH_CAMERA_TYPE=ascamera
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. Hailo-10H 런타임
@@ -134,4 +146,33 @@ RUN usermod -aG dialout,video ubuntu || true
 
 USER ubuntu
 WORKDIR /ros2_ws
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. exec_shell.sh 진입 자동화 (2026-09-01, 사용자 지시)
+#
+#    /home/ubuntu/ros2_ws/.zshrc(베이스 이미지 소유, .zshrc → .robotrc 체인의
+#    끝단)는 벤더 워크스페이스(/home/ubuntu/ros2_ws)와 third_party_ws는
+#    자동으로 source 하지만, 이 프로젝트의 워크스페이스(/ros2_ws == 컨테이너
+#    기동 시 ${HOME}/docker/shared/grippers/ros2_ws 를 마운트한 자리, 이름만
+#    같고 다른 디렉터리)는 안 건드립니다 — 그래서 매번 손으로
+#    `source /ros2_ws/install/setup.zsh` 해야 했습니다.
+#
+#    ⚠️ /ros2_ws/install/setup.zsh 는 런타임에 마운트되는 파일이라 이미지
+#    빌드 시점엔 없습니다 — 그래서 ENV로 못 박고, 셸 시작 시점에 source 하는
+#    코드만 .zshrc 에 심어 둡니다. GRIPPERS_ENV_LOADED 가드는 같은 셸에서
+#    .zshrc 가 중첩 로드될 때 중복 source 를 막습니다.
+# ─────────────────────────────────────────────────────────────────────────────
+RUN cat >> /home/ubuntu/ros2_ws/.zshrc << 'EOF'
+
+# ── grippers 실기 bringup 자동화 (2026-09-01, 사용자 지시) ──────────────
+# ros2 launch grippers_bringup bringup.launch.py 전에 매번 손으로 source
+# 하던 프로젝트 워크스페이스를 exec_shell.sh 진입 시 자동으로 잡아 둔다.
+# need_compile/DEPTH_CAMERA_TYPE 은 이 Dockerfile의 ENV로 이미 고정돼 있어
+# 여기서 다시 export 하지 않는다.
+if [ -z "$GRIPPERS_ENV_LOADED" ]; then
+  source /ros2_ws/install/setup.zsh
+  export GRIPPERS_ENV_LOADED=1
+fi
+EOF
+
 CMD ["/bin/zsh"]
