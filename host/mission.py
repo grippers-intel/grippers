@@ -246,6 +246,14 @@ class MissionFSM:
         self._align = None
         self._align_from: Optional[tuple[float, float, float]] = None
         self._align_tries = 0
+        # BACK_OFF 후진 뒤 좌우로 훑는 재탐색용(2026-09-01). None 이면 아직
+        # 후진 단계거나 스윕이 필요 없는 보정 중이고, "left"/"right" 면 그
+        # 방향으로 훑는 중이다. _sweep_phase_start 는 지금 방향(좌 또는 우)
+        # 을 시작한 시각, _sweep_burst_until 은 이번 짧은 버스트가 끝나는
+        # 시각 — 버스트가 끝날 때마다 멈추고 GRASP 로 넘겨 확인한다.
+        self._align_sweep_stage: Optional[str] = None
+        self._align_sweep_phase_start: Optional[float] = None
+        self._align_sweep_burst_until: Optional[float] = None
         # 강제 파지(GRASP_FORCE, 2026-08-31) 용. _forcing_grasp 는 지금
         # Pi 에 강제 시도를 보내 놓고 결과를 기다리는 중인지, _forced_grasp_tries
         # 는 이 기물에 몇 번 강제했는지, _align_tries_at_last_force 는
@@ -293,6 +301,9 @@ class MissionFSM:
         print(f"[mission] {self.target_label} 보류: {why}")
         self._align = None
         self._align_from = None
+        self._align_sweep_stage = None
+        self._align_sweep_phase_start = None
+        self._align_sweep_burst_until = None
         self.target_label = None
         self._target_xy = None
         self.dest_xy = None
@@ -367,10 +378,65 @@ class MissionFSM:
                     "left" if fix.lateral_m > 0 else "right")
         return None
 
+    def _grasp_sweep_step(self) -> tuple[str, bool]:
+        """BACK_OFF 한 걸음 뒤 좌우로 훑는 한 걸음. (cmd, done) 을 낸다.
+
+        Pi 의 관측(observe_target 다중 프레임 합의)은 정지 상태를 전제해서
+        회전 "중"에는 물을 수 없다 — 그래서 짧게(GRASP_SWEEP_BURST_SEC) 돌리고
+        멈춰서 GRASP 로 돌아가 확인하는 것을 반복한다. done=True 는 "이번
+        버스트가 끝났으니 멈추고 확인하라"는 뜻이지, 스윕 전체가 끝났다는
+        뜻이 아니다 — 여전히 같은 BACK_OFF 로 돌아오면(못 찾았으면)
+        _align_sweep_stage 가 그대로 남아 있어 여기서 이어서 훑는다.
+
+        좌(GRASP_SWEEP_LEFT_SEC)+우(GRASP_SWEEP_RIGHT_SEC) 예산을 다 써도
+        못 찾으면 스윕을 접고(_align_sweep_stage=None) 평소 GRASP_ALIGN
+        처럼 넘긴다 — 다음 BACK_OFF 는 후진부터 다시 시작한다. align_tries
+        는 이 왕복들 내내 계속 누적되므로 GRASP_FORCE 안전망은 그대로
+        살아 있다."""
+        now = time.monotonic()
+        assert self._align_sweep_stage is not None
+        assert self._align_sweep_phase_start is not None
+        assert self._align_sweep_burst_until is not None
+        budget = (mcfg.GRASP_SWEEP_LEFT_SEC if self._align_sweep_stage == "left"
+                  else mcfg.GRASP_SWEEP_RIGHT_SEC)
+        phase_elapsed = now - self._align_sweep_phase_start
+        if phase_elapsed >= budget:
+            if self._align_sweep_stage == "left":
+                self._align_sweep_stage = "right"
+                self._align_sweep_phase_start = now
+                self._align_sweep_burst_until = now + mcfg.GRASP_SWEEP_BURST_SEC
+                return "yaw-", False
+            # 좌우 다 훑었는데도 못 찾음 — 스윕 종료.
+            self._align_sweep_stage = None
+            self._align_sweep_phase_start = None
+            self._align_sweep_burst_until = None
+            return "stop", True
+        if now >= self._align_sweep_burst_until:
+            # 이번 버스트 끝 — 멈추고 GRASP 로 넘겨 확인한다.
+            self._align_sweep_burst_until = now + mcfg.GRASP_SWEEP_BURST_SEC
+            return "stop", True
+        return ("yaw+" if self._align_sweep_stage == "left" else "yaw-"), False
+
     def step(self, pose: Pose, piece_map: PieceMap, link: VehicleLink) -> State:
         if not pose.ok:
             # 로봇을 잃으면 이번 사이클은 그냥 넘어간다 — 명령을 안 보내면
             # 차량 쪽 워치독이 알아서 멈춘다(마지막 좌표로 계속 가면 안 됨).
+            if self._align_sweep_phase_start is not None:
+                # 스윕(_grasp_sweep_step) 도중 포즈를 잃으면 이 사이클은
+                # 위 return으로 건너뛰어 yaw 명령이 실제로는 하나도 안
+                # 나가는데, 예산은 벽시계 기준(now - phase_start)이라
+                # 그동안도 그냥 흘러버린다 — 포즈가 돌아온 첫 호출에서
+                # phase_elapsed가 이미 예산을 넘어 있어, 한 번도 안 돈
+                # 채로 스윕이 "다 훑었다"고 착각하고 끝날 수 있다
+                # (2026-09-01 코드 리뷰). 기준점을 지금 시각으로 계속
+                # 밀어서 "회전하지 않은 이 시간"을 예산에서 뺀다 — 이
+                # 스윕을 만든 계기 자체가 BACK_OFF 반복 중 포즈를 잃은
+                # 사고였다는 걸 생각하면, 스윕이 실제로 도는 상황이 포즈를
+                # 잃기 가장 쉬운 상황과 겹친다는 점도 이 처리가 필요한
+                # 이유다.
+                now = time.monotonic()
+                self._align_sweep_phase_start = now
+                self._align_sweep_burst_until = now + mcfg.GRASP_SWEEP_BURST_SEC
             return self.state
 
         if self._back_requested:
@@ -401,6 +467,9 @@ class MissionFSM:
                     # 첫 기물이 예산을 다 쓴 뒤 나머지가 전부 첫 시도에서
                     # 보류된다. 되돌리는 자리는 대상이 바뀌는 여기 하나뿐이다.
                     self._align_tries = 0
+                    self._align_sweep_stage = None
+                    self._align_sweep_phase_start = None
+                    self._align_sweep_burst_until = None
                     self._forcing_grasp = False
                     self._forced_grasp_tries = 0
                     self._align_tries_at_last_force = None
@@ -529,14 +598,36 @@ class MissionFSM:
                 done = turned >= want
                 cmd = "stop" if done else ("yaw+" if sign > 0 else "yaw-")
             else:
-                moved = math.hypot(pose.x - fx, pose.y - fy)
-                done = moved >= mcfg.GRASP_ALIGN_STEP_M
-                # 뎁스캠이 목표를 못 본 경우도 여기로 온다 — Pi 가 그때
-                # RETREAT 를 보내기 때문이다(방향을 아는 쪽이 방향을 말한다,
-                # domain/task/corrections.from_grasp_precondition). 그래서
-                # Host 는 BACK_OFF 하나만 알면 된다.
-                cmd = "stop" if done else ("back" if self._align.kind == BACK_OFF
-                                           else "go")
+                if self._align.kind != BACK_OFF and self._align_sweep_stage is not None:
+                    # 스윕 도중 Pi 가 다른 종류의 보정으로 바꿔 보냈다 —
+                    # 스윕 상태는 BACK_OFF 계열에만 유효하므로 정리한다.
+                    self._align_sweep_stage = None
+                    self._align_sweep_phase_start = None
+                    self._align_sweep_burst_until = None
+
+                if self._align.kind == BACK_OFF and self._align_sweep_stage is not None:
+                    cmd, done = self._grasp_sweep_step()
+                else:
+                    moved = math.hypot(pose.x - fx, pose.y - fy)
+                    done = moved >= mcfg.GRASP_ALIGN_STEP_M
+                    # 뎁스캠이 목표를 못 본 경우도 여기로 온다 — Pi 가 그때
+                    # RETREAT 를 보내기 때문이다(방향을 아는 쪽이 방향을 말한다,
+                    # domain/task/corrections.from_grasp_precondition). 그래서
+                    # Host 는 BACK_OFF 하나만 알면 된다.
+                    if self._align.kind == BACK_OFF and done:
+                        # 후진 한 걸음 끝 — 곧장 GRASP 로 돌아가지 않고 좌우로
+                        # 훑는다(2026-09-01 사용자 지시: 후진만 반복해서는
+                        # 안 나아지는 게 실기로 확인됨 — mission_config.
+                        # GRASP_SWEEP_* 주석 참고).
+                        now = time.monotonic()
+                        self._align_sweep_stage = "left"
+                        self._align_sweep_phase_start = now
+                        self._align_sweep_burst_until = now + mcfg.GRASP_SWEEP_BURST_SEC
+                        cmd = "yaw+"
+                        done = False
+                    else:
+                        cmd = "stop" if done else ("back" if self._align.kind == BACK_OFF
+                                                   else "go")
 
             link.send(MissionCommand(cmd, "GRASP_ALIGN", pose.x, pose.y,
                                       pose.yaw_deg, target_label=self.target_label))
