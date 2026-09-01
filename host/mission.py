@@ -51,6 +51,7 @@ class State(Enum):
     FACE_BOX = auto()          # 상자 앞 도착 후 정해진 방향(BOX_FACE_YAW_DEG)으로 제자리 회전
     NUDGE_BOX = auto()         # 그 방향으로 BOX_NUDGE_M 만큼만 더 전진하고 정지
     PLACE = auto()             # 차량이 SmolVLA 로 내려놓는 동안 대기
+    RETURN_HOME = auto()       # 기물을 포기하고 mcfg.DEFAULT_HOME_XY 로 복귀 중
     DONE = auto()
 
 
@@ -263,6 +264,10 @@ class MissionFSM:
         self._forcing_grasp = False
         self._forced_grasp_tries = 0
         self._align_tries_at_last_force: Optional[int] = None
+        # 정렬 문제가 아니라 "순수 물리적"으로 파지가 반복 실패한 횟수
+        # (mcfg.GRASP_FAIL_MAX_RETRIES, 2026-09-01 사용자 지시). GRASP_BLOCKED
+        # 는 위 align_tries/forcing 쪽이 이미 상한을 관리하므로 겹치지 않는다.
+        self._grasp_fail_tries = 0
         # 재정렬을 다 쓰고도 못 집은 기물 좌표. SEARCH_TARGET 후보에서 뺀다.
         self.skipped: list[XY] = []
 
@@ -292,13 +297,19 @@ class MissionFSM:
         return math.hypot(target_xy[0] - robot_xy[0], target_xy[1] - robot_xy[1])
 
     def _skip_target(self, why: str) -> None:
-        """지금 대상을 보류하고 SEARCH_TARGET 으로 돌아간다.
+        """지금 대상을 보류하고 기본 위치(mcfg.DEFAULT_HOME_XY)로 돌아간 뒤
+        SEARCH_TARGET 으로 돌아간다(2026-09-01 사용자 지시).
+
+        SEARCH_TARGET 으로 곧장 돌아가지 않는 이유: 포기하는 자리는 실패한
+        기물 코앞이거나 이상한 각도로 서 있을 수 있는 자리다. 그대로 다음
+        탐색을 시작하면 매번 다른, 예측하기 어려운 자리에서 스캔하게 된다
+        — RETURN_HOME 을 한 번 거치면 항상 같은 자리에서 다시 시작한다.
 
         좌표를 `skipped` 에 남기는 것이 핵심이다 — 안 남기면 SEARCH_TARGET 이
         같은 기물을 또 "가장 가까운 것"으로 골라 무한 반복한다."""
         if self._target_xy is not None:
             self.skipped.append(self._target_xy)
-        print(f"[mission] {self.target_label} 보류: {why}")
+        print(f"[mission] {self.target_label} 보류: {why} — 기본 위치로 복귀합니다")
         self._align = None
         self._align_from = None
         self._align_sweep_stage = None
@@ -311,7 +322,7 @@ class MissionFSM:
         self.last_cmd = None
         self._path_planner.reset()
         self._drive.reset()
-        self.state = State.SEARCH_TARGET
+        self.state = State.RETURN_HOME
 
     def begin_carrying(self, label: str) -> bool:
         """차량이 이미 `label` 을 들고 있다고 보고 CARRY_TO_DEST 부터 시작한다.
@@ -473,6 +484,7 @@ class MissionFSM:
                     self._forcing_grasp = False
                     self._forced_grasp_tries = 0
                     self._align_tries_at_last_force = None
+                    self._grasp_fail_tries = 0
                     self._path_planner.reset()   # 새 구간 시작
                     self._drive.reset()
                     self.ready_to_advance = False
@@ -532,6 +544,20 @@ class MissionFSM:
                 print(f"[mission] {self.target_label} 강제 파지 "
                       f"{self._forced_grasp_tries}/{mcfg.GRASP_FORCE_MAX_ATTEMPTS}회 실패 "
                       f"— 재정렬 후 재시도합니다")
+            elif poll == "FAILED":
+                # 강제가 아닌 일반 실패 — 조건은 다 맞았는데(정렬 창 안,
+                # 라벨 인식됨) 팔을 내려도 놓친 경우다(사용자 지시,
+                # 2026-09-01). 여기서 아무것도 안 하면 Host 는 다음
+                # 사이클에도 그대로 "GRASP" 를 다시 보내고, Pi 는 파지
+                # 시퀀스 전체를 처음부터 무한 재시도한다 — mcfg.
+                # GRASP_FAIL_MAX_RETRIES 로 상한을 둔다.
+                self._grasp_fail_tries += 1
+                print(f"[mission] {self.target_label} 파지 실패 "
+                      f"{self._grasp_fail_tries}/{mcfg.GRASP_FAIL_MAX_RETRIES}회")
+                if self._grasp_fail_tries >= mcfg.GRASP_FAIL_MAX_RETRIES:
+                    self._skip_target(
+                        f"파지 {self._grasp_fail_tries}회 연속 실패")
+                    return self.state
 
             # Pi 가 "조건이 안 맞는다, 수정된 명령을 달라"고 했으면 재정렬로
             # 넘어간다. 여기서 아무것도 안 하면 Pi 는 계속 기다리고 Host 는
@@ -772,6 +798,20 @@ class MissionFSM:
                 self.target_label = None
                 self._target_xy = None
                 self.dest_xy = None
+                self.state = State.SEARCH_TARGET
+
+        elif self.state == State.RETURN_HOME:
+            # 기물을 포기한 뒤(_skip_target) 실패한 자리에 그대로 남지 않고
+            # 여기로 먼저 돌아간다 — 다음 SEARCH_TARGET 을 매번 같은 예측
+            # 가능한 자리에서 시작하게 한다(사용자 지시, 2026-09-01).
+            obstacles = _other_pieces(piece_map)
+            dist = self._approach(pose, robot_xy, mcfg.DEFAULT_HOME_XY,
+                                  obstacles, None, link)
+            self.ready_to_advance = dist <= mcfg.HOME_ARRIVE_TOL_M
+            if self.ready_to_advance and self._should_advance():
+                self.ready_to_advance = False
+                self._path_planner.reset()   # 새 구간 시작
+                self._drive.reset()
                 self.state = State.SEARCH_TARGET
 
         return self.state
