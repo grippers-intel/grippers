@@ -234,7 +234,12 @@ class MissionLogger:
             "state": state,
             "cmd": cmd,
             "target": target,
-            "ready": ready,
+            # bool()로 한 번 더 감싼다 — numpy 스칼라(예: pose.yaw_deg 파생 비교값)가
+            # 섞여 들어오면 json.dumps가 TypeError로 미션 전체를 죽인다
+            # (2026-09-01 실기 사고: GRASP_ALIGN 도중 크래시, localizer.py의
+            # float() 누락이 근본 원인이었다 — 거기는 고쳤지만, 여기도 방어선을
+            # 하나 더 둔다).
+            "ready": None if ready is None else bool(ready),
             "pose_ok": bool(getattr(pose, "ok", False)),
         }
         if getattr(pose, "ok", False):

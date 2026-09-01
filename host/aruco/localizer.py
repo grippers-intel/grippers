@@ -316,7 +316,7 @@ class RobotLocalizer:
             pose = Pose(
                 x=float(np.sum(xs) / wsum),
                 y=float(np.sum(ys) / wsum),
-                yaw_deg=(np.degrees(yaw) + cfg.YAW_OFFSET_DEG + 180.0) % 360.0 - 180.0,
+                yaw_deg=float((np.degrees(yaw) + cfg.YAW_OFFSET_DEG + 180.0) % 360.0 - 180.0),
                 ok=True, n_cams=len(ws), age_s=0.0, fresh=True, per_cam=per_cam,
             )
             self._last, self._last_t = pose, now
