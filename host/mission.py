@@ -36,7 +36,8 @@ sys.path.insert(0, str(Path(__file__).parent / "aruco"))
 import config as cfg
 from localizer import Pose, box_pose
 from navigator import GridPathPlanner, DriveCommand, DriveMode, DriveSequencer
-from vehicle_link import BACK_OFF, CREEP_IN, RE_AIM, MissionCommand, VehicleLink
+from vehicle_link import (BACK_OFF, CREEP_IN, RE_AIM, GraspCorrection,
+                          MissionCommand, VehicleLink)
 
 XY = tuple[float, float]
 PieceMap = dict[str, list[XY]]
@@ -363,6 +364,15 @@ class MissionFSM:
         self._align = None
         self._align_from: Optional[tuple[float, float, float]] = None
         self._align_tries = 0
+        # ROTATE(RE_AIM) 가 연속으로 몇 번째인지(2026-09-01,
+        # GRASP_REAIM_ESCALATE_AFTER_TRIES 용) — RE_AIM 이 아닌 보정이
+        # 오거나 이 기물을 새로 잡을 때 0으로 되돌린다.
+        self._reaim_tries = 0
+        # 지금 GRASP_ALIGN 이 회전 미수렴 때문에 만든 "가짜" BACK_OFF 인지
+        # (2026-09-01). 진짜 BACK_OFF(뎁스캠이 목표를 못 봄)와 달리, 이
+        # 경우는 목표를 여전히 보고 있으므로 후진 한 걸음 뒤 좌우 스윕을
+        # 돌 필요가 없다 — 곧장 GRASP 로 돌아가 다시 재본다.
+        self._align_reaim_backoff = False
         # BACK_OFF 후진 뒤 좌우로 훑는 재탐색용(2026-09-01). None 이면 아직
         # 후진 단계거나 스윕이 필요 없는 보정 중이고, "left"/"right" 면 그
         # 방향으로 훑는 중이다. _sweep_phase_start 는 지금 방향(좌 또는 우)
@@ -460,6 +470,7 @@ class MissionFSM:
         self._target_xy = None
         self.dest_xy = _box_front_xy(dest_box)
         self._align_tries = 0
+        self._reaim_tries = 0
         self._nudge_from = None
         self._nudge_plan = None
         self._basket_creep_used = 0.0
@@ -611,6 +622,8 @@ class MissionFSM:
                     # 첫 기물이 예산을 다 쓴 뒤 나머지가 전부 첫 시도에서
                     # 보류된다. 되돌리는 자리는 대상이 바뀌는 여기 하나뿐이다.
                     self._align_tries = 0
+                    self._reaim_tries = 0
+                    self._align_reaim_backoff = False
                     self._align_sweep_stage = None
                     self._align_sweep_phase_start = None
                     self._align_sweep_burst_until = None
@@ -725,6 +738,28 @@ class MissionFSM:
                           f"강제 파지 시도 {self._forced_grasp_tries}/"
                           f"{mcfg.GRASP_FORCE_MAX_ATTEMPTS} ({correction.detail})")
                 else:
+                    if correction.kind == RE_AIM:
+                        self._reaim_tries += 1
+                    else:
+                        self._reaim_tries = 0
+
+                    self._align_reaim_backoff = False
+                    if self._reaim_tries > mcfg.GRASP_REAIM_ESCALATE_AFTER_TRIES:
+                        # 같은 자리에서 회전만 반복해도 안 풀린다(사용자
+                        # 지시 2026-09-01). BACK_OFF 의 후진 한 걸음만
+                        # 빌려 쓴다 — 진짜 BACK_OFF(뎁스캠이 목표를 못 봄)
+                        # 와 달리 목표는 여전히 보이므로, 뒤이은 좌우 스윕은
+                        # 안 돈다(_align_reaim_backoff 로 구분).
+                        print(f"[mission] {self.target_label} 회전 보정 "
+                              f"{self._reaim_tries}회 연속 — 후진 한 걸음 뒤 재겨냥")
+                        correction = GraspCorrection(
+                            BACK_OFF,
+                            f"회전 {self._reaim_tries}회 미수렴 — 후진 전환",
+                            correction.lateral_mm, correction.forward_mm,
+                            correction.yaw_deg)
+                        self._align_reaim_backoff = True
+                        self._reaim_tries = 0
+
                     self._align = correction
                     self._align_from = (pose.x, pose.y, pose.yaw_deg)
                     self._align_tries += 1
@@ -773,11 +808,17 @@ class MissionFSM:
                     # RETREAT 를 보내기 때문이다(방향을 아는 쪽이 방향을 말한다,
                     # domain/task/corrections.from_grasp_precondition). 그래서
                     # Host 는 BACK_OFF 하나만 알면 된다.
-                    if self._align.kind == BACK_OFF and done:
+                    if (self._align.kind == BACK_OFF and done
+                            and not self._align_reaim_backoff):
                         # 후진 한 걸음 끝 — 곧장 GRASP 로 돌아가지 않고 좌우로
                         # 훑는다(2026-09-01 사용자 지시: 후진만 반복해서는
                         # 안 나아지는 게 실기로 확인됨 — mission_config.
                         # GRASP_SWEEP_* 주석 참고).
+                        #
+                        # _align_reaim_backoff 인 경우는 뺀다 — 회전 미수렴
+                        # 때문에 빌려 쓴 후진이라 목표를 못 본 게 아니다.
+                        # 스윕(목표 재탐색)을 돌 이유가 없으니 곧장 GRASP 로
+                        # 돌아가 다시 정렬을 잰다.
                         now = time.monotonic()
                         self._align_sweep_stage = "left"
                         self._align_sweep_phase_start = now

@@ -315,6 +315,19 @@ GRASP_SWEEP_BURST_SEC = 0.2      # 한 버스트 회전 시간 — 이후 멈춰
 GRASP_SWEEP_LEFT_SEC = 1.0       # 좌회전 누적 예산
 GRASP_SWEEP_RIGHT_SEC = 2.0      # 우회전 누적 예산 (좌 다음, 좌보다 길게)
 
+# ROTATE(RE_AIM) 도 같은 병으로 앓을 수 있다는 게 2026-09-01 실기로
+# 확인됐다 — 좌우 오차가 -69mm -> +25mm -> -63mm로 165초 동안 수렴하지
+# 않고 부호만 뒤집혔다(GRASP_READY 도달 못함). GRASP_ALIGN_YAW_STEP_DEG
+# (3도)는 고정 걸음이라 오차 크기와 무관하고, GRASP 자세로 바짝 붙은
+# 상태에서 제자리 회전하면 그리퍼 끝 좌우 위치가 거리에 반비례해 민감하게
+# 튀어 오버슈트하기 쉽다 — 위 BACK_OFF 사례와 같은 "고정 동작 반복은
+# 수렴을 보장 못한다"는 교훈이다(사용자 지시).
+#
+# 그래서 같은 방향(ROTATE/RE_AIM)으로 이 횟수 넘게 연속으로 다시 걸리면,
+# 그 자리에서 더 돌리지 않고 위 BACK_OFF+스윕 경로로 바꿔 한 번 물러났다가
+# 다시 겨눈다(mission.py GRASP 블록 참고).
+GRASP_REAIM_ESCALATE_AFTER_TRIES = 3
+
 # 재정렬(GRASP_ALIGN)을 이만큼 반복해도 여전히 영역 밖이면, 잔여 오차가
 # 파지 가능한 수준까지 좁혀졌다고 보고 Pi 에 한 번 강제로 파지를 시도하게
 # 한다(state="GRASP_FORCE", 사용자 지시, 2026-08-31). Pi 는 정렬 창 판정만
