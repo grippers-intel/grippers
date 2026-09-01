@@ -59,6 +59,10 @@ GLYPHS = {
 LEGEND_COL1 = ["box", "star", "knight"]
 LEGEND_COL2 = ["soccer", "queen", "rook"]
 
+# 계획기 경로 끝과 목표가 이보다 더 벌어져 있을 때만 넘김 구간을 점선으로 잇는다.
+# 격자 한 칸(PLAN_CELL_M=0.025)보다 작은 틈은 그어 봐야 점 하나라 의미가 없다.
+HANDOFF_MIN_GAP_M = 0.03
+
 # 팀원 디자인 시안을 참고해 통일한 팔레트 — 부드러운 배경 + 한글 폰트.
 # 상태 패널의 행 이름. **고정이다** — 값이 없으면 "-" 로 채우고 행 자체는
 # 안 없앤다. 그래야 라벨 칸을 배경에 구워 둘 수 있다(_status_labels 주석).
@@ -199,6 +203,16 @@ class LiveMap:
         self._path_line, = self.ax.plot(
             [], [], color="#2f80ed", linewidth=2.5, alpha=0.85, zorder=4, solid_capstyle="round")
 
+        # 경로선 끝 -> 목표 를 잇는 점선. GridPathPlanner 는 목표까지 파고들지
+        # 않고 GRASP/PLACE 넘김 거리(mission_config.GRASP_TRIGGER_DIST_M, 0.35 m)
+        # 안에 들어가면 거기서 멈춘다 — 마지막 접근은 차량이 아니라 SmolVLA 몫이라
+        # 계획기가 낼 이유가 없다. 그런데 화면에는 그 사정이 안 보여서 경로가
+        # 목표 한참 앞에서 끊긴 것처럼 보였다(실측: queen 까지 0.33 m 남기고 끊김).
+        # 남은 구간을 점선으로 마저 그어 "여기부터는 넘김"임을 드러낸다.
+        self._handoff_line, = self.ax.plot(
+            [], [], color="#2f80ed", linewidth=1.6, alpha=0.55, zorder=4,
+            linestyle=":", solid_capstyle="round")
+
         self._piece_slots: dict[str, list[_PieceSlot]] = {
             label: [_PieceSlot(self.ax, label) for _ in range(mcfg.PIECE_MAX_PER_LABEL)]
             for label in KNOWN_LABELS
@@ -214,6 +228,7 @@ class LiveMap:
         # zorder 가 자동 정렬되지 않는다.
         self._dynamic = [
             self._path_line,                                    # zorder 4
+            self._handoff_line,                                 # 4
             *[a for slots in self._piece_slots.values()
               for slot in slots for a in slot._artists],        # 6
             self._robot_radius, self._robot_radius_wall,        # 7
@@ -268,6 +283,7 @@ class LiveMap:
             for slot in slots:
                 slot.hide()
         self._path_line.set_visible(False)
+        self._handoff_line.set_visible(False)
         self._status_text.set_text("")
         self._ready_light.set_facecolor("lightgray")
         self.fig.canvas.draw_idle()
@@ -771,8 +787,18 @@ class LiveMap:
             self._path_line.set_data(xs, ys)
             self._path_line.set_linestyle("--" if nav.blocked_by else "-")
             self._path_line.set_visible(True)
+
+            # 계획기가 넘김 거리에서 멈춘 만큼을 점선으로 마저 잇는다.
+            # blocked 일 때는 긋지 않는다 — 못 가는데 닿을 것처럼 보이면 안 된다.
+            gap = float(np.hypot(goal[0] - xs[-1], goal[1] - ys[-1]))
+            if not nav.blocked_by and gap > HANDOFF_MIN_GAP_M:
+                self._handoff_line.set_data([xs[-1], goal[0]], [ys[-1], goal[1]])
+                self._handoff_line.set_visible(True)
+            else:
+                self._handoff_line.set_visible(False)
         else:
             self._path_line.set_visible(False)
+            self._handoff_line.set_visible(False)
 
         # 행 순서는 STATUS_ROWS 와 반드시 같다 — 라벨 칸이 배경에 고정이라
         # 여기서 한 줄이라도 빼면 아래 줄들이 다른 라벨에 붙는다.
