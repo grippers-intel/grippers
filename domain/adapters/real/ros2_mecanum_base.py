@@ -8,6 +8,8 @@
 속도는 액션이 아니라 **토픽**으로 낸다. Host가 사이클마다 새 속도를 보내므로
 목표-결과 왕복이 필요 없고, 오히려 왕복 지연이 제어 주기를 늘린다."""
 
+import math
+import os
 import time
 
 from geometry_msgs.msg import Twist
@@ -31,6 +33,50 @@ FEEDBACK_TOPIC = "odom_raw"
 CREEP_SPEED_MPS = 0.06
 CREEP_BURST_S = 0.35
 
+# 제자리회전도 같은 데드밴드를 갖고 있었다(2026-09-01 발견) — 다만 creep_forward와
+# 달리 회전은 **Host가 매 사이클 계속 명령하는 닫힌 루프**라 한 번 정해진 총
+# 거리만큼 블로킹으로 미는 방식을 못 쓴다. 그래서 여기서는 `apply_velocity()`
+# 호출마다(블로킹 없이) on/off를 토글하는 펄스(PWM과 같은 발상)로 낸다 —
+# 회전 명령이 들어오는 한 계속 펄싱되고, Host가 다음 사이클에 방향을 바꾸거나
+# 멈추면 그 즉시 반영된다.
+#
+# ⚠️ 발견 경위: 메카넘 역기구학(controller/mecanum.py)에 합의 회전속도
+# AGREED_ROTATION_RAD_S(0.25 rad/s, domain/task/motion.py)를 넣으면 필요한
+# 바퀴 선속도가 0.25 x (wheelbase+track_width)/2 = 0.0347 m/s — CREEP_SPEED_MPS
+# 위 데드밴드(0.05m/s) **아래**다. "yaw- 명령이 계속 나가는데 한참 있다가
+# 겨우 도는" 증상이 실기로 확인됐다(2026-09-01).
+#
+# ROTATE_BURST_SPEED_RAD_S는 그 역기구학을 거꾸로 풀어 데드밴드를 확실히
+# 넘기는 값을 잡았다: 0.05 / ((wheelbase+track_width)/2) ≈ 0.36 rad/s가
+# 최소선이고, 여유를 더해 0.4로 뒀다(바퀴 선속도 0.0556m/s, 데드밴드
+# 대비 CREEP_SPEED_MPS와 비슷한 수준의 여유).
+#
+# on/off 비율은 **시간이 아니라 호출 횟수 기반 분수 누적기**(Bresenham 직선
+# 알고리즘과 같은 방식)로 정한다 — 처음엔 벽시계 시간으로 주기를 나누려
+# 했으나, `apply_velocity()`가 실제로 불리는 간격 자체가 이미 Pi FSM
+# 사이클(CYCLE_PERIOD_S=0.1초)에 묶여 있어서 그보다 촘촘한 시간 주기를
+# 잡으면 샘플링 앨리어싱으로 평균이 어긋난다(예: 0.2초 주기로 시도했더니
+# 평균이 -0.35가 나와야 할 -0.25 대신 나옴 — 시뮬레이션으로 확인, 이번
+# 구현에서 폐기). 호출마다 duty를 누적하다 1.0을 넘으면 그 호출만 켠다 —
+# 실제로 불리는 간격이 얼마든 장기 평균이 정확히 요청값에 수렴한다.
+#
+# ⚠️ **아직 실기 미검증**이다. 이 설계가 전제하는 것은 "데드밴드가 순간
+# 토크/속도 문턱이지, 지속시간 문턱이 아니다"인데(정지마찰을 넘는 순간
+# 크기가 필요조건이라는 뜻) 이건 creep_forward의 기존 문서에서 유추한
+# 것이지 회전축으로 직접 실측한 적은 없다. 내일 펄싱 중에도 여전히 안
+# 돌면 이 전제부터 의심할 것 — 그땐 켜짐 구간을 몇 사이클 연속으로
+# 묶는 식으로 바꿔야 할 수 있다.
+ROTATE_BURST_SPEED_RAD_S = 0.4
+_ROTATE_EPSILON = 1e-6
+
+# 실기 미검증 기능이라 켜는 즉시 되돌릴 수단이 필요하다 — colcon build나
+# git revert 없이, **재기동 시 환경변수 하나로** 펄싱 이전 동작(요청 각속도를
+# 그대로 cmd_vel에 낸다, 데드밴드 아래면 이전처럼 안 돎)으로 되돌린다.
+# 로봇 앞에서 문제가 보이면:
+#     export GRIPPERS_DISABLE_ROTATE_BURST=1
+# 을 export하고 mission_orchestrator만 재기동하면 된다(다른 노드는 안 건드림).
+ROTATE_BURST_DISABLE_ENV = "GRIPPERS_DISABLE_ROTATE_BURST"
+
 
 class Ros2MecanumBase(BaseDriver):
     def __init__(self, node, clock_sleep=None, clock=time.monotonic):
@@ -41,6 +87,15 @@ class Ros2MecanumBase(BaseDriver):
         self._stop_service_missing = False
         # 테스트에서 실제로 잠들지 않게 주입할 수 있도록 열어 둔다.
         self._sleep = clock_sleep
+
+        # --- 제자리회전 데드밴드 펄싱 (2026-09-01) ---
+        self._rotate_accumulator = 0.0
+        self._rotate_sign = 0.0
+        self._rotate_burst_enabled = not os.environ.get(ROTATE_BURST_DISABLE_ENV)
+        if not self._rotate_burst_enabled:
+            node.get_logger().warn(
+                f"{ROTATE_BURST_DISABLE_ENV} 설정됨 — 회전 펄싱 비활성화, "
+                "요청 각속도를 그대로 낸다(데드밴드 아래면 2026-09-01 이전처럼 안 돎)")
 
         # --- 구동계 생존 감시 (2026-08-28) ---
         self._clock = clock
@@ -84,8 +139,40 @@ class Ros2MecanumBase(BaseDriver):
 
     def apply_velocity(self, linear_x: float, linear_y: float,
                        angular_z: float) -> None:
-        """받은 속도를 cmd_vel로 낸다. 다시 자르지 않는다 — 한계 집행은
-        `domain/task/motion.py` 한 곳에만 있어야 한다."""
+        """받은 속도를 cmd_vel로 낸다. 크기는 다시 자르지 않는다 — 한계 집행은
+        `domain/task/motion.py` 한 곳에만 있어야 한다.
+
+        제자리회전(병진 없이 angular_z만 있는 경우)만 예외다. 요청한 각속도가
+        ROTATE_BURST_SPEED_RAD_S보다 작으면 그 크기 그대로 내보내지 않고,
+        더 빠른 속도로 껐다 켰다 하는 펄스로 바꾼다 — 그대로 내보내면 바퀴
+        데드밴드 아래라 아무리 오래 줘도 안 돈다(모듈 상단 주석 참고). 몇 번째
+        호출에서 켤지는 분수 누적기(`_rotate_accumulator`)로 정하므로, 호출
+        간격이 정확히 일정하지 않아도 장기 평균 각속도는 요청값에 수렴한다."""
+        is_pure_rotation = (abs(angular_z) >= _ROTATE_EPSILON
+                            and abs(linear_x) < _ROTATE_EPSILON
+                            and abs(linear_y) < _ROTATE_EPSILON)
+        if (not self._rotate_burst_enabled or not is_pure_rotation
+                or abs(angular_z) >= ROTATE_BURST_SPEED_RAD_S):
+            self._rotate_accumulator = 0.0
+            self._rotate_sign = 0.0
+            self._publish(linear_x, linear_y, angular_z)
+            return
+
+        sign = math.copysign(1.0, angular_z)
+        if sign != self._rotate_sign:
+            # 새로 회전을 시작했거나 방향이 바뀌었다 — 누적기를 리셋해서
+            # 이전 방향의 잔여 누적치가 새 방향으로 새지 않게 한다.
+            self._rotate_accumulator = 0.0
+            self._rotate_sign = sign
+        duty = min(1.0, abs(angular_z) / ROTATE_BURST_SPEED_RAD_S)
+        self._rotate_accumulator += duty
+        if self._rotate_accumulator >= 1.0:
+            self._rotate_accumulator -= 1.0
+            self._publish(0.0, 0.0, sign * ROTATE_BURST_SPEED_RAD_S)
+        else:
+            self._publish(0.0, 0.0, 0.0)
+
+    def _publish(self, linear_x: float, linear_y: float, angular_z: float) -> None:
         twist = Twist()
         twist.linear.x = float(linear_x)
         twist.linear.y = float(linear_y)
