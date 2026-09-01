@@ -120,6 +120,18 @@ _STATE_TO_PI = {
     "NUDGE_BOX":      MissionState.APPROACH_BOX,
     "PLACE":          MissionState.INSERT,
     "DONE":           MissionState.DONE,
+    # 2026-09-02 실기 사고로 발견: GRASP_FORCE(2026-08-31 도입, mission.py의
+    # _forcing_grasp)가 이 표에 빠져 있었다. encode()의 "모르는 상태는 IDLE+
+    # stop" 안전장치가 그대로 걸려서, 강제 파지를 보낼 때마다 전선에는
+    # 조용히 IDLE이 나갔다 — Pi가 진짜로 IDLE에 들어가고 Host는 State.GRASP/
+    # _forcing_grasp=True에 갇혀 둘 다 다시는 못 빠져나오는 락업이었다
+    # (07:12 rook 시험, GRASP_ALIGN 30회 후 강제 파지 1회 만에 33초간 정지).
+    "GRASP_FORCE":    MissionState.GRASP_FORCE,
+    # 같은 감사에서 같이 발견: RETURN_HOME(_skip_target 이 기물을 포기하고
+    # 기본 위치로 돌아갈 때, _approach 가 self.state.name 을 그대로 status로
+    # 씀)도 빠져 있었다. GRASP_ALIGN과 이유가 같다 — Pi 쪽에 특별한 판정이
+    # 필요 없는 순수 주행이라 APPROACH로 보낸다.
+    "RETURN_HOME":    MissionState.APPROACH,
 }
 
 # Pi 가 돌려주는 Report -> mission.py 가 기다리는 옛 문자열
@@ -340,6 +352,10 @@ def classify_correction(detail: str) -> GraspCorrection:
 # 그대로 찍으면 콘솔이 묻히고, 진짜 인코더 버그가 났을 때 그 한 줄이 안 보인다.
 _WARN_REPEAT_SEC = 5.0
 
+# encode()가 모르는 status를 만났을 때 한 번만 찍기 위한 표시. 상태 이름
+# 종류는 미션 내내 고정돼 있어 무한히 늘지 않는다.
+_WARNED_UNKNOWN_STATUS: set[str] = set()
+
 
 def encode(cmd: MissionCommand) -> HostCommand:
     """Host 내부 명령 -> 전선에 실릴 `HostCommand`.
@@ -366,6 +382,16 @@ def encode(cmd: MissionCommand) -> HostCommand:
     state = _STATE_TO_PI.get(cmd.status)
     if state is None:
         # 모르는 상태 이름을 추측해서 보내지 않는다. 정지가 안전하다.
+        #
+        # ⚠️ 2026-09-02까지 이 분기가 조용히 걸려도 아무 로그가 안 남았다 —
+        # GRASP_FORCE가 이 표에서 빠진 채 몇 주를 지나며 강제 파지 때마다
+        # 매번 여기로 빠져 Host·Pi가 서로 락업됐는데, 아무 경고도 없어서
+        # 실기에서야 발견됐다. 표를 또 빠뜨리는 사고가 나도 이번엔 눈에
+        # 띄게, 상태 이름별로 한 번만 찍는다.
+        if cmd.status not in _WARNED_UNKNOWN_STATUS:
+            _WARNED_UNKNOWN_STATUS.add(cmd.status)
+            print(f"\n[vehicle_link] ⚠️ _STATE_TO_PI에 없는 상태 '{cmd.status}' "
+                  "— IDLE+정지로 대체해 보냄 (매핑 표 확인 필요)")
         return HostCommand(state=MissionState.IDLE, stop=True)
 
     if cmd.cmd == "go":
