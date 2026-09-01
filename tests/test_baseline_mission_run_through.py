@@ -248,10 +248,13 @@ def test_주행_명령이_합의_속도로_바퀴까지_간다(run_through):
         assert abs(linear_x) <= AGREED_LINEAR_MPS + 1e-9
         assert abs(linear_y) <= AGREED_LINEAR_MPS + 1e-9
         assert abs(angular_z) <= AGREED_ROTATION_RAD_S + 1e-9
-    # 파지 전진은 관측에서 나온 값이라 상한 안이어야 한다.
-    assert ports.base.creep_forward_calls
-    for creep in ports.base.creep_forward_calls:
-        assert 0.0 < creep <= bc.GRASP_CREEP_FORWARD_MM / 1000.0 + 1e-9
+    # 파지 전진은 2026-09-02부터 관측 거리가 아니라 고정된 시간·속도
+    # 개방루프다(baseline_constants.GRASP_CREEP_OPEN_LOOP_*) — creep_forward
+    # 가 아니라 creep_forward_timed 가 그 값 그대로 불린다.
+    assert ports.base.creep_forward_timed_calls
+    for speed_mps, duration_s in ports.base.creep_forward_timed_calls:
+        assert speed_mps == pytest.approx(bc.GRASP_CREEP_OPEN_LOOP_SPEED_MPS)
+        assert duration_s == pytest.approx(bc.GRASP_CREEP_OPEN_LOOP_SEC)
 
 
 def test_파지_성공은_부하_하나만_있어도_된다(run_through):

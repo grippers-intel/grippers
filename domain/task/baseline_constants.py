@@ -69,6 +69,20 @@ GRASP_CREEP_FORWARD_MM = 500.0  # 지시(2026-09-02, 300.0 -> 500.0, EXTRA가 �
 # 않는다 — creep_distance_m 참고.
 GRASP_CREEP_EXTRA_MM = 300.0  # 지시(2026-09-02)
 
+# 09-02 실기(2회차): +300mm 보너스를 적용한 채로도 여전히 16~70mm 수준의
+# 미세 전진만 나왔다 — 이번엔 상한(500.0)이나 보너스가 잘려서가 아니라,
+# **이 코드 자체가 Pi에 배포되지 않은 채** 실행됐다(Pi가 물려 있던 브랜치가
+# 이 커밋보다 하나 뒤처져 있었다). 사용자가 이 계산 경로 전체의 신뢰성을
+# 더 따지지 않고, GRASP 미세 전진을 관측 기반 거리 계산에서 **결정론적인
+# 시간·속도 개방루프**로 바꾸기로 했다 — "거리 단위가 아니라 1.5초간 0.1의
+# 속도로 전진" (2026-09-02). `domain.ports.base_driver.BaseDriver.
+# creep_forward_timed` 가 이 값을 그대로 받아 관측을 전혀 안 보고 민다.
+#
+# 위 GRASP_CREEP_FORWARD_MM/EXTRA_MM 은 지운다 — `creep_forward`(거리 기반)
+# 자체는 어댑터에 인프라로 남겨 뒀지만 GRASP 시퀀스는 더 이상 부르지 않는다.
+GRASP_CREEP_OPEN_LOOP_SPEED_MPS = 0.1  # 지시(2026-09-02)
+GRASP_CREEP_OPEN_LOOP_SEC = 1.5  # 지시(2026-09-02)
+
 # GRASP 진입 판정(grasp_alignment.judge)의 전후·좌우 여유. 2026-09-01 실기
 # 10차례 중 GRASP까지 실제로 들어간 횟수가 손에 꼽을 정도로 적었고, 그중
 # 하나는 "물체가 턱 선보다 가깝다 (186mm < 191mm)" — 5mm 차이로 막힌

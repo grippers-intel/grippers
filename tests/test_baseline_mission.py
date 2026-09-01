@@ -604,7 +604,7 @@ class _OrderSpy:
 
         def recorded(*args, **kwargs):
             if method in ("move_to_floor_pose", "set_gripper",
-                          "creep_forward", "remember_target"):
+                          "creep_forward_timed", "remember_target"):
                 detail = args[1] if method == "move_to_floor_pose" else None
                 self._log.append(f"{method}:{detail}" if detail else method)
             return attribute(*args, **kwargs)
@@ -633,8 +633,8 @@ def test_미세_전진은_팔이_내려가_그리퍼가_열린_뒤에_일어난�
     """전진이 grasp 자세 도달 **뒤**여야 물체가 턱 사이로 들어온다."""
     order = _grasp_call_order()
 
-    assert "creep_forward" in order, "미세 전진이 아예 안 일어났다"
-    creep = order.index("creep_forward")
+    assert "creep_forward_timed" in order, "미세 전진이 아예 안 일어났다"
+    creep = order.index("creep_forward_timed")
     descended = order.index("move_to_floor_pose:grasp")
     opened = order.index("set_gripper")
 
@@ -648,7 +648,7 @@ def test_전진은_그리퍼를_닫기_전에_끝난다():
     """턱 사이에 물체가 들어오기 전에 닫으면 빈손으로 물거나 물체를 친다."""
     order = _grasp_call_order()
 
-    creep = order.index("creep_forward")
+    creep = order.index("creep_forward_timed")
     closes = [i for i, call in enumerate(order) if call == "set_gripper"]
     assert len(closes) >= 2, f"열기/닫기가 둘 다 있어야 한다: {order}"
     assert creep < closes[1], f"닫은 뒤에 전진했다: {order}"

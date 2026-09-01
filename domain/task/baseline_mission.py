@@ -342,10 +342,16 @@ class BaselineApproachState(State):
         verdict = ga.judge(observation, object_width_mm(label))
 
         if verdict.action == ga.READY or (force and verdict.action == ga.HOST_CORRECTION):
+            # creep_m 자체는 이제 미는 양을 정하지 않는다(2026-09-02, 아래
+            # BaselineGraspState.execute 참고) — 여기서는 "정면에서 유효한
+            # 관측이 있었는가"만 본다. None이면 물체가 이미 턱 선 안쪽이라
+            # 전진 자체가 필요 없다는 뜻이거나 관측 실패다.
             creep_m = ga.creep_distance_m(observation)
             reason = (verdict.reason if verdict.action == ga.READY
                       else f"Host 지시로 강제 진행 — {verdict.reason}")
-            detail = (f"{label} {reason} · 전진 {creep_m * 1000:.0f}mm"
+            detail = (f"{label} {reason} · 전진 "
+                      f"{bc.GRASP_CREEP_OPEN_LOOP_SEC:.1f}s@"
+                      f"{bc.GRASP_CREEP_OPEN_LOOP_SPEED_MPS:.2f}m/s"
                       if creep_m is not None else f"{label} {reason}")
             ports.host.report(Report.GRASP_READY, self.name, detail)
             return BaselineGraspState(label, creep_m, self.retries)
@@ -410,10 +416,22 @@ class BaselineGraspState(State):
         #
         # ⚠️ 이 구간에서는 **회전이 절대 금지**다. 그리퍼가 바닥에서 2.6cm
         # 위에 열린 채 떠 있어서, 제자리 회전은 그것을 바닥과 물체를 가로질러
-        # 옆으로 쓴다. `creep_forward` 는 직진만 내므로 계약상 지켜진다 —
-        # 여기에 회전을 섞는 구현으로 바꾸면 안 된다(demo_rook_run.py 의
-        # CREEP_KEYMAP 이 회전 키를 일부러 뺀 것과 같은 이유).
-        if not ports.base.creep_forward(self.creep_m):
+        # 옆으로 쓴다. `creep_forward_timed` 도 직진만 내므로 계약상
+        # 지켜진다 — 여기에 회전을 섞는 구현으로 바꾸면 안 된다
+        # (demo_rook_run.py 의 CREEP_KEYMAP 이 회전 키를 일부러 뺀 것과
+        # 같은 이유).
+        #
+        # 2026-09-02: 관측 거리(self.creep_m, ga.creep_distance_m)로 미는
+        # 양을 계산하던 방식을 버렸다 — 300→500mm 상한, +300mm 보너스까지
+        # 조정해도 실기에서 16~70mm 수준의 미세 전진만 나왔고(원인은 이
+        # 계산 자체가 아니라 배포 지연이었던 것으로 나중에 드러났지만),
+        # 사용자가 신뢰성이 불투명한 관측 기반 계산 대신 결정론적인
+        # 시간·속도 개방루프를 지시했다("거리 단위가 아니라 1.5초간 0.1의
+        # 속도로 전진"). `self.creep_m is None` 게이트(위)는 그대로 둔다 —
+        # 그건 "전진량이 얼마인가"가 아니라 "물체가 애초에 유효하게 관측
+        # 됐는가"를 보는 것이라 여기와 무관하다.
+        if not ports.base.creep_forward_timed(bc.GRASP_CREEP_OPEN_LOOP_SPEED_MPS,
+                                              bc.GRASP_CREEP_OPEN_LOOP_SEC):
             return self._failed(ports, "미세 전진 실패")
 
         ports.arm.set_gripper(gp.close_width_mm)

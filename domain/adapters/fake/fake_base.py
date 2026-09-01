@@ -12,6 +12,7 @@ class FakeBase(BaseDriver):
         self._creep_ok = creep_ok
         self.velocity_calls: list = []
         self.creep_forward_calls: list = []
+        self.creep_forward_timed_calls: list = []
         self.stop_calls = 0
 
     @property
@@ -25,6 +26,10 @@ class FakeBase(BaseDriver):
 
     def creep_forward(self, distance_m: float) -> bool:
         self.creep_forward_calls.append(distance_m)
+        return self._creep_ok
+
+    def creep_forward_timed(self, speed_mps: float, duration_s: float) -> bool:
+        self.creep_forward_timed_calls.append((speed_mps, duration_s))
         return self._creep_ok
 
     def stop(self) -> None:

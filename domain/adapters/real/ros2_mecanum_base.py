@@ -215,6 +215,26 @@ class Ros2MecanumBase(BaseDriver):
             return False
         return True
 
+    def creep_forward_timed(self, speed_mps: float, duration_s: float) -> bool:
+        """이 속도로 이 시간만큼 열린 루프로 밀고 멈춘다 (사용자 지시,
+        2026-09-02) — GRASP 미세 전진을 관측 기반 거리 계산 대신 고정된
+        시간·속도로 낸다. `creep_forward`처럼 버스트로 쪼개지 않는다 —
+        여기 쓰는 속도(호출자가 `baseline_constants.
+        GRASP_CREEP_OPEN_LOOP_SPEED_MPS`를 넘긴다, 0.1 m/s)가 이미
+        데드밴드(0.05 m/s) 위라 연속으로 내도 바퀴가 죽지 않는다."""
+        if self._sleep is None:
+            import time
+            self._sleep = time.sleep
+        try:
+            self.apply_velocity(speed_mps, 0.0, 0.0)
+            self._sleep(duration_s)
+            self.stop()
+        except Exception:                       # noqa: BLE001 -- 실기 경로
+            self.stop()
+            self._node.get_logger().error("creep_forward_timed: 실패 — 정지")
+            return False
+        return True
+
     def stop(self) -> None:
         """즉시 정지. cmd_vel 0을 직접 내고, 노드 쪽 정지 서비스도 부른다.
 

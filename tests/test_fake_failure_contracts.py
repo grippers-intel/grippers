@@ -45,6 +45,15 @@ FAILURE_CONTRACTS = [
         False,
         "False",
     ),
+    (
+        # 2026-09-02: GRASP 미세 전진이 관측 거리 대신 고정 시간·속도
+        # 개방루프로 바뀌면서 추가된 포트 메서드.
+        BaseDriver,
+        "creep_forward_timed",
+        lambda: FakeBase(creep_ok=False).creep_forward_timed(0.1, 1.5),
+        False,
+        "False",
+    ),
     (ArmDriver, "move_to_floor_pose",
      lambda: FakeArm(move_ok=False).move_to_floor_pose("chess_rook", "grasp"), False, "False"),
     (ArmDriver, "move_to_cartesian",
