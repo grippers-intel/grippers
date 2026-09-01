@@ -15,8 +15,7 @@ from domain.task.preconditions import (
 
 
 def _grasp(**overrides):
-    base = dict(estop_set=False, base_stopped=True, gripper_load=0.02,
-                detected_label="queen", profile_known=True)
+    base = dict(base_stopped=True, detected_label="queen")
     base.update(overrides)
     return GraspInputs(**base)
 
@@ -44,26 +43,11 @@ def test_전부_충족되면_통과한다():
     assert report.detected_label == "queen"
 
 
-def test_그리퍼에_이미_뭔가_물려_있으면_막는다():
-    """또 파지하러 내려가면 물고 있던 것을 떨어뜨린다."""
-    report = check_grasp(_grasp(gripper_load=0.14))
-
-    assert not report.ok
-    assert any("비어 있지 않다" in reason for reason in report.reasons)
-
-
 def test_자기_카메라가_목표를_못_보면_막는다():
     report = check_grasp(_grasp(detected_label=None))
 
     assert not report.ok
     assert any("찾지 못했다" in reason for reason in report.reasons)
-
-
-def test_교시_자세가_없는_라벨이면_막는다():
-    report = check_grasp(_grasp(detected_label="바나나", profile_known=False))
-
-    assert not report.ok
-    assert any("교시 파지 자세가 없다" in reason for reason in report.reasons)
 
 
 def test_차체가_움직이는_중이면_막는다():
@@ -75,11 +59,10 @@ def test_차체가_움직이는_중이면_막는다():
 
 def test_미충족_사유를_전부_모아서_돌려준다():
     """무엇을 고쳐야 하는지 알려줘야 Host가 수정된 명령을 만들 수 있다."""
-    report = check_grasp(_grasp(estop_set=True, base_stopped=False,
-                                gripper_load=0.14, detected_label=None))
+    report = check_grasp(_grasp(base_stopped=False, detected_label=None))
 
-    assert len(report.reasons) == 4
-    assert report.detail.count("/") == 3
+    assert len(report.reasons) == 2
+    assert report.detail.count("/") == 1
 
 
 # ── INSERT ────────────────────────────────────────────────────────────────

@@ -102,17 +102,20 @@ def _load_script():
     어긋나 테스트가 깨진다 — 그것이 의도다. 부하 판정은 빈손 11/256과 파지
     13/256 사이 **2양자**밖에 여유가 없어서, 어느 자리에서 읽는지가 값
     자체만큼 중요하다.
+
+    ⚠️ 2026-09-01 사용자 지시로 check_grasp()가 그리퍼 부하를 더 이상 보지
+    않는다(GraspInputs에서 gripper_load를 뺐다 — preconditions.check_grasp
+    문서 참고) — 그래서 예전 1번 자리("GRASP 조건 판정")가 사라졌다.
     """
     return [
-        EMPTY,      # 1. GRASP 조건 판정 — 그리퍼가 비어 있어야 내려간다
-        HOLDING,    # 2. 닫은 직후
-        HOLDING,    # 3. midpoint 유지 확인
-        HOLDING,    # 4. CARRY 전환 후 (성공 판정 신호 하나)
-        HOLDING,    # 5. CARRY 표본 1
-        HOLDING,    # 6. CARRY 표본 2
-        HOLDING,    # 7. INSERT 판정 사이클의 표본
-        HOLDING,    # 8. 투하 직전
-        EMPTY,      # 9. 투하 직후 — 손을 떠났다
+        HOLDING,    # 1. 닫은 직후
+        HOLDING,    # 2. midpoint 유지 확인
+        HOLDING,    # 3. CARRY 전환 후 (성공 판정 신호 하나)
+        HOLDING,    # 4. CARRY 표본 1
+        HOLDING,    # 5. CARRY 표본 2
+        HOLDING,    # 6. INSERT 판정 사이클의 표본
+        HOLDING,    # 7. 투하 직전
+        EMPTY,      # 8. 투하 직후 — 손을 떠났다
     ]
 
 

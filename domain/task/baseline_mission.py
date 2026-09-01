@@ -266,8 +266,10 @@ class BaselineApproachState(State):
     def _judge_grasp(self, ports, command, force: bool = False):
         """임무 2번 — 조건 판정 후 보고. 충족이면 GRASP로, 아니면 제자리.
 
-        판정은 두 겹이다. 먼저 기본 전제(E-STOP·정지·빈 그리퍼·식별)를 보고,
-        통과하면 **물체가 턱이 쓸고 갈 영역 안에 있는지**를 본다. `force`
+        판정은 두 겹이다. 먼저 기본 전제(정지·식별, 2026-09-01 사용자 지시로
+        E-STOP·빈 그리퍼·교시 자세 확인을 뺐다 — preconditions.check_grasp
+        문서 참고)를 보고, 통과하면 **물체가 턱이 쓸고 갈 영역 안에 있는지**를
+        본다. `force`
         는 이 중 두 번째 겹(정렬 창)만 건너뛴다 — 첫 겹(기본 전제)은
         force 여도 그대로 지킨다(2026-08-31, MissionState.GRASP_FORCE 참고).
 
@@ -284,18 +286,15 @@ class BaselineApproachState(State):
         observation = ports.perception.identify_target()
         label = observation.label if observation is not None else None
         inputs = pc.GraspInputs(
-            estop_set=ports.estop.is_set(),
             base_stopped=_base_stopped(ports, command),
-            gripper_load=ports.arm.get_load(),
             detected_label=label,
-            profile_known=plan_for_label(label) is not None,
         )
         report = pc.check_grasp(inputs)
         if not report.ok:
             # 보정을 같이 실어 보낸다. 안 보내면 Host가 이 실패를 고칠 수
             # 없는 것으로 읽고 기물을 포기한다 — 2026-08-28 run6이 그랬다.
-            # force 는 이 전제를 건너뛰지 않는다 — E-STOP·안 빈 그리퍼
-            # 상태에서는 강제로도 안 내려간다.
+            # force 는 이 전제를 건너뛰지 않는다 — 아직 안 멈춘 상태에서는
+            # 강제로도 안 내려간다.
             ports.host.report(Report.GRASP_BLOCKED, self.name, report.detail,
                               corrections.from_grasp_precondition(inputs))
             return self

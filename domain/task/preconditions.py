@@ -50,13 +50,13 @@ class GraspInputs:
     """GRASP 판정에 필요한 관측값 묶음.
 
     포트를 직접 받지 않고 값으로 받는다 — 이 판정을 포트 더블 없이 순수
-    단위 테스트로 고정할 수 있어야 하기 때문이다."""
+    단위 테스트로 고정할 수 있어야 하기 때문이다.
 
-    estop_set: bool
+    ⚠️ 2026-09-01 사용자 지시로 원래 있던 다섯 항목 중 셋(estop_set·
+    gripper_load·profile_known)을 뺐다 — 근거는 check_grasp() 문서 참고."""
+
     base_stopped: bool
-    gripper_load: float
     detected_label: str | None
-    profile_known: bool
 
 
 @dataclass
@@ -82,32 +82,33 @@ class InsertInputs:
 def check_grasp(inputs: GraspInputs) -> PreconditionReport:
     """APPROACH -> GRASP 전환 조건 (임무 2번).
 
-    네 가지를 본다. 하나라도 어긋나면 팔을 바닥으로 내리지 않는다 — 이
-    단계의 실패는 그리퍼가 바닥을 긁거나 물고 있던 것을 떨어뜨리는 쪽으로
-    나타나므로, 막는 비용보다 진행하는 비용이 훨씬 크다."""
-    reasons = []
+    ⚠️ 2026-09-01 사용자 지시로 넷에서 둘로 줄였다. 근거:
+      - E-STOP: `BaselineMission.run()`이 사이클마다 최상위에서 먼저
+        검사해 `ESTOP` 상태로 갈아치운다(baseline_mission.py 참고) — 이
+        상태의 execute()가 도는 시점엔 이미 E-STOP이 아니라는 뜻이라,
+        여기서 또 보는 것은 중복이었다. 게다가 하드웨어 배선이 아직
+        안 돼 있어 이 필드는 사실상 값을 낼 방법이 없었다.
+      - 그리퍼 부하(비어 있는가): 뭔가를 문 채 이 상태로 돌아오는
+        경로가 없다는 전제로 뺐다 — CARRY가 아닌 한 그리퍼는 항상 비어
+        있다.
+      - 교시 자세 존재: `identify_target()`이 답하는 라벨은 여섯 개
+        (`plan_for_label`이 아는 전부)뿐이라, 라벨이 잡히면 자세도 항상
+        있다 — 이 조건은 한 번도 걸린 적이 없었다.
 
-    if inputs.estop_set:
-        reasons.append("E-STOP이 걸려 있다")
+    남은 둘은 다르다. 차체 정지는 팔이 내려가는 동안 교시 자세의 전제가
+    깨지는 걸 막고, 라벨 인식은 Pi 자기 눈으로 확인 못 한 채 내려가는
+    것 자체를 막는다 — 둘 다 이 상태만 아는 것들이라 여기가 아니면
+    아무 데서도 못 본다."""
+    reasons = []
 
     if not inputs.base_stopped:
         # 팔이 내려가는 동안 차체가 움직이면 교시 자세의 전제가 깨진다.
         reasons.append("차체가 아직 정지하지 않았다")
 
-    if inputs.gripper_load > bc.EMPTY_LOAD_CEILING:
-        # 이미 무언가를 물고 있다. 여기서 또 파지하러 내려가면 물고 있던
-        # 것을 떨어뜨린다.
-        reasons.append(
-            f"그리퍼가 비어 있지 않다 (부하 {inputs.gripper_load:.4f} > "
-            f"{bc.EMPTY_LOAD_CEILING:.4f})")
-
     if inputs.detected_label is None:
         # 자기 뎁스캠이 목표를 못 봤다. Host는 오버헤드로 봤겠지만, 내려가는
         # 것은 이 팔이다 — 자기 눈으로 확인하지 못하면 내려가지 않는다.
         reasons.append("뎁스 카메라가 정면에서 목표를 찾지 못했다")
-    elif not inputs.profile_known:
-        # 봤지만 교시 자세가 없는 클래스다. 추측한 자세로 내려가지 않는다.
-        reasons.append(f"'{inputs.detected_label}'의 교시 파지 자세가 없다")
 
     return PreconditionReport(not reasons, tuple(reasons), inputs.detected_label)
 

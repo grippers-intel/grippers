@@ -365,18 +365,14 @@ def test_접기_전에_그리퍼를_닫는다():
 
 
 # ── E-STOP ────────────────────────────────────────────────────────────────
-
-
-def test_ESTOP이_걸리면_GRASP_조건_판정이_통과하지_않는다():
-    estop = threading.Event()
-    estop.set()
-    host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
-    ports = _ports(host=host, estop=estop)
-
-    nxt = BaselineApproachState().execute(ports)
-
-    assert Report.GRASP_BLOCKED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
+#
+# ⚠️ 2026-09-01 사용자 지시로 check_grasp()가 더 이상 estop_set을 보지
+# 않는다(preconditions.check_grasp 문서 참고) — E-STOP은 이제 오롯이
+# `BaselineMission.run()`의 최상위 검사(사이클마다 상태 실행 전에 먼저
+# 보고 ESTOP이면 BaselineEstopState로 갈아친다) 하나로만 막는다. 여기
+# 있던 테스트는 `BaselineApproachState().execute()`를 직접 불러 그
+# run() 개입을 건너뛰므로, 이 레이어에서 검증할 계약이 더는 없다 —
+# 지웠다.
 
 
 # ── 정렬 판정 (사용자 지시 2026-08-26) ────────────────────────────────────
@@ -511,12 +507,12 @@ def test_GRASP_FORCE도_위치를_아예_모르면_안_내려간다():
 
 
 def test_GRASP_FORCE도_기본_전제는_안_건너뛴다():
-    """E-STOP 처럼 정렬과 무관한 안전 전제는 force 여도 그대로 막는다."""
-    estop = threading.Event()
-    estop.set()
+    """force는 `_judge_alignment`(2단계, 정렬 창)만 건너뛴다 — `check_grasp`
+    (1단계)은 force와 무관하게 항상 본다. 애초에 목표를 못 본 것까지
+    강제로 내려가게 하지는 않는다."""
     host = FakeHostLink([HostCommand(MissionState.GRASP_FORCE, stop=True)])
     ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD),
-                   perception=_centered(), estop=estop)
+                   perception=ScriptedPerception())  # 아무것도 안 보임
 
     nxt = BaselineApproachState().execute(ports)
 

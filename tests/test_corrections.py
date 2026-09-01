@@ -155,10 +155,7 @@ def test_Host가_못_고치는_미충족에는_보정을_안_준다():
 
 def _grasp(**overrides):
     from domain.task.preconditions import GraspInputs
-    base = dict(
-        estop_set=False, base_stopped=True, gripper_load=0.03,
-        detected_label="rook", profile_known=True,
-    )
+    base = dict(base_stopped=True, detected_label="rook")
     base.update(overrides)
     return GraspInputs(**base)
 
@@ -188,24 +185,7 @@ def test_전제가_다_맞으면_보정을_요구하지_않는다():
     assert cx.from_grasp_precondition(_grasp()) is None
 
 
-def test_E_STOP_은_움직여서_못_고친다():
-    """사람이 풀어야 한다. 이때 차를 움직이라고 하면 위험하다."""
-    assert cx.from_grasp_precondition(
-        _grasp(estop_set=True, detected_label=None)) is None
-
-
 def test_아직_안_멈췄으면_보정을_요구하지_않는다():
     """다음 사이클에 저절로 풀린다 — 여기서 움직이면 오히려 멀어진다."""
     assert cx.from_grasp_precondition(
         _grasp(base_stopped=False, detected_label=None)) is None
-
-
-def test_그리퍼가_안_비었으면_어디로_가든_그대로다():
-    assert cx.from_grasp_precondition(
-        _grasp(gripper_load=0.14, detected_label=None)) is None
-
-
-def test_교시_자세가_없는_클래스는_자리_문제가_아니다():
-    """봤는데 프로필이 없는 것은 물러나도 안 풀린다."""
-    assert cx.from_grasp_precondition(
-        _grasp(detected_label="pawn", profile_known=False)) is None
