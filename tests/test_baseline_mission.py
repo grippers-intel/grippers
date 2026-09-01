@@ -520,23 +520,31 @@ def test_GRASP_FORCE도_영역_안이면_그냥_평소대로_내려간다():
     assert isinstance(nxt, BaselineGraspState)
 
 
-# ── 두 신호 파지 판정 (사용자 지시 2026-08-26) ─────────────────────────────
+# ── 두 신호 파지 판정 (사용자 지시 2026-08-26, 2026-09-01 AND -> OR) ────────
+#
+# 2026-08-26 ~ 2026-09-01: 부하와 뎁스(confirm_grasp) 둘 다 있어야 성공
+# (AND)이었다. 2026-09-01 실기에서 CARRY 자세는 카메라 프레임 밖이 맞는데도
+# confirm_grasp() 가 "그대로 있다"를 반환했다(뎁스 오탐) — 정상적으로 문턱을
+# 넘은 부하(0.0547)가 그 오탐 하나 때문에 막혔다. 사용자 지시로 **둘 중
+# 하나만 있어도 성공**으로 바꿨다 — 둘 다 실패를 가리킬 때만 진짜 실패다.
 
 
-def test_부하만_높고_목표가_남아있으면_실패로_본다():
-    """턱끼리 물었거나 물체를 쳐 놓은 경우 — 부하 하나로는 못 가른다."""
+def test_부하만_높아도_뎁스_오탐과_무관하게_성공이다():
+    """뎁스가 "그대로 있다"고 해도 부하가 충분하면 성공이다(OR)."""
     host = FakeHostLink()
     perception = ScriptedPerception(grasp_confirmed=False)
     ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), perception=perception)
 
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
-    assert Report.GRASP_FAILED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
+    assert Report.GRASP_DONE in host.reported_kinds
+    assert "뎁스 오탐 무시" in host.reports[-1][2]
+    assert isinstance(nxt, BaselineCarryState)
 
 
-def test_목표는_사라졌는데_부하가_없으면_실패로_본다():
-    """내려오는 그리퍼가 물체를 쳐서 밀어낸 경우 — 뎁스 하나로는 못 가른다."""
+def test_부하가_거의_없으면_뎁스가_뭐라든_실패다():
+    """들어올리기 자체를 못 하면(부하 0.0) OR 판정까지 갈 필요도 없이
+    실패다 — 뎁스만으로 성공을 만들어내지 않는다는 하한선."""
     host = FakeHostLink()
     ports = _ports(host=host, arm=FakeArm(load_ratio=0.0),
                    perception=ScriptedPerception(grasp_confirmed=True))
@@ -547,7 +555,7 @@ def test_목표는_사라졌는데_부하가_없으면_실패로_본다():
     assert isinstance(nxt, BaselineApproachState)
 
 
-def test_두_신호가_모두_있어야_성공이다():
+def test_두_신호가_모두_있으면_당연히_성공이다():
     host = FakeHostLink()
     ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD),
                    perception=ScriptedPerception(grasp_confirmed=True))
@@ -555,6 +563,7 @@ def test_두_신호가_모두_있어야_성공이다():
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
     assert Report.GRASP_DONE in host.reported_kinds
+    assert "목표 사라짐 확인" in host.reports[-1][2]
     assert isinstance(nxt, BaselineCarryState)
 
 

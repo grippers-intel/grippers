@@ -409,28 +409,27 @@ class BaselineGraspState(State):
         if not ports.arm.move_to_floor_pose(gp.profile, "carry"):
             return self._failed(ports, "CARRY 전환 실패")
 
-        # 성공 판정은 **독립적인 두 신호가 모두** 있어야 한다(사용자 지시
-        # 2026-08-26). 부하는 "무언가를 쥐고 있다"를, 뎁스 카메라는 "있던
-        # 물체가 그 자리에서 사라졌다"를 말한다 — 실패 양상이 겹치지 않는다.
+        # 2026-08-26 ~ 2026-09-01까지는 성공 판정에 **독립적인 두 신호가
+        # 모두** 있어야 했다(AND). 부하는 "무언가를 쥐고 있다"를, 뎁스
+        # 카메라는 "있던 물체가 그 자리에서 사라졌다"를 말한다는 전제였다.
         #
-        # 부하만 보면 물체 모서리를 살짝 물었거나 턱이 서로를 문 경우도
-        # 통과한다. 뎁스만 보면 내려오는 그리퍼가 물체를 **쳐서 시야 밖으로
-        # 밀어낸** 경우도 "사라짐"으로 읽힌다. 둘 다 요구하면 각자의 오검출이
-        # 서로를 막는다.
+        # ⚠️ 2026-09-01 실기: CARRY 자세에서는 팔·기물이 카메라 프레임
+        # 밖에 있는 게 맞다(floor_grasp_profiles.CARRY_RAW 로 확인된 설계
+        # 그대로) — 그런데도 confirm_grasp() 가 "그대로 있다"를 반환했다.
+        # 즉 눈앞에 없는 rook 을 있다고 오검출한 것이다(뎁스 카메라 쪽의
+        # 오탐). 그 사이 부하(0.0547)는 LOAD_THRESHOLD 를 정상적으로
+        # 넘겼고, 사용자가 직접 파지 성공을 눈으로 확인했다. 뎁스 오탐
+        # 하나가 정상적인 부하 신호를 막는 것을 사용자 지시로 없앤다 —
+        # AND 를 **OR** 로 바꾼다. 부하가 낮고 뎁스도 "그대로 있다"고
+        # 하는, **둘 다 실패를 가리키는 경우만** 진짜 실패로 본다.
         carried = ports.arm.get_load()
         vanished = ports.perception.confirm_grasp()
         if carried < bc.LOAD_THRESHOLD and not vanished:
             return self._failed(ports, f"부하도 낮고 물체도 그대로다 (부하 {carried:.4f})")
-        if carried < bc.LOAD_THRESHOLD:
-            return self._failed(ports, f"CARRY에서 빈손 (부하 {carried:.4f})")
-        if not vanished:
-            # 쥐고는 있는데 목표는 제자리다 — 엉뚱한 것을 물었거나 물체를
-            # 쳐 놓고 턱끼리 문 경우다.
-            return self._failed(
-                ports, f"부하는 {carried:.4f}인데 목표가 그 자리에 남아 있다")
 
-        ports.host.report(Report.GRASP_DONE, MissionState.CARRY,
-                          f"{self.label} 부하 {carried:.4f} · 목표 사라짐 확인")
+        detail = f"{self.label} 부하 {carried:.4f}"
+        detail += " · 목표 사라짐 확인" if vanished else " · 부하로 확인(뎁스 오탐 무시)"
+        ports.host.report(Report.GRASP_DONE, MissionState.CARRY, detail)
         return BaselineCarryState(self.label)
 
     def _failed(self, ports, detail):

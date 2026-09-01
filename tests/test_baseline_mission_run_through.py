@@ -254,28 +254,41 @@ def test_주행_명령이_합의_속도로_바퀴까지_간다(run_through):
         assert 0.0 < creep <= bc.GRASP_CREEP_FORWARD_MM / 1000.0 + 1e-9
 
 
-def test_파지_성공은_두_신호를_모두_요구한다(run_through):
-    """부하와 뎁스 카메라 둘 다 봐야 한다(사용자 지시 2026-08-26).
-
-    뎁스가 "물체가 그대로 있다"고 하면 부하가 아무리 높아도 실패다 —
-    턱끼리 물었거나 엉뚱한 것을 문 경우를 이것으로 거른다.
+def test_파지_성공은_부하_하나만_있어도_된다(run_through):
+    """부하와 뎁스(confirm_grasp) 중 하나만 있어도 성공이다(OR, 사용자 지시
+    2026-09-01 — AND 였던 이전 계약은 CARRY 자세에서 confirm_grasp() 가
+    뎁스 오탐("그대로 있다")을 낸 실기 사고로 바뀌었다).
     """
     _names, host, ports = run_through()
     assert ports.perception.confirm_grasp_calls >= 1
     assert Report.GRASP_DONE in host.reported_kinds
 
-    # 뎁스만 뒤집으면 통주행이 실패로 바뀌어야 한다.
+    # 뎁스만 뒤집어도(오탐 흉내) 부하가 정상이면 통주행은 여전히 성공이다.
     _names, host, _ports = run_through(
         perception=ScriptedPerception(
             script=[TargetObservation(LABEL, JAW_LINE_M + 0.02, 0.0, True)],
             grasp_confirmed=False))
-    assert Report.GRASP_FAILED in host.reported_kinds
+    assert Report.GRASP_DONE in host.reported_kinds
+    assert Report.GRASP_FAILED not in host.reported_kinds
+
+
+def test_부하도_뎁스도_없으면_실패다(run_through):
+    """둘 다 실패를 가리킬 때만 진짜 실패다 — 유일하게 남은 실패 경로."""
+    _names, host, _ports = run_through(
+        arm=FakeArm(load_ratio=EMPTY),
+        perception=ScriptedPerception(
+            script=[TargetObservation(LABEL, JAW_LINE_M + 0.02, 0.0, True)],
+            grasp_confirmed=False))
     assert Report.GRASP_DONE not in host.reported_kinds
+    failures = [detail for kind, _s, detail, _f in host.reports
+                if kind == Report.GRASP_FAILED]
+    assert failures, host.reported_kinds
 
 
 def test_파지_실패_보고에_시도_횟수가_실린다(run_through):
     """Host가 재시도 여부를 정하려면 몇 번째인지 알아야 한다(2026-08-28)."""
     _names, host, _ports = run_through(
+        arm=FakeArm(load_ratio=EMPTY),
         perception=ScriptedPerception(
             script=[TargetObservation(LABEL, JAW_LINE_M + 0.02, 0.0, True)],
             grasp_confirmed=False))
