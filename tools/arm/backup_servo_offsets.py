@@ -36,8 +36,21 @@ MOTORS = {
 }
 
 # 백업할 레지스터. Homing_Offset 이 핵심이고 나머지는 참고용이다.
+# 아래 둘째 묶음은 **lerobot 이 절대 덮어쓰지 않는** 값들이다. connect() ->
+# configure() 가 P/I/D 와 Acceleration 은 매번 6축에 같은 값으로 덮어쓰지만,
+# Maximum_Velocity_Limit 과 Torque_Limit 은 손대지 않는다. 그래서 EEPROM 에
+# 남은 값이 그대로 살아 있고, 팔을 바꾸거나 초기화하면 조용히 되돌아간다.
+#
+# 2026-09-01: 팔로워 6축이 Maximum_Velocity_Limit=65 로 묶여 있어 리더를 크게
+# 움직여도 굼뜨게 따라오는 증상이 있었다(리더는 250). 그때 이 스크립트가 이
+# 값을 안 떠서 "원래 65였는가"를 확인할 방법이 없었다. 그래서 추가한다.
 FIELDS = ["Homing_Offset", "Min_Position_Limit", "Max_Position_Limit",
-          "Present_Position"]
+          "Present_Position",
+          # lerobot 이 안 건드리는 값 — 이력이 없으면 원인 추적이 불가능하다
+          "Maximum_Velocity_Limit", "Torque_Limit", "Max_Torque_Limit",
+          # lerobot 이 매 connect 마다 덮어쓰는 값 — 비교용 참고치
+          "Acceleration", "Maximum_Acceleration", "P_Coefficient",
+          "Present_Temperature"]
 
 OUT_DIR = Path(__file__).parent / "servo_backup"
 
@@ -83,8 +96,15 @@ def restore(port: str, src: str) -> int:
         if isinstance(v, int):
             bus.write("Homing_Offset", name, v, normalize=False)
             print(f"  {name:14s} Homing_Offset <- {v}")
+        if "--with-velocity" in sys.argv:
+            mv = row.get("Maximum_Velocity_Limit")
+            if isinstance(mv, int):
+                bus.write("Maximum_Velocity_Limit", name, mv, normalize=False)
+                print(f"  {name:14s} Maximum_Velocity_Limit <- {mv}")
     bus.disconnect()
     print("\n복구 완료. 그리퍼 미션의 교시 자세를 실제로 확인할 것.")
+    if "--with-velocity" not in sys.argv:
+        print("(속도 상한은 복구하지 않았다. 필요하면 --with-velocity)")
     return 0
 
 
