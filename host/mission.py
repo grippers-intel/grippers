@@ -372,6 +372,7 @@ class MissionFSM:
         self._align = None
         self._align_from: Optional[tuple[float, float, float]] = None
         self._align_tries = 0
+        self._align_wait = 0    # 두 카메라 관측을 기다린 사이클 수
         # INSERT_ALIGN 용. 위 셋과 같은 역할이되 바구니 쪽이다. **따로 두는
         # 이유**는 GRASP 보정과 INSERT 보정이 서로 새는 것을 막기 위해서다
         # (vehicle_link 의 슬롯 분리와 같은 이유).
@@ -437,6 +438,7 @@ class MissionFSM:
         print(f"[mission] {self.target_label} 보류: {why}")
         self._align = None
         self._align_from = None
+        self._align_wait = 0
         self._insert_align = None
         self._insert_align_from = None
         self._insert_align_tries = 0
@@ -584,7 +586,11 @@ class MissionFSM:
                         f"재정렬 {self._align_tries}회 소진 — {correction.detail}")
                 else:
                     self._align = correction
-                    self._align_from = (pose.x, pose.y, pose.yaw_deg)
+                    # 기준 pose 는 **두 카메라가 다 보이는 첫 사이클**에 잡는다.
+                    # 한 대만 보이는 프레임에서 잡으면 그 프레임의 yaw 치우침이
+                    # 기준에 박혀 회전량 계산이 통째로 밀린다.
+                    self._align_from = None
+                    self._align_wait = 0
                     self._align_tries += 1
                     self.ready_to_advance = False
                     self.state = State.GRASP_ALIGN
@@ -603,7 +609,24 @@ class MissionFSM:
             self.nav_corner = None
             self.nav_path = None
             self.last_nav = None
-            assert self._align is not None and self._align_from is not None
+            assert self._align is not None
+
+            # 카메라 한 대만 보이거나 좌표를 붙들고 있는(HOLD) 동안에는 겨누지
+            # 않는다. 근거는 mission_config.GRASP_ALIGN_WAIT_CYCLES 주석에 있다.
+            if pose.n_cams < 2:
+                self._align_wait += 1
+                if self._align_wait > mcfg.GRASP_ALIGN_WAIT_CYCLES:
+                    self._skip_target(
+                        f"재정렬 대기 {self._align_wait}사이클 동안 두 카메라 관측 없음")
+                    return self.state
+                link.send(MissionCommand("stop", "GRASP_ALIGN", pose.x, pose.y,
+                                          pose.yaw_deg, target_label=self.target_label))
+                self.last_cmd = "stop"
+                self.ready_to_advance = False
+                return self.state
+
+            if self._align_from is None:
+                self._align_from = (pose.x, pose.y, pose.yaw_deg)
             fx, fy, fyaw = self._align_from
 
             if self._align.kind is RE_AIM or self._align.kind == RE_AIM:

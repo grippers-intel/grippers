@@ -194,6 +194,70 @@ def test_insert_unfixable_halts_not_skips():
     assert fsm.state == State.HALTED
 
 
+# --- 재정렬은 두 카메라가 다 보일 때만 -------------------------------------
+#
+# 로봇 마커가 12.9도 기울어 붙어 있어(로봇암 기본자세) 카메라 한 대만 보이는
+# 관측의 yaw 는 최대 4.6도 치우친다. 한 걸음이 3도이므로 치우침이 걸음보다
+# 크다. 게다가 회전량을 (지금 yaw - 기준 yaw) 로 재므로, 재정렬 도중에 두
+# 대에서 한 대로 바뀌면 그 치우침 변화가 통째로 "회전했다"로 잡힌다.
+
+ONE_CAM = Pose(x=1.0, y=0.8, yaw_deg=90.0, ok=True, n_cams=1, fresh=True)
+HELD = Pose(x=1.0, y=0.8, yaw_deg=90.0, ok=True, n_cams=0, fresh=False, age_s=0.2)
+
+
+def test_align_waits_while_only_one_camera_sees():
+    """한 대만 보이면 겨누지 않고 멈춰서 기다린다."""
+    link = FakeLink()
+    fsm = _fsm_at(State.GRASP_ALIGN, _align=GraspCorrection(RE_AIM, "틀어짐", lateral_mm=20.0),
+                  _align_from=None)
+    fsm.step(ONE_CAM, {}, link)
+    assert fsm.state == State.GRASP_ALIGN, "한 대만 보이는데 진행했다"
+    assert link.sent[-1].cmd == "stop", f"겨누면 안 되는데 {link.sent[-1].cmd} 를 보냈다"
+    assert fsm._align_from is None, "한 대 관측으로 기준을 잡으면 안 된다"
+
+
+def test_align_also_waits_while_pose_is_held():
+    """폴백(HOLD)은 n_cams=0 이다 — 붙들고 있는 좌표로 겨누면 안 된다."""
+    link = FakeLink()
+    fsm = _fsm_at(State.GRASP_ALIGN, _align=GraspCorrection(RE_AIM, "틀어짐", lateral_mm=20.0),
+                  _align_from=None)
+    fsm.step(HELD, {}, link)
+    assert link.sent[-1].cmd == "stop"
+    assert fsm._align_from is None
+
+
+def test_align_baseline_is_taken_when_both_cameras_return():
+    """두 대가 돌아온 사이클에 비로소 기준 pose 를 잡고 겨눈다."""
+    link = FakeLink()
+    fsm = _fsm_at(State.GRASP_ALIGN, _align=GraspCorrection(RE_AIM, "틀어짐", lateral_mm=20.0),
+                  _align_from=None)
+    fsm.step(ONE_CAM, {}, link)
+    assert fsm._align_from is None
+    fsm.step(POSE, {}, link)
+    assert fsm._align_from == (POSE.x, POSE.y, POSE.yaw_deg), "기준을 안 잡았다"
+    assert link.sent[-1].cmd in ("yaw+", "yaw-"), "두 대가 보이면 겨눠야 한다"
+
+
+def test_align_gives_up_after_waiting_too_long():
+    """영영 두 대를 못 얻으면 그 기물은 보류한다 — 멈춰 있으면 안 된다."""
+    link = FakeLink()
+    fsm = _fsm_at(State.GRASP_ALIGN, _align=GraspCorrection(RE_AIM, "틀어짐", lateral_mm=20.0),
+                  _align_from=None)
+    for _ in range(mcfg.GRASP_ALIGN_WAIT_CYCLES + 1):
+        fsm.step(ONE_CAM, {}, link)
+    assert fsm.state == State.SEARCH_TARGET, "대기가 끝나도 안 놓아준다"
+    assert (1.2, 1.0) in fsm.skipped
+
+
+def test_align_entry_does_not_freeze_the_baseline():
+    """GRASP 에서 재정렬로 넘어갈 때 기준을 그 자리에서 박으면 안 된다."""
+    link = FakeLink(correction=GraspCorrection(RE_AIM, "틀어짐", lateral_mm=20.0))
+    fsm = _fsm_at(State.GRASP)
+    fsm.step(ONE_CAM, {}, link)
+    assert fsm.state == State.GRASP_ALIGN
+    assert fsm._align_from is None, "한 대만 보이는 프레임의 치우침이 기준에 박혔다"
+
+
 # --- 인코딩 규약 -----------------------------------------------------------
 
 def test_encoder_never_mixes_rotation_and_translation():
