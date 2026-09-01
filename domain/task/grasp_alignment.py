@@ -132,15 +132,12 @@ def creep_distance_m(observation, max_creep_mm: float = bc.GRASP_CREEP_FORWARD_M
     return min(needed, max_creep_mm / 1000.0)
 
 
-def judge(observation, object_width_mm: float,
-          centering_tolerance_m=None) -> AlignmentVerdict:
+def judge(observation, object_width_mm: float) -> AlignmentVerdict:
     """GRASP로 내려가도 되는지 판정한다.
 
     `observation`은 Pi 뎁스 카메라의 `TargetObservation`이다. `metric_ok`가
     아니면 **판정하지 않는다** — 물체가 어디 있는지 모르는 채로 팔을 바닥에
     내리는 것이 이 단계에서 가장 비싼 실수다."""
-    if centering_tolerance_m is None:
-        centering_tolerance_m = bc.GRASP_CENTERING_TOLERANCE_M
     if observation is None or not observation.metric_ok:
         return AlignmentVerdict(
             UNKNOWN, reason="뎁스 카메라가 물체 위치를 미터로 환산하지 못했다")
@@ -184,18 +181,14 @@ def judge(observation, object_width_mm: float,
             f"물체가 턱 폭 밖이다 (좌우 {lateral * 1000:+.0f}mm, "
             f"한계 ±{half_width * 1000:.0f}mm) — 재회전 필요")
 
-    if abs(lateral) <= centering_tolerance_m:
-        return AlignmentVerdict(READY, lateral, 0.0, "영역 안 · 중앙")
-
-    offset = servo1_offset_for(lateral)
-    if offset is None:
-        # 팔 길이 미실측 — 각도를 지어내면 엉뚱한 곳으로 턱을 돌린다.
-        # 영역 안이라 그냥 내려가도 대체로 물리지만, 사용자 지시는 "가운데에
-        # 있어야 한다"이므로 Host에 넘겨 다시 세우게 한다.
-        return AlignmentVerdict(
-            HOST_CORRECTION, lateral, 0.0,
-            f"좌우 {lateral * 1000:+.0f}mm 치우침 — SERVO1_AXIS_TO_JAW_MM "
-            "미실측이라 Pi가 못 고친다")
-    return AlignmentVerdict(
-        PI_CENTER, lateral, offset,
-        f"좌우 {lateral * 1000:+.0f}mm 치우침 — servo 1 {math.degrees(offset):+.1f}도로 보정")
+    # 2026-09-01까지는 여기서 centering_tolerance_m 을 더 좁게 걸어
+    # PI_CENTER(servo 1 미세 보정)로 넘겼다. 사용자 지시로 그 경로를
+    # 없앤다 — 실기에서 servo 1이 첫 보정 때 반대 방향으로 도는 사례가
+    # 나왔고, 그 보정 각이 offset_base_yaw 의 ±15도(교시 정면 기준) 예산을
+    # 갉아먹어 다음 보정이 "servo 1이 거부했다"로 막히길 반복했다 —
+    # GRASP ↔ GRASP_ALIGN 이 수렴 없이 왕복하는 원인 중 하나였다.
+    #
+    # 턱 폭 안(half_width)이면 그대로 READY다 — 모듈 docstring의 설계
+    # 원칙대로, 필요한 것은 "가운데"가 아니라 "턱이 쓸고 지나갈 영역 안"
+    # 이고 평행 턱의 자기정렬 효과가 나머지를 메운다.
+    return AlignmentVerdict(READY, lateral, 0.0, "영역 안")

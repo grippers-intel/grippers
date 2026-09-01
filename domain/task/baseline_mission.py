@@ -304,13 +304,16 @@ class BaselineApproachState(State):
     def _judge_alignment(self, ports, observation, label, force: bool = False):
         """좌우·전후 정렬 판정 (사용자 지시 2026-08-26).
 
-        영역 안이면 내려가고, 영역 안인데 치우쳤으면 **Pi가 servo 1로 고친
-        뒤 다시 본다**, 영역 밖이면 Host에 다시 세워 달라고 한다.
+        영역 안이면 내려가고, 영역 밖이면 Host에 다시 세워 달라고 한다.
 
-        보정 직후에 곧장 내려가지 않고 한 사이클 더 관측하는 이유: 이
-        저장소의 접근 제어가 전부 "관측 -> 소이동 -> 재관측" 폐루프다.
-        한 번 계산한 값으로 열린 루프를 돌면 오차가 쌓인다는 것이 이미
-        실기로 확인됐다.
+        ⚠️ 2026-09-01까지는 영역 안인데 가운데가 아니면 Pi가 servo 1로
+        미세 보정한 뒤 다시 봤다(PI_CENTER). 사용자 지시로 그 경로를
+        없앴다 — 실기에서 servo 1이 첫 보정 때 반대 방향으로 도는 사례가
+        나왔고, 그 보정각이 offset_base_yaw 의 ±15도(교시 정면 기준) 예산을
+        갉아먹어 다음 보정이 "servo 1이 거부했다"로 막히는 일이 반복됐다
+        (2026-08-28 run1/run6도 같은 계열 — test_grasp_centering_loop.py
+        참고). 이제는 턱 폭 안이면 그대로 READY다 — grasp_alignment 모듈
+        docstring의 설계 원칙(평행 턱의 자기정렬 효과)에 맡긴다.
 
         `force=True` 면 HOST_CORRECTION(영역 밖) 이라도 READY 처럼 내려간다
         — **UNKNOWN(뎁스캠이 아예 못 잰 경우)은 건너뛰지 않는다.** Host 가
@@ -327,20 +330,6 @@ class BaselineApproachState(State):
                       if creep_m is not None else f"{label} {reason}")
             ports.host.report(Report.GRASP_READY, self.name, detail)
             return BaselineGraspState(label, creep_m, self.retries)
-
-        if verdict.action == ga.PI_CENTER:
-            if ports.arm.offset_base_yaw(verdict.servo1_offset_rad):
-                ports.host.report(Report.GRASP_CENTERING, self.name, verdict.reason,
-                                  corrections.from_alignment(verdict))
-            else:
-                # 관절이 거부했다 — 한계각 초과나 범위 밖이다. 팔로 못 고치면
-                # 차량이 다시 서야 한다.
-                ports.host.report(
-                    Report.GRASP_BLOCKED, self.name,
-                    f"{verdict.reason} — servo 1이 거부했다, 재회전 필요",
-                    corrections.Correction(corrections.ROTATE,
-                                           lateral_m=verdict.lateral_error_m))
-            return self
 
         ports.host.report(Report.GRASP_BLOCKED, self.name, verdict.reason,
                           corrections.from_alignment(verdict))

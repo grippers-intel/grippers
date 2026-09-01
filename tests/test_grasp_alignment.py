@@ -3,8 +3,6 @@
 여기서 지키려는 성질: **"가운데"가 아니라 "영역 안"이 통과 기준이고,
 영역 안/밖이 누가 고치는지를 가른다.**"""
 
-import math
-
 import pytest
 
 from domain.task import baseline_constants as bc
@@ -61,12 +59,13 @@ def test_영역_안_중앙이면_그대로_내려간다():
     assert ga.judge(_obs(lateral_m=0.005), 17.0).action == ga.READY
 
 
-def test_영역_안_치우침은_Pi가_고친다():
+def test_영역_안_치우침도_그대로_내려간다():
+    """2026-09-01 사용자 지시로 PI_CENTER(servo 1 미세 보정)를 없앴다 —
+    턱 폭 안이면 가운데가 아니어도 READY다. 평행 턱의 자기정렬 효과로
+    충분하다는 모듈 docstring의 설계 원칙 그대로다."""
     verdict = ga.judge(_obs(lateral_m=0.040), 17.0)
 
-    assert verdict.action == ga.PI_CENTER
-    assert verdict.servo1_offset_rad == pytest.approx(
-        math.atan2(0.040, SERVO1_REACH_MM / 1000.0))
+    assert verdict.action == ga.READY
 
 
 def test_턱_폭_밖은_Host가_다시_세운다():
@@ -92,9 +91,12 @@ def test_턱_선보다_가까우면_후진이다():
     assert "후진" in verdict.reason
 
 
-def test_보정_방향이_치우친_쪽을_따라간다():
-    left = ga.judge(_obs(lateral_m=0.040), 17.0).servo1_offset_rad
-    right = ga.judge(_obs(lateral_m=-0.040), 17.0).servo1_offset_rad
+def test_servo1_보정각_방향은_치우친_쪽을_따라간다():
+    """judge() 는 더 이상 이 값을 쓰지 않지만(PI_CENTER 삭제, 2026-09-01),
+    servo1_offset_for() 자체의 기하 계산은 여전히 맞아야 한다 — 다른
+    용도(예: 수동 진단 도구)가 이 함수를 직접 부를 수 있다."""
+    left = ga.servo1_offset_for(0.040, reach_mm=SERVO1_REACH_MM)
+    right = ga.servo1_offset_for(-0.040, reach_mm=SERVO1_REACH_MM)
 
     assert left > 0.0 > right
     assert left == pytest.approx(-right)
@@ -119,16 +121,6 @@ def test_턱_선_미실측이면_판정하지_않는다(monkeypatch):
 
     assert verdict.action == ga.UNKNOWN
     assert "JAW_LINE_DEPTH_FORWARD_M" in verdict.reason
-
-
-def test_팔_길이_미실측이면_보정_대신_Host에_넘긴다(monkeypatch):
-    """각도를 지어내면 엉뚱한 곳으로 턱을 돌린다."""
-    monkeypatch.setattr(bc, "SERVO1_AXIS_TO_JAW_MM", None)
-
-    verdict = ga.judge(_obs(lateral_m=0.040), 17.0)
-
-    assert verdict.action == ga.HOST_CORRECTION
-    assert "SERVO1_AXIS_TO_JAW_MM" in verdict.reason
 
 
 def test_카메라_광축_어긋남을_먼저_지운다(monkeypatch):

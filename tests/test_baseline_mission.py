@@ -378,8 +378,11 @@ def test_접기_전에_그리퍼를_닫는다():
 # ── 정렬 판정 (사용자 지시 2026-08-26) ────────────────────────────────────
 
 
-def test_영역_안에서_치우치면_Pi가_servo1로_고친다():
-    """Host가 아니라 Pi가 고친다 — 차량 제어 원칙의 의도된 예외다."""
+def test_영역_안에서_치우쳐도_그대로_내려간다():
+    """2026-09-01 사용자 지시로 PI_CENTER(servo 1 미세 보정)를 없앴다 —
+    턱 폭 안이면 가운데가 아니어도 servo 1을 건드리지 않고 곧장 파지로
+    간다(grasp_alignment.judge()/baseline_mission._judge_alignment 주석
+    참고)."""
     host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
     arm = FakeArm(load_ratio=EMPTY_LOAD)
     perception = ScriptedPerception(
@@ -388,10 +391,9 @@ def test_영역_안에서_치우치면_Pi가_servo1로_고친다():
 
     nxt = BaselineApproachState().execute(ports)
 
-    assert Report.GRASP_CENTERING in host.reported_kinds
-    assert len(arm.yaw_offsets) == 1
-    assert arm.yaw_offsets[0] > 0.0            # 왼쪽으로 치우쳤으니 왼쪽으로 돈다
-    assert isinstance(nxt, BaselineApproachState)   # 보정 후 다시 관측한다
+    assert Report.GRASP_READY in host.reported_kinds
+    assert arm.yaw_offsets == []               # servo 1 을 아예 건드리지 않는다
+    assert isinstance(nxt, BaselineGraspState)
 
 
 def test_보정_후_곧장_내려가지_않는다():
@@ -430,20 +432,6 @@ def test_전진_거리_밖이면_Host에_재직진을_요구한다():
 
     assert Report.GRASP_BLOCKED in host.reported_kinds
     assert "재직진" in host.reports[-1][2]
-
-
-def test_servo1이_거부하면_Host에_넘긴다():
-    """한계각을 넘는 보정은 차량이 잘못 선 것이다."""
-    host = FakeHostLink([HostCommand(MissionState.GRASP, stop=True)])
-    arm = FakeArm(load_ratio=EMPTY_LOAD, yaw_offset_ok=False)
-    perception = ScriptedPerception(
-        script=[TargetObservation("queen", JAW_LINE_M + 0.02, 0.040, True)])
-    ports = _ports(host=host, arm=arm, perception=perception)
-
-    BaselineApproachState().execute(ports)
-
-    assert Report.GRASP_BLOCKED in host.reported_kinds
-    assert "재회전" in host.reports[-1][2]
 
 
 def test_거리_환산에_실패하면_내려가지_않는다():
