@@ -348,6 +348,9 @@ class MissionFSM:
         self.nav_path: Optional[list[XY]] = None   # 계획기가 낸 전체 경로(화면용)
         self.last_nav: Optional[DriveCommand] = None
         self.last_cmd: Optional[str] = None   # 실제로 보낸 "go"/"stop"/"yaw+"/"yaw-"
+        # 포즈를 잃었을 때 즉시 "stop"을 보내기 위한 표시용 좌표(2026-09-02,
+        # step() 의 pose.ok 분기 참고) — 차량 제어에는 안 쓰인다.
+        self._last_good_pose: Optional[Pose] = None
         self._nudge_from: Optional[XY] = None   # NUDGE_BOX 진입 시점의 위치
         # NUDGE_BOX 가 이번에 갈 (거리 m, 방향). PLACE 가 Pi 의 라이다 판독을
         # 보고 채운다. None 이면 첫 진입이라 기존 BOX_NUDGE_M 만큼만 붙인다.
@@ -603,8 +606,28 @@ class MissionFSM:
 
     def step(self, pose: Pose, piece_map: PieceMap, link: VehicleLink) -> State:
         if not pose.ok:
-            # 로봇을 잃으면 이번 사이클은 그냥 넘어간다 — 명령을 안 보내면
-            # 차량 쪽 워치독이 알아서 멈춘다(마지막 좌표로 계속 가면 안 됨).
+            # 로봇을 잃으면 이번 사이클엔 새로 계산해 명령을 내지 않는다 —
+            # 마지막 **유효** 좌표를 기준으로 계속 주행 명령을 내면 안 된다는
+            # 원칙은 그대로다. 하지만 "아무 것도 안 보낸다"와 "정지를
+            # 보낸다"는 다르다 — 직전 명령이 "go"/"back"/"left"/"right"/
+            # "yaw±"처럼 움직이는 값이었다면, 차량 쪽은 새 명령이 올 때까지
+            # 그걸 그대로 래치해 둔다(HOST_COMMAND_TIMEOUT_CYCLES, 6사이클
+            # ≈0.4초 동안은 신호가 없어도 계속 움직인다는 뜻). "stop"은
+            # 좌표를 계산할 필요가 없는 명령이라(HostCommand 에는 애초에
+            # 좌표가 없다 — vehicle_link.py 참고) pose 없이도 지금 당장 낼
+            # 수 있다.
+            #
+            # 09-02 실기: NUDGE_BOX로 바구니에 접근하던 중 ArUco 마커를
+            # 놓쳐 pose.ok가 False가 됐는데, 그 뒤로 Host가 아무 명령도
+            # 안 보내는 바람에 마지막 "go"가 워치독이 걸릴 때까지 그대로
+            # 밀었다 — 그 블라인드 구간에 바구니와 충돌했다. 여기서 즉시
+            # "stop"을 내면 그 구간이 한두 사이클로 줄어든다.
+            if self.last_cmd not in (None, "stop"):
+                last = self._last_good_pose
+                x, y, yaw = ((last.x, last.y, last.yaw_deg)
+                            if last is not None else (0.0, 0.0, 0.0))
+                link.send(MissionCommand("stop", self.state.name, x, y, yaw))
+                self.last_cmd = "stop"
             if self._align_sweep_phase_start is not None:
                 # 스윕(_grasp_sweep_step) 도중 포즈를 잃으면 이 사이클은
                 # 위 return으로 건너뛰어 yaw 명령이 실제로는 하나도 안
@@ -622,6 +645,8 @@ class MissionFSM:
                 self._align_sweep_phase_start = now
                 self._align_sweep_burst_until = now + mcfg.GRASP_SWEEP_BURST_SEC
             return self.state
+
+        self._last_good_pose = pose
 
         if self._back_requested:
             self._back_requested = False
