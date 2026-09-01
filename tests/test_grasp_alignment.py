@@ -133,9 +133,14 @@ def test_카메라_광축_어긋남을_먼저_지운다(monkeypatch):
 # ── 미세 전진 거리 ─────────────────────────────────────────────────────────
 
 
-def test_전진_거리는_관측에서_나온다():
-    """상수를 그대로 밀면 이미 가까운 물체를 턱 안쪽으로 처박는다."""
-    assert ga.creep_distance_m(_obs(forward_m=JAW_LINE_M + 0.024)) == pytest.approx(0.024)
+def test_전진_거리는_관측에서_GRASP_CREEP_EXTRA_MM을_더해_나온다():
+    """상수를 그대로 밀면 이미 가까운 물체를 턱 안쪽으로 처박는다.
+
+    2026-09-02 사용자 지시로 관측된 needed 에 GRASP_CREEP_EXTRA_MM(300mm)을
+    그대로 더한다 — 09-02 실기에서 이 여유 없이는 물체가 안 들어가 반복
+    파지 실패("들어 올리지 못함")가 났다."""
+    assert ga.creep_distance_m(_obs(forward_m=JAW_LINE_M + 0.024)) == pytest.approx(
+        0.024 + bc.GRASP_CREEP_EXTRA_MM / 1000.0)
 
 
 def test_전진_거리에_상한이_걸린다():
@@ -171,10 +176,11 @@ def test_클래스마다_다른_턱_선을_쓴다(monkeypatch):
     monkeypatch.setattr(bc, "JAW_LINE_DEPTH_FORWARD_M",
                         {"queen": 0.30, "soccer": 0.50})
 
+    extra = bc.GRASP_CREEP_EXTRA_MM / 1000.0
     assert ga.creep_distance_m(
-        TargetObservation("queen", 0.32, 0.0, True)) == pytest.approx(0.02)
+        TargetObservation("queen", 0.32, 0.0, True)) == pytest.approx(0.02 + extra)
     assert ga.creep_distance_m(
-        TargetObservation("soccer", 0.52, 0.0, True)) == pytest.approx(0.02)
+        TargetObservation("soccer", 0.52, 0.0, True)) == pytest.approx(0.02 + extra)
 
 
 # ── 실측된 rook 기하 (2026-08-26) ─────────────────────────────────────────
@@ -194,7 +200,7 @@ def test_턱_끝에_걸리는_거리에서는_전진이_남아있다():
     나와야 한다 — 턱 선이 0.1911로 갱신된 뒤에도 여전히 그 앞이다."""
     creep = ga.creep_distance_m(TargetObservation("rook", 0.1985, 0.0, True))
 
-    assert creep == pytest.approx(0.0074, abs=0.0005)
+    assert creep == pytest.approx(0.0074 + bc.GRASP_CREEP_EXTRA_MM / 1000.0, abs=0.0005)
 
 
 def test_제대로_앉은_자리에서는_전진할_것이_없다():

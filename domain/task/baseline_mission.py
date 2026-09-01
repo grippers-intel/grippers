@@ -50,6 +50,7 @@ from domain.task import corrections
 from domain.task import grasp_alignment as ga
 from domain.task import preconditions as pc
 from domain.task.floor_grasp_policy import (
+    GRIPPER_GRASP_MIN_MM,
     GRIPPER_MAX_SAFE_OPEN_MM,
     HorizontalGraspPlan,
     _close_width,
@@ -81,9 +82,27 @@ _OBJECT_WIDTH_MM = {
     "soccer": ("soccer_polyhedron", 46.0),
 }
 
+# rook만 파지 폭을 GRIPPER_GRASP_MIN_MM(2026-08-25 knight 실측 포화점,
+# floor_grasp_policy 주석 참고)까지 강제로 더 좁힌다 (2026-09-02 실기 지시).
+#
+# _close_width(24.5) = max(7.0, 24.5-15.0) = **9.5** — 이미 하한(7.0)보다
+# 위라 08-25에 queen/knight을 7.0으로 내린 조정(9.0 -> 7.0)의 혜택을 rook은
+# 못 받았다. 09-02 실기에서 8회 연속 "들어 올리지 못함"이 났고, 그때 부하
+# (0.0235 x3 / 0.0274 / 0.0469)가 knight 실측 스윕의 "9.0mm 명령 -> 0.0235"
+# 대와 같은 대역이었다 — 09-01 이전까지는 헐겁지 않았다는 사용자 관찰과
+# 별개로, 이 폭 자체가 애초에 그 헐거운 대역에 있었다는 뜻이다.
+#
+# GRIPPER_SQUEEZE_MM(공용 상수)을 올리면 box/star/soccer(이미 검증된 25.0/
+# 30.0/31.0)까지 같이 좁아진다 — 그건 요청받지 않았으니 rook 하나만 덮어쓴다.
+_CLOSE_WIDTH_OVERRIDE_MM = {
+    "rook": GRIPPER_GRASP_MIN_MM,
+}
+
 _PROFILE_BY_LABEL = {
-    label: HorizontalGraspPlan(profile, GRIPPER_MAX_SAFE_OPEN_MM,
-                               _close_width(width_mm), _release_width(width_mm))
+    label: HorizontalGraspPlan(
+        profile, GRIPPER_MAX_SAFE_OPEN_MM,
+        _CLOSE_WIDTH_OVERRIDE_MM.get(label, _close_width(width_mm)),
+        _release_width(width_mm))
     for label, (profile, width_mm) in _OBJECT_WIDTH_MM.items()
 }
 

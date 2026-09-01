@@ -129,7 +129,11 @@ def creep_distance_m(observation, max_creep_mm: float = bc.GRASP_CREEP_FORWARD_M
     needed = observation.forward_m - jaw
     if needed <= 0.0:
         return None
-    return min(needed, max_creep_mm / 1000.0)
+    # 2026-09-02 실기 지시: "미세 전진 거리보다 30cm 더 늘릴 것" — 8회
+    # 연속 "들어 올리지 못함"이 난 뒤, 관측대로만(needed) 미는 것으로는
+    # 물체가 턱 안쪽 깊숙이 안 들어간다고 판단했다. needed 에 그대로
+    # 더한다 — 상한(max_creep_mm)은 넘지 않는다.
+    return min(needed + bc.GRASP_CREEP_EXTRA_MM / 1000.0, max_creep_mm / 1000.0)
 
 
 def judge(observation, object_width_mm: float) -> AlignmentVerdict:

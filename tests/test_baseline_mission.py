@@ -26,6 +26,7 @@ from domain.task.baseline_mission import (
     LinkWatchdog,
     plan_for_label,
 )
+from domain.task.floor_grasp_policy import GRIPPER_GRASP_MIN_MM
 from domain.task.motion import AGREED_LINEAR_MPS, AGREED_ROTATION_RAD_S
 from domain.values import TargetObservation
 
@@ -196,7 +197,8 @@ def test_조건이_충족되면_GRASP_READY를_보고하고_넘어간다():
     assert Report.GRASP_READY in host.reported_kinds
     assert isinstance(nxt, BaselineGraspState)
     assert nxt.label == "queen"
-    assert nxt.creep_m == pytest.approx(0.02)   # 관측 전방거리 - 턱 선
+    # 관측 전방거리 - 턱 선 + GRASP_CREEP_EXTRA_MM(2026-09-02 사용자 지시)
+    assert nxt.creep_m == pytest.approx(0.02 + bc.GRASP_CREEP_EXTRA_MM / 1000.0)
 
 
 def test_그리퍼가_비어있지_않으면_GRASP를_막고_제자리에_머문다():
@@ -279,7 +281,11 @@ def test_파지에_실패하면_APPROACH로_돌아가고_스스로_재시도하�
 def test_파지_명령_폭은_ros2_프로파일_공식에서_나온다():
     """도메인과 ros2 프로파일이 갈라져 파지가 헐거워진 2026-08-26 사고 방지."""
     assert plan_for_label("queen").close_width_mm == 7.0
-    assert plan_for_label("rook").close_width_mm == 9.5
+    # rook은 공식값(9.5)이 아니라 2026-09-02 지시로 GRIPPER_GRASP_MIN_MM까지
+    # 덮어쓴 값이다 — 09-02 실기에서 이 폭(9.5)이 knight 실측 스윕의
+    # "9.0mm 명령 -> 부하 0.0235"와 같은 헐거운 대역이었다
+    # (baseline_mission._CLOSE_WIDTH_OVERRIDE_MM 참고).
+    assert plan_for_label("rook").close_width_mm == GRIPPER_GRASP_MIN_MM
     assert plan_for_label("soccer").close_width_mm == 31.0
 
 
