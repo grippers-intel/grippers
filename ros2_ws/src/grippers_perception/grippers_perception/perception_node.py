@@ -726,11 +726,22 @@ class PerceptionNode(Node):
         return kept, weak, high
 
     def _observe_samples(self):
-        """정지 전제 다중 프레임 표본. 캐시가 살아 있으면 재사용한다.
+        """정지 전제 다중 프레임 원본(raw, 게이트 전) 검출 표본. 캐시가
+        살아 있으면 재사용한다.
 
         캐시를 두는 이유: identify_target이 클래스 6개를 연달아 묻는데,
         그때마다 5프레임을 새로 뜨면 6배가 든다. 같은 순간을 묻는 질문이니
-        같은 표본으로 답하는 것이 맞고 더 빠르다."""
+        같은 표본으로 답하는 것이 맞고 더 빠르다.
+
+        ⚠️ 2026-09-01: 예전엔 여기서 바로 게이트까지 걸어(_gate_observe_
+        detections) 클래스 구분 없이 걸러낸 결과만 캐시했다. 그러면
+        "이 클래스가 왜 안 잡혔나"를 정확히 답할 수 없다 — 신뢰도/위치
+        게이트는 클래스 상관없이 프레임 전체 검출에 걸리는데, 어떤 프레임에
+        다른 클래스(예: 배경의 노트북)가 게이트에 걸린 걸 지금 물은 클래스
+        (예: rook)가 걸린 것처럼 보고하면 오히려 헷갈린다. 그래서 게이트를
+        여기서 안 걸고, 호출자(_on_observe_target)가 요청 클래스로 먼저
+        걸러낸 뒤에 그 클래스 후보에만 게이트를 적용하게 바꿨다 — 캐시는
+        원본 검출(raw)만 들고, 클래스별 게이트 집계는 매 호출 새로 한다."""
         now = time.monotonic()
         if (self._observe_samples_cache is not None
                 and now - self._observe_samples_at < OBSERVE_CACHE_SEC):
@@ -738,22 +749,11 @@ class PerceptionNode(Node):
 
         frames = self._collect_cpu_yolo_frames(
             OBSERVE_CONSENSUS_FRAMES, OBSERVE_COLLECT_TIMEOUT_SEC)
-        gated, weak_total, high_total = [], 0, 0
-        for frame_detections in frames:
-            kept, weak, high = self._gate_observe_detections(frame_detections)
-            gated.append(kept)
-            weak_total += weak
-            high_total += high
-        if weak_total or high_total:
-            self.get_logger().info(
-                f"[observe] 게이트 탈락 — 신뢰도<{OBSERVE_CONF_THRESHOLD} {weak_total}건, "
-                f"화면 위쪽(y<{OBSERVE_MIN_BOTTOM_Y_PX:.0f}) {high_total}건 "
-                f"({len(frames)}프레임)")
-        self._observe_samples_cache = gated
+        self._observe_samples_cache = frames
         # 수집을 **마친** 시각을 쓴다. 시작 시각을 쓰면 수집에 걸린 시간이
         # 창에서 먼저 깎여 나가 캐시가 거의 즉시 만료된다.
         self._observe_samples_at = time.monotonic()
-        return gated
+        return frames
 
     def _on_observe_target(self, request, response):
         """정면 목표 하나를 관측한다. GRASP 진입 판정과 파지 확인이 쓴다.
@@ -770,7 +770,16 @@ class PerceptionNode(Node):
 
         CPU YOLO 백엔드 전용. 모델 미로드·프레임 없음·합의 미달은 전부
         found=False — "모르면 실패" 관례. 여러 후보가 있으면 가장 큰(=가까운)
-        것을 고른다."""
+        것을 고른다.
+
+        response.reason: found=False일 때 왜인지(2026-09-01 추가, 사용자
+        지시). 2026-09-01 실기: YOLO는 conf 0.97로 정확히 잡았는데
+        observe_target은 "못 찾음"이었다 — 신뢰도가 아니라 화면 위치
+        게이트(OBSERVE_MIN_BOTTOM_Y_PX)에 걸린 거였는데, 호출자는 found
+        =False만 보고 이유를 알 방법이 없어 bbox를 직접 대조해서야
+        알아냈다. 게이트는 요청 클래스(raw_cls)로 먼저 걸러낸 후보에만
+        적용한다 — 프레임 안 다른 클래스가 게이트에 걸린 걸 지금 물은
+        클래스가 걸린 것처럼 보고하면 안 되기 때문이다."""
         response.found = False
         response.x = 0.0
         response.h = 0.0
@@ -778,22 +787,40 @@ class PerceptionNode(Node):
         response.metric_ok = False
         response.forward_m = 0.0
         response.lateral_m = 0.0
+        response.reason = ""
         if self._cpu_yolo_model is None or self._latest_frame is None:
+            response.reason = ("YOLO 모델 미로드" if self._cpu_yolo_model is None
+                                else "RGB 프레임을 아직 못 받음")
             return response
 
-        samples = self._observe_samples()
+        frames = self._observe_samples()
         boxes = []
-        for frame_detections in samples:
-            candidates = [d for d in frame_detections if d[0] == request.raw_cls]
-            if candidates:
+        weak_total = high_total = 0
+        for frame_detections in frames:
+            class_dets = [d for d in frame_detections if d[0] == request.raw_cls]
+            kept, weak, high = self._gate_observe_detections(class_dets)
+            weak_total += weak
+            high_total += high
+            if kept:
                 # 가장 큰 높이 = 가장 가까운 것.
-                boxes.append(max(candidates, key=lambda d: d[2][3] - d[2][1])[2])
+                boxes.append(max(kept, key=lambda d: d[2][3] - d[2][1])[2])
 
         if len(boxes) < OBSERVE_CONSENSUS_MIN_HITS:
             if boxes:
-                self.get_logger().info(
-                    f"[observe] {request.raw_cls} {len(boxes)}/{len(samples)}프레임 — "
-                    f"합의 미달(최소 {OBSERVE_CONSENSUS_MIN_HITS}) → 검출 없음으로 본다")
+                response.reason = (
+                    f"{len(boxes)}/{len(frames)}프레임에서만 잡힘"
+                    f"(다중 프레임 합의 최소 {OBSERVE_CONSENSUS_MIN_HITS}건 필요)")
+            elif weak_total or high_total:
+                parts = []
+                if weak_total:
+                    parts.append(f"신뢰도<{OBSERVE_CONF_THRESHOLD} {weak_total}건")
+                if high_total:
+                    parts.append(f"화면 위치(파지 거리가 아님) {high_total}건")
+                response.reason = " · ".join(parts) + "로 게이트 탈락"
+            else:
+                response.reason = "이 프레임들에서 검출 자체가 없음"
+            self.get_logger().info(
+                f"[observe] {request.raw_cls} 못 찾음 — {response.reason}")
             return response
 
         # 프레임마다 조금씩 흔들리므로 좌표별 중앙값을 쓴다 — 한 프레임이

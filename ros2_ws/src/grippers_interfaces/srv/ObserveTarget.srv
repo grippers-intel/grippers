@@ -17,3 +17,9 @@ float32 w               # bbox 너비 픽셀
 bool metric_ok
 float32 forward_m       # 카메라 정면 거리
 float32 lateral_m       # 좌우 오프셋 (+ 왼쪽)
+# found=false일 때 왜인지. 2026-09-01: YOLO는 conf 0.97로 정확히 잡았는데
+# observe_target은 "못 찾음"을 돌려줘, 신뢰도 게이트가 아니라 화면 위치
+# 게이트(OBSERVE_MIN_BOTTOM_Y_PX, perception_node.py)에 걸린 걸 호출자가
+# 알 방법이 없었다 — bbox를 직접 대조해서야 알아냈다. found=true면 빈
+# 문자열.
+string reason

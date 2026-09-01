@@ -739,8 +739,16 @@ def print_position(node: GraspTestNode, raw_cls: str, label: str) -> dict:
     """관측·출력하고, RunLog에 그대로 넣을 수 있는 dict로 돌려준다."""
     obs = node.observe(raw_cls)
     if obs is None or not obs.found:
-        print(f"  [{label}] 물체를 못 찾음")
-        return {"found": False}
+        # 2026-09-01: observe_target이 왜 못 찾았는지(obs.reason)를 이제
+        # 돌려준다 — 신뢰도 미달인지, 화면 위치(파지 거리 아님) 게이트
+        # 탈락인지, 다중 프레임 합의 미달인지, 애초에 검출 자체가 없는지를
+        # 구분해서 보여준다. 예전엔 전부 "물체를 못 찾음"으로만 찍혀서,
+        # YOLO는 conf 0.97로 정확히 잡았는데 위치 게이트에 걸린 걸 bbox를
+        # 직접 대조해서야 알아낸 적이 있다(같은 날 실기).
+        reason = getattr(obs, "reason", "") if obs is not None else "관측 서비스 응답 없음"
+        suffix = f" — {reason}" if reason else ""
+        print(f"  [{label}] 물체를 못 찾음{suffix}")
+        return {"found": False, "reason": reason}
     z_m, lateral_m = estimate_position(obs, raw_cls)
     info = {"found": True, "x": obs.x, "h": obs.h, "w": obs.w}
     if z_m is None:
