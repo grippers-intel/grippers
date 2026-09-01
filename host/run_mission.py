@@ -17,10 +17,18 @@ SmolVLA(그리퍼캠+차량 RGB캠)로 알아서 한다.
 시험용). 주면 UdpVehicleLink 로 실제 UDP 전송한다 — 규격은
 VEHICLE_LINK_PROTOCOL.md 참고.
 
-라벨을 지정하지 않는다 — 화면에 보이는 기물 중 "지금 로봇 위치에서 가장
-가까운 것"을 매번 골라서, 그 라벨에 맞는 상자(mission_config.PIECE_DEST_BOX:
-체스말은 chess 상자, 나머지는 toy 상자)로 나른다. 하나 끝나면 멈추지 않고
-다음 기물을 또 찾는다 — 화면(작업 영역)에 기물이 하나도 안 남을 때까지 반복.
+기본은 라벨을 지정하지 않는다 — 화면에 보이는 기물 중 "지금 로봇 위치에서
+가장 가까운 것"을 매번 골라서, 그 라벨에 맞는 상자(mission_config.
+PIECE_DEST_BOX: 체스말은 chess 상자, 나머지는 toy 상자)로 나른다. 하나
+끝나면 멈추지 않고 다음 기물을 또 찾는다 — 화면(작업 영역)에 기물이 하나도
+안 남을 때까지 반복.
+
+실행 중 터미널에 문장을 치면(예: "퀸 가져와", "룩 정리해") 그 한 번은 이
+"최근접 우선" 규칙을 덮어쓴다(instruction_resolver.py, Claude API로 해석 —
+ANTHROPIC_API_KEY 환경변수 필요, 없으면 이 기능만 조용히 꺼진다). "가져와"
+류는 사용자 앞(mission_config.DELIVER_HERE_XY)으로, "정리해"류나 라벨만
+말한 경우는 평소처럼 라벨별 상자로 나른다. --manual 모드에서는 stdin 을
+이미 단계 진행에 쓰고 있어서 이 입력을 안 받는다.
 
 사용법
     python run_mission.py
@@ -55,13 +63,24 @@ import config as cfg
 from localizer import Camera, RobotLocalizer, detect, make_detector
 
 import geti_detector
+import mission_config as mcfg
 import mission_log
 import piece_map
 import window_layout
 from live_map import LiveMap
-from mission import MissionFSM, State
+from mission import MissionFSM, PieceMap, State, visible_labels
 from run_localize import draw, open_cams
 from vehicle_link import ConsoleVehicleLink, MissionCommand, UdpVehicleLink
+
+# instruction_resolver.py 는 anthropic SDK(및 ANTHROPIC_API_KEY)가 있어야
+# 쓸 수 있다 — 없어도 이 스크립트 자체는 죽지 않고 그 기능만 꺼진다
+# (2026-09-01, 팀원의 2026-08-31 handoff 델타 이식).
+try:
+    from instruction_resolver import InstructionResolver
+    _instruction_resolver_import_error = None
+except Exception as _exc:  # noqa: BLE001 -- 미설치·키 없음 등 다양한 원인
+    InstructionResolver = None
+    _instruction_resolver_import_error = _exc
 
 _stop = False
 
@@ -167,6 +186,16 @@ def main() -> int:
     loc = RobotLocalizer()
     tracker = piece_map.PieceTracker()
     fsm = MissionFSM(manual_mode=args.step or args.manual)
+    pmap: PieceMap = {}   # 지시 입력 스레드가 루프 시작 전에 참조할 수 있어 미리 초기화
+
+    resolver = None
+    if InstructionResolver is None:
+        print(f"[지시] 자연어 지시 비활성화: {_instruction_resolver_import_error}")
+    else:
+        try:
+            resolver = InstructionResolver()
+        except Exception as exc:  # noqa: BLE001 -- 키 오류 등 다양한 원인
+            print(f"[지시] 자연어 지시 비활성화(초기화 실패): {exc}")
     if args.vehicle_ip:
         link = UdpVehicleLink(args.vehicle_ip, cmd_port=args.vehicle_cmd_port,
                               status_port=args.vehicle_status_port)
@@ -245,20 +274,45 @@ def main() -> int:
     _enter_armed = (not args.no_stop_on_enter) and sys.stdin.isatty() \
         and not args.manual
     if _enter_armed:
-        def _enter_watch():
+        def _instruct_watch():
+            # 예전엔 아무 줄이나 치면(내용 무관) 정지였다 — 이제 **빈 줄**만
+            # 정지고, 글자가 있으면 지시 문장으로 본다(사용자 지시,
+            # 2026-09-01 — 팀원의 2026-08-31 handoff 델타 이식). manual
+            # 모드에서는 안 켠다 — 그쪽은 stdin 을 단계 진행(Enter/b/q)에
+            # 이미 쓰고 있어서 같은 채널을 나눠 쓸 수 없다.
             global _stop
-            try:
-                line = sys.stdin.readline()
-            except Exception:
-                return
-            if line == "":
-                return          # EOF 는 Enter 가 아니다
-            _stop = True
-            print("\n[STOP] Enter — 정지합니다", flush=True)
-        threading.Thread(target=_enter_watch, daemon=True).start()
-        print("\n>>> Enter 를 치면 즉시 정지하고 종료합니다 <<<\n", flush=True)
+            while not _stop:
+                try:
+                    line = sys.stdin.readline()
+                except Exception:
+                    return
+                if line == "":
+                    return               # EOF 는 입력이 아니다
+                text = line.strip()
+                if text == "":
+                    _stop = True
+                    print("\n[STOP] Enter — 정지합니다", flush=True)
+                    return
+                if resolver is None:
+                    print(f"\n[지시] 무시함 — 자연어 지시 비활성화"
+                          f"({_instruction_resolver_import_error or '초기화 실패'})\n",
+                          flush=True)
+                    continue
+                if resolver.busy:
+                    print("\n[지시] 이전 요청을 아직 처리 중입니다 — 잠시 후 다시 시도하세요\n",
+                          flush=True)
+                    continue
+                labels = visible_labels(pmap)
+                if not labels:
+                    print("\n[지시] 지금 화면에 보이는 기물이 없습니다\n", flush=True)
+                    continue
+                print(f"\n[지시] \"{text}\" 처리 중...\n", flush=True)
+                resolver.submit(text, labels)
+        threading.Thread(target=_instruct_watch, daemon=True).start()
+        print("\n>>> 빈 줄+Enter: 즉시 정지 / 문장+Enter: 그 기물을 지시"
+              "(예: '퀸 가져와', '룩 정리해') <<<\n", flush=True)
     elif not args.no_stop_on_enter and not args.manual:
-        print("\n[주의] stdin 이 터미널이 아니라 Enter 정지를 못 겁니다 — "
+        print("\n[주의] stdin 이 터미널이 아니라 Enter 정지·자연어 지시를 못 겁니다 — "
               "--seconds 로 시간 제한을 두세요\n", flush=True)
 
     # --- 기록 ---
@@ -311,6 +365,24 @@ def main() -> int:
             fsm.step(pose, pmap, link)
             _t_fsm = time.perf_counter(); hz_acc["fsm"] += _t_fsm - _t_geti
             frames_seen += 1
+
+            # 자연어 지시 결과 — resolver.submit() 은 백그라운드 스레드에서
+            # 돌므로, FSM 을 건드리는 건(set_instruction) 여기 메인 루프
+            # 안에서만 한다(2026-09-01).
+            if resolver is not None:
+                result = resolver.poll_result()
+                if result is not None:
+                    if result.error:
+                        print(f"\n[지시] API 오류: {result.error}\n", flush=True)
+                    elif not result.matched:
+                        print(f"\n[지시] 못 알아들음 — {result.reasoning}\n", flush=True)
+                    else:
+                        dest_xy = mcfg.DELIVER_HERE_XY if result.intent == "fetch" else None
+                        applied_now = fsm.set_instruction(result.target_label, dest_xy=dest_xy)
+                        where = "저한테" if result.intent == "fetch" else "정해진 상자로"
+                        when = "바로 전환" if applied_now else "지금 든 것 마친 뒤 적용"
+                        print(f"\n[지시] '{result.target_label}' 를 {where} "
+                              f"({when}) — {result.reasoning}\n", flush=True)
 
             # 사이클마다 넘긴다 — 무엇이 사건인지는 logger 가 판단한다.
             logger.record(

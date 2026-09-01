@@ -98,6 +98,46 @@ def _nearest_piece(piece_map: PieceMap, robot_xy: XY,
     return best
 
 
+def _find_label(piece_map: PieceMap, label: str, robot_xy: XY,
+                skip: Optional[list[XY]] = None) -> Optional[tuple[str, XY]]:
+    """특정 라벨만 대상으로 로봇과 가장 가까운 것 하나를 고른다 — 사용자
+    지시(instruction_resolver.py 가 해석한 라벨)로 라벨이 정해졌을 때
+    쓴다. 같은 라벨이 여러 개일 수 있어(예: 폰) 그중 가까운 걸 고른다.
+    그 라벨이 지금 안 보이면(또는 전부 skip 대상이면) None.
+
+    `_nearest_piece`와 조건(작업영역·skip)을 그대로 맞춘다 — 라벨을
+    지정했다고 해서 재정렬을 다 쓰고 포기한 기물을 다시 들이밀면 안
+    된다(2026-09-01)."""
+    wx0, wx1 = cfg.WORKSPACE_X
+    wy0, wy1 = cfg.WORKSPACE_Y
+    best_xy: Optional[XY] = None
+    best_d = math.inf
+    for p in piece_map.get(label, []):
+        if not (wx0 <= p[0] <= wx1 and wy0 <= p[1] <= wy1):
+            continue
+        if skip and any(math.hypot(p[0] - s[0], p[1] - s[1]) <= mcfg.SKIP_RADIUS_M
+                        for s in skip):
+            continue
+        d = (p[0] - robot_xy[0]) ** 2 + (p[1] - robot_xy[1]) ** 2
+        if d < best_d:
+            best_xy, best_d = p, d
+    return (label, best_xy) if best_xy is not None else None
+
+
+def visible_labels(piece_map: PieceMap) -> list[str]:
+    """작업 영역 안에 실제로 보이는 라벨만 정렬해서 돌려준다.
+
+    run_mission.py 가 사용자 지시를 Claude 로 해석시킬 때, 화면에 없는
+    라벨을 후보로 주면 안 보이는 걸 골라버릴 수 있어서 이 목록을 같이
+    넘긴다(instruction_resolver.InstructionResolver.submit() 참고)."""
+    wx0, wx1 = cfg.WORKSPACE_X
+    wy0, wy1 = cfg.WORKSPACE_Y
+    return sorted({
+        label for label, pts in piece_map.items()
+        if any(wx0 <= p[0] <= wx1 and wy0 <= p[1] <= wy1 for p in pts)
+    })
+
+
 def _box_front_xy(box_name: str) -> XY:
     """상자 "중심"이 아니라 상자 앞(작업영역 쪽)에서 멈출 좌표.
 
@@ -154,6 +194,45 @@ class MissionFSM:
         순간 바로 다음 상태로 넘어간다."""
         self._advance_requested = True
 
+    def set_instruction(self, target_label: str, dest_xy: Optional[XY] = None) -> bool:
+        """사용자 지시(instruction_resolver.py 가 해석한 라벨)를 처리
+        대상으로 삼는다 — "가장 가까운 기물" 규칙을 한 번 덮어쓴다
+        (사용자 지시, 2026-09-01 — 팀원의 2026-08-31 handoff 델타의
+        set_instruction()을 이 저장소의 현재 구조에 맞춰 이식).
+
+        `dest_xy`를 주면(자연어 지시가 "fetch" 의도일 때, 예: "퀸 가져와")
+        그 좌표로 옮긴다 — instruction_resolver.py 의 intent 판단에 따라
+        run_mission.py 가 mission_config.DELIVER_HERE_XY 를 넘겨준다.
+        안 주면(기본값, "organize" 의도나 라벨만 말한 경우) 기존처럼
+        PIECE_DEST_BOX 로 정해지는 상자로 옮긴다.
+
+        손이 비어있으면(아직 안 집었으면, SEARCH_TARGET/APPROACH_PIECE)
+        그 즉시 지금 하던 걸 버리고 이 라벨로 전환한다. 이미 뭔가 집어서
+        옮기는 중(GRASP 이후 — GRASP_ALIGN 포함)이면 무리해서 끼어들지
+        않고, 지금 들고 있는 걸 상자에 넣는 것까지 마친 뒤(PLACE 완료 ->
+        SEARCH_TARGET 복귀 시점에) 자동으로 적용되도록 큐에 쌓아둔다 —
+        들고 있던 걸 그냥 놓아버리는 안전하지 않은 동작을 피하기 위함.
+
+        반환값: 손이 비어서 즉시 반영됐으면 True, 지금 하던 일을 마치고
+        나중에 적용되도록 큐에 쌓였으면 False (run_mission.py 가 이 값으로
+        LiveMap 피드백 문구를 다르게 보여준다)."""
+        if self.state in (State.SEARCH_TARGET, State.APPROACH_PIECE):
+            self._instructed_label = target_label
+            self._instructed_dest_xy = dest_xy
+            if self.state == State.APPROACH_PIECE:
+                # 지금 쫓던 기물을 버리고 새 지시로 즉시 재탐색.
+                self.state = State.SEARCH_TARGET
+                self.target_label = None
+                self._target_xy = None
+                self.dest_xy = None
+                self.ready_to_advance = False
+                self._path_planner.reset()
+                self._drive.reset()
+            return True
+        self._queued_instruction_label = target_label
+        self._queued_instruction_dest_xy = dest_xy
+        return False
+
     def request_back(self) -> None:
         """"이전" 버튼 — 한 단계 전 상태로 되돌아간다. ready_to_advance
         조건과 무관하게 항상 즉시 적용된다(자동 모드에서도 동작 — 뒤로가기는
@@ -179,6 +258,8 @@ class MissionFSM:
             self.target_label = None
             self._target_xy = None
             self.dest_xy = None
+            self._instructed_label = None   # 뒤로가기는 사용자 개입이라 지시도 같이 취소
+            self._instructed_dest_xy = None
         self._path_planner.reset()
         self._drive.reset()
         self.nav_goal = None
@@ -220,6 +301,14 @@ class MissionFSM:
         self.ready_to_advance = False
         self._advance_requested = False
         self._back_requested = False
+        # 사용자 지시(instruction_resolver.py, 2026-09-01)로 정해진 다음
+        # 목표 라벨과 목적지 오버라이드. set_instruction() 참고.
+        self._instructed_label: Optional[str] = None
+        self._instructed_dest_xy: Optional[XY] = None
+        # 지금 든 것을 내려놓은 뒤 적용할 지시 — 손이 안 비어 있을 때
+        # set_instruction() 이 여기 쌓아 둔다.
+        self._queued_instruction_label: Optional[str] = None
+        self._queued_instruction_dest_xy: Optional[XY] = None
 
         # LiveMap 이 "지금 어디로 가는 중인지" 그릴 수 있게 마지막 계산을 남겨둔다.
         # goal 은 이번 단계의 최종 목적지(기물 또는 상자), corner 는 축정렬
@@ -463,17 +552,31 @@ class MissionFSM:
             self.nav_path = None
             self.last_nav = None
             self.last_cmd = None
-            found = _nearest_piece(piece_map, robot_xy, self.skipped)
+            # 사용자 지시(instruction_resolver.py)로 라벨이 지정돼 있으면
+            # 그 라벨만 찾는다 — 없으면 평소처럼 최근접 우선(2026-09-01).
+            if self._instructed_label is not None:
+                found = _find_label(piece_map, self._instructed_label, robot_xy,
+                                    self.skipped)
+            else:
+                found = _nearest_piece(piece_map, robot_xy, self.skipped)
             self.ready_to_advance = found is not None
             if found is not None and self._should_advance():
                 label, xy = found
-                dest_box = mcfg.PIECE_DEST_BOX.get(label)
-                if dest_box is None:
+                # "fetch" 의도(사용자 지시로 목적지 오버라이드가 있음)면 그
+                # 고정 좌표로, 아니면(기본값) 기존 라벨별 상자로.
+                if self._instructed_dest_xy is not None:
+                    dest_xy = self._instructed_dest_xy
+                else:
+                    dest_box = mcfg.PIECE_DEST_BOX.get(label)
+                    dest_xy = _box_front_xy(dest_box) if dest_box is not None else None
+                if dest_xy is None:
                     # 목적지 매핑이 없는 라벨 — 건드리지 않고 다음 후보를 기다린다.
                     self.ready_to_advance = False
                 else:
                     self.target_label, self._target_xy = label, xy
-                    self.dest_xy = _box_front_xy(dest_box)
+                    self.dest_xy = dest_xy
+                    self._instructed_label = None   # 소비했으니 초기화
+                    self._instructed_dest_xy = None
                     # 재정렬 예산은 **대상 1개** 스코프다. 미션 누적으로 두면
                     # 첫 기물이 예산을 다 쓴 뒤 나머지가 전부 첫 시도에서
                     # 보류된다. 되돌리는 자리는 대상이 바뀌는 여기 하나뿐이다.
@@ -798,6 +901,13 @@ class MissionFSM:
                 self.target_label = None
                 self._target_xy = None
                 self.dest_xy = None
+                if self._queued_instruction_label is not None:
+                    # 방금 내려놓는 동안 큐에 쌓여있던 지시를 이제 적용
+                    # (2026-09-01).
+                    self._instructed_label = self._queued_instruction_label
+                    self._instructed_dest_xy = self._queued_instruction_dest_xy
+                    self._queued_instruction_label = None
+                    self._queued_instruction_dest_xy = None
                 self.state = State.SEARCH_TARGET
 
         elif self.state == State.RETURN_HOME:
@@ -810,6 +920,15 @@ class MissionFSM:
             self.ready_to_advance = dist <= mcfg.HOME_ARRIVE_TOL_M
             if self.ready_to_advance and self._should_advance():
                 self.ready_to_advance = False
+                # PLACE 완료 경로와 같은 이유로 여기서도 큐를 비운다 —
+                # 포기한 기물을 쫓는 동안 새 지시가 들어왔을 수 있다
+                # (set_instruction() 이 GRASP/GRASP_ALIGN 도 "손이 안
+                # 비었다"로 보고 큐에 쌓아 두므로, 2026-09-01).
+                if self._queued_instruction_label is not None:
+                    self._instructed_label = self._queued_instruction_label
+                    self._instructed_dest_xy = self._queued_instruction_dest_xy
+                    self._queued_instruction_label = None
+                    self._queued_instruction_dest_xy = None
                 self._path_planner.reset()   # 새 구간 시작
                 self._drive.reset()
                 self.state = State.SEARCH_TARGET

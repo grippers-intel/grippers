@@ -381,6 +381,22 @@ DEFAULT_HOME_XY = (0.900, DRIVE_AREA_Y[0] + 0.02)
 # 자리) GRASP_TRIGGER_DIST_M/PLACE_TRIGGER_DIST_M 처럼 엄격할 이유가 없다.
 HOME_ARRIVE_TOL_M = 0.10  # 지시(잠정)
 
+# "fetch" 의도(사용자 지시 — "가져와" 류, 상자가 아니라 사용자에게 직접
+# 건네줌)의 목적지. 2026-08-31 핸드오프 델타(instruction_resolver.py 등,
+# ~/Downloads/handoff_2026-08-31_delta.zip)가 쓰던 이름을 그대로 유지한다
+# (2026-09-01 부분 병합 — instruction_resolver.py·mission.py 의
+# set_instruction() 계열만 이 저장소의 현재 구조에 맞춰 이식했고, 그 델타의
+# navigator.AxisPathPlanner·mission_config 의 다른 값들은 안 가져왔다 — 이
+# 저장소가 그 델타 이후로 GridPathPlanner 로 재작성됐고 DRIVE_YAW_TOLERANCE_
+# DEG 같은 값도 실기로 재조정된 상태라, 그대로 덮어쓰면 이미 고친 버그들을
+# 되돌리게 된다).
+#
+# 값은 DEFAULT_HOME_XY 를 그대로 쓴다 — 그 델타의 원래 값(0.900, 0.200)은
+# 위 DEFAULT_HOME_XY 절에서 설명한 것과 같은 이유(DRIVE_AREA_Y 하한 밖)로
+# 못 쓰고, 목적(사용자 앞에 서기)도 사실상 같다. "포기 후 복귀"와 "가져다
+# 주기"가 서로 다른 자리여야 한다는 게 나중에 밝혀지면 그때 분리할 것.
+DELIVER_HERE_XY = DEFAULT_HOME_XY
+
 # 차량 쪽에서 참고할 값 — 이 시간 안에 새 좌표가 안 오면 정지하도록 차량이
 # 자체적으로 워치독을 두는 걸 권장한다(실제 판정은 차량 쪽 코드가 한다).
 VEHICLE_LINK_TIMEOUT_S = 0.3
