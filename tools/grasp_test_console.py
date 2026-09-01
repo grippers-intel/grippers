@@ -537,7 +537,12 @@ class GraspTestNode(Node):
         if not self._observe_client.wait_for_service(timeout_sec=timeout_sec):
             print("  [경고] perception/observe_target 서비스 없음")
             return None
-        future = self._observe_client.call_async(ObserveTarget.Request(raw_cls=raw_cls))
+        # force_fresh=True — 사용자가 키를 눌러 매번 독립적으로 부르는
+        # 관측이라, 3초 캐시에 걸려 직전(다른 자세·다른 위치) 표본을
+        # 돌려받으면 지금 화면과 다른 답이 나온다(2026-09-01, ObserveTarget.
+        # srv force_fresh 필드 추가와 같은 이유).
+        future = self._observe_client.call_async(
+            ObserveTarget.Request(raw_cls=raw_cls, force_fresh=True))
         rclpy.spin_until_future_complete(self, future, timeout_sec=timeout_sec)
         return future.result() if future.done() else None
 

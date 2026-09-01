@@ -88,7 +88,10 @@ class ProbeNode(Node):
     def observe(self, raw_cls, timeout_sec=3.0):
         if not self._observe.wait_for_service(timeout_sec=timeout_sec):
             return None
-        future = self._observe.call_async(ObserveTarget.Request(raw_cls=raw_cls))
+        # force_fresh=True — 이 도구도 매 호출이 독립된 실측이다(같은 이유는
+        # grasp_geometry_calibrate.py의 observe() 주석 참고).
+        future = self._observe.call_async(
+            ObserveTarget.Request(raw_cls=raw_cls, force_fresh=True))
         rclpy.spin_until_future_complete(self, future, timeout_sec=timeout_sec)
         return future.result() if future.done() else None
 

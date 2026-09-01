@@ -9,6 +9,16 @@
 # 작거나, 그 클래스의 K가 아직 미실측이거나, camera_info를 아직 못 받은
 # 경우다 — "모르면 실패" 관례.
 string raw_cls
+# true면 perception_node의 다중 프레임 캐시(OBSERVE_CACHE_SEC)를 무시하고
+# 반드시 새로 프레임을 모은다. 2026-09-01: identify_target이 클래스 6개를
+# 연달아 묻는 한 라운드 안에서는 같은 표본을 공유하는 게 맞지만(캐시가
+# 원래 그걸 위해 있다), GRASP_ALIGN 재정렬 루프처럼 **차체가 실제로
+# 움직인 뒤** 다시 물을 때도 같은 캐시가 3초 창 안에 걸리면 정렬 전 낡은
+# 프레임으로 답해 버린다 — 물체가 지금은 잘 보이는데 "못 찾음"으로
+# 오답하는 원인이었다. 그래서 매 판정 라운드의 **첫** 질문에서만
+# true로 보내 캐시를 강제로 비우고, 같은 라운드의 나머지 질문에는 false로
+# 보내 원래의 공유 이점을 유지한다(Ros2Perception.identify_target 참고).
+bool force_fresh
 ---
 bool found
 float32 x               # bbox 중심 가로 픽셀

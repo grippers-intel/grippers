@@ -243,7 +243,13 @@ class CalibrationNode(Node):
         return result
 
     def observe(self, label):
-        return self._call(self._observe, ObserveTarget.Request(raw_cls=label), "observe_target")
+        # force_fresh=True — 이 도구는 매 호출이 독립된 실측이라, 3초
+        # 캐시(perception_node.OBSERVE_CACHE_SEC)에 걸려 물체를 옮겨 놓고도
+        # 이전 자리의 낡은 표본을 돌려받으면 캘리브레이션 값이 틀어진다
+        # (2026-09-01, ObserveTarget.srv force_fresh 필드 추가와 같은 이유).
+        return self._call(
+            self._observe, ObserveTarget.Request(raw_cls=label, force_fresh=True),
+            "observe_target")
 
     def hold(self):
         return self._call(self._hold, Trigger.Request(), "hold_position")

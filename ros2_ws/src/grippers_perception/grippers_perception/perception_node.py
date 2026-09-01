@@ -270,8 +270,18 @@ OBSERVE_MIN_BOTTOM_Y_PX = 290.0
 
 # (3) 다중 프레임 합의 — 배경 오검출은 프레임마다 깜빡인다. 2026-08-26의
 # 노트북 오검출은 7프레임 중 2번만 나왔다.
+#
+# ⚠️ 2026-09-01: 5분의 3에서 5분의 2로 낮췄다(사용자 지시 — 실기에서 진짜
+# 물체가 계속 GRASP_BLOCKED로 막혀 테스트가 안 됨). 진짜 rook이 conf
+# 0.97로 잡히는데도 못 찾음으로 나온 사고 중 일부는 아래 force_fresh로
+# 고친 캐시 버그였지만, 그것과 별개로 5프레임 중 3프레임 문턱은 여전히
+# 빡빡하다 — 정지 직후 잔진동이나 조명 변화로 한두 프레임이 흔들리는
+# 것만으로 진짜 물체가 걸린다. 2건 이상 일치는 여전히 배경 오검출(2건
+# 이하로 깜빡이던 노트북 사례)을 거르면서, 실기의 정상적인 흔들림은
+# 덜 막는다. 오검출 쪽 여유가 줄어드는 트레이드오프이므로, 이후 배경
+# 오검출이 다시 새면 이 값부터 되돌아볼 것.
 OBSERVE_CONSENSUS_FRAMES = 5
-OBSERVE_CONSENSUS_MIN_HITS = 3
+OBSERVE_CONSENSUS_MIN_HITS = 2
 
 # 표본을 이만큼 재사용한다. identify_target이 클래스 6개를 연달아 묻는데,
 # 그때마다 5프레임을 새로 뜨면 6배가 든다 — 같은 순간의 같은 표본으로
@@ -725,7 +735,7 @@ class PerceptionNode(Node):
             kept.append((class_name, score, bbox))
         return kept, weak, high
 
-    def _observe_samples(self):
+    def _observe_samples(self, force_fresh=False):
         """정지 전제 다중 프레임 원본(raw, 게이트 전) 검출 표본. 캐시가
         살아 있으면 재사용한다.
 
@@ -741,9 +751,20 @@ class PerceptionNode(Node):
         (예: rook)가 걸린 것처럼 보고하면 오히려 헷갈린다. 그래서 게이트를
         여기서 안 걸고, 호출자(_on_observe_target)가 요청 클래스로 먼저
         걸러낸 뒤에 그 클래스 후보에만 게이트를 적용하게 바꿨다 — 캐시는
-        원본 검출(raw)만 들고, 클래스별 게이트 집계는 매 호출 새로 한다."""
+        원본 검출(raw)만 들고, 클래스별 게이트 집계는 매 호출 새로 한다.
+
+        ⚠️ 2026-09-01 `force_fresh` 추가(실기 사고 대응) — 이 캐시는 원래
+        "6개 클래스를 연달아 묻는 한 라운드 안에서 표본을 공유"하려고
+        만들었는데, 시간(OBSERVE_CACHE_SEC=3.0초)으로만 유효성을 따지다
+        보니 GRASP_ALIGN 재정렬처럼 **판정 라운드 자체가 3초 이내 간격으로
+        반복되는 경로**에서 의도치 않게 새어 나갔다 — 차체가 실제로
+        움직이거나(Host 재직진) Pi가 servo 1로 고친 뒤에도, 다음 라운드가
+        3초 안에 들어오면 그 움직임 **이전**에 찍은 낡은 프레임을 그대로
+        돌려줘 "지금은 잘 보이는데 못 찾음"으로 오답했다. `force_fresh=True`
+        면 캐시 나이와 무관하게 무조건 새로 모은다 — 호출자(Ros2Perception)가
+        매 판정 라운드의 첫 질문에서만 세운다."""
         now = time.monotonic()
-        if (self._observe_samples_cache is not None
+        if (not force_fresh and self._observe_samples_cache is not None
                 and now - self._observe_samples_at < OBSERVE_CACHE_SEC):
             return self._observe_samples_cache
 
@@ -793,7 +814,7 @@ class PerceptionNode(Node):
                                 else "RGB 프레임을 아직 못 받음")
             return response
 
-        frames = self._observe_samples()
+        frames = self._observe_samples(force_fresh=request.force_fresh)
         boxes = []
         weak_total = high_total = 0
         for frame_detections in frames:

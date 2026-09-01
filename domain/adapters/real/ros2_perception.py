@@ -49,12 +49,21 @@ class Ros2Perception(Perception):
 
         여러 개가 동시에 보이면 **가장 큰 것**을 고른다. 파지하러 내려가는
         거리에서는 목표가 화면에서 가장 크고, 배경에 걸친 다른 물체는 작게
-        잡히기 때문이다."""
+        잡히기 때문이다.
+
+        ⚠️ 첫 질문에만 `force_fresh=True`를 보낸다(2026-09-01, 실기 사고
+        대응) — perception_node의 표본 캐시는 이 여섯 번 연속 질문이
+        같은 순간을 공유하라고 있는 것이지, GRASP_ALIGN처럼 이 함수 자체가
+        3초 안에 여러 번 다시 불리는 것까지 같은 표본으로 답하라는 뜻이
+        아니다. 차체가 재직진하거나 servo 1로 고친 **뒤** 다시 부른
+        판정 라운드가 낡은 캐시를 물려받으면 "지금은 보이는데 못 찾음"이
+        된다 — 매 라운드의 첫 질문에서 캐시를 강제로 비워 그걸 막는다."""
         best, best_area = None, 0.0
-        for label in self.KNOWN_LABELS:
+        for index, label in enumerate(self.KNOWN_LABELS):
             res = call_service(
                 self._node, self._observe_client,
-                ObserveTarget.Request(raw_cls=label), label="identify_target")
+                ObserveTarget.Request(raw_cls=label, force_fresh=(index == 0)),
+                label="identify_target")
             if res is None or not res.found:
                 continue
             area = float(res.h) * float(res.w)
@@ -107,9 +116,13 @@ class Ros2Perception(Perception):
     STILL_THERE_H_RATIO = 0.8
 
     def remember_target(self, raw_cls: str) -> bool:
+        # force_fresh=True — identify_target의 마지막 질문 이후로도 시간이
+        # 흘렀을 수 있는, 별도의 판정 라운드다(같은 이유는 identify_target
+        # docstring 참고).
         res = call_service(
             self._node, self._observe_client,
-            ObserveTarget.Request(raw_cls=raw_cls), label="remember_target")
+            ObserveTarget.Request(raw_cls=raw_cls, force_fresh=True),
+            label="remember_target")
         if res is None or not res.found or res.h <= 0.0:
             self._remembered = None
             self._node.get_logger().warn(
@@ -125,9 +138,14 @@ class Ros2Perception(Perception):
             self._node.get_logger().warn("[confirm_grasp] 기준 관측이 없다 — False")
             return False
         raw_cls, h_before, _x_before = self._remembered
+        # force_fresh=True — 팔이 파지를 시도한 **뒤**의 판정이라, remember_
+        # target 때 찍은 낡은 캐시를 다시 받으면 "그대로 있다"를 자기 자신과
+        # 비교하는 꼴이 된다(캐시 유효창 3초 안에서는 실제로 벌어질 수 있는
+        # 경로다 — GRASP 시퀀스는 그보다 빠르다).
         res = call_service(
             self._node, self._observe_client,
-            ObserveTarget.Request(raw_cls=raw_cls), label="confirm_grasp")
+            ObserveTarget.Request(raw_cls=raw_cls, force_fresh=True),
+            label="confirm_grasp")
         if res is None:
             self._node.get_logger().warn("[confirm_grasp] 관측 응답 없음 — False")
             return False
