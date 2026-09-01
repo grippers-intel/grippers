@@ -37,6 +37,7 @@ def launch_setup(context):
     record_bag = LaunchConfiguration("record_bag")
     bag_output = LaunchConfiguration("bag_output")
     arm_port = LaunchConfiguration("arm_port")
+    host_ip = LaunchConfiguration("host_ip")
 
     # ⚠️ 2026-08-23: controller.launch.py를 그대로 쓰지 않는다 — HANDOFF.md
     # 실기 확인: 이 launch가 포함하는 imu_filter.launch.py가 `imu_calib`
@@ -107,6 +108,7 @@ def launch_setup(context):
                     "use_fake_arm": use_fake_arm,
                     "use_fake_perception": use_fake_perception,
                     "use_fake_interpreter": use_fake_interpreter,
+                    "host_ip": host_ip,
                 }
             ],
         ),
@@ -162,6 +164,27 @@ def generate_launch_description():
                 # arm_driver_node도 기동 시 베이스 보드 포트 충돌을 검사한다.
                 default_value="/dev/soarm",
                 description="SO-ARM101 시리얼 포트 (udev 기본값: /dev/soarm)",
+            ),
+            DeclareLaunchArgument(
+                "host_ip",
+                # ⚠️ 2026-09-01 실기 사고: 이 인자가 아예 없어서 mission_orchestrator_
+                # node.py 의 파라미터 기본값(192.168.0.10)이 그대로 쓰였다. 그날
+                # Host(맥)의 실제 IP는 192.168.0.9 였다 — Pi 는 GRASP_BLOCKED 와
+                # 보정(fix)을 전부 정상적으로 계산해서 5006으로 보냈지만 엉뚱한
+                # 주소로 가서 Host 가 전혀 못 받았다. Host 는 응답이 없으니 매
+                # 사이클 그대로 "GRASP" 를 다시 보냈고, Pi 는 같은 자리에서 같은
+                # 판정을 4분 40초 동안 반복했다 — 팔은 한 번도 안 움직였다(위험한
+                # 상태는 아니었지만 미션이 완전히 멈춰 있었다).
+                #
+                # 이 IP는 DHCP 라 세션마다 바뀔 수 있다 — 매번 Host(맥)에서
+                # `ipconfig getifaddr en0` 로 확인하고 반드시 명시적으로 넘길 것.
+                # 기본값은 마지막으로 확인된 값을 남겨 두지만 **그대로 믿지 말 것**.
+                default_value="192.168.0.9",
+                description="Host(맥)의 현재 IP — mission_orchestrator 가 상태/보정을 "
+                "여기로 UDP 5006 보고한다. DHCP 라 세션마다 바뀔 수 있으니 매번 "
+                "`ipconfig getifaddr en0`(맥)로 확인해서 넘길 것 — 안 맞으면 GRASP/"
+                "INSERT 가 Pi 쪽에서는 정상 판정하는데 Host 는 응답을 영원히 못 받는다 "
+                "(2026-09-01 실기 사고, 4분 40초 동안 GRASP 멈춤).",
             ),
             DeclareLaunchArgument(
                 "record_bag",
