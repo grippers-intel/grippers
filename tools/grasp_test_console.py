@@ -4,13 +4,16 @@
 
 ⚠️ 이 파일은 하드웨어 미연결 상태에서 작성됐다(2026-08-23). 실기 연결 후
 아래 값·가정을 반드시 재확인할 것:
-  - GRIPPER_STREAM_PORT가 실제로 맥북에서 열리는지(도커 네트워크가 host
-    모드가 아니면 포트를 게시(publish)해야 한다 — `docker inspect IntelPi
-    --format '{{.HostConfig.NetworkMode}}'`로 확인)
-  - GRASP_AREA_THRESHOLD_PX2(82,854px²) — 오늘 실기로 얻은 값, 그리퍼 캠
-    설치 위치가 바뀌면 무효
   - FX/CX(카메라 내참수, yolov5_ros2/cv_tool.py에서 그대로 가져옴) — 실제
     RGB 카메라가 그 파일 기준과 같은 카메라인지 확인
+
+그리퍼캠(/dev/gripper_cam) 스트림·면적 판정은 2026-09-01에 뺐다 — 3단계에서
+그걸 넘겨받으려고 perception_node를 죽이던 이유(confirm_grasp이 그 장치를
+독점) 자체가 죽은 코드였다(observe_target 기반으로 대체된 뒤 안 지워짐,
+grippers_perception/perception_node.py 참고). 이제 3~7단계 내내
+perception_node가 그대로 떠 있고, 파지 판정은 load_ratio(그리퍼 부하)만
+본다 — 그리퍼캠 면적은 애초에 demo_rook_run.py에서도 "빈 그리퍼가 문 것보다
+면적이 크게" 나와 신뢰 못 한다고 확인된 신호였다.
 
 실행 (2026-08-23 실기로 검증된 절차 — 컨테이너는 exec_shell.sh로 들어간
 zsh, `-it`인 대화형 tty가 있어야 한다):
@@ -73,8 +76,8 @@ cmd_vel/odom_raw를 직접 쓰고 base_driver 서비스는 호출하지 않는�
 키 배치:
   1단계 — Enter                  : 룩 위치(전방 cm, 좌/우 cm) 관측 + YOLO 캡처 저장
   (2단계 정렬 주행은 2026-08-24 제거 — 물체를 사람이 직접 놓고 시작한다)
-  3단계 — g                      : GRASP 진입(파지 직전 자세), 그리퍼캠 스트림 시작
-  4단계 — Space/a/d, c(정지)     : 미세 전진, 1초마다 그리퍼캠 면적 출력
+  3단계 — g                      : GRASP 진입(파지 직전 자세)
+  4단계 — Space/a/d, c(정지)     : 미세 전진
   5단계 — g                      : 파지(닫기)→들어올리기(midpoint), 부하 확인
   6단계 — w/a/s/d, c(정지)       : CARRY_IDLE 도달 후 자유 주행(바구니로 이동)
   7단계 — Enter(확인 후 자동)     : 바구니 투하(drop→그리퍼 열기→idle)
@@ -216,21 +219,12 @@ CX_PX = CAMERA_WIDTH_PX - 325.3050842285156  # = 314.695 (180도 회전 보정 �
 # 재보면 된다. 그때도 어긋나면 3번, 맞으면 1번/2번이다.
 LATERAL_BIAS_M = 0.0291
 
-# 그리퍼 캠 프레임(640×480)에서 "파지해도 되는" 컨투어 면적 하한. 오늘 두
-# 차례 rook 성공 사례(82,854px²=27.0%로 성공, 172,738px²=56.2%도 성공)에서
-# 역산 — **rook 전용 값**이다. 물체마다 실제 크기가 다르므로 다른 클래스는
-# 아직 미실측(None) — 이 경우 4단계는 경고 없이 면적만 참고용으로 출력한다.
-GRASP_AREA_THRESHOLD_PX2 = {
-    "knight": None,
-    "queen": None,
-    "rook": 82854.0,
-    "box": None,
-    "soccer": None,
-    "star": None,
-}
-
 LOAD_THRESHOLD = 0.04  # domain/task/states.py GraspState.LOAD_THRESHOLD과 동일
 
+# 이 콘솔 자신은 더 이상 그리퍼캠을 안 쓰지만(2026-09-01, 아래 GripperCam
+# docstring 참고), auto_grasp_sequence.py·grasp_cycle.py·
+# straight_approach_calibrate.py가 여기서 GripperCam/restart_perception_node/
+# start_stream_server를 그대로 import해 쓴다 — 지우지 않는다.
 GRIPPER_STREAM_PORT = 8090
 
 # perception_node 재기동을 기다리는 최대 시간 — ultralytics 모델 로드가
@@ -365,6 +359,14 @@ class KeyReader:
 
 
 # --- 그리퍼 캠: 공유 프레임 버퍼 + MJPEG 스트림 ---------------------------
+#
+# ⚠️ 이 콘솔(main()) 자신은 2026-09-01부터 아래 GripperCam을 더 이상 안
+# 쓴다 — 3단계에서 이걸 넘겨받으려고 perception_node를 죽이던 이유(구
+# confirm_grasp이 이 장치를 독점)가 그 자체로 죽은 코드였다(observe_target
+# 기반으로 대체된 뒤 안 지워짐, perception_node.py 참고). 그래도 이 클래스와
+# start_stream_server/restart_perception_node는 지우지 않는다 —
+# auto_grasp_sequence.py·grasp_cycle.py·straight_approach_calibrate.py가
+# 각자의 흐름에서 그대로 import해 쓴다.
 
 
 class GripperCam:
@@ -378,7 +380,13 @@ class GripperCam:
     있는 걸 직접 확인했다. 예전 세션 노트의 "confirm_grasp를 호출해야 lazy하게
     연다"는 가정은 틀렸다). 그래서 이 클래스를 만들기 전에 `main()`이 먼저
     perception_node를 죽인다 — observe_target은 1~2단계에서만 쓰고 그 뒤로는
-    안 쓰므로 안전하다."""
+    안 쓰므로 안전하다.
+
+    ⚠️ 2026-09-01: 위 문단은 이제 이 콘솔 자신에는 안 맞는다 — perception_node.py
+    가 confirm_grasp의 그리퍼캠 경로를 통째로 제거해서(observe_target으로
+    대체된 뒤 죽은 코드였다) 더 이상 이 장치를 열지 않는다. 이 클래스를 아직
+    쓰는 다른 도구(auto_grasp_sequence.py 등)는 각자 자기 흐름에서 죽이고
+    되살리는 책임을 진다 — 이 클래스 자체는 손대지 않는다."""
 
     def __init__(self, device="/dev/gripper_cam", width=640, height=480):
         self._cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
@@ -693,8 +701,6 @@ def drive_phase(
     *,
     keymap: dict,
     speed: float,
-    report_area: GripperCam | None = None,
-    on_area_sample=None,
     report=None,
     legend=None,
 ):
@@ -703,7 +709,7 @@ def drive_phase(
 
     `report`는 1초에 한 번 불리는 인자 없는 콜백이다 — 운전하는 사람에게
     "언제 c를 누를지"를 알려주는 용도로, 무엇을 보여줄지는 호출부가 정한다
-    (그리퍼캠 면적은 report_area, depth 거리는 demo_rook_run.py 참고)."""
+    (depth 거리는 demo_rook_run.py 참고)."""
     kr.ensure_cbreak()  # 위 ensure_cbreak docstring 참고 — 키가 안 먹는 사고 방지
     if legend is None:
         legend = ("  [space]/[a]/[d] 전진, [c] 정지" if "w" not in keymap else
@@ -712,7 +718,6 @@ def drive_phase(
     node.pump()
     start_pose = node._pose
     linear_x, angular_z = 0.0, 0.0
-    last_area_t = 0.0
     last_report_t = 0.0
     while True:
         node.pump()
@@ -727,14 +732,6 @@ def drive_phase(
         t.linear.x = linear_x
         t.angular.z = angular_z
         node.cmd_pub.publish(t)
-
-        if report_area is not None and time.time() - last_area_t >= 1.0:
-            area = report_area.measure_area_px2()
-            area_str = f"{area:.0f}px²" if area is not None else "검출 안 됨"
-            print(f"    그리퍼캠 면적: {area_str}")
-            if on_area_sample is not None:
-                on_area_sample(area)
-            last_area_t = time.time()
 
         if report is not None and time.time() - last_report_t >= 1.0:
             report()
@@ -777,14 +774,12 @@ WASD_KEYMAP = {
 
 
 def restart_perception_node() -> bool:
-    """3단계에서 죽였던 perception_node를 다시 띄운다.
+    """`GripperCam`을 쓰려고 죽였던 perception_node를 다시 띄운다.
 
-    ⚠️ 이 콘솔은 그리퍼캠(/dev/gripper_cam)을 넘겨받으려고 perception_node를
-    일부러 죽인다(3단계 참고). 예전에는 그걸 되살리지 않고 끝냈고, 그래서
-    **다음 실행이 조용히 무력화**됐다 — observe_target이 없어 1단계 관측과
-    YOLO 캡처가 전부 실패하는데 화면에는 "물체를 못 찾음"으로만 보여
-    원인을 알기 어려웠다(2026-08-24 실기에서 두 번 겪음). 죽인 쪽이
-    되살릴 책임을 진다.
+    ⚠️ 이 콘솔(main()) 자신은 2026-09-01부터 이 함수를 안 부른다 — perception_node를
+    죽일 이유(그리퍼캠 확보) 자체가 없어졌다. auto_grasp_sequence.py·
+    grasp_cycle.py는 여전히 이 함수를 쓴다 — 죽인 쪽이 되살릴 책임을 진다는
+    원칙은 그대로다.
 
     카메라를 놓아준 뒤(GripperCam.close) 불러야 한다 — 안 그러면
     perception_node가 기동 시 장치를 못 열고 바로 죽는다."""
@@ -875,8 +870,6 @@ def main():
 
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = GraspTestNode()
-    cam = None
-    perception_was_killed = False
     try:
         with KeyReader() as kr:
             # 1단계 -----------------------------------------------------
@@ -922,37 +915,20 @@ def main():
                 print("  GRASP 진입 실패 — 서보 온도/자세 조건을 arm.log에서 확인 후 재시도할 것")
                 recover_to_idle(node, profile, log, "GRASP 진입 실패")
                 return
-            # perception_node는 lazy가 아니라 __init__ 시점에 confirm_grasp용 기준
-            # 프레임을 찍으려고 /dev/gripper_cam을 무조건 열어서 계속 쥐고 있다
-            # (오늘 실기로 재확인 — 예전 "lazy하게 연다"는 가정이 틀렸다). observe_target은
-            # 1~2단계에서만 쓰고 여기부턴 안 쓰므로, 지금 죽여서 장치를 넘겨받는다.
-            # stdin을 물려주지 않는다 — 자식이 터미널 속성을 되돌리면 이
-            # 콘솔의 cbreak가 풀려 키 입력이 죽는다(ensure_cbreak 참고).
-            subprocess.run(["pkill", "-f", "grippers_perception/perception_node"],
-                           stdin=subprocess.DEVNULL)
-            perception_was_killed = True
-            time.sleep(1.0)
-            cam = GripperCam()
-            url = start_stream_server(cam)
-            print(f"  그리퍼캠 스트림: {url}  (맥북 브라우저에서 열 것)")
+            # 그리퍼캠(/dev/gripper_cam)을 넘겨받으려고 perception_node를 죽이던
+            # 자리였다 — 그 목적이던 confirm_grasp의 그리퍼캠 경로 자체가
+            # 죽은 코드였다(2026-08-26에 observe_target 기반으로 대체된 뒤
+            # 안 지워짐, grippers_perception/perception_node.py 2026-09-01
+            # 정리 참고). perception_node는 더 이상 이 장치를 열지 않으므로
+            # 죽일 이유가 없다 — 그대로 두고 observe_target도 계속 쓸 수 있다.
 
             # 4단계 -----------------------------------------------------
-            print("\n[4단계] Space로 미세 전진 (1초마다 그리퍼캠 면적 출력)")
-            start4, end4 = drive_phase(
-                node, kr, keymap=SPACE_KEYMAP, speed=FINE_SPEED_MPS, report_area=cam,
-                on_area_sample=lambda area: log.log("step4_area_sample", area_px2=area),
-            )
+            print("\n[4단계] Space로 미세 전진")
+            start4, end4 = drive_phase(node, kr, keymap=SPACE_KEYMAP, speed=FINE_SPEED_MPS)
             d4 = odom_distance_m(start4, end4)
-            final_area = cam.measure_area_px2()
             print(f"  정지. 이번 구간 이동거리(odom_raw)={'%.3fm' % d4 if d4 is not None else '측정 불가'}"
                   f"  ⚠️ odom은 명령 적분값이라 실제 이동의 증거가 아니다 — 눈으로 확인할 것")
-            print(f"  현재 그리퍼캠 면적: {final_area:.0f}px²" if final_area else "  현재 그리퍼캠 면적: 검출 안 됨")
-            area_threshold = GRASP_AREA_THRESHOLD_PX2.get(args.raw_cls)
-            if area_threshold is None:
-                print(f"  [참고] '{args.raw_cls}'는 파지 기준 면적 미실측 — 눈으로 직접 판단할 것")
-            elif final_area is not None and final_area < area_threshold:
-                print(f"  [주의] 기준치({area_threshold:.0f}px²) 미달 — 더 전진을 권장")
-            log.log("step4_stop", distance_m=d4, final_area_px2=final_area, area_threshold_px2=area_threshold)
+            log.log("step4_stop", distance_m=d4)
 
             # 5단계 -----------------------------------------------------
             kr.wait_enter("\n[5단계] g + Enter로 파지(닫기 후 들어올리기): ")
@@ -963,11 +939,8 @@ def main():
                 recover_to_idle(node, profile, log, "그리퍼 닫기 실패")
                 return
             print(f"  닫힘(폭 {close_width_mm}mm). load_ratio={resp.load_ratio:.4f} (기준 {LOAD_THRESHOLD})")
-            close_area = cam.measure_area_px2() if cam is not None else None
-            print(f"  닫힘 직후 그리퍼캠 면적: "
-                  f"{f'{close_area:.0f}px²' if close_area is not None else '검출 안 됨'}")
             log.log("step5_close", ok=True, close_width_mm=close_width_mm,
-                    load_ratio=resp.load_ratio, area_px2=close_area)
+                    load_ratio=resp.load_ratio)
             if resp.load_ratio < LOAD_THRESHOLD:
                 print(f"  [경고] 닫힘 부하가 기준({LOAD_THRESHOLD}) 미만 — 빈 채로 닫혔을 수 있다")
             # ⚠️ 2026-08-24 실기: 여기서 곧바로 들어올려 닫힘과 상승이 겹쳤다.
@@ -1024,11 +997,6 @@ def main():
         log.log("run_end")
         log.close()
         print(f"\n분석용 로그: {log.path}")
-        if cam is not None:
-            cam.close()
-        # 카메라를 놓아준 뒤에 되살린다 — 순서가 바뀌면 장치 경합으로 죽는다.
-        if perception_was_killed:
-            restart_perception_node()
         node.destroy_node()
         rclpy.shutdown()
 
