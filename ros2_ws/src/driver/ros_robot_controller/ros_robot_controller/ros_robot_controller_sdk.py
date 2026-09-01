@@ -483,7 +483,39 @@ class Board:
     def recv_task(self):
         while True:
             if self.enable_recv:
-                recv_data = self.port.read()
+                try:
+                    recv_data = self.port.read()
+                except Exception as e:
+                    # 2026-09-01 실기 재부팅 직후 확인: 파이가 이 스레드를 시작한
+                    # 시점에 STM32(USB-CDC, /dev/ttyACM0)가 아직 완전히 준비되지
+                    # 않아 "device reports readiness to read but returned no
+                    # data"로 read()가 예외를 던진 사례가 있었다. 이 스레드는
+                    # daemon 스레드라 예외가 나도 노드 프로세스 자체는 안 죽지만,
+                    # 이전에는 여기서 예외가 잡히지 않아 스레드가 그대로
+                    # 종료됐다 — 그러면 모터 등 **쓰기** 경로는 이 스레드와
+                    # 무관해 계속 동작하는데, 배터리/IMU/버튼/조이스틱처럼 이
+                    # 스레드가 파싱해 채우는 **읽기** 경로만 그 프로세스 수명
+                    # 내내 조용히 멈춘다 — 재시작 전까진 겉으로 아무 에러도 안
+                    # 보여서 알아채기 어렵다.
+                    #
+                    # 죽는 대신 포트를 닫았다 다시 열고 계속한다. 재연결
+                    # 자체가 실패해도(장치가 진짜 없어졌다면) 이 루프는 살아
+                    # 있으니 다음 바퀴에서 다시 시도한다 — 예전처럼 한 번의
+                    # 실패로 텔레메트리가 영구히 죽는 일은 없다.
+                    print(f"[recv_task] 시리얼 읽기 실패({e}) — 포트 재연결 시도")
+                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
+                    self.frame = []
+                    self.recv_count = 0
+                    try:
+                        self.port.close()
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+                    try:
+                        self.port.open()
+                    except Exception as reopen_err:
+                        print(f"[recv_task] 포트 재연결 실패({reopen_err}) — 0.5s 뒤 다시 시도")
+                    continue
                 if recv_data:
                     for dat in recv_data:
                         # print("%0.2X "%dat)
