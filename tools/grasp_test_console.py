@@ -340,6 +340,22 @@ class KeyReader:
         tty.setcbreak(self._fd)
         termios.tcflush(self._fd, termios.TCIFLUSH)
 
+    def cbreak_ok(self) -> bool:
+        """cbreak가 지금도 걸려 있는지만 확인한다 — tcflush 등 부수효과가
+        없어 주행 루프 안에서 매 틱 불러도 안전하다(ensure_cbreak과 달리
+        키 버퍼를 비우지 않으므로, 눌러 둔 키를 지우지 않는다).
+
+        2026-09-01 재발: ultralytics 지연 import를 없앤 뒤에도(load_yolo_model
+        참고) 4단계(drive_phase) 도중 키가 다시 안 먹힌 사례가 나왔다 —
+        이번엔 진입 시점이 아니라 **루프가 도는 중간**에 풀린 것으로 보인다.
+        어느 경로로 풀렸는지 이 파일 안에서는 아직 특정하지 못했다(그 시점에
+        이 스크립트가 서브프로세스를 새로 띄우지 않는다 — GripperCam도
+        2026-09-01부터 이 콘솔은 안 씀). ensure_cbreak()의 방침(진입 시
+        무조건 다시 건다)을 루프 내부로 넓혀, 원인을 특정하지 못해도 매 틱
+        스스로 고치게 한다."""
+        current = termios.tcgetattr(self._fd)
+        return not (current[tty.LFLAG] & termios.ICANON)
+
     def getch_nonblocking(self) -> str | None:
         r, _, _ = select.select([sys.stdin], [], [], 0)
         if not r:
@@ -766,6 +782,8 @@ def drive_phase(
     last_report_t = 0.0
     while True:
         node.pump()
+        if not kr.cbreak_ok():  # 매 틱 검사 — cbreak_ok() 문서 참고(2026-09-01 재발)
+            kr.ensure_cbreak()
         key = kr.getch_nonblocking()
         if key is not None:
             key = key.lower()
