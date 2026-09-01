@@ -163,11 +163,19 @@ def judge(observation, object_width_mm: float) -> AlignmentVerdict:
     near_m, far_m = depth_range
     half_width = capture_half_width_m(object_width_mm)
 
-    if forward < near_m:
+    # 2026-09-01 사용자 지시: 근접(near_m)·좌우(half_width) 양쪽에 여유를
+    # 준다 — 원래 경계는 near_m이 0mm 여유(측정 잡음 5mm에도 걸림, 실기
+    # 확인)라 GRASP 진입 자체가 너무 드물었다. far_m은 이미 넉넉해(위
+    # GRASP_CREEP_FORWARD_MM 참고) 그대로 둔다.
+    tolerance_m = bc.GRASP_ALIGN_TOLERANCE_MM / 1000.0
+    near_effective = near_m - tolerance_m
+    half_width_effective = half_width + tolerance_m
+
+    if forward < near_effective:
         return AlignmentVerdict(
             HOST_CORRECTION, lateral, 0.0,
-            f"물체가 턱 선보다 가깝다 ({forward * 1000:.0f}mm < {near_m * 1000:.0f}mm) "
-            "— 후진 필요",
+            f"물체가 턱 선보다 가깝다 ({forward * 1000:.0f}mm < {near_m * 1000:.0f}mm, "
+            f"여유 {bc.GRASP_ALIGN_TOLERANCE_MM:.0f}mm 포함) — 후진 필요",
             forward_error_m=forward - near_m)
     if forward > far_m:
         return AlignmentVerdict(
@@ -175,11 +183,12 @@ def judge(observation, object_width_mm: float) -> AlignmentVerdict:
             f"물체가 전진 거리 밖이다 ({forward * 1000:.0f}mm > {far_m * 1000:.0f}mm) "
             "— 재직진 필요",
             forward_error_m=forward - far_m)
-    if abs(lateral) > half_width:
+    if abs(lateral) > half_width_effective:
         return AlignmentVerdict(
             HOST_CORRECTION, lateral, 0.0,
             f"물체가 턱 폭 밖이다 (좌우 {lateral * 1000:+.0f}mm, "
-            f"한계 ±{half_width * 1000:.0f}mm) — 재회전 필요")
+            f"한계 ±{half_width * 1000:.0f}mm, 여유 {bc.GRASP_ALIGN_TOLERANCE_MM:.0f}mm 포함) "
+            "— 재회전 필요")
 
     # 2026-09-01까지는 여기서 centering_tolerance_m 을 더 좁게 걸어
     # PI_CENTER(servo 1 미세 보정)로 넘겼다. 사용자 지시로 그 경로를
