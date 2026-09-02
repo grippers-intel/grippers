@@ -554,6 +554,33 @@ class BaselineCarryState(State):
         if command.state == MissionState.INSERT:
             return self._judge_insert(ports, command, face)
 
+        if command.state == MissionState.APPROACH_BOX and face.ok:
+            # 09-02 실기(2건): NUDGE_BOX가 Host 계획 거리(want_m)를 다 밀
+            # 때까지 라이다를 안 보다가, PLACE에 들어가서야 확인해서는 늦었다
+            # — ArUco 데드레커닝이 틀리면 그사이 이미 바구니에 닿는다. 접근
+            # 중에도 매 사이클 확인해서, 이미 너무 가까우면 Host 계획을
+            # 무시하고 더 밀지 않는다(바퀴를 실제로 돌리는 쪽이 최종
+            # 안전판이라는 이 파일의 기존 원칙 그대로 — encode()/motion.py의
+            # 속도 클램프와 같은 계층).
+            too_close = corrections.retreat_if_too_close(face.distance_m)
+            if too_close is not None:
+                ports.base.stop()
+                ports.host.report(
+                    Report.INSERT_BLOCKED, self.reported_as,
+                    f"라이다 판독이 하한보다 가깝다 ({face.distance_m:.3f}m < "
+                    f"{bc.BASKET_MIN_LIDAR_M:.3f}m) — 접근 중 감지, 더 밀지 않는다",
+                    too_close)
+                return BaselineCarryState(self.label, self.reported_as, self.sample)
+            if corrections.within_stop_window(face.distance_m):
+                # 이미 알맞은 거리다 — 계획한 거리를 마저 채우면 창을 넘겨
+                # 버린다. 요·좌우·안정성·부하는 아직 안 본다 — PLACE에서
+                # check_insert가 평소대로 마저 본다.
+                ports.base.stop()
+                ports.host.report(
+                    Report.APPROACH_BOX_READY, self.reported_as,
+                    f"라이다 {face.distance_m:.3f}m — 목표창 안, 그만 밀어도 된다")
+                return BaselineCarryState(self.label, self.reported_as, self.sample)
+
         if not _drive(ports, command, self.reported_as):
             return self
         if command.state in (MissionState.CARRY, MissionState.APPROACH_BOX):

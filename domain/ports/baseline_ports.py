@@ -85,6 +85,18 @@ class Report:
     INSERT_FAILED = "INSERT_FAILED"
     IDLE_DONE = "IDLE_DONE"              # IDLE 복귀까지 완료
 
+    # APPROACH_BOX(바구니로 미세 접근, 2026-09-02) 중에도 매 사이클 라이다를
+    # 본다 — 예전에는 Host가 계획한 거리(want_m)만큼 다 민 뒤에야(=PLACE 진입
+    # 후) 라이다로 확인했는데, 그 계획이 틀리면(ArUco 데드레커닝 오차) 확인
+    # 시점엔 이미 늦어 바구니에 닿았다(09-02 실기 2건). 이제 접근 중에도
+    # 매번 확인해서, 이미 알맞은 거리면 더 밀지 않고 알린다 — INSERT_READY와
+    # 다르다: 요·좌우·안정성·부하까지 다 통과한 "투하해도 된다"가 아니라
+    # 거리 하나만 맞다는 "그만 밀어도 된다"다. 나머지 조건은 PLACE 에서
+    # 평소대로(check_insert) 마저 본다. 너무 가까운 경우(이미 최소거리
+    # 아래)는 새 보고를 안 만든다 — INSERT_BLOCKED + RETREAT 보정이 이미
+    # 그 경우를 정확히 표현하므로 그대로 재사용한다(corrections.from_insert).
+    APPROACH_BOX_READY = "APPROACH_BOX_READY"
+
     # 명령 자체를 실행할 수 없을 때. 모르는 state 이름, 제자리회전과 병진이
     # 섞인 명령 등 — 추측해서 움직이지 않고 되돌려준다.
     REJECTED = "REJECTED"
