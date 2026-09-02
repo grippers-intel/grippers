@@ -102,6 +102,23 @@ def find_port(explicit: str | None) -> str:
     sys.exit("6축이 응답하는 포트를 못 찾았습니다. 전원과 케이블을 확인하세요.")
 
 
+def action_queue(policy):
+    """정책의 액션 큐를 돌려준다. 정책마다 이름이 다르다.
+
+        ACT       policy._action_queue            (modeling_act.py:97)
+        SmolVLA   policy._queues["action"]        (modeling_smolvla.py:251)
+
+    큐가 비어 있는 스텝에서만 실제로 forward 가 돈다 - 그걸 알아야 forward 횟수를
+    제대로 세고, 최종 접근에서 재예측을 강제할 수도 있다.
+    """
+    q = getattr(policy, "_action_queue", None)
+    if q is not None:
+        return q
+    from lerobot.utils.constants import ACTION
+
+    return getattr(policy, "_queues", {}).get(ACTION)
+
+
 def _strip_unknown_config_fields(ckpt: str) -> None:
     """config.json 에서 이 lerobot 버전이 모르는 필드를 걷어낸다. 원본은 .orig 로 남긴다.
 
@@ -140,7 +157,7 @@ def find_camera(explicit: int | None, width: int, height: int) -> tuple[int, int
 
     Windows 는 MSMF 를 먼저 보고, 안 열리면 DSHOW 로 떨어진다. Linux 는 V4L2.
     DSHOW 도 MJPG 30fps 가 나온다 — 단 해상도를 FOURCC 보다 먼저 걸어야 한다
-    (patch_dshow_property_order 참고). "DSHOW 는 느리다"는 통념은 순서 문제였다.
+    (tools/arm/dshow_patch.py 참고). "DSHOW 는 느리다"는 통념은 순서 문제였다.
     """
     import cv2
     from lerobot.cameras.configs import Cv2Backends
@@ -149,7 +166,86 @@ def find_camera(explicit: int | None, width: int, height: int) -> tuple[int, int
         # MSMF 를 먼저 본다. 그런데 이 백엔드는 드라이버 상태에 따라 통째로
         # 안 열릴 때가 있다(2026-09-02 실측: MSMF 로는 index 0~7 이 전부
         # isOpened()=False, 같은 카메라가 DSHOW 로는 열림). 그때 죽지 않고
-        # DSHOW 로 떨어진다 — 대신 아래 patch_dshow_property_order() 가 필요하다.
+        # DSHOW 로 떨어진다 — 대신 dshow_patch.patch_dshow_property_order() 가 필요하다.
+        candidates = [(Cv2Backends.MSMF, cv2.CAP_MSMF), (Cv2Backends.DSHOW, cv2.CAP_DSHOW)]
+    else:
+        candidates = [(Cv2Backends.V4L2, cv2.CAP_V4L2)]
+
+    if explicit is not None:
+        return explicit, candidates[0][0]
+
+    for backend, cv_backend in candidates:
+        for idx in range(8):
+            cap = cv2.VideoCapture(idx, cv_backend)
+            try:
+                if not cap.isOpened():
+                    continue
+                # DSHOW 는 이 순서여야 MJPG 로 협상된다(patch 주석 참고).
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                ok, frame = cap.read()
+                # 죽은 장치(Phone Link 같은 가상 카메라)는 열리고 읽히지만 단색
+                # 플레이스홀더를 준다. 그걸 그리퍼캠으로 고르면 롤아웃이 통째로 무의미하다.
+                if ok and frame is not None and frame.std() > 8.0:
+                    print(f"  카메라 index {idx}: {frame.shape[1]}x{frame.shape[0]}"
+                          f"  ({backend.name})")
+                    return idx, backend
+            finally:
+                cap.release()
+            time.sleep(0.4)
+        print(f"  {backend.name}: 쓸 수 있는 카메라 없음")
+    sys.exit("열리는 카메라를 못 찾았습니다.")
+
+
+def _strip_unknown_config_fields(ckpt: str) -> None:
+    """config.json 에서 이 lerobot 버전이 모르는 필드를 걷어낸다. 원본은 .orig 로 남긴다.
+
+    데스크탑(0.6.1)에서 학습한 체크포인트를 이쪽(0.4.4)에서 로드할 때마다 걸린다.
+    에러 메시지가 필드 이름을 알려 주므로 그것만 지운다 - `type` 은 절대 지우지
+    않는다(policies.py 가 판별자로 pop 한다).
+    """
+    import json
+    import re
+    import shutil
+
+    from lerobot.configs.policies import PreTrainedConfig
+
+    path = os.path.join(ckpt, "config.json")
+    for _ in range(5):
+        try:
+            PreTrainedConfig.from_pretrained(ckpt)
+            return
+        except Exception as e:
+            bad = [f for f in re.findall(r"`([^`]+)`", str(e)) if f != "type"]
+            if not bad or "not valid for" not in str(e):
+                raise
+            cfg = json.load(open(path, encoding="utf-8"))
+            missing = object()
+            gone = [f for f in bad if cfg.pop(f, missing) is not missing]
+            if not gone:
+                raise
+            if not os.path.exists(path + ".orig"):
+                shutil.copy2(path, path + ".orig")
+            json.dump(cfg, open(path, "w", encoding="utf-8"), indent=2)
+            print(f"config.json 에서 제거: {', '.join(gone)}  (원본은 config.json.orig)")
+
+
+def find_camera(explicit: int | None, width: int, height: int) -> tuple[int, int]:
+    """열리는 카메라 index 와 그 플랫폼의 OpenCV 백엔드를 돌려준다.
+
+    Windows 는 MSMF 를 먼저 보고, 안 열리면 DSHOW 로 떨어진다. Linux 는 V4L2.
+    DSHOW 도 MJPG 30fps 가 나온다 — 단 해상도를 FOURCC 보다 먼저 걸어야 한다
+    (tools/arm/dshow_patch.py 참고). "DSHOW 는 느리다"는 통념은 순서 문제였다.
+    """
+    import cv2
+    from lerobot.cameras.configs import Cv2Backends
+
+    if platform.system() == "Windows":
+        # MSMF 를 먼저 본다. 그런데 이 백엔드는 드라이버 상태에 따라 통째로
+        # 안 열릴 때가 있다(2026-09-02 실측: MSMF 로는 index 0~7 이 전부
+        # isOpened()=False, 같은 카메라가 DSHOW 로는 열림). 그때 죽지 않고
+        # DSHOW 로 떨어진다 — 대신 dshow_patch.patch_dshow_property_order() 가 필요하다.
         candidates = [(Cv2Backends.MSMF, cv2.CAP_MSMF), (Cv2Backends.DSHOW, cv2.CAP_DSHOW)]
     else:
         candidates = [(Cv2Backends.V4L2, cv2.CAP_V4L2)]
@@ -335,6 +431,7 @@ def main() -> int:
     )
 
     if backend == Cv2Backends.DSHOW:
+        from dshow_patch import patch_dshow_property_order
         patch_dshow_property_order()
     cam = OpenCVCameraConfig(index_or_path=cam_idx, fps=args.fps, width=w, height=h,
                              rotation=Cv2Rotation.ROTATE_180, backend=backend,
@@ -414,12 +511,15 @@ def main() -> int:
                     print(f"[{time.perf_counter() - t_start:5.1f}s] 최종 접근 - "
                           f"이제 {args.replan_every}스텝마다 재예측합니다")
             if reaching and args.replan_every and step % args.replan_every == 0:
-                policy._action_queue.clear()
+                _q = action_queue(policy)
+                if _q is not None:
+                    _q.clear()
 
             # 큐가 비어 있는 스텝에서만 실제로 forward 가 돈다(modeling_act.py:116).
             # 소요 시간으로 가르면 안 된다 — 200ms 는 파이 기준이라 노트북에서는
             # 진짜 forward 도 그 아래로 들어와 1회로 세어졌다(2026-09-02).
-            refilled = len(policy._action_queue) == 0
+            _q = action_queue(policy)
+            refilled = _q is None or len(_q) == 0
             tf = time.perf_counter()
             with torch.no_grad():
                 act = post(policy.select_action(pre({

@@ -51,6 +51,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dshow_patch import patch_dshow_property_order
 from feetech_retry import RETRY, patch_bus
 
 #: 리더가 읽힌 wrist_roll 을 이 값으로 덮는다. 팔로워 서보 가동범위
@@ -90,6 +91,8 @@ def main() -> int:
 
     patch_bus()
     print(f"모터 통신을 재시도 {RETRY}회로 감쌌습니다.")
+    if patch_dshow_property_order():
+        print("카메라: 해상도를 FOURCC 보다 먼저 적용합니다 (DSHOW MJPG 협상용).")
     if _patch_leader_wrist_roll():
         print(f"wrist_roll 을 {WRIST_ROLL_FREEZE_DEG}도로 고정합니다 (리더 입력을 덮어씀).")
     else:
