@@ -197,6 +197,12 @@ def main() -> int:
     ap.add_argument("--n-action-steps", type=int, default=None,
                     help="청크당 재예측 없이 쓰는 스텝 수. 기본값(학습값)을 그대로 쓸 것 - "
                          "줄이면 정지 구간에서 못 빠져나온다(아래 주석)")
+    ap.add_argument("--replan-every", type=int, default=None, metavar="N",
+                    help="그리퍼가 열린 뒤부터 N 스텝마다 청크를 새로 뽑는다. "
+                         "시작 구간은 긴 청크가 필요하고 파지는 신선도가 필요하다")
+    ap.add_argument("--replan-after-lift", type=float, default=60.0,
+                    help="shoulder_lift 가 이 값을 넘으면 '최종 접근'으로 본다. "
+                         "그 전에는 정지 구간이 있어 재예측하면 갇힌다")
     ap.add_argument("--save-frames", default=None, metavar="DIR",
                     help="관측 프레임을 이 폴더에 남긴다. 파지 순간에 그리퍼가 "
                          "물체의 어디에 닿았는지는 이것 없이는 못 본다")
@@ -323,6 +329,7 @@ def main() -> int:
     # 자세로 끝난 롤아웃이 한 번도 안 움직인 것인지, 나갔다 돌아온 것인지
     # 마지막 프레임만 봐서는 같아 보인다(2026-09-02).
     traj = []
+    reaching = False        # 그리퍼가 한 번 열렸는가 = 정책이 뻗기로 넘어갔는가
     t_start = time.perf_counter()
     try:
         while time.perf_counter() - t_start < args.seconds:
@@ -341,6 +348,32 @@ def main() -> int:
                 img = torch.nn.functional.interpolate(
                     img.unsqueeze(0), size=(ph, pw), mode="bilinear",
                     align_corners=False).squeeze(0)
+            # 청크 길이는 구간마다 필요한 게 반대다.
+            #
+            #   시작   관측이 몇 초간 같아 "언제 펴는가"를 관측으로 못 정한다.
+            #          시간 정보가 청크 안에 있으므로 **길어야** 한다.
+            #   중간   그리퍼가 열린 뒤에도 4초쯤 거의 안 움직인다. 여기서
+            #          0.5초마다 재예측했더니 시작 때와 똑같이 갇혔다(2026-09-02).
+            #          그래서 트리거는 "그리퍼가 열렸나"가 아니라 "이미 뻗었나"다.
+            #   파지   2초 전 관측으로 만든 계획이 낡는다. 2026-09-02 실측:
+            #          15.4초 관측으로 새로 뽑으면 elbow 를 -24.0 까지 굽힌 뒤
+            #          닫으라고 하는데(학습 중앙값 -22.2), 돌고 있던 청크는
+            #          elbow -10.4 에서 닫았다. 14도 모자라 헛손질이 됐다.
+            #          **짧아야** 한다.
+            #
+            # 간격도 접근이 완주할 만큼은 줘야 한다 - 15.4초 관측의 새 청크는
+            # 44스텝 뒤에 닫으라고 했다. 그보다 짧게 자르면 영영 안 닫힌다.
+            #
+            # 그래서 최종 접근 구간에서만 큐를 비워 재예측을 강제한다.
+            # n_action_steps 를 통째로 줄이면 시작 구간에 갇힌다(위 주석 참고).
+            if not reaching and float(obs["shoulder_lift.pos"]) > args.replan_after_lift:
+                reaching = True
+                if args.replan_every:
+                    print(f"[{time.perf_counter() - t_start:5.1f}s] 최종 접근 - "
+                          f"이제 {args.replan_every}스텝마다 재예측합니다")
+            if reaching and args.replan_every and step % args.replan_every == 0:
+                policy._action_queue.clear()
+
             # 큐가 비어 있는 스텝에서만 실제로 forward 가 돈다(modeling_act.py:116).
             # 소요 시간으로 가르면 안 된다 — 200ms 는 파이 기준이라 노트북에서는
             # 진짜 forward 도 그 아래로 들어와 1회로 세어졌다(2026-09-02).
