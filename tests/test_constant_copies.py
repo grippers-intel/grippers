@@ -205,3 +205,15 @@ def test_bbox_보정값_사본이_같다(sources):
     node, gate = sources["perception_node"], sources["proximity_gate"]
     assert gate["BBOX_PADDING_PX"] == node["BBOX_PADDING_PX"]
     assert gate["MIN_BBOX_AREA_PX"] == node["MIN_BBOX_AREA_PX"]
+
+
+def test_화면위치_게이트_사본이_같다(sources):
+    """observe_target의 화면위치 게이트(OBSERVE_MIN_BOTTOM_Y_PX).
+
+    2026-09-02에 290 -> 250으로 낮추면서 tools/grasp_geometry_calibrate.py의
+    사본을 깜빡하고 안 고칠 뻔했다 — 이 스위트가 막으려는 바로 그 실패
+    양상(K/JAW_LINE 사본이 갈라진 전적)이라 여기도 지킨다."""
+    assert (sources["calibrate_tool"]["OBSERVE_MIN_BOTTOM_Y_PX"]
+            == sources["perception_node"]["OBSERVE_MIN_BOTTOM_Y_PX"]), (
+        "tools/grasp_geometry_calibrate.py의 OBSERVE_MIN_BOTTOM_Y_PX가 "
+        "perception_node.py와 다르다")

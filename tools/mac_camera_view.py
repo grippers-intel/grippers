@@ -82,15 +82,12 @@ TOPIC, FRAMES, MARKER, YOLO = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.ar
 # perception_node의 게이트와 **같은 값이어야 한다.** 이 도구의 요점은 YOLO가
 # 무엇을 봤는지가 아니라, 그중 무엇이 파이프라인에 실제로 들어가는지다.
 #
-# ⚠️ 2026-09-02: 사용자 요청으로 화면위치 게이트를 240.0으로 비교해본다
-# (290 -> 350 -> 200 -> 240 순으로 비교, 이번이 마지막) — perception_node.py의
-# 실제 값(OBSERVE_MIN_BOTTOM_Y_PX=290.0, perception_node.py:269)과 지금
-# 달라졌다. 이 도구의 "화면에 보이는 게 곧 파이프라인에 들어가는 것"이라는
-# 전제가 그동안 깨져 있다는 뜻이니, 실제 파이프라인 값을 바꾸려는 게
-# 아니라면 확인 끝나고 290.0으로 되돌릴 것.
+# 2026-09-02: 뷰어로 290 -> 350 -> 200 -> 240을 비교해본 뒤, 사용자가
+# 250으로 결정해 perception_node.py의 실제 값도 같이 바꿨다(그쪽 주석에
+# 전체 근거가 있다). 여기는 다시 그 값을 따라간다.
 MODEL_PATH = "/grippers/models/best.pt"
 CONF_GATE = 0.70
-MIN_BOTTOM_Y = 240.0
+MIN_BOTTOM_Y = 250.0
 
 model = None
 if YOLO:

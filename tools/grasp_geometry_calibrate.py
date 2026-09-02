@@ -130,7 +130,8 @@ SCALE_TOLERANCE = 0.05
 # 잡아낼 수 있고**, 그보다 작은 차이는 있는지 없는지 못 가린다.
 SCALE_MAX_PUSH_MM = 120.0
 # perception_node.OBSERVE_MIN_BOTTOM_Y_PX와 같은 값이어야 한다.
-OBSERVE_MIN_BOTTOM_Y_PX = 290.0
+# 2026-09-02: 290 -> 250 (perception_node.py의 같은 상수 옆 주석 참고).
+OBSERVE_MIN_BOTTOM_Y_PX = 250.0
 # perception_node.CLASS_DISTANCE_CALIBRATION_SQRT_PX_M의 현재 값.
 # 척도가 어긋났을 때 보정값을 바로 낼 수 있게 여기 적어 둔다 —
 # 도메인 계층이 ROS 패키지를 import하지 않는 것과 같은 이유로 복사한다.
