@@ -102,6 +102,39 @@ def find_port(explicit: str | None) -> str:
     sys.exit("6축이 응답하는 포트를 못 찾았습니다. 전원과 케이블을 확인하세요.")
 
 
+def _strip_unknown_config_fields(ckpt: str) -> None:
+    """config.json 에서 이 lerobot 버전이 모르는 필드를 걷어낸다. 원본은 .orig 로 남긴다.
+
+    데스크탑(0.6.1)에서 학습한 체크포인트를 이쪽(0.4.4)에서 로드할 때마다 걸린다.
+    에러 메시지가 필드 이름을 알려 주므로 그것만 지운다 - `type` 은 절대 지우지
+    않는다(policies.py 가 판별자로 pop 한다).
+    """
+    import json
+    import re
+    import shutil
+
+    from lerobot.configs.policies import PreTrainedConfig
+
+    path = os.path.join(ckpt, "config.json")
+    for _ in range(5):
+        try:
+            PreTrainedConfig.from_pretrained(ckpt)
+            return
+        except Exception as e:
+            bad = [f for f in re.findall(r"`([^`]+)`", str(e)) if f != "type"]
+            if not bad or "not valid for" not in str(e):
+                raise
+            cfg = json.load(open(path, encoding="utf-8"))
+            missing = object()
+            gone = [f for f in bad if cfg.pop(f, missing) is not missing]
+            if not gone:
+                raise
+            if not os.path.exists(path + ".orig"):
+                shutil.copy2(path, path + ".orig")
+            json.dump(cfg, open(path, "w", encoding="utf-8"), indent=2)
+            print(f"config.json 에서 제거: {', '.join(gone)}  (원본은 config.json.orig)")
+
+
 def find_camera(explicit: int | None, width: int, height: int) -> tuple[int, int]:
     """열리는 카메라 index 와 그 플랫폼의 OpenCV 백엔드를 돌려준다.
 
@@ -224,8 +257,8 @@ def main() -> int:
     from lerobot.cameras.configs import Cv2Backends, Cv2Rotation
     from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
     from lerobot.configs.policies import PreTrainedConfig
-    from lerobot.policies.act.modeling_act import ACTPolicy
-    from lerobot.policies.factory import make_pre_post_processors
+    from lerobot.policies.act.modeling_act import ACTPolicy  # noqa: F401  choice 등록용
+    from lerobot.policies.factory import get_policy_class, make_pre_post_processors
     from lerobot.robots.so_follower.config_so_follower import SO101FollowerConfig
     from lerobot.robots.so_follower.so_follower import SOFollower
 
@@ -262,6 +295,11 @@ def main() -> int:
     # LeRobot 0.4.4 는 config 에 `type` 이 있어야 하고(`policies.py` 가 pop 한다),
     # `pretrained_revision` 은 받지 않는다. 진입점을 PreTrainedConfig 로 두면
     # draccus 가 `type` 을 판별자로 소비한다.
+    # 학습 쪽(lerobot 0.6.x)이 저장한 config.json 에는 이 버전에 없는 필드가
+    # 섞여 들어온다. 남아 있으면 draccus 가 통째로 거부한다.
+    #     DecodingError: The fields `pretrained_revision` are not valid for ACTConfig
+    # 값이 null 이라 pop 의 기본값을 None 으로 두면 "없다"와 구분이 안 된다 - 센티널을 쓴다.
+    _strip_unknown_config_fields(args.ckpt)
     cfg = PreTrainedConfig.from_pretrained(args.ckpt)
     cfg.device = "cpu"
     if args.n_action_steps:
@@ -284,7 +322,11 @@ def main() -> int:
         if args.n_action_steps < cfg.chunk_size:
             print("  ⚠️ 학습값보다 짧습니다. 정지 구간에서 못 빠져나올 수 있습니다.")
         cfg.n_action_steps = args.n_action_steps
-    policy = ACTPolicy.from_pretrained(args.ckpt, config=cfg)
+    # 정책 종류를 여기서 고정하지 않는다. cfg.type 이 체크포인트에 적혀 있고
+    # (draccus 가 판별자로 쓰는 바로 그 값), 팩토리가 그걸로 클래스를 찾는다.
+    # ACT 와 SmolVLA 를 같은 도구로 돌려야 언어 조건 비교가 가능하다.
+    policy = get_policy_class(cfg.type).from_pretrained(args.ckpt, config=cfg)
+    print(f"정책: {cfg.type}  chunk={cfg.chunk_size}")
     policy.to("cpu").eval()
     # 학습 때 device(xpu)가 전처리기에 박혀 있다. 안 덮으면 mat1 is on xpu:0 로 죽는다.
     pre, post = make_pre_post_processors(
