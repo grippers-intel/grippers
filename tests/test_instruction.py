@@ -24,7 +24,11 @@ from mission import MissionFSM, State                # noqa: E402
 
 from conftest import PiSim                            # noqa: E402
 
-MAX_STEPS = 500
+# ⚠️ 2026-09-02, 시연용으로 PLACE 완료 뒤 SEARCH_TARGET 으로 곧장 가지 않고
+# RETURN_HOME 을 한 번 거치도록 바뀌어 사이클이 늘었다(test_basket_close_
+# loop.py 의 MAX_STEPS 주석 참고) — 여기는 그 위에 두 번째 기물까지
+# 오가므로 더 넉넉히 둔다.
+MAX_STEPS = 900
 
 
 class AutoDonePi(PiSim):

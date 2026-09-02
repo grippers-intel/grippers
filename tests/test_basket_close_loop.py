@@ -33,7 +33,12 @@ from vehicle_link import parse_basket_fix  # noqa: E402
 # 상한 안에 못 끝나면 그 자체를 실패로 본다(Pi 저장소 conftest 와 같은 원칙).
 # 0.196m 를 0.06 m/s 로 가면 3.3초 = 14Hz 에서 46 사이클이고, 좌우 79mm 가
 # 1.3초 = 19 사이클이다. 판정 왕복을 넉넉히 얹어 400 으로 둔다.
-MAX_STEPS = 400
+#
+# ⚠️ 2026-09-02, 시연용으로 PLACE 완료 뒤 SEARCH_TARGET 으로 곧장 가지 않고
+# RETURN_HOME(기본 위치, 바구니에서 대략 1m 대각선)을 한 번 거치도록
+# 바꿨다 — 그만큼 사이클이 늘어난다(실측: 이 파일의 기본 시나리오가
+# 442사이클에 끝남). 800으로 두 배 가까운 여유를 준다.
+MAX_STEPS = 800
 
 
 def _run(sim: PiSim, max_steps: int = MAX_STEPS) -> tuple[MissionFSM, int]:
@@ -50,6 +55,30 @@ def _run(sim: PiSim, max_steps: int = MAX_STEPS) -> tuple[MissionFSM, int]:
         f"좌우 {sim.lateral_m * 1000:+.0f}mm")
 
 
+def _run_to_place_done(sim: PiSim, max_steps: int = MAX_STEPS) -> tuple[MissionFSM, int]:
+    """룩을 든 상태로 시작해 PLACE 가 **막 끝나는 그 순간**까지 돌린다.
+
+    2026-09-02부터 PLACE 완료는 SEARCH_TARGET이 아니라 RETURN_HOME으로
+    이어진다(시연용, _skip_target과 같은 이유로 항상 같은 자리에서 다음
+    탐색을 시작하게 함). "바구니 앞에 어떻게 섰는가"를 보는 테스트는 그
+    뒤 RETURN_HOME으로 주행해 버린 좌표가 아니라 이 전이 순간의 좌표를
+    봐야 한다 — PLACE에서 NUDGE_BOX로 되돌아가는 보정 왕복(정상 동작)과
+    구분하려고, "직전이 PLACE였고 지금이 RETURN_HOME"인 순간만 완료로
+    본다."""
+    fsm = MissionFSM()
+    assert fsm.begin_carrying("rook")
+    was_place = False
+    for n in range(1, max_steps + 1):
+        was_place = fsm.state == State.PLACE
+        fsm.step(sim.pose(), {}, sim)
+        if was_place and fsm.state == State.RETURN_HOME:
+            return fsm, n
+    pytest.fail(
+        f"{max_steps} 사이클 안에 INSERT 를 못 끝냈다 — "
+        f"상태 {fsm.state.name}, 라이다 {sim.lidar_m:.3f}m, "
+        f"좌우 {sim.lateral_m * 1000:+.0f}mm")
+
+
 def test_실기_출발조건이_그날_관측과_같다():
     """이 시늉이 딴 것을 시험하고 있지 않은지부터 고정한다."""
     sim = PiSim()
@@ -59,7 +88,7 @@ def test_실기_출발조건이_그날_관측과_같다():
 
 def test_그날_막힌_자리에서_INSERT까지_간다():
     sim = PiSim()
-    fsm, steps = _run(sim)
+    fsm, steps = _run_to_place_done(sim)
 
     # 도착 조건은 Pi 가 받아 주는 범위 안이어야 한다 — 그것도 **가장자리가
     # 아니라 여유를 두고**. 상한에 딱 붙어 서면 판독이 1mm 만 튀어도 다시
@@ -107,7 +136,7 @@ def test_좌우를_모르면_거리만_맞추고_멈춘다():
     낸다. 그때 0으로 읽고 "가운데"라고 판단하면 물체가 바구니 밖에
     떨어진다 — Host 도 지어내지 말아야 한다."""
     sim = PiSim(lateral_known=False)
-    fsm, _ = _run(sim)
+    fsm, _ = _run_to_place_done(sim)
     assert sim.lidar_m <= PI_STOP_LIDAR_M + PI_STOP_TOLERANCE_M
 
 

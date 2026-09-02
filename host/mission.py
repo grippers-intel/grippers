@@ -1244,23 +1244,33 @@ class MissionFSM:
             if self.ready_to_advance and self._should_advance():
                 # 하나 끝났다고 멈추지 않는다 — 다음 기물을 다시 찾는다.
                 # 화면에 기물이 더 없으면 SEARCH_TARGET 에서 계속 대기한다.
+                #
+                # 2026-09-02, 시연용으로 SEARCH_TARGET 에 곧장 가지 않고
+                # RETURN_HOME 을 거친다 — _skip_target 과 같은 이유다.
+                # 바구니 바로 앞은 매번 각도·거리가 다른 자리라, 거기서 바로
+                # 다음 스캔을 시작하면 그때그때 다른 자리에서 SEARCH_TARGET
+                # 이 시작된다. RETURN_HOME 을 한 번 거치면 매 라운드가 항상
+                # 같은 자리에서 시작해 시연이 예측 가능해진다. 큐에 쌓인
+                # 지시(_queued_instruction_label)는 여기서 바로 적용하지
+                # 않는다 — RETURN_HOME 완료 시점에 적용하는 기존 경로(아래)
+                # 하나로 합친다.
                 self.ready_to_advance = False
                 self.target_label = None
                 self._target_xy = None
                 self.dest_xy = None
-                if self._queued_instruction_label is not None:
-                    # 방금 내려놓는 동안 큐에 쌓여있던 지시를 이제 적용
-                    # (2026-09-01).
-                    self._instructed_label = self._queued_instruction_label
-                    self._instructed_dest_xy = self._queued_instruction_dest_xy
-                    self._queued_instruction_label = None
-                    self._queued_instruction_dest_xy = None
-                self.state = State.SEARCH_TARGET
+                self._path_planner.reset()
+                self._drive.reset()
+                self.state = State.RETURN_HOME
 
         elif self.state == State.RETURN_HOME:
             # 기물을 포기한 뒤(_skip_target) 실패한 자리에 그대로 남지 않고
             # 여기로 먼저 돌아간다 — 다음 SEARCH_TARGET 을 매번 같은 예측
             # 가능한 자리에서 시작하게 한다(사용자 지시, 2026-09-01).
+            #
+            # 2026-09-02부터 PLACE 완료(하나를 성공적으로 넣은 뒤)도 같은
+            # 이유로 여기를 거친다(시연용) — 바구니 앞은 매번 각도·거리가
+            # 달라, 거기서 곧장 SEARCH_TARGET을 시작하면 매 라운드가
+            # 다른 자리에서 시작된다.
             obstacles = _other_pieces(piece_map)
             dist = self._approach(pose, robot_xy, mcfg.DEFAULT_HOME_XY,
                                   obstacles, None, link)
