@@ -147,6 +147,12 @@ def main() -> int:
     ap.add_argument("--res", nargs=2, type=int, default=(720, 1280), metavar=("H", "W"))
     ap.add_argument("--task", default="pick up the queen")
     ap.add_argument("--max-rel", type=float, default=5.0, help="스텝당 최대 이동(도). 유일한 안전장치")
+    ap.add_argument("--policy-res", nargs=2, type=int, default=None, metavar=("H", "W"),
+                    help="정책에 넣기 전 소프트웨어 리사이즈. 생략하면 train_config.json 에서 자동 판별")
+    ap.add_argument("--n-action-steps", type=int, default=None,
+                    help="청크당 재예측 없이 쓰는 스텝 수. 줄이면 개루프 드리프트가 준다")
+    ap.add_argument("--freeze-wrist-roll", type=float, default=0.067,
+                    help="정책에 넣을 wrist_roll 상수. v5 학습 평균이 기본값")
     args = ap.parse_args()
 
     # 모터 통신 재시도. LeRobot 기본값이 0 이라 패킷 하나 어긋나면 죽는다 —
@@ -165,6 +171,28 @@ def main() -> int:
     from lerobot.robots.so_follower.so_follower import SOFollower
 
     h, w = args.res
+
+    # 학습에 쓴 리사이즈는 train_config.json 에 있다. config.json 은 데이터셋
+    # 원본 크기를 적으므로 못 쓴다(policies/factory.py 가 ds_meta.features 를 읽는다).
+    #
+    # ⚠️ --res 는 **카메라에 요청할 촬영 해상도**다. 여기에 180x320 을 주면
+    # 리사이즈가 아니라 다른 카메라 모드(다른 화각)가 온다 - 이 카메라는 4:3 을
+    # 요청하면 좌우를 25% 잘라낸다. 학습은 1280x720 으로 찍은 것을 소프트웨어로
+    # 줄인 것이므로, 촬영은 원본으로 하고 여기서 줄인다.
+    ph, pw = (args.policy_res if args.policy_res else (None, None))
+    if ph is None:
+        import json as _json
+        try:
+            _tf = _json.load(open(os.path.join(args.ckpt, "train_config.json"),
+                                  encoding="utf-8"))["dataset"]["image_transforms"]
+            if _tf.get("enable") and "resize" in _tf.get("tfs", {}):
+                ph, pw = _tf["tfs"]["resize"]["kwargs"]["size"]
+                print(f"학습 리사이즈 자동 판별: {ph}x{pw}  (train_config.json)")
+        except Exception as _e:
+            print(f"train_config.json 을 못 읽었습니다({_e}) - 원본 크기로 넣습니다")
+    if ph is None:
+        ph, pw = h, w
+
     port = find_port(args.port)
     cam_idx, backend = find_camera(args.camera, w, h)
     print(f"\n선택: 포트 {port}  카메라 {cam_idx}  {w}x{h}@{args.fps}\n")
@@ -174,6 +202,10 @@ def main() -> int:
     # draccus 가 `type` 을 판별자로 소비한다.
     cfg = PreTrainedConfig.from_pretrained(args.ckpt)
     cfg.device = "cpu"
+    if args.n_action_steps:
+        print(f"n_action_steps {cfg.n_action_steps} -> {args.n_action_steps} "
+              f"(재예측 주기 {args.n_action_steps / args.fps:.2f}초)")
+        cfg.n_action_steps = args.n_action_steps
     policy = ACTPolicy.from_pretrained(args.ckpt, config=cfg)
     policy.to("cpu").eval()
     # 학습 때 device(xpu)가 전처리기에 박혀 있다. 안 덮으면 mat1 is on xpu:0 로 죽는다.
@@ -201,7 +233,18 @@ def main() -> int:
             t0 = time.perf_counter()
             obs = robot.get_observation()
             state = torch.tensor([obs[f"{j}.pos"] for j in JOINTS], dtype=torch.float32)
+            if args.freeze_wrist_roll is not None:
+                # wrist_roll 캘리브레이션 범위가 14틱(2040~2054)뿐이라 1틱만 어긋나도
+                # 정규화값이 14 뛴다. 학습 std 가 0.1022 이므로 4틱이면 z=558 이다.
+                # 실측: 같은 이미지에 이 값 하나만 바꾸면 정책이 프레임과 무관하게
+                # 동일한 액션을 뱉는다 - 트랜스포머가 포화돼 이미지를 무시한다.
+                # 학습 평균으로 덮으면 정상 출력과 0.05도 이내로 복구된다.
+                state[4] = args.freeze_wrist_roll
             img = torch.from_numpy(obs["gripper"].copy()).permute(2, 0, 1).float() / 255.0
+            if (ph, pw) != (img.shape[1], img.shape[2]):
+                img = torch.nn.functional.interpolate(
+                    img.unsqueeze(0), size=(ph, pw), mode="bilinear",
+                    align_corners=False).squeeze(0)
             tf = time.perf_counter()
             with torch.no_grad():
                 act = post(policy.select_action(pre({
