@@ -168,6 +168,25 @@ def test_Host가_APPROACH_BOX를_부르면_그_이름으로_보고한다():
     assert nxt.reported_as == MissionState.APPROACH_BOX
 
 
+def test_CARRY_중에도_IDLE_명령을_받으면_IdleState로_돌아간다():
+    """10:06 실기 재현 — 회귀 방지.
+
+    BaselineIdleState/BaselineApproachState는 둘 다 IDLE 명령을 받으면
+    IdleState로 돌아가는데, CarryState만 그 분기가 없어서 `return self`로
+    빠져 제자리에 갇혔다. run_mission.py는 미션을 중간에 멈출 때(사용자가
+    Enter/q로 끌 때) DONE이 아니라 "stop"+SEARCH_TARGET(-> 전선에서는
+    IDLE)을 보낸다 — 그 순간 Pi가 CARRY나 APPROACH_BOX(바구니 접근)
+    어딘가에 있었으면 그 자리에 영영 갇히고, 다음 미션이 새로 APPROACH/
+    GRASP를 보내도 Pi는 여전히 CarryState라 못 알아듣는다(GRASP가 영원히
+    대기하는 락업)."""
+    host = FakeHostLink([HostCommand(MissionState.IDLE, stop=True)])
+    ports = _ports(host=host)
+
+    nxt = BaselineCarryState("queen", MissionState.APPROACH_BOX).execute(ports)
+
+    assert isinstance(nxt, BaselineIdleState)
+
+
 # ── APPROACH_BOX 접근 중 실시간 라이다 점검 (2026-09-02) ───────────────────
 #
 # NUDGE_BOX가 Host 계획 거리(want_m)를 다 밀 때까지 라이다를 안 보고 있다가

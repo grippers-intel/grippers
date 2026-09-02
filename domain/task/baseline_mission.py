@@ -587,6 +587,19 @@ class BaselineCarryState(State):
             return BaselineCarryState(self.label, self.reported_as, self.sample)
         if command.state == MissionState.DONE:
             return BaselineDoneState()
+        if command.state == MissionState.IDLE:
+            # 2026-09-02 실기로 발견: 여기만 IDLE을 안 받고 있었다 —
+            # BaselineIdleState/BaselineApproachState는 둘 다 IDLE을 받아
+            # IdleState로 돌아가는데, CarryState만 빠져 있었다. Host가
+            # 미션을 중간에 멈출 때(run_mission.py 종료 처리, 사용자가
+            # Enter/q로 끌 때) 보내는 것은 DONE이 아니라 "stop"+
+            # SEARCH_TARGET(-> 여기서는 IDLE)이다. 그 순간 Pi가 CARRY나
+            # APPROACH_BOX(바구니 접근) 어딘가에 있었으면, 이 분기가 없어서
+            # `return self`로 떨어져 그 자리에 그대로 갇혔다 — 다음에 새
+            # 미션을 시작해도 Host가 APPROACH/GRASP를 보내는데 Pi는 여전히
+            # CarryState라 못 알아듣고(APPROACH_BOX만 받는다) GRASP가
+            # 영원히 대기하는 락업이 됐다(10:06 실기).
+            return BaselineIdleState()
         return self
 
     def _judge_insert(self, ports, command, face):
