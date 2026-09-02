@@ -62,6 +62,28 @@ DEFAULT_STEPS = 12
 DEFAULT_SETTLE_SEC = 0.6
 DEFAULT_TOLERANCE_RAW = 120
 
+# ── 마무리 정착(오버슈트) ──────────────────────────────────────────────────
+#
+# 중력이 걸린 관절은 **내려오는 방향으로는 목표에 못 닿는다.** 정지 마찰과
+# 중력이 균형을 이루는 지점에서 멈추고, P 게인을 올려도(LeRobot 은 떨림을
+# 줄이려고 16 으로 낮춘다) 다 닫히지 않는다. 2026-09-02 elbow_flex 실측:
+#
+#     위에서 3090 -> 3024      3053 에 정착   +29틱 (2.64도)
+#     아래에서 2960 -> 3024    3030 에 정착    +6틱 (0.55도)
+#     P 16/24/32/48            27/27/19/13틱   게인으로는 못 없앤다
+#
+# 그래서 목표를 지나쳤다가 되돌아온다 - 백래시를 한쪽으로 몰고 정지 마찰을
+# 깨는 표준 수법이다. 오버슈트별 잔차: 15틱->22, 30틱->11, 45틱->8.
+#
+# 왜 tolerance 로는 안 되나: DEFAULT_TOLERANCE_RAW 는 120 이다. 그건 헛
+# JamDetected 를 막으려는 값이라 넉넉해야 하고, 그래서 31틱 어긋난 자세도
+# "정렬 완료"로 통과시킨다. VLA 시작 자세는 그보다 훨씬 촘촘해야 한다 -
+# v5 15개 에피소드의 첫 프레임 elbow 산포가 0.26도(표준편차 0.08도)뿐이라,
+# 2.64도면 학습 분포의 32배 밖이다.
+SETTLE_TOLERANCE_RAW = 15
+SETTLE_OVERSHOOT_RAW = 40
+SETTLE_SEC = 0.8
+
 # ⚠️ 2026-08-24 사용자 지시로 **편차 상한 거부를 껐다**. 예전에는 이 값을
 # 넘으면 아무것도 쓰지 않고 "손으로 대략 맞춘 뒤 재실행하라"고 안내했는데,
 # 실기에서 IDLE 복귀가 필요한 상황은 대개 편차가 클 때라 그 가드가 오히려
@@ -449,6 +471,37 @@ class _ScservoDriver:
         return out
 
 
+def settle_by_overshoot(
+    driver,
+    targets,
+    tolerance=SETTLE_TOLERANCE_RAW,
+    overshoot=SETTLE_OVERSHOOT_RAW,
+    settle=SETTLE_SEC,
+):
+    """목표를 지나쳤다가 되돌아와 잔차를 줄인다. 위 상수 주석이 근거다.
+
+    아직 tolerance 밖인 관절만 건드린다 - 이미 들어온 관절을 흔들 이유가 없다.
+    오버슈트가 Min/Max_Position_Limit 을 넘으면 서보 펌웨어가 잘라내므로
+    여기서 따로 막지 않는다.
+    """
+    present = read_positions(driver, sorted(targets))
+    moving = {sid: targets[sid] for sid, pos in present.items()
+              if pos is not None and abs(pos - targets[sid]) > tolerance}
+    if not moving:
+        return present
+
+    print(f"[align] 마무리 정착: servo {sorted(moving)} "
+          f"(오버슈트 {overshoot}틱 뒤 목표로 복귀)")
+    for sid, target in moving.items():
+        direction = -1 if present[sid] > target else 1
+        driver.set_position(sid, target + direction * overshoot)
+    time.sleep(settle)
+    for sid, target in moving.items():
+        driver.set_position(sid, target)
+    time.sleep(settle)
+    return read_positions(driver, sorted(targets))
+
+
 def _connect(port):
     # driver_sdk(pyserial 의존)는 여기서만 import한다 — 그래야 위의 검사/보간
     # 로직은 하드웨어 없이도 fake driver로 단위 테스트할 수 있다.
@@ -485,6 +538,11 @@ def main(argv=None):
         action="store_true",
         help="교시 IDLE 대신 VLA 정책의 학습 시작 자세로 정렬한다. "
              "팔이 VLA 캘리브레이션일 때만 쓸 것 (프레임이 다르다)",
+    )
+    parser.add_argument(
+        "--no-settle",
+        action="store_true",
+        help="마무리 오버슈트 정착을 끈다. 목표 주변으로 조금도 넘어가면 안 될 때만",
     )
     parser.add_argument(
         "--skip-frame-check",
@@ -549,6 +607,11 @@ def main(argv=None):
     except JamDetected as e:
         print(f"[align] 끼임 감지 — 중단: {e}", file=sys.stderr)
         return 2
+
+    if not args.no_settle:
+        settled = settle_by_overshoot(driver, targets)
+        if any(v is not None for v in settled.values()):
+            final = {sid: v for sid, v in settled.items() if v is not None}
 
     print(f"[align] final={final}")
     final_offsets = {
