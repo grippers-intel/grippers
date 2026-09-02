@@ -34,6 +34,8 @@
 """
 
 import argparse
+import json
+import pathlib
 import sys
 import time
 
@@ -110,6 +112,30 @@ def idle_targets():
     targets = {servo_id: IDLE_CRADLE_RAW[servo_id - 1] for servo_id in SERVO_IDS}
     targets[GRIPPER_SERVO_ID] = GRIPPER_CLOSED_RAW
     return targets
+
+
+VLA_IDLE_FILE = (
+    pathlib.Path(__file__).resolve().parent / "arm" / "calibration" / "vla_idle_pose.json"
+)
+
+
+def vla_idle_targets():
+    """VLA 정책이 학습한 시작 자세로 정렬한다 — **VLA 캘리브레이션 프레임**의 raw다.
+
+    ⚠️ 교시 IDLE(IDLE_CRADLE_RAW)과 숫자를 섞으면 안 된다. 두 캘리브레이션은
+    Homing_Offset 이 다르고, `Present = Actual - Homing_Offset` 이므로 **같은 raw가
+    다른 물리 자세**를 뜻한다. wrist_roll 은 976틱(86도), gripper 는 953틱(84도)
+    차이가 난다.
+
+    그래서 이 목표는 **팔이 VLA 캘리브레이션일 때만** 의미가 있다. 교시 상태에서
+    이 값을 쓰면 엉뚱한 곳으로 간다 — 쓰기 전에 오프셋을 확인할 것.
+
+    값의 출처는 `tools/arm/calibration/vla_idle_pose.json` 하나다. 여기 숫자를
+    다시 적지 않는다 — 사본이 늘면 갈라진다(restore_taught_offsets 가
+    TAUGHT_HOMING_OFFSETS 를 대하는 방식과 같다).
+    """
+    data = json.loads(VLA_IDLE_FILE.read_text(encoding="utf-8"))
+    return {int(sid): int(raw) for sid, raw in data["pose_raw"].items()}
 
 
 def read_positions(driver, servo_ids):
@@ -313,9 +339,18 @@ def main(argv=None):
     parser.add_argument("--settle", type=float, default=DEFAULT_SETTLE_SEC)
     parser.add_argument("--dry-run", action="store_true", help="검사와 리포트만 하고 종료")
     parser.add_argument("--tolerance", type=int, default=DEFAULT_TOLERANCE_RAW)
+    parser.add_argument(
+        "--vla",
+        action="store_true",
+        help="교시 IDLE 대신 VLA 정책의 학습 시작 자세로 정렬한다. "
+             "팔이 VLA 캘리브레이션일 때만 쓸 것 (프레임이 다르다)",
+    )
     args = parser.parse_args(argv)
 
-    targets = idle_targets()
+    targets = vla_idle_targets() if args.vla else idle_targets()
+    if args.vla:
+        print(f"목표: VLA 학습 시작 자세 ({VLA_IDLE_FILE.name})")
+        print("  ⚠️ 이 값은 VLA 캘리브레이션 프레임입니다. 팔이 교시 상태면 엉뚱한 곳으로 갑니다.")
 
     driver = _connect(args.port)
     if driver is None:

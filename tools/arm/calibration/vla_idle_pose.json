@@ -1,0 +1,23 @@
+{
+  "_note": "VLA 정책이 학습한 시작 자세. VLA 캘리브레이션 프레임의 raw 값이다.",
+  "_derived_from": "lsy0284/gripper_pick_v5_queen 15 에피소드 첫 프레임의 중앙값",
+  "_frame": "VLA (tools/arm/calibration/grippers_arm.json 의 오프셋·범위 기준). 교시 프레임과 직접 비교하면 안 된다.",
+  "_clamped": "shoulder_lift 는 환산값 783 이 VLA 창 하한 822 밖이라 822 로 맞췄다 (39틱, 3.4도).",
+  "_measured": "2026-09-02",
+  "pose_raw": {
+    "1": 2008,
+    "2": 822,
+    "3": 3024,
+    "4": 2868,
+    "5": 2047,
+    "6": 1989
+  },
+  "source_median_deg": {
+    "shoulder_pan": -5.49,
+    "shoulder_lift": -103.30,
+    "elbow_flex": 95.82,
+    "wrist_flex": 73.45,
+    "wrist_roll": -0.18,
+    "gripper": 6.94
+  }
+}
