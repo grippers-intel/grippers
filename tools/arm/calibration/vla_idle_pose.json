@@ -14,10 +14,19 @@
   },
   "source_median_deg": {
     "shoulder_pan": -5.49,
-    "shoulder_lift": -103.30,
+    "shoulder_lift": -103.3,
     "elbow_flex": 95.82,
     "wrist_flex": 73.45,
     "wrist_roll": -0.18,
     "gripper": 6.94
+  },
+  "_homing_offsets_why": "이 자세가 어느 프레임의 숫자인지 증명하는 지문이다. align_to_idle --vla 가 움직이기 전에 서보의 Homing_Offset 을 읽어 이것과 대조하고, 다르면 거부한다. Pi 에는 lerobot 캐시가 없으므로 저장소에 있어야 한다. 출처는 lerobot 캘리브레이션 grippers_arm.json - 재캘리브레이션하면 같이 갱신할 것.",
+  "homing_offsets": {
+    "1": -1917,
+    "2": -1757,
+    "3": 1338,
+    "4": 1794,
+    "5": -872,
+    "6": 390
   }
 }

@@ -27,6 +27,9 @@ def _load_module():
 align = _load_module()
 
 
+from grippers_arm.floor_grasp_profiles import TAUGHT_HOMING_OFFSETS
+
+
 class FakeStatus:
     def __init__(self, online=True, position=None, temperature=25):
         self.online = online
@@ -38,9 +41,16 @@ class FakeDriver:
     """Duck-types just the STS3215Driver surface align_to_idle.py calls."""
 
     def __init__(
-        self, positions, temperatures=None, online=None, jam_servo=None, jam_after_calls=0
+        self, positions, temperatures=None, online=None, jam_servo=None, jam_after_calls=0,
+        homing_offsets=None,
     ):
         self.positions = dict(positions)
+        # 프레임 검사가 읽는 값. 기본은 교시 오프셋 - 이 테스트들은 교시 IDLE 경로를
+        # 보므로, 팔이 교시 프레임에 있다는 것이 이들의 전제다.
+        self.homing_offsets = (
+            dict(homing_offsets) if homing_offsets is not None
+            else dict(TAUGHT_HOMING_OFFSETS)
+        )
         self.temperatures = temperatures or dict.fromkeys(positions, 25)
         self.online = online or dict.fromkeys(positions, True)
         self.jam_servo = jam_servo
@@ -50,6 +60,9 @@ class FakeDriver:
 
     def get_position(self, servo_id):
         return self.positions.get(servo_id)
+
+    def get_homing_offset(self, servo_id):
+        return self.homing_offsets.get(servo_id)
 
     def set_position(self, servo_id, position):
         self.calls.append(("set_position", servo_id, position))
@@ -253,3 +266,60 @@ def test_converge_gives_up_after_the_timeout_without_raising(monkeypatch):
     final = align.converge_at_targets(driver, targets, timeout=0.0, poll=0.0)
 
     assert final[3] == positions[3]
+
+
+# ── 프레임 검사 ────────────────────────────────────────────────────────────
+#
+# `latch_torque_at_present` 는 "지금 자세에서 출발한다"만 보장한다. 목표 raw 가
+# 다른 캘리브레이션 프레임의 숫자면 출발이 안전해도 도착이 엉뚱하다 - 교시
+# 상태에서 --vla 를 돌리면 wrist_roll 이 994틱(87도) 돈다. 온도·통신 검사는
+# 전부 통과하므로 이 검사가 없으면 아무것도 막지 못한다.
+
+
+def _vla_frame_driver():
+    """VLA 오프셋이 실린 팔. 교시 IDLE 을 요구하면 거부돼야 한다."""
+    return FakeDriver(
+        dict.fromkeys(range(1, 7), 2048),
+        homing_offsets=align.vla_homing_offsets(),
+    )
+
+
+def test_taught_align_is_refused_when_arm_carries_vla_offsets(monkeypatch):
+    driver = _vla_frame_driver()
+    monkeypatch.setattr(align, "_connect", lambda port: driver)
+
+    assert align.main([]) == 3
+    assert driver.calls == []      # 검사 전에 아무것도 쓰지 않았다
+
+
+def test_vla_align_is_refused_when_arm_carries_taught_offsets(monkeypatch):
+    driver = FakeDriver(dict.fromkeys(range(1, 7), 2048))   # 기본 = 교시 오프셋
+    monkeypatch.setattr(align, "_connect", lambda port: driver)
+
+    assert align.main(["--vla"]) == 3
+    assert driver.calls == []
+
+
+def test_vla_align_proceeds_when_frames_agree(monkeypatch):
+    driver = _vla_frame_driver()
+    monkeypatch.setattr(align, "_connect", lambda port: driver)
+
+    assert align.main(["--vla", "--dry-run"]) == 0
+
+
+def test_unreadable_offset_is_refused_rather_than_assumed_equal(monkeypatch):
+    """못 읽은 것은 '같다'가 아니다 - calib_identity 가 UNREADABLE 로 가르는 이유."""
+    driver = FakeDriver(dict.fromkeys(range(1, 7), 2048))
+    driver.homing_offsets[3] = None
+    monkeypatch.setattr(align, "_connect", lambda port: driver)
+
+    assert align.main([]) == 3
+    assert driver.calls == []
+
+
+def test_skip_frame_check_lets_a_mismatched_frame_through(monkeypatch):
+    """오프셋을 일부러 바꾸는 중이라면 빠져나갈 문이 있어야 한다."""
+    driver = _vla_frame_driver()
+    monkeypatch.setattr(align, "_connect", lambda port: driver)
+
+    assert align.main(["--dry-run", "--skip-frame-check"]) == 0

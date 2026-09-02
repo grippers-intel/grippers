@@ -47,7 +47,7 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from grippers_arm.floor_grasp_profiles import IDLE_CRADLE_RAW
+from grippers_arm.floor_grasp_profiles import IDLE_CRADLE_RAW, TAUGHT_HOMING_OFFSETS
 from grippers_arm.gripper_calibration import GRIPPER_CLOSED_MM, position_from_width
 
 SERVO_IDS = range(1, 6)
@@ -144,6 +144,42 @@ def vla_idle_targets():
     """
     data = json.loads(VLA_IDLE_FILE.read_text(encoding="utf-8"))
     return {int(sid): int(raw) for sid, raw in data["pose_raw"].items()}
+
+
+def vla_homing_offsets():
+    """VLA 캘리브레이션의 Homing_Offset. 프레임 검사의 기준값이다.
+
+    교시 쪽 기준값은 `TAUGHT_HOMING_OFFSETS` 로 이미 저장소에 있다. VLA 쪽은
+    lerobot 캐시(~/.cache/huggingface/lerobot/...)에만 있었는데, Pi 에는 그 캐시가
+    없다. 검사를 파이에서도 하려면 저장소에 있어야 한다.
+    """
+    data = json.loads(VLA_IDLE_FILE.read_text(encoding="utf-8"))
+    return {int(sid): int(v) for sid, v in data["homing_offsets"].items()}
+
+
+def check_frame(driver, expected, label):
+    """서보에 실린 Homing_Offset 이 기대한 프레임인지 본다. 사유 문자열 또는 None.
+
+    ## 왜 이 검사가 따로 있나
+
+    `latch_torque_at_present` 는 "지금 자세에서 출발한다"를 보장한다. 그런데 목표
+    숫자가 **다른 프레임의 raw** 면, 출발이 안전해도 도착이 엉뚱하다. 교시 상태에서
+    --vla 를 돌리면 wrist_roll 이 994틱(87도) 돈다 - latch 도 정상, 온도도 정상,
+    통신도 정상이라 기존 검사는 전부 통과한다.
+
+    `check_safe_to_align` 에 합치지 않은 이유는 driver 를 읽어야 하기 때문이다.
+    그쪽은 순수 함수로 두어 하드웨어 없이 테스트된다는 성질을 지킨다.
+
+    판정은 `calib_identity` 를 그대로 쓴다 - 재시도 읽기와 MISMATCH/UNREADABLE
+    구분이 거기 있고, 이미 arm_driver_node 와 restore_taught_offsets 가 쓰는 것이다.
+    """
+    from grippers_arm import calib_identity
+
+    current = calib_identity.read_offsets(driver, sorted(expected))
+    result = calib_identity.verdict(current, expected)
+    if result.ok:
+        return None
+    return f"{label} 프레임이 아닙니다 - {result.message()}"
 
 
 def read_positions(driver, servo_ids):
@@ -339,7 +375,7 @@ class _ScservoDriver:
 
     _ADDR = {
         "position": (56, 2), "goal": (42, 2), "speed": (46, 2), "accel": (41, 1),
-        "temp": (63, 1), "torque": (40, 1),
+        "temp": (63, 1), "torque": (40, 1), "home": (31, 2),
     }
 
     class _Status:
@@ -387,6 +423,14 @@ class _ScservoDriver:
 
     def get_position(self, sid):
         return self._read(sid, "position")
+
+    def get_homing_offset(self, sid):
+        # bit11 이 부호, 하위 11비트가 크기다. 2의 보수가 아니다 -
+        # 그냥 int 로 읽으면 음수 오프셋이 2048 이상의 양수로 나온다.
+        raw = self._read(sid, "home")
+        if raw is None:
+            return None
+        return -(raw & 0x7FF) if raw & 0x800 else raw
 
     def set_position(self, sid, value):
         return self._write(sid, "goal", int(value))
@@ -442,17 +486,37 @@ def main(argv=None):
         help="교시 IDLE 대신 VLA 정책의 학습 시작 자세로 정렬한다. "
              "팔이 VLA 캘리브레이션일 때만 쓸 것 (프레임이 다르다)",
     )
+    parser.add_argument(
+        "--skip-frame-check",
+        action="store_true",
+        help="Homing_Offset 프레임 검사를 건너뛴다. 오프셋을 일부러 바꾸는 중일 때만",
+    )
     args = parser.parse_args(argv)
 
     targets = vla_idle_targets() if args.vla else idle_targets()
     if args.vla:
         print(f"목표: VLA 학습 시작 자세 ({VLA_IDLE_FILE.name})")
-        print("  [주의] 이 값은 VLA 캘리브레이션 프레임입니다. 팔이 교시 상태면 엉뚱한 곳으로 갑니다.")
+        print("  이 값은 VLA 캘리브레이션 프레임입니다 - 서보 오프셋을 대조해 확인합니다.")
 
     driver = _connect(args.port)
     if driver is None:
         print(f"[align] 연결 실패: {args.port}", file=sys.stderr)
         return 1
+
+    if args.skip_frame_check:
+        print("[align] --skip-frame-check - 프레임 검사를 건너뜁니다", file=sys.stderr)
+    else:
+        if args.vla:
+            expected, label = vla_homing_offsets(), "VLA"
+        else:
+            expected, label = dict(TAUGHT_HOMING_OFFSETS), "교시"
+        bad = check_frame(driver, expected, label)
+        if bad:
+            print(f"[align] {bad}", file=sys.stderr)
+            print("  아무것도 쓰지 않았습니다. 목표 raw 가 다른 프레임의 숫자라 "
+                  "그대로 움직이면 엉뚱한 자세로 갑니다.", file=sys.stderr)
+            print(f"  기대: {expected}", file=sys.stderr)
+            return 3
 
     status = driver.get_all_status()
     problems = check_safe_to_align(status, targets)
