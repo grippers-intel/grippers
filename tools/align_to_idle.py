@@ -39,6 +39,14 @@ import pathlib
 import sys
 import time
 
+# Windows 콘솔(cp949)은 em dash 나 경고 기호 같은 글자를 못 쓴다. 이 도구는 Pi 와
+# 노트북 양쪽에서 도는데, 출력 한 글자 때문에 정렬이 중단되면 안 된다.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
 from grippers_arm.floor_grasp_profiles import IDLE_CRADLE_RAW
 from grippers_arm.gripper_calibration import GRIPPER_CLOSED_MM, position_from_width
 
@@ -317,6 +325,86 @@ def converge_at_targets(
         time.sleep(poll)
 
 
+class _ScservoDriver:
+    """노트북용 어댑터 — `driver_sdk.STS3215Driver` 와 같은 인터페이스를 scservo_sdk 로 낸다.
+
+    `driver_sdk.py` 는 Pi 컨테이너의 `/third_party` 에만 있고 저장소에 두지 않는다
+    (tools/teleop/driver_sdk_note.txt). 그런데 팔 USB 를 노트북에 꽂고 VLA 롤아웃을
+    할 때도 이 도구가 필요하다 — 안전 순서(present 를 goal 에 latch 한 뒤 보간),
+    끼임 감지, 온도 검사, 수렴 대기가 전부 여기 있기 때문이다. 그걸 새로 만드는 대신
+    하드웨어 접근만 갈아 끼운다.
+
+    이 도구가 driver 에 요구하는 것은 여섯 개뿐이라 얇게 끝난다.
+    """
+
+    _ADDR = {
+        "position": (56, 2), "goal": (42, 2), "speed": (46, 2), "accel": (41, 1),
+        "temp": (63, 1), "torque": (40, 1),
+    }
+
+    class _Status:
+        __slots__ = ("online", "position", "temperature")
+
+        def __init__(self, online, position, temperature):
+            self.online, self.position, self.temperature = online, position, temperature
+
+    def __init__(self, port):
+        self._port_name = port
+        self._ph = None
+        self._pk = None
+
+    def connect(self):
+        import serial.tools.list_ports
+        from scservo_sdk import PacketHandler, PortHandler
+
+        port = self._port_name
+        if port in (None, "", DEFAULT_PORT) or not port.upper().startswith("COM"):
+            # 기본값 /dev/soarm 은 Pi 경로다. 노트북에서는 CH343 을 찾아 쓴다.
+            cands = [p.device for p in serial.tools.list_ports.comports()
+                     if "Bluetooth" not in p.description]
+            if not cands:
+                return False
+            port = cands[0]
+        self._ph = PortHandler(port)
+        if not (self._ph.openPort() and self._ph.setBaudRate(1_000_000)):
+            return False
+        self._pk = PacketHandler(0)
+        self._port_name = port
+        return True
+
+    def _read(self, sid, key):
+        addr, n = self._ADDR[key]
+        v, res, _ = (self._pk.read1ByteTxRx(self._ph, sid, addr) if n == 1
+                     else self._pk.read2ByteTxRx(self._ph, sid, addr))
+        return v if res == 0 else None
+
+    def _write(self, sid, key, value):
+        addr, n = self._ADDR[key]
+        r = (self._pk.write1ByteTxRx(self._ph, sid, addr, value) if n == 1
+             else self._pk.write2ByteTxRx(self._ph, sid, addr, value))
+        res = r[0] if isinstance(r, tuple) else r
+        return res == 0
+
+    def get_position(self, sid):
+        return self._read(sid, "position")
+
+    def set_position(self, sid, value):
+        return self._write(sid, "goal", int(value))
+
+    def set_speed(self, sid, value):
+        return self._write(sid, "speed", int(value))
+
+    def set_acceleration(self, sid, value):
+        return self._write(sid, "accel", int(value))
+
+    def get_all_status(self):
+        out = {}
+        for sid in list(SERVO_IDS) + [GRIPPER_SERVO_ID]:
+            pos = self._read(sid, "position")
+            out[sid] = self._Status(pos is not None, pos, self._read(sid, "temp"))
+        return out
+
+
 def _connect(port):
     # driver_sdk(pyserial 의존)는 여기서만 import한다 — 그래야 위의 검사/보간
     # 로직은 하드웨어 없이도 fake driver로 단위 테스트할 수 있다.
@@ -325,11 +413,20 @@ def _connect(port):
     # 디렉터리를 sys.path에 얹어 둬서 driver_sdk를 flat import할 수 있게
     # 만든다 (arm_driver_node.py와 동일한 규칙). 실기(2026-08-21)에서
     # 이 줄 없이 바로 driver_sdk를 import해 ModuleNotFoundError로 확인됨.
-    import soarm_lab  # noqa: F401
-    from driver_sdk import STS3215Driver
+    #
+    # driver_sdk 가 없는 환경(노트북)에서는 scservo_sdk 어댑터로 떨어진다.
+    try:
+        import soarm_lab  # noqa: F401
+        from driver_sdk import STS3215Driver
 
-    driver = STS3215Driver(port)
-    return driver if driver.connect() else None
+        driver = STS3215Driver(port)
+        return driver if driver.connect() else None
+    except ImportError:
+        driver = _ScservoDriver(port)
+        if not driver.connect():
+            return None
+        print(f"[align] driver_sdk 없음 - scservo_sdk 로 붙었습니다 ({driver._port_name})")
+        return driver
 
 
 def main(argv=None):
@@ -350,7 +447,7 @@ def main(argv=None):
     targets = vla_idle_targets() if args.vla else idle_targets()
     if args.vla:
         print(f"목표: VLA 학습 시작 자세 ({VLA_IDLE_FILE.name})")
-        print("  ⚠️ 이 값은 VLA 캘리브레이션 프레임입니다. 팔이 교시 상태면 엉뚱한 곳으로 갑니다.")
+        print("  [주의] 이 값은 VLA 캘리브레이션 프레임입니다. 팔이 교시 상태면 엉뚱한 곳으로 갑니다.")
 
     driver = _connect(args.port)
     if driver is None:
