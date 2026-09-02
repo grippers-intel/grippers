@@ -105,35 +105,80 @@ def find_port(explicit: str | None) -> str:
 def find_camera(explicit: int | None, width: int, height: int) -> tuple[int, int]:
     """열리는 카메라 index 와 그 플랫폼의 OpenCV 백엔드를 돌려준다.
 
-    Windows 는 MSMF 여야 720p 30fps 가 나온다. DSHOW 는 MJPG 협상을 못 해
-    YUY2 로 떨어지고 10fps 가 된다. Linux 는 V4L2.
+    Windows 는 MSMF 를 먼저 보고, 안 열리면 DSHOW 로 떨어진다. Linux 는 V4L2.
+    DSHOW 도 MJPG 30fps 가 나온다 — 단 해상도를 FOURCC 보다 먼저 걸어야 한다
+    (patch_dshow_property_order 참고). "DSHOW 는 느리다"는 통념은 순서 문제였다.
     """
     import cv2
     from lerobot.cameras.configs import Cv2Backends
 
     if platform.system() == "Windows":
-        backend, cv_backend = Cv2Backends.MSMF, cv2.CAP_MSMF
+        # MSMF 를 먼저 본다. 그런데 이 백엔드는 드라이버 상태에 따라 통째로
+        # 안 열릴 때가 있다(2026-09-02 실측: MSMF 로는 index 0~7 이 전부
+        # isOpened()=False, 같은 카메라가 DSHOW 로는 열림). 그때 죽지 않고
+        # DSHOW 로 떨어진다 — 대신 아래 patch_dshow_property_order() 가 필요하다.
+        candidates = [(Cv2Backends.MSMF, cv2.CAP_MSMF), (Cv2Backends.DSHOW, cv2.CAP_DSHOW)]
     else:
-        backend, cv_backend = Cv2Backends.V4L2, cv2.CAP_V4L2
+        candidates = [(Cv2Backends.V4L2, cv2.CAP_V4L2)]
 
     if explicit is not None:
-        return explicit, backend
+        return explicit, candidates[0][0]
 
-    for idx in range(8):
-        cap = cv2.VideoCapture(idx, cv_backend)
-        try:
-            if not cap.isOpened():
-                continue
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            ok, frame = cap.read()
-            if ok and frame is not None:
-                print(f"  카메라 index {idx}: {frame.shape[1]}x{frame.shape[0]}")
-                return idx, backend
-        finally:
-            cap.release()
-        time.sleep(0.4)
+    for backend, cv_backend in candidates:
+        for idx in range(8):
+            cap = cv2.VideoCapture(idx, cv_backend)
+            try:
+                if not cap.isOpened():
+                    continue
+                # DSHOW 는 이 순서여야 MJPG 로 협상된다(patch 주석 참고).
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                ok, frame = cap.read()
+                # 죽은 장치(Phone Link 같은 가상 카메라)는 열리고 읽히지만 단색
+                # 플레이스홀더를 준다. 그걸 그리퍼캠으로 고르면 롤아웃이 통째로 무의미하다.
+                if ok and frame is not None and frame.std() > 8.0:
+                    print(f"  카메라 index {idx}: {frame.shape[1]}x{frame.shape[0]}"
+                          f"  ({backend.name})")
+                    return idx, backend
+            finally:
+                cap.release()
+            time.sleep(0.4)
+        print(f"  {backend.name}: 쓸 수 있는 카메라 없음")
     sys.exit("열리는 카메라를 못 찾았습니다.")
+
+
+def patch_dshow_property_order() -> None:
+    """DSHOW 에서 해상도를 FOURCC 보다 **먼저** 걸도록 LeRobot 을 고쳐 끼운다.
+
+    LeRobot 은 FOURCC 를 먼저 건다(camera_opencv.py:202, "FOURCC first as it can
+    affect available FPS/resolution options"). MSMF·V4L2 에서는 맞는 순서지만
+    DSHOW 에서는 정확히 거꾸로다. 2026-09-02 실측(index 0, 1280x720):
+
+        해상도 -> FOURCC      MJPG   29.9 fps
+        FOURCC -> 해상도      YUY2   10.0 fps      <- LeRobot 의 순서
+        해상도만              YUY2   10.0 fps      <- fourcc=None 일 때
+
+    10fps 는 정책을 못 쫓아가게 만든다 — 관측이 낡은 채로 추론하고, max_rel 이
+    그 지연을 다시 키운다. 그래서 백엔드가 DSHOW 일 때만 미리 해상도를 걸어
+    두고 원래 함수를 부른다(원래 함수가 FOURCC 뒤에 해상도를 한 번 더 걸지만
+    같은 값이라 협상을 되돌리지 않는다 — 실측으로 확인).
+    """
+    import cv2
+    from lerobot.cameras.opencv.camera_opencv import OpenCVCamera
+
+    if getattr(OpenCVCamera, "_dshow_order_patched", False):
+        return
+    original = OpenCVCamera._configure_capture_settings
+
+    def configure(self):
+        if self.backend == cv2.CAP_DSHOW and self.config.width and self.config.height:
+            self.videocapture.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.config.width))
+            self.videocapture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.config.height))
+        return original(self)
+
+    OpenCVCamera._configure_capture_settings = configure
+    OpenCVCamera._dshow_order_patched = True
 
 
 def main() -> int:
@@ -151,6 +196,8 @@ def main() -> int:
                     help="정책에 넣기 전 소프트웨어 리사이즈. 생략하면 train_config.json 에서 자동 판별")
     ap.add_argument("--n-action-steps", type=int, default=None,
                     help="청크당 재예측 없이 쓰는 스텝 수. 줄이면 개루프 드리프트가 준다")
+    ap.add_argument("--goal-speed", type=int, default=0,
+                    help="서보 Goal_Speed(raw/s). 0=무제한. 앞선 도구가 남긴 값을 덮는다")
     ap.add_argument("--freeze-wrist-roll", type=float, default=0.067,
                     help="정책에 넣을 wrist_roll 상수. v5 학습 평균이 기본값")
     args = ap.parse_args()
@@ -162,7 +209,7 @@ def main() -> int:
     patch_bus()
 
     import torch
-    from lerobot.cameras.configs import Cv2Rotation
+    from lerobot.cameras.configs import Cv2Backends, Cv2Rotation
     from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
     from lerobot.configs.policies import PreTrainedConfig
     from lerobot.policies.act.modeling_act import ACTPolicy
@@ -214,12 +261,32 @@ def main() -> int:
         preprocessor_overrides={"device_processor": {"device": "cpu"}},
     )
 
+    if backend == Cv2Backends.DSHOW:
+        patch_dshow_property_order()
     cam = OpenCVCameraConfig(index_or_path=cam_idx, fps=args.fps, width=w, height=h,
-                             rotation=Cv2Rotation.ROTATE_180, backend=backend)
+                             rotation=Cv2Rotation.ROTATE_180, backend=backend,
+                             fourcc="MJPG")
     robot = SOFollower(SO101FollowerConfig(
         port=port, id=args.id, max_relative_target=float(args.max_rel),
         disable_torque_on_disconnect=False, cameras={"gripper": cam}))
     robot.connect(calibrate=False)   # 기존 캘리브레이션을 쓴다. True 면 덮어쓸 수 있다.
+
+    # Goal_Velocity(주소 46, align_to_idle 이 "speed" 로 부르는 그 레지스터)를
+    # 여기서 정한다 — 앞서 무엇이 돌았든 상관없게.
+    #
+    # LeRobot 의 configure() 는 Acceleration 은 254 로 되돌리지만 이 레지스터는
+    # 건드리지 않는다. 그래서 align_to_idle(SPEED_RAW=150, 사람이 지켜보며 도는
+    # 정렬이라 일부러 느리다)이 남긴 값이 서보 RAM 에 그대로 남아 롤아웃을 묶는다.
+    # 2026-09-02 실측: 정책이 shoulder_lift 를 50도로 부르는데 팔은 스텝당 0.44도,
+    # 즉 12.1도/s 로만 갔다 — 150 raw/s = 13.2도/s 와 맞는다.
+    #
+    # 느린 팔은 그냥 느린 게 아니다. max_relative_target 이 **현재 위치** 기준으로
+    # 자르므로, 못 따라간 만큼 다음 목표가 더 잘리고 그게 다시 뒤처짐을 키운다.
+    # 0 = 무제한이고, 수집 때 팔로워가 리더를 쫓던 조건도 그것이다. 한 스텝의
+    # 이동량은 max_relative_target 이 이미 묶고 있으므로 여기서 또 묶을 이유가 없다.
+    for motor in robot.bus.motors:
+        robot.bus.write("Goal_Velocity", motor, args.goal_speed)
+    print(f"Goal_Velocity <- {args.goal_speed}" + ("  (0=무제한)" if not args.goal_speed else ""))
     print("is_calibrated:", robot.bus.is_calibrated)
     if not robot.bus.is_calibrated:
         print("  ⚠️ 서보 값과 캘리브레이션 파일이 다릅니다. 관절값 해석이 어긋날 수 있습니다.")
@@ -245,15 +312,18 @@ def main() -> int:
                 img = torch.nn.functional.interpolate(
                     img.unsqueeze(0), size=(ph, pw), mode="bilinear",
                     align_corners=False).squeeze(0)
+            # 큐가 비어 있는 스텝에서만 실제로 forward 가 돈다(modeling_act.py:116).
+            # 소요 시간으로 가르면 안 된다 — 200ms 는 파이 기준이라 노트북에서는
+            # 진짜 forward 도 그 아래로 들어와 1회로 세어졌다(2026-09-02).
+            refilled = len(policy._action_queue) == 0
             tf = time.perf_counter()
             with torch.no_grad():
                 act = post(policy.select_action(pre({
                     "observation.state": state.unsqueeze(0),
                     "observation.images.gripper": img.unsqueeze(0),
                     "task": [args.task]}))).squeeze(0).float()
-            dt_fwd = (time.perf_counter() - tf) * 1000
-            if dt_fwd > 200:          # 큐에서 꺼낸 스텝이 아니라 실제로 forward 가 돈 스텝
-                fwd.append(dt_fwd)
+            if refilled:
+                fwd.append((time.perf_counter() - tf) * 1000)
 
             if not torch.isfinite(act).all():
                 stop = "NaN/Inf 출력"
