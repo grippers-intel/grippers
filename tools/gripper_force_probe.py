@@ -23,9 +23,21 @@
 매 스텝 온도를 읽고 상한을 넘으면 즉시 중단한다. 실측에서 servo 6이 이미
 52°C까지 올라간 적이 있다.
 
+⚠️ 2026-09-02: GRIPPER_GRASP_MIN_MM을 이 도구의 08-25 실측(7.0mm 포화)을
+근거로 0.0mm(raw 1106)까지 이미 내려 배포했다. 그런데 그 이후 실기에서
+나이트가 파지 불완전으로 떨어지는 사건이 있었고, 이전에는 잘 잡히던 것이
+지금 그 정도로 헐거워질 만큼 기어 백래시가 갑자기 커졌다고 보기는
+어렵다는 게 사용자 판단이다 — 즉 08-25 스윕이 "포화"로 봤던 지점이
+실은 하드스톱이 아니라 그때 기준 서보 축 부하 판독의 한계였을 가능성이
+있다. Pi가 다시 가용해지면 **0.0mm(raw 1106)보다 더 좁게** `--holding`
+스윕을 이어서 실측해야 한다 — 아래 HOLDING_SWEEP_MIN_MM 기본값이 그렇게
+맞춰져 있어 `--holding <클래스>`만 그대로 실행하면 된다.
+
 사용:
   python3 gripper_force_probe.py --empty              # 빈 턱 하드스톱
   python3 gripper_force_probe.py --holding knight     # 물체를 문 채 힘 곡선
+  python3 gripper_force_probe.py --holding knight --min-mm -20.0
+                                                       # 더 좁게까지 재확인
 """
 from __future__ import annotations
 
@@ -40,9 +52,26 @@ from grippers_arm.gripper_calibration import GRIPPER_CLOSED_MM, width_from_posit
 from rclpy.parameter import Parameter
 from rclpy.signals import SignalHandlerOptions
 
-# 스윕 하한. 보정표 첫 구간의 기울기가 약 4.9 raw/mm라 2.0mm는 raw로
-# 1116쯤이다 — 1150에서 34 raw 아래다.
-SWEEP_MIN_MM = 2.0
+# 스윕 하한. 보정표 첫 구간의 기울기가 약 4.9 raw/mm다. 모드별로 기본값이
+# 다르다 — 아래 각 상수 주석 참고. `--min-mm`으로 언제든 덮어쓸 수 있다.
+
+# --empty 기본값. 빈 턱은 실측 하드스톱이 이미 raw 1144(~7.8mm) 부근으로
+# 알려져 있다(gripper_calibration.GRIPPER_GRASP_MIN_MM 주석) — 그보다
+# 한참 더 내려가 봐야 턱이 서로 미는 것만 계속돼 열만 더 난다.
+EMPTY_SWEEP_MIN_MM = 2.0
+
+# --holding 기본값.
+#
+# ⚠️ 처음엔 이 값도 2.0mm(raw 1116쯤)였다 — 그때 production 하한
+# (GRIPPER_CLOSED_MM 9.0mm)보다 좁으면 충분했다. 그런데 2026-09-02에
+# 파지 전용 하한(GRIPPER_GRASP_MIN_MM)을 0.0mm(raw 1106)까지 내려 이미
+# 배포했다 — 옛 기본값(2.0mm)은 이제 그 배포값보다 **높아서**, 이 기본값
+# 그대로 `--holding`을 돌리면 시작점(0.0mm, FLOOR_GRASP_PROFILES의
+# close_width_mm)이 이미 min-mm보다 낮아 한 스텝도 못 돌고 끝난다.
+# 다시 헐거워짐 의심(나이트 낙하)을 확인하려면 배포값보다 확실히 더
+# 좁게까지 훑어야 하므로 -20.0mm(raw 1007쯤, 1106에서 99 raw 아래)로
+# 낮춘다.
+HOLDING_SWEEP_MIN_MM = -20.0
 SWEEP_STEP_MM = 1.0
 # 매 스텝 명령 후 정착을 기다리는 시간(GRASP_SETTLE_SEC과 같은 근거).
 STEP_SETTLE_S = 1.2
@@ -170,9 +199,14 @@ def main():
                       help="빈 턱으로 하드스톱을 찾는다 (팔 앞에 아무것도 없어야 함)")
     mode.add_argument("--holding", metavar="CLS", choices=sorted(CLASS_TO_PROFILE),
                       help="이 클래스를 문 채 힘 곡선을 훑는다 (손으로 물려 주세요)")
-    ap.add_argument("--min-mm", type=float, default=SWEEP_MIN_MM)
+    ap.add_argument("--min-mm", type=float, default=None,
+                    help="스윕 하한(mm). 생략하면 모드별 기본값"
+                         f"(--empty {EMPTY_SWEEP_MIN_MM:.1f}mm / "
+                         f"--holding {HOLDING_SWEEP_MIN_MM:.1f}mm)을 쓴다")
     ap.add_argument("--step-mm", type=float, default=SWEEP_STEP_MM)
     args = ap.parse_args()
+    if args.min_mm is None:
+        args.min_mm = EMPTY_SWEEP_MIN_MM if args.empty else HOLDING_SWEEP_MIN_MM
 
     label = "empty" if args.empty else args.holding
     start_mm = GRIPPER_CLOSED_MM
