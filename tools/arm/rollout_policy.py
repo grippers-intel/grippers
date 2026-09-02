@@ -195,7 +195,8 @@ def main() -> int:
     ap.add_argument("--policy-res", nargs=2, type=int, default=None, metavar=("H", "W"),
                     help="정책에 넣기 전 소프트웨어 리사이즈. 생략하면 train_config.json 에서 자동 판별")
     ap.add_argument("--n-action-steps", type=int, default=None,
-                    help="청크당 재예측 없이 쓰는 스텝 수. 줄이면 개루프 드리프트가 준다")
+                    help="청크당 재예측 없이 쓰는 스텝 수. 기본값(학습값)을 그대로 쓸 것 - "
+                         "줄이면 정지 구간에서 못 빠져나온다(아래 주석)")
     ap.add_argument("--goal-speed", type=int, default=0,
                     help="서보 Goal_Speed(raw/s). 0=무제한. 앞선 도구가 남긴 값을 덮는다")
     ap.add_argument("--freeze-wrist-roll", type=float, default=0.067,
@@ -250,8 +251,24 @@ def main() -> int:
     cfg = PreTrainedConfig.from_pretrained(args.ckpt)
     cfg.device = "cpu"
     if args.n_action_steps:
+        # ⚠️ 함부로 줄이지 말 것. **청크가 곧 시계다.**
+        #
+        # ACT 는 언어도 시간도 안 본다. 시작 자세에서는 관측이 몇 초 동안 거의
+        # 같으므로 "언제 펴는가"는 관측만으로 결정될 수 없다 - 그 시간 정보는
+        # 청크 안에 들어 있다. v5 의 첫 청크(100스텝)는 "가만히 있다가 50스텝쯤
+        # 부터 그리퍼를 연다"이다.
+        #
+        # 2026-09-02 실측: 30 으로 줄였더니 그리퍼가 열리기 직전에 잘렸고, 같은
+        # 관측으로 다시 예측하니 같은 청크가 나와 0~29 를 무한히 반복했다.
+        # 팔이 25초 동안 한 번도 안 움직였다(관절별 폭 최대 2.8도). 학습값 100
+        # 으로 되돌리자 대기->개방->뻗기->파지->회수가 전부 돌았다.
+        #
+        # 검증에서 본 "청크 뒤쪽 오차가 앞쪽의 1.7배"는 사실이지만, 그걸 줄이자고
+        # 정지 구간보다 짧게 자르면 그 구간을 영영 못 벗어난다.
         print(f"n_action_steps {cfg.n_action_steps} -> {args.n_action_steps} "
               f"(재예측 주기 {args.n_action_steps / args.fps:.2f}초)")
+        if args.n_action_steps < cfg.chunk_size:
+            print("  ⚠️ 학습값보다 짧습니다. 정지 구간에서 못 빠져나올 수 있습니다.")
         cfg.n_action_steps = args.n_action_steps
     policy = ACTPolicy.from_pretrained(args.ckpt, config=cfg)
     policy.to("cpu").eval()
