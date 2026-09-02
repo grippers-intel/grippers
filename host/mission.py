@@ -447,11 +447,18 @@ class MissionFSM:
 
         `_send_drive`의 ROTATE 관례와 부호를 맞춘다 — 목표-현재, CCW가
         양수. GRASP_REPLAN 재접근의 타이트한 yaw 게이트(_facing_target)와
-        그 겨눔 동작(_aim_at_target)이 같이 쓴다."""
+        그 겨눔 동작(_aim_at_target)이 같이 쓴다.
+
+        PIECE_AIM_YAW_TRIM_DEG(2026-09-02)를 더한다 — 순수 기하로는
+        오차 0이어도 실제로는 기물이 그리퍼 화면에서 계속 왼쪽에 남는
+        고정 편향이 관찰됐다. 여기 한 곳에서만 더해서 `_facing_target`
+        (GRASP_REPLAN 게이트)과 `_aim_at_target`(제자리 겨눔)이 항상
+        같은 보정된 오차를 보게 한다."""
         assert self._target_xy is not None
         desired = math.degrees(math.atan2(self._target_xy[1] - robot_xy[1],
                                           self._target_xy[0] - robot_xy[0]))
-        return (desired - pose.yaw_deg + 180.0) % 360.0 - 180.0
+        raw_err = desired - pose.yaw_deg + mcfg.PIECE_AIM_YAW_TRIM_DEG
+        return (raw_err + 180.0) % 360.0 - 180.0
 
     def _facing_target(self, pose: Pose, robot_xy: XY) -> bool:
         """지금 헤딩이 target_xy 방향으로 GRASP_REPLAN_YAW_TOLERANCE_DEG
@@ -713,12 +720,21 @@ class MissionFSM:
             dist = math.hypot(self._target_xy[0] - robot_xy[0],
                               self._target_xy[1] - robot_xy[1])
             if dist <= mcfg.GRASP_TRIGGER_DIST_M:
-                if self._tight_yaw_gate and not self._facing_target(pose, robot_xy):
-                    # GRASP_REPLAN 이 보낸 재접근이다 — 여느 때처럼 거리만
-                    # 보고 트리거하면 또 어긋난 각도로 GRASP 에 들어가
-                    # 오늘과 같은 사고가 반복된다(GRASP_REPLAN_AFTER_TRIES
-                    # 주석 참고). yaw 가 허용치 안에 들어올 때까지 전후진
-                    # 없이 제자리에서 겨눈다.
+                if not self._facing_target(pose, robot_xy):
+                    # 트리거 거리 안이어도 정면이 아니면 아직 GRASP 로 안
+                    # 넘어간다 — 제자리에서 겨눈다.
+                    #
+                    # 2026-09-02까지는 이 게이트를 `_tight_yaw_gate`(GRASP_
+                    # REPLAN 이 보낸 재접근에서만)로만 켰다 — 평소
+                    # APPROACH_PIECE 는 거리만 보고 바로 넘어갔다(경로
+                    # 추종(_approach/DriveSequencer)이 남긴 헤딩을 그대로
+                    # 썼다). 07:12 rook 실기(52도 미스얼라인) 같은 큰 사고는
+                    # 없었지만, 평소에도 그 헤딩은 목표를 "대충 보는" 정도라
+                    # 사용자가 매번 비슷한 크기로 왼쪽 3~5cm 편차를 확인했다
+                    # (PIECE_AIM_YAW_TRIM_DEG 주석 참고). 이미 있는 이 게이트
+                    # (허용치 GRASP_REPLAN_YAW_TOLERANCE_DEG, ±6도)를 평소
+                    # 접근에도 그대로 적용해, 매번 트림이 반영된 정확한
+                    # 오차 안에서 GRASP 에 들어가게 한다.
                     self._aim_at_target(pose, robot_xy, link)
                     self.ready_to_advance = False
                     return self.state
