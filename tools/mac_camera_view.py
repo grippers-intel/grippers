@@ -86,17 +86,32 @@ if YOLO:
     model = _Y(MODEL_PATH)
     print("MODEL " + MODEL_PATH, file=sys.stderr, flush=True)
 
+# 여섯 클래스(cpu_yolo_scan_mapping.CPU_YOLO_CLASS_NAMES와 같다)를 색으로
+# 구분한다. 전부 BGR이고 빨강 계열(빨강/주황/분홍)은 하나도 없다.
+CLASS_COLORS = {
+    "rook": (219, 152, 52),      # 하늘색
+    "knight": (90, 220, 90),     # 초록
+    "queen": (50, 220, 220),     # 노랑
+    "soccer": (220, 220, 50),    # 시안
+    "box": (220, 80, 160),       # 보라
+    "star": (128, 128, 0),       # 청록
+}
+UNKNOWN_CLASS_COLOR = (170, 170, 170)  # 위 여섯에 없는 클래스가 나오면 회색
+
 
 def draw_detections(img):
-    """검출을 그리고 게이트 통과 여부를 색으로 구분한다.
+    """검출을 클래스별 색으로 그리고, 게이트 통과 여부는 굵기로 구분한다.
 
-    통과(초록)와 탈락(파랑)을 나눠 그리는 이유는, 배경 오검출이 신뢰도만으로는
-    안 걸러진다는 것이 실측으로 드러났기 때문이다 - 노트북을 rook으로 0.80에
-    잡은 적이 있고 그때 막은 것은 화면위치 게이트뿐이었다. 그 선을 눈으로
-    보게 해 두면 왜 걸렀는지가 그림에 나온다.
+    ⚠️ 사용자 지시(2026-09-02): 클래스(6개)마다 다른 색을 쓰고, 빨간색
+    계열은 전부 제외한다. 통과/탈락은 원래 색(초록/파랑)으로 나눴지만
+    그 자리를 클래스 색이 차지하게 되어, 대신 통과=굵은 테두리·탈락=
+    얇은 테두리로 구분한다 — 탈락 사유는 라벨 글자(conf<0.70 등)에
+    그대로 남아 있어 정보가 줄지 않는다.
 
-    ⚠️ 사용자 지시(2026-09-02): 이 프로젝트 OpenCV 오버레이에서는 빨간색
-    계열을 웬만하면 쓰지 않는다. 탈락 색을 빨강이 아니라 파랑으로 뒀다."""
+    통과/탈락 구분 자체가 필요한 이유는, 배경 오검출이 신뢰도만으로는
+    안 걸러진다는 것이 실측으로 드러났기 때문이다 - 노트북을 rook으로
+    0.80에 잡은 적이 있고 그때 막은 것은 화면위치 게이트뿐이었다. 그
+    선을 눈으로 보게 해 두면 왜 걸렀는지가 그림에 나온다."""
     result = model(img, verbose=False, conf=0.25)[0]
     names = result.names
     passed = 0
@@ -104,7 +119,7 @@ def draw_detections(img):
     cv2.line(img, (0, int(MIN_BOTTOM_Y)), (img.shape[1], int(MIN_BOTTOM_Y)),
              (90, 90, 90), 1, cv2.LINE_AA)
     cv2.putText(img, "y=%d gate" % MIN_BOTTOM_Y, (6, int(MIN_BOTTOM_Y) - 5),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.36, (140, 140, 140), 1, cv2.LINE_AA)
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (140, 140, 140), 1, cv2.LINE_AA)
 
     for box in result.boxes:
         x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
@@ -113,13 +128,14 @@ def draw_detections(img):
         conf_ok, y_ok = conf >= CONF_GATE, y2 >= MIN_BOTTOM_Y
         ok = conf_ok and y_ok
         passed += int(ok)
-        color = (90, 220, 90) if ok else (230, 120, 20)   # 초록/파랑 (BGR) — 빨강 계열 금지
-        cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
+        color = CLASS_COLORS.get(label, UNKNOWN_CLASS_COLOR)
+        thickness = 3 if ok else 1   # 통과=굵게, 탈락=얇게
+        cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), color, thickness)
         why = "" if ok else ("  conf<%.2f" % CONF_GATE if not conf_ok else "  too high")
         text = "%s %.2f%s" % (label, conf, why)
-        ty = int(y1) - 6 if y1 > 18 else int(y2) + 14
-        cv2.putText(img, text, (int(x1), ty), cv2.FONT_HERSHEY_SIMPLEX, 0.44,
-                    color, 1, cv2.LINE_AA)
+        ty = int(y1) - 10 if y1 > 30 else int(y2) + 26
+        cv2.putText(img, text, (int(x1), ty), cv2.FONT_HERSHEY_SIMPLEX, 0.85,
+                    color, 2, cv2.LINE_AA)
     return "%d/%d pass gates" % (passed, len(result.boxes))
 
 
