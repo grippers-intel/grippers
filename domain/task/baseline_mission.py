@@ -213,6 +213,25 @@ def _base_stopped(ports, command) -> bool:
     return command is None or command.stop or not command.wants_motion
 
 
+def _load_holds(ports) -> bool:
+    """부하가 threshold를 넘기는가 — 못 넘기면 한 번 더 재서 확인한다.
+
+    LOAD_THRESHOLD 자체가 "빈손 실측 11/256"과 "파지 실측 13/256"의
+    중점이다(baseline_constants 주석) — 두 계단 사이 틈이 코드 값 하나
+    (약 0.0039)뿐이라, 방금 막 멈춘 팔의 잔진동 하나로도 판독이 계단
+    하나만큼 튈 수 있다. 09-02 10:41 실기가 그 예다: 그리퍼를 막 닫고
+    잰 값(13/256 대역, 0.0508)은 정상적으로 threshold를 넘겼는데, 곧바로
+    이어진 midpoint 이동 직후 다시 잰 값(11/256 대역, 0.0430)만 그 틈
+    하나만큼 밑돌아 "들어 올리지 못함"으로 실패 처리됐다 — 사용자가 직접
+    옆에서 파지 성공을 확인한 자리였다.
+
+    한 번 더 재서 그중 하나라도 넘기면 쥐고 있는 것으로 본다 — 진짜로
+    놓쳤다면 재확인에서도 낮게 나온다."""
+    if ports.arm.get_load() >= bc.LOAD_THRESHOLD:
+        return True
+    return ports.arm.get_load() >= bc.LOAD_THRESHOLD
+
+
 # ── 상태 ──────────────────────────────────────────────────────────────────
 
 
@@ -438,7 +457,9 @@ class BaselineGraspState(State):
         load = ports.arm.get_load()
         lifted = load >= bc.LOAD_THRESHOLD and ports.arm.move_to_floor_pose(
             gp.profile, "midpoint")
-        held = lifted and ports.arm.get_load() >= bc.LOAD_THRESHOLD
+        # 2026-09-02 10:41 실기: 여기서 한 번만 재고 threshold를 못 넘기면
+        # 바로 실패 처리했다 — _load_holds() 주석 참고.
+        held = lifted and _load_holds(ports)
         cleared = held and ports.arm.move_to_floor_pose(gp.profile, "safe")
         if not cleared:
             return self._failed(ports, f"들어 올리지 못함 (부하 {load:.4f})")

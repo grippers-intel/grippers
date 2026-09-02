@@ -372,6 +372,38 @@ def test_파지에_실패하면_APPROACH로_돌아가고_스스로_재시도하�
     assert isinstance(nxt, BaselineApproachState)
 
 
+def test_들어올린_직후_부하가_한_계단_떨어져도_재확인에서_넘기면_성공한다():
+    """09-02 10:41 실기 재현 — 회귀 방지.
+
+    LOAD_THRESHOLD 자체가 "빈손 11/256"과 "파지 13/256"의 중점이라 두
+    계단 사이 틈이 코드 값 하나(약 0.0039)뿐이다. 실기에서 그리퍼를
+    막 닫고 잰 값(0.0508, 13/256 대역)은 threshold를 넘겼는데, 곧바로
+    이어진 midpoint 이동 직후 다시 잰 값(0.0430, 11/256 대역)만 그 틈
+    하나만큼 밑돌아 "들어 올리지 못함"으로 실패 처리됐다 — 사용자가
+    직접 옆에서 파지 성공을 확인한 자리였다."""
+    host = FakeHostLink()
+    arm = FakeArm(load_ratio=[0.0508, 0.0430, 0.0508, 0.0508])
+    ports = _ports(host=host, arm=arm)
+
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+
+    assert Report.GRASP_DONE in host.reported_kinds
+    assert isinstance(nxt, BaselineCarryState)
+
+
+def test_재확인에서도_부하가_낮으면_그때는_진짜_실패다():
+    """재시도 한 번으로 진짜 실패까지 가려 버리면 안 된다 — 재확인마저
+    낮으면 여전히 실패로 본다."""
+    host = FakeHostLink()
+    arm = FakeArm(load_ratio=[0.0508, 0.0430, 0.0430])
+    ports = _ports(host=host, arm=arm)
+
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+
+    assert Report.GRASP_FAILED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
 def test_파지_명령_폭은_ros2_프로파일_공식에서_나온다():
     """도메인과 ros2 프로파일이 갈라져 파지가 헐거워진 2026-08-26 사고 방지."""
     assert plan_for_label("queen").close_width_mm == 7.0
