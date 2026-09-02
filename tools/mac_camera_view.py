@@ -311,6 +311,13 @@ def run_live(topic: str, yolo: bool, seconds: int, capture_dir: pathlib.Path) ->
     import cv2
     import numpy as np
 
+    # ⚠️ 2026-09-02: topic이 "/depth_cam/rgb/image_rotated"처럼 "/"로
+    # 시작하는 실제 ROS 토픽 경로라, `capture_dir / f"{topic}_..."`을 그대로
+    # 쓰면 pathlib이 절대경로로 취급해 capture_dir을 통째로 무시한다 —
+    # 그 결과 파일시스템 루트(`/depth_cam/...`) 밑에 쓰려다 권한이 없어
+    # 조용히 실패했는데도 "캡처 저장" 메시지는 그대로 찍혔다(사용자가 실제로
+    # 겪음). 파일 이름에는 "/"를 다 지운 안전한 이름만 쓴다.
+    topic_safe = topic.strip("/").replace("/", "_")
     process = feed(run_grabber(topic, seconds * 10, yolo))
     window = f"grippers camera — {topic}"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
@@ -329,10 +336,12 @@ def run_live(topic: str, yolo: bool, seconds: int, capture_dir: pathlib.Path) ->
                 break
             if key == ord("s"):
                 capture_dir.mkdir(parents=True, exist_ok=True)
-                path = capture_dir / f"{topic}_{time.strftime('%Y%m%d_%H%M%S')}.png"
-                cv2.imwrite(str(path), img)
-                saved += 1
-                print(f"캡처 저장: {path} (총 {saved}장)")
+                path = capture_dir / f"{topic_safe}_{time.strftime('%Y%m%d_%H%M%S')}.png"
+                if cv2.imwrite(str(path), img):
+                    saved += 1
+                    print(f"캡처 저장: {path} (총 {saved}장)")
+                else:
+                    print(f"캡처 저장 실패: {path}", file=sys.stderr)
     except KeyboardInterrupt:
         pass
     finally:
