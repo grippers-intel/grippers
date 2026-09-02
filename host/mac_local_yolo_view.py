@@ -88,10 +88,15 @@ def draw_detections(img, model) -> str:
         conf_ok, y_ok = conf >= CONF_GATE, y2 >= MIN_BOTTOM_Y
         ok = conf_ok and y_ok
         passed += int(ok)
+        # 사용자 지시(2026-09-02): 신뢰도 0.7 이하는 화면에 아예 안 그린다.
+        # 위치 게이트만으로 걸러진 것(신뢰도는 충분한데 화면 아래쪽이 아닌
+        # 경우)은 여전히 얇은 테두리로 보여준다.
+        if not conf_ok:
+            continue
         color = CLASS_COLORS.get(label, UNKNOWN_CLASS_COLOR)
         thickness = 3 if ok else 1
         cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), color, thickness)
-        why = "" if ok else ("  conf<%.2f" % CONF_GATE if not conf_ok else "  too high")
+        why = "" if ok else "  too high"  # 여기 도달하면 conf_ok는 항상 True
         text = "%s %.2f%s" % (label, conf, why)
         ty = int(y1) - 10 if y1 > 30 else int(y2) + 26
         cv2.putText(img, text, (int(x1), ty), cv2.FONT_HERSHEY_SIMPLEX, 0.85,
@@ -127,11 +132,55 @@ def frames_from(proc: subprocess.Popen):
             buf = buf[end:]
 
 
+DEVICE_NAME_HINT = "ASJ ZNX_NVT"  # 2026-09-02에 확인한 그 뎁스캠의 UVC 이름
+
+
+def list_avfoundation_video_devices() -> list[str]:
+    """`ffmpeg -f avfoundation -list_devices true`가 보여주는 비디오 장치
+    이름을 순서대로 뽑는다."""
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-f", "avfoundation",
+         "-list_devices", "true", "-i", ""],
+        capture_output=True, text=True)
+    names, in_video = [], False
+    for line in proc.stderr.splitlines():
+        if "AVFoundation video devices" in line:
+            in_video = True
+            continue
+        if "AVFoundation audio devices" in line:
+            break
+        if in_video and "] [" in line:
+            _, _, tail = line.partition("] [")
+            _, _, name = tail.partition("] ")
+            names.append(name.strip())
+    return names
+
+
+def resolve_device(requested: str | None) -> str:
+    """`--device`를 직접 줬으면 그대로 쓰고, 아니면 이름으로 뎁스캠을 찾는다.
+
+    ⚠️ macOS는 카메라 열거 순서를 보장하지 않는다(host/camera_backend.py의
+    같은 경고와 동일한 문제) — 2026-09-02에 같은 작업 도중에도 순서가 한
+    번 뒤집히는 것을 실제로 봤다(ASJ가 [1]이었다가 [0]으로). 번호를
+    고정해서 쓰면 그 사이 다른 카메라(FaceTime)를 잘못 열게 된다 — 실제로
+    그래서 한 번 실패했다. 그래서 매번 이름으로 다시 찾는다."""
+    if requested is not None:
+        return requested
+    names = list_avfoundation_video_devices()
+    for i, name in enumerate(names):
+        if DEVICE_NAME_HINT in name:
+            print(f"장치 자동 인식: [{i}] {name}")
+            return str(i)
+    raise SystemExit(
+        f"'{DEVICE_NAME_HINT}' 이름의 카메라를 못 찾았습니다 — 연결을 "
+        f"확인하거나 --device로 직접 번호를 주세요. 지금 보이는 장치: {names}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--device", default="1",
-                    help="ffmpeg avfoundation 장치 번호 (기본 1)")
+    ap.add_argument("--device", default=None,
+                    help="ffmpeg avfoundation 장치 번호. 안 주면 이름으로 자동 인식")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--model", default=str(_DEFAULT_MODEL))
@@ -139,11 +188,13 @@ def main() -> int:
                     default=pathlib.Path.home() / ".grippers_camview" / "captures")
     args = ap.parse_args()
 
+    device = resolve_device(args.device)
+
     from ultralytics import YOLO
     model = YOLO(args.model)
     print("MODEL", args.model)
 
-    proc = run_ffmpeg(args.device, args.width, args.height)
+    proc = run_ffmpeg(device, args.width, args.height)
     window = "grippers local camera — YOLO(train-9)"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     saved = 0
@@ -172,11 +223,20 @@ def main() -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        # ⚠️ terminate()만 부르고 안 기다리면 ffmpeg가 살아남을 수 있다
+        # (2026-09-02에 실제로 이렇게 좀비 프로세스가 남아 카메라를 계속
+        # 붙잡고 있었고, 그다음 실행이 "프레임을 못 받았습니다"로 실패한
+        # 원인이 됐다). 죽는 것까지 확인하고, 안 죽으면 kill한다.
         proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
         cv2.destroyAllWindows()
 
     if not got_any:
-        print("프레임을 못 받았습니다.", file=sys.stderr)
+        print("프레임을 못 받았습니다. ffmpeg 메시지:", file=sys.stderr)
         print(proc.stderr.read().decode(errors="replace")[-600:], file=sys.stderr)
         return 1
     print(f"\n종료 — {saved}장 캡처, 저장 위치: {args.capture_dir}")
