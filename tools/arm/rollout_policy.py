@@ -197,6 +197,11 @@ def main() -> int:
     ap.add_argument("--n-action-steps", type=int, default=None,
                     help="청크당 재예측 없이 쓰는 스텝 수. 기본값(학습값)을 그대로 쓸 것 - "
                          "줄이면 정지 구간에서 못 빠져나온다(아래 주석)")
+    ap.add_argument("--save-frames", default=None, metavar="DIR",
+                    help="관측 프레임을 이 폴더에 남긴다. 파지 순간에 그리퍼가 "
+                         "물체의 어디에 닿았는지는 이것 없이는 못 본다")
+    ap.add_argument("--save-every", type=int, default=15,
+                    help="--save-frames 의 저장 간격(스텝). 기본 15 = 0.5초")
     ap.add_argument("--goal-speed", type=int, default=0,
                     help="서보 Goal_Speed(raw/s). 0=무제한. 앞선 도구가 남긴 값을 덮는다")
     ap.add_argument("--freeze-wrist-roll", type=float, default=0.067,
@@ -240,6 +245,9 @@ def main() -> int:
             print(f"train_config.json 을 못 읽었습니다({_e}) - 원본 크기로 넣습니다")
     if ph is None:
         ph, pw = h, w
+
+    if args.save_frames:
+        os.makedirs(args.save_frames, exist_ok=True)
 
     port = find_port(args.port)
     cam_idx, backend = find_camera(args.camera, w, h)
@@ -358,6 +366,14 @@ def main() -> int:
             robot.send_action({f"{j}.pos": float(act[i]) for i, j in enumerate(JOINTS)})
             traj.append((time.perf_counter() - t_start,
                          [float(obs[f"{j}.pos"]) for j in JOINTS]))
+            if args.save_frames and step % args.save_every == 0:
+                # 정책이 본 그대로(회전 포함) 남긴다. 여기서 다시 돌리면
+                # 무엇을 보고 그렇게 움직였는지 대조할 수가 없다.
+                import cv2 as _cv2
+                _cv2.imwrite(
+                    os.path.join(args.save_frames,
+                                 f"t{traj[-1][0]:06.2f}_g{obs['gripper.pos']:05.1f}.jpg"),
+                    _cv2.cvtColor(obs["gripper"], _cv2.COLOR_RGB2BGR))
             step += 1
             loop.append(time.perf_counter() - t0)
             time.sleep(max(0.0, 1 / args.fps - (time.perf_counter() - t0)))
