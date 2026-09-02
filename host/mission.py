@@ -1042,7 +1042,17 @@ class MissionFSM:
                                robot_xy[1] - self._nudge_from[1])
             yaw_err = (mcfg.BOX_FACE_YAW_DEG - pose.yaw_deg + 180.0) % 360.0 - 180.0
             aligned = abs(yaw_err) <= mcfg.DRIVE_YAW_TOLERANCE_DEG
-            done = moved >= want_m
+            # 2026-09-02 실기(2건): 여기서 계획 거리(want_m)를 다 채울 때까지
+            # Pi 보고를 하나도 안 읽고 있다가, PLACE 에 들어가서야 처음
+            # poll_status() 를 불러 확인했다 — ArUco 데드레커닝이 실제와
+            # 어긋나면 그사이 이미 바구니에 닿았다. 여기서도 매 사이클
+            # 드레인해서, Pi가 실시간 라이다로 "이미 목표창 안"(basket_
+            # ready_early) 이라 하거나 "너무 가깝다"(last_basket_fix, 아래
+            # PLACE 의 _plan_basket_fix 가 그대로 소비한다)고 알려 오면
+            # 계획 거리를 마저 채우지 않고 즉시 멈춘다.
+            link.poll_status()
+            done = (moved >= want_m or link.take_basket_ready_early()
+                    or link.last_basket_fix is not None)
             # 전후 이동 중에 방위가 틀어지면 다시 맞춘다 — 5 cm 라도 비스듬히
             # 들어가면 상자 정면에 안 선다. 좌우 이동은 방위를 안 건드리므로
             # (메카넘 횡이동) 회전으로 끊지 않는다 — 여기서 돌면 방금 맞춘

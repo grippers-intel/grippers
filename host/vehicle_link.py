@@ -447,6 +447,10 @@ class VehicleLink:
     #: 마지막 INSERT_BLOCKED 가 알려 준 바구니 보정량. **읽은 쪽이 지운다**.
     last_basket_fix: Optional[BasketFix] = None
 
+    #: APPROACH_BOX_READY(2026-09-02) — Pi가 접근 중 실시간 라이다로 "이미
+    #: 목표창 안이라 그만 밀어도 된다"고 알려 온 표시. **읽은 쪽이 지운다**.
+    basket_ready_early: bool = False
+
     def take_basket_fix(self) -> Optional[BasketFix]:
         """마지막 바구니 보정량을 꺼내고 지운다.
 
@@ -454,6 +458,16 @@ class VehicleLink:
         같은 오차를 두 배로 고치게 된다. 다음 판정은 다음 보고를 기다린다."""
         f, self.last_basket_fix = self.last_basket_fix, None
         return f
+
+    def take_basket_ready_early(self) -> bool:
+        """APPROACH_BOX_READY 표시를 꺼내고 지운다.
+
+        NUDGE_BOX가 계획한 거리를 다 채우기 전에 이미 라이다가 목표창 안을
+        보고했다는 뜻이다 — 09-02 실기에서 계획 거리를 마저 채우다 창을
+        넘겨 바구니에 닿은 사고(mission_config 미세 접근 관련 주석 참고)를
+        막는다. `take_basket_fix`와 같은 이유로 소비 즉시 지운다."""
+        v, self.basket_ready_early = self.basket_ready_early, False
+        return v
 
     def take_correction(self) -> Optional[GraspCorrection]:
         """보정 요청을 **소비한다.** 없으면 None.
@@ -675,6 +689,12 @@ class UdpVehicleLink(VehicleLink):
             return "BUSY"
 
         if report == Report.GRASP_READY or report == Report.INSERT_READY:
+            return "BUSY"
+        if report == Report.APPROACH_BOX_READY:
+            # NUDGE_BOX 접근 중 Pi가 실시간 라이다로 "이미 목표창 안"이라고
+            # 알려 왔다 — mission.py 의 NUDGE_BOX 가 계획한 거리를 마저
+            # 채우지 않고 바로 멈추도록 표시만 남긴다.
+            self.basket_ready_early = True
             return "BUSY"
         if report == Report.STATE:
             return "IDLE" if state == MissionState.IDLE else "BUSY"
