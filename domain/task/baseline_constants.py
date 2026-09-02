@@ -80,8 +80,14 @@ GRASP_CREEP_EXTRA_MM = 300.0  # 지시(2026-09-02)
 #
 # 위 GRASP_CREEP_FORWARD_MM/EXTRA_MM 은 지운다 — `creep_forward`(거리 기반)
 # 자체는 어댑터에 인프라로 남겨 뒀지만 GRASP 시퀀스는 더 이상 부르지 않는다.
-GRASP_CREEP_OPEN_LOOP_SPEED_MPS = 0.1  # 지시(2026-09-02)
-GRASP_CREEP_OPEN_LOOP_SEC = 1.5  # 지시(2026-09-02)
+#
+# 09-02 재지시: "미세전진 되게 빨리 바꿔줘" — 0.1 m/s·1.5초(150mm)가 실기에서
+# 너무 느리다고 판단해 속도를 3배로, 시간을 1/3로 올려 **같은 150mm를 0.5초에
+# 끝내도록** 바꿨다. `creep_forward_timed`가 이 구간 내내 mission_orchestrator
+# 스레드를 블로킹하므로(단일 스레드 FSM, E-STOP은 별도 콜백이라 안전은
+# 유지된다) 시간이 짧아질수록 그 사이 Host 명령을 못 읽는 창도 같이 줄어든다.
+GRASP_CREEP_OPEN_LOOP_SPEED_MPS = 0.3  # 지시(2026-09-02, 0.1 -> 0.3)
+GRASP_CREEP_OPEN_LOOP_SEC = 0.5  # 지시(2026-09-02, 1.5 -> 0.5, 이동 거리는 150mm로 유지)
 
 # GRASP 진입 판정(grasp_alignment.judge)의 전후·좌우 여유. 2026-09-01 실기
 # 10차례 중 GRASP까지 실제로 들어간 횟수가 손에 꼽을 정도로 적었고, 그중
