@@ -30,10 +30,17 @@ sensor_msgs/Image는 그냥 바이트 버퍼라 numpy로 직접 푸는 편이 �
     python3 tools/mac_camera_view.py --topic raw    회전 전 원본 RGB
     python3 tools/mac_camera_view.py --watch        브라우저에서 실시간
     python3 tools/mac_camera_view.py --watch --seconds 120
+    python3 tools/mac_camera_view.py --live --topic depth --yolo
+                                                     맥 OpenCV 창에서 실시간
+                                                     (s=캡처, q/Esc=종료)
 
 ⚠️ perception_node가 죽어 있어도 이 도구는 동작한다 — 카메라 드라이버와
 depth_cam_rotate_node만 있으면 된다. 반대로 `--topic rotated`가 안 나오면
 depth_cam_rotate_node가 내려간 것이다.
+
+⚠️ `--live`는 맥 로컬에서 cv2/numpy로 창을 띄운다(grippers-host-mac/.venv에
+설치돼 있음) — `--watch`(브라우저, HTML/JS만 필요)와 별개 경로다. 이 저장소
+자체는 cv2/numpy에 의존하지 않으므로 `--live`를 안 쓰면 필요 없다.
 """
 
 import argparse
@@ -83,10 +90,13 @@ if YOLO:
 def draw_detections(img):
     """검출을 그리고 게이트 통과 여부를 색으로 구분한다.
 
-    통과(초록)와 탈락(빨강)을 나눠 그리는 이유는, 배경 오검출이 신뢰도만으로는
+    통과(초록)와 탈락(파랑)을 나눠 그리는 이유는, 배경 오검출이 신뢰도만으로는
     안 걸러진다는 것이 실측으로 드러났기 때문이다 - 노트북을 rook으로 0.80에
     잡은 적이 있고 그때 막은 것은 화면위치 게이트뿐이었다. 그 선을 눈으로
-    보게 해 두면 왜 걸렀는지가 그림에 나온다."""
+    보게 해 두면 왜 걸렀는지가 그림에 나온다.
+
+    ⚠️ 사용자 지시(2026-09-02): 이 프로젝트 OpenCV 오버레이에서는 빨간색
+    계열을 웬만하면 쓰지 않는다. 탈락 색을 빨강이 아니라 파랑으로 뒀다."""
     result = model(img, verbose=False, conf=0.25)[0]
     names = result.names
     passed = 0
@@ -103,7 +113,7 @@ def draw_detections(img):
         conf_ok, y_ok = conf >= CONF_GATE, y2 >= MIN_BOTTOM_Y
         ok = conf_ok and y_ok
         passed += int(ok)
-        color = (90, 220, 90) if ok else (70, 70, 235)
+        color = (90, 220, 90) if ok else (230, 120, 20)   # 초록/파랑 (BGR) — 빨강 계열 금지
         cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
         why = "" if ok else ("  conf<%.2f" % CONF_GATE if not conf_ok else "  too high")
         text = "%s %.2f%s" % (label, conf, why)
@@ -262,17 +272,73 @@ def frames_from(process):
                 pass
 
 
+def run_live(topic: str, yolo: bool, seconds: int, capture_dir: pathlib.Path) -> int:
+    """맥 로컬 OpenCV 창에 실시간으로 띄운다.
+
+    `--watch`(브라우저)와 달리 프레임을 새로 받을 때마다 그 자리에서 디코드해
+    바로 보여준다 — 화면에 떠 있는 것이 곧 다음에 캡처될 프레임이다. 이 함수만
+    cv2/numpy 를 쓴다(grippers-host-mac/.venv 기준) — 저장소 전체를 그 의존성에
+    묶지 않으려고 여기서만 지역 import 한다.
+
+    's' 키로 지금 프레임을 PNG로 저장하고, 'q'/Esc 로 종료한다."""
+    import cv2
+    import numpy as np
+
+    process = feed(run_grabber(topic, seconds * 10, yolo))
+    window = f"grippers camera — {topic}"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    saved = 0
+    got_any = False
+    try:
+        for data in frames_from(process):
+            arr = np.frombuffer(data, np.uint8)
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if img is None:
+                continue
+            got_any = True
+            cv2.imshow(window, img)
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):  # q 또는 Esc
+                break
+            if key == ord("s"):
+                capture_dir.mkdir(parents=True, exist_ok=True)
+                path = capture_dir / f"{topic}_{time.strftime('%Y%m%d_%H%M%S')}.png"
+                cv2.imwrite(str(path), img)
+                saved += 1
+                print(f"캡처 저장: {path} (총 {saved}장)")
+    except KeyboardInterrupt:
+        pass
+    finally:
+        process.terminate()
+        cv2.destroyAllWindows()
+
+    if not got_any:
+        print("프레임을 못 받았습니다.", file=sys.stderr)
+        print(process.stderr.read().strip()[-600:], file=sys.stderr)
+        return 1
+    print(f"\n종료 — {saved}장 캡처, 저장 위치: {capture_dir}")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--topic", default="rotated", choices=sorted(TOPICS))
     parser.add_argument("--watch", action="store_true", help="브라우저에서 실시간")
+    parser.add_argument("--live", action="store_true",
+                        help="맥 OpenCV 창에서 실시간 (s=캡처, q/Esc=종료)")
     parser.add_argument("--yolo", action="store_true",
                         help="배포된 가중치로 검출을 그리고 게이트 통과 여부를 표시")
-    parser.add_argument("--seconds", type=int, default=60, help="--watch 지속 시간")
+    parser.add_argument("--seconds", type=int, default=60, help="--watch/--live 지속 시간")
+    parser.add_argument("--capture-dir", type=pathlib.Path, default=None,
+                        help="--live 에서 's'로 저장할 위치 (기본: ~/.grippers_camview/captures)")
     args = parser.parse_args()
 
     topic = TOPICS[args.topic]
     OUT_DIR.mkdir(exist_ok=True)
+
+    if args.live:
+        return run_live(topic, args.yolo, args.seconds,
+                        args.capture_dir or OUT_DIR / "captures")
 
     if not args.watch:
         process = feed(run_grabber(topic, 1, args.yolo))
