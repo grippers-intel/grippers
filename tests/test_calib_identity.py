@@ -174,8 +174,20 @@ def test_복구_도구가_기준값을_다시_적지_않는다():
     tool = (ROOT / "tools" / "arm" / "restore_taught_offsets.py") \
         .read_text(encoding="utf-8")
 
-    assert "from grippers_arm.floor_grasp_profiles import TAUGHT_HOMING_OFFSETS" in tool
+    assert "TAUGHT_HOMING_OFFSETS" in tool
+    assert "TAUGHT_POSITION_LIMITS" in tool
     assert "-1945" not in tool, "숫자를 여기에 다시 적으면 안 된다"
+    assert "1140" not in tool, "각도제한 숫자도 여기에 다시 적으면 안 된다"
+
+
+def test_복구_도구가_각도제한도_같이_다룬다():
+    """2026-09-01: Homing_Offset만 복구하고 각도제한을 안 보던 시절
+    그리퍼가 먹통이 됐다 — 이제 이 도구가 둘 다 확인·복구해야 한다."""
+    tool = (ROOT / "tools" / "arm" / "restore_taught_offsets.py") \
+        .read_text(encoding="utf-8")
+
+    assert "position_limit_registers" in tool
+    assert "set_position_limits" in tool
 
 
 def test_복구_도구가_토크_해제를_승인받는다():
@@ -271,6 +283,31 @@ def test_오프셋_읽기에_재시도를_건다():
 
     assert "_read_with_retry" in body
     assert "get_homing_offset" in body
+
+
+def test_각도제한도_같이_검사한다():
+    """2026-09-01: Homing_Offset만 봐서는 그리퍼 먹통 사고를 못 잡는다 —
+    Min/Max_Angle_Limit도 같이 봐야 한다(position_limit_registers.py)."""
+    tree = _node_tree()
+    check = next(n for n in ast.walk(tree)
+                 if isinstance(n, ast.FunctionDef)
+                 and n.name == "_check_taught_calibration")
+    body = ast.dump(check)
+
+    assert "get_position_limits" in body
+    assert "TAUGHT_POSITION_LIMITS" in body
+
+
+def test_각도제한_불일치도_기동을_거부한다():
+    tree = _node_tree()
+    check = next(n for n in ast.walk(tree)
+                 if isinstance(n, ast.FunctionDef)
+                 and n.name == "_check_taught_calibration")
+    raises = [n for n in ast.walk(check) if isinstance(n, ast.Raise)]
+
+    # Homing_Offset 불일치용 하나 + min/max 불일치용 둘, 최소 3개는 있어야
+    # 각 경로가 다 거부로 이어진다.
+    assert len(raises) >= 3
 
 
 def test_검사를_끌_수_있다():

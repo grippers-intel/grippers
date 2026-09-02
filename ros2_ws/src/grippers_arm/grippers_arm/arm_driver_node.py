@@ -55,8 +55,10 @@ from .floor_grasp_profiles import (
     HORIZONTAL_SAFE_145_RAW,
     IDLE_CRADLE_RAW,
     TAUGHT_HOMING_OFFSETS,
+    TAUGHT_POSITION_LIMITS,
 )
 from . import calib_identity
+from . import position_limit_registers as poslim
 
 WRIST_SERVO_ID = 4
 GRIPPER_SERVO_ID = 6
@@ -389,7 +391,7 @@ class ArmDriverNode(Node):
         self.get_logger().info(f"{arm_port} 배타 잠금 확보")
 
     def _check_taught_calibration(self, backend) -> None:
-        """이 팔의 Homing_Offset 이 교시 당시와 같은지 본다.
+        """이 팔의 Homing_Offset과 Min/Max_Angle_Limit이 교시 당시와 같은지 본다.
 
         ⚠️ 2026-08-29 에 VLA 시연 수집을 준비하며 LeRobot 캘리브레이션을
         돌렸고, 그때 서보의 Homing_Offset 이 덮여 썼다. 오프셋이 바뀌면
@@ -401,6 +403,15 @@ class ArmDriverNode(Node):
         조합이 아무 경고 없이 만들어진다 — 그 상태로 움직이면 차체·라이다에
         막히는 범위로 들어간다(shoulder_pan 가동폭 2493 -> 2087, sysy009
         실측 2026-08-29).
+
+        ⚠️ 2026-09-01 실기로 추가: Homing_Offset만으로는 부족하다. 그날
+        Homing_Offset은 이미 복구된 상태였는데도 그리퍼가 전혀 안 닫혔다 —
+        원인은 별개의 레지스터인 Min/Max_Angle_Limit(서보의 물리적 가동
+        범위)이었고, LeRobot/VLA 캘리브레이션은 이것도 Homing_Offset과
+        같이 덮어쓴다(position_limit_registers.py 모듈 docstring 참고).
+        이 검사가 Homing_Offset만 보면, 바로 그 사고 상황에서 "캘리브레이션
+        확인" 로그를 찍고 기동을 허용해 버린다 — 검사가 안전을 보장한다고
+        믿게 만드는 것이 조용히 놓치는 것보다 나쁘다.
 
         그래서 경고가 아니라 거부다."""
         if not bool(self.get_parameter("verify_calibration").value):
@@ -417,10 +428,28 @@ class ArmDriverNode(Node):
             for servo_id in sorted(TAUGHT_HOMING_OFFSETS)
         }
         result = calib_identity.verdict(current, TAUGHT_HOMING_OFFSETS)
-        if result.ok:
-            self.get_logger().info(f"캘리브레이션 확인 — {result.message()}")
-            return
-        raise ArmCalibrationMismatchError(result.message())
+        if not result.ok:
+            raise ArmCalibrationMismatchError(result.message())
+
+        current_limits = {
+            servo_id: self._read_with_retry(
+                lambda sid: poslim.get_position_limits(backend.drv, sid), servo_id)
+            for servo_id in sorted(TAUGHT_POSITION_LIMITS)
+        }
+        current_min, current_max = poslim.split_limits(current_limits)
+        taught_min, taught_max = poslim.split_taught(TAUGHT_POSITION_LIMITS)
+        min_result = calib_identity.verdict(current_min, taught_min)
+        max_result = calib_identity.verdict(current_max, taught_max)
+        if not min_result.ok:
+            raise ArmCalibrationMismatchError(
+                "Min_Angle_Limit이 교시 당시와 다릅니다 (2026-09-01 그리퍼 "
+                "먹통 사고와 같은 종류):\n" + min_result.message())
+        if not max_result.ok:
+            raise ArmCalibrationMismatchError(
+                "Max_Angle_Limit이 교시 당시와 다릅니다 (2026-09-01 그리퍼 "
+                "먹통 사고와 같은 종류):\n" + max_result.message())
+
+        self.get_logger().info(f"캘리브레이션 확인 — {result.message()}")
 
     def _check_startup_torque(
         self,

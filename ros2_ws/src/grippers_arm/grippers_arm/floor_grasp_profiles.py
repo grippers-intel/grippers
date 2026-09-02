@@ -43,6 +43,31 @@ TAUGHT_HOMING_OFFSETS = {
     6: 1343,    # gripper
 }
 
+# ⚠️ 2026-09-01 실기, 이날의 가장 큰 발견: Homing_Offset만 되돌리는 것으로는
+# 부족하다. 그리퍼(servo 6)가 어떤 폭을 명령해도 전혀 안 닫히는 사고가
+# 났는데, `restore_taught_offsets.py --apply --yes`로 Homing_Offset은
+# 이미 복구된 상태였다 — 원인은 Min/Max_Angle_Limit(EEPROM 주소 9/11,
+# 서보가 실제로 움직일 수 있는 물리적 허용 범위)이었다. LeRobot/VLA
+# 캘리브레이션은 이 레지스터를 Homing_Offset과 **같이** 덮어쓰는데(그날
+# 실측: 1140~2090 -> 1960~2378), 그 복구 도구는 이 레지스터를 아예
+# 보지도 쓰지도 않았다. "닫힘"에 필요한 목표(raw ~1150)가 서보 펌웨어의
+# 허용 범위 밖이라 조용히 무시되고 있었다 — ROS 서비스는 ok=True를 그대로
+# 반환했다(set_position()이 ACK는 받지만 목표 자체가 서보 안에서 버려짐).
+#
+# 그날은 스크래치패드 즉석 스크립트로 레지스터를 직접 복구했고 저장소에는
+# 반영되지 않았다. 아래 값은 그 즉석 복구가 확인한 값이자, TAUGHT_HOMING_
+# OFFSETS와 같은 백업 파일(08-29 18:11:24, LeRobot 캘리브레이션 돌리기
+# **직전** 스냅샷)에서 나온 것이다 — 둘은 같은 순간의 같은 팔 상태를
+# 담고 있으므로 반드시 같이 갱신해야 한다.
+TAUGHT_POSITION_LIMITS = {
+    1: (932, 3425),     # shoulder_pan
+    2: (817, 3196),     # shoulder_lift
+    3: (889, 3101),     # elbow_flex
+    4: (870, 3224),     # wrist_flex
+    5: (129, 3995),     # wrist_roll
+    6: (1140, 2090),    # gripper — 2026-09-01 사고가 난 바로 그 레지스터
+}
+
 
 @dataclass(frozen=True)
 class FloorGraspProfile:
