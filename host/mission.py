@@ -1047,12 +1047,32 @@ class MissionFSM:
             # poll_status() 를 불러 확인했다 — ArUco 데드레커닝이 실제와
             # 어긋나면 그사이 이미 바구니에 닿았다. 여기서도 매 사이클
             # 드레인해서, Pi가 실시간 라이다로 "이미 목표창 안"(basket_
-            # ready_early) 이라 하거나 "너무 가깝다"(last_basket_fix, 아래
-            # PLACE 의 _plan_basket_fix 가 그대로 소비한다)고 알려 오면
-            # 계획 거리를 마저 채우지 않고 즉시 멈춘다.
+            # ready_early) 이라 하거나 "너무 가깝다"고 알려 오면 계획 거리를
+            # 마저 채우지 않고 즉시 멈춘다.
+            #
+            # ⚠️ 09-02 실기 3번째 재발로 확인: `last_basket_fix` 는 PLACE 의
+            # _judge_insert(INSERT 명령에 대한 응답)와 여기 라이브 점검
+            # (APPROACH_BOX 명령에 대한 응답) 양쪽이 **같은 채널**
+            # (Report.INSERT_BLOCKED)로 채운다. PLACE 에서 NUDGE_BOX 로 막
+            # 넘어온 순간에는 Pi 가 직전 INSERT 판정에 대해 아직 보내고 있던
+            # 오래된 보고(전형적으로 "바구니가 멀다", forward_m 이 양수)가
+            # 한두 사이클 뒤늦게 도착할 수 있다 — 그런데 여기서 "값이
+            # 있으면 무조건 멈춘다"고 읽으면, 실제로는 한 걸음도 안 갔는데
+            # 멈춘 것으로 치고 `_plan_basket_fix`의 예산(BASKET_CREEP_BUDGET_M)
+            # 을 또 청구해 몇 사이클 만에 소진시켜 버린다(실측: 0.376m→
+            # 0.372m 두 판독이 사실상 제자리인데 예산 0.40m 를 통째로 태워
+            # 이후 계속 INSERT_BLOCKED 만 반복). 라이브 점검
+            # (baseline_mission.BaselineCarryState)이 실제로 보내는 것은
+            # `retreat_if_too_close` 뿐이고, 그건 언제나 forward_m 이
+            # 음수다 — 그래서 음수일 때만 "지금 막 온 라이브 신호"로 믿는다.
+            # 0 이상(양수/None)은 PLACE 국면의 잔여 보고로 보고 무시한다 —
+            # PLACE 가 want_m 완주 후 다시 물어서 정식으로 처리한다.
             link.poll_status()
+            fix = link.last_basket_fix
+            live_too_close = fix is not None and fix.forward_m is not None \
+                and fix.forward_m < 0
             done = (moved >= want_m or link.take_basket_ready_early()
-                    or link.last_basket_fix is not None)
+                    or live_too_close)
             # 전후 이동 중에 방위가 틀어지면 다시 맞춘다 — 5 cm 라도 비스듬히
             # 들어가면 상자 정면에 안 선다. 좌우 이동은 방위를 안 건드리므로
             # (메카넘 횡이동) 회전으로 끊지 않는다 — 여기서 돌면 방금 맞춘

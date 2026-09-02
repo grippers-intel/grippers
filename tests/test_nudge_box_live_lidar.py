@@ -69,3 +69,23 @@ def test_너무_가깝다는_보정을_받으면_계획_거리_전에_바로_PLA
     # PLACE 가 이걸 소비해서 다음 보정을 계산해야 한다 — NUDGE_BOX 는
     # 넘어가는 신호로만 쓰고 지우지 않는다.
     assert link.last_basket_fix is not None
+
+
+def test_너무_멀다는_보정은_PLACE의_잔여_보고로_보고_무시한다():
+    """09-02 실기 3번째 재발 재현 — 회귀 방지.
+
+    라이브 점검(baseline_mission.BaselineCarryState)이 접근 중에 실제로
+    보내는 것은 `retreat_if_too_close` 뿐이라 forward_m 이 항상 음수다.
+    양수 forward_m 은 직전 PLACE(INSERT 판정)에서 아직 도착 중이던
+    오래된 보고일 수 있다 — 그걸 "지금 온 라이브 신호"로 오인해 멈추면
+    실제로는 안 움직였는데 `_basket_creep_used` 예산만 청구돼, 몇 번
+    반복으로 예산이 바닥나 이후 INSERT_BLOCKED 에서 영영 못 빠져나온다
+    (09-02 09:45 실기가 정확히 이랬다)."""
+    fsm, link = _nudge_fsm()
+    link.last_basket_fix = BasketFix(forward_m=0.025)
+
+    fsm.step(link.pose(), {}, link)
+
+    assert fsm.state == State.NUDGE_BOX
+    # 소비하지 않았으니 PLACE 가 도착하면 그대로 봐야 한다.
+    assert link.last_basket_fix is not None
