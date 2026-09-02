@@ -230,6 +230,15 @@ class BasketFix:
     #: 영원히 갇혔다(10:18 실기, INSERT_BLOCKED "정렬이 틀어졌다"가
     #: 몇 분간 반복).
     yaw_rad: Optional[float] = None
+    #: Pi가 `REACQUIRE`(방향 없음 — corrections.from_insert의 face_ok=False
+    #: 분기)를 보냈다는 표시. 10:41 실기: 차가 바구니 옆 **벽**을 보고
+    #: 있었다 — 라이다 평면 자체를 못 찾으니(겉보기 폭이 바구니 범위 밖)
+    #: Pi는 "무엇을 고쳐야 할지" 방향을 모른다. 나머지 필드가 전부 None인
+    #: 것과 구분해야 한다 — "아직 보고가 안 왔다"와 "Pi가 정말 모른다"는
+    #: Host가 다르게 대응해야 한다(_plan_basket_fix는 못 고치지만, mission.py
+    #: PLACE는 이 표시를 보고 오버헤드 카메라로 크게 다시 접근해야 한다 —
+    #: GRASP_REPLAN과 같은 이유).
+    lost: bool = False
 
 
 def basket_fix_from_fix(fix) -> Optional[BasketFix]:
@@ -264,6 +273,12 @@ def basket_fix_from_fix(fix) -> Optional[BasketFix]:
             return BasketFix(yaw_rad=float(yaw))
         if isinstance(lateral, (int, float)):
             return BasketFix(lateral_m=float(lateral))
+    if action == "reacquire":
+        # face_ok=False — Pi는 라이다 평면 자체를 못 찾았다(바구니가 아니라
+        # 벽 등 엉뚱한 것을 보고 있을 수 있다). 방향이 없으니 forward_m/
+        # lateral_m/yaw_rad로는 못 나타낸다 — lost 하나로 "나머지 필드가
+        # 전부 None인 것"과 구분한다(10:41 실기, BasketFix.lost 주석 참고).
+        return BasketFix(lost=True)
     return None
 
 

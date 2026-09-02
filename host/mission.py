@@ -366,6 +366,10 @@ class MissionFSM:
         self._basket_creep_used = 0.0
         # 같은 폐루프의 회전판 예산(rad) — 미터 예산과 단위가 달라 따로 둔다.
         self._basket_yaw_used = 0.0
+        # PLACE에서 Pi가 REACQUIRE(방향 없음)를 연속으로 보낸 횟수 —
+        # BASKET_LOST_REPLAN_AFTER_TRIES 넘으면 CARRY_TO_DEST로 크게
+        # 다시 접근한다.
+        self._basket_lost_tries = 0
 
         # GRASP_ALIGN 용. _align 은 지금 수행 중인 보정, _align_from 은 그
         # 보정을 시작한 시점의 pose(얼마나 움직였는지 재는 기준),
@@ -534,6 +538,7 @@ class MissionFSM:
         self._nudge_plan = None
         self._basket_creep_used = 0.0
         self._basket_yaw_used = 0.0
+        self._basket_lost_tries = 0
         self.ready_to_advance = False
         self._path_planner.reset()
         self._drive.reset()
@@ -1198,7 +1203,34 @@ class MissionFSM:
                 # 보고 조금 움직인 뒤 다시 묻는다. 서서 기다리기만 하면
                 # 영원히 INSERT_BLOCKED 만 돌아온다 — 2026-08-28 실기가
                 # 정확히 그랬다(라이다 0.351m, 요구 0.155m).
-                plan = self._plan_basket_fix(link.take_basket_fix())
+                fix = link.take_basket_fix()
+                if fix is not None and fix.lost:
+                    # Pi가 라이다 평면 자체를 못 찾았다(방향 없음) — 10:41
+                    # 실기: 차가 바구니가 아니라 옆의 벽을 보고 있었다.
+                    # 국소 보정(전후/좌우/회전)은 "무엇이 어긋났는지"가
+                    # 있어야 계획이 서는데, 여기는 그게 아예 없다 — 몇 번
+                    # 더 물어서 Pi가 스스로 다시 찾는지 보고, 그래도
+                    # 안 되면 오버헤드 카메라로 dest_xy를 향해 크게 다시
+                    # 접근한다(GRASP_REPLAN과 같은 이유 — Pi의 좁은 정면
+                    # 센서 대신 Host가 아는 좌표로 되돌아간다).
+                    self._basket_lost_tries += 1
+                    if self._basket_lost_tries >= mcfg.BASKET_LOST_REPLAN_AFTER_TRIES:
+                        print(f"[mission] 바구니를 {self._basket_lost_tries}회 "
+                              f"연속 못 찾음 — 오버헤드 재접근", flush=True)
+                        self._basket_lost_tries = 0
+                        self._nudge_from = None
+                        self._nudge_yaw_from = None
+                        self._nudge_plan = None
+                        self._basket_creep_used = 0.0
+                        self._basket_yaw_used = 0.0
+                        self.ready_to_advance = False
+                        self._path_planner.reset()
+                        self._drive.reset()
+                        self.state = State.CARRY_TO_DEST
+                        return self.state
+                else:
+                    self._basket_lost_tries = 0
+                plan = self._plan_basket_fix(fix)
                 if plan is not None:
                     self._nudge_plan = plan
                     self._nudge_from = None
