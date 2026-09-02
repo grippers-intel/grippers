@@ -51,11 +51,10 @@ import cv2
 import numpy as np
 
 CONF_GATE = 0.70
-# ⚠️ 2026-09-02: 사용자 요청으로 240.0으로 비교해본다(290 -> 350 -> 200 ->
-# 240 순으로 비교, 이번이 마지막) — grippers 저장소 perception_node.py의
-# 실제 값(OBSERVE_MIN_BOTTOM_Y_PX=290.0)과 지금 달라졌다. 확인 끝나고
-# 290.0으로 되돌릴 것.
-MIN_BOTTOM_Y = 240.0
+# 2026-09-02: 290 -> 350 -> 200 -> 240을 비교해본 뒤, 사용자가 250으로
+# 결정해 grippers 저장소 perception_node.py의 실제 값도 같이 바꿨다.
+# 여기는 다시 그 값을 따라간다.
+MIN_BOTTOM_Y = 250.0
 
 # 이 맥에서 확인된 train-9 best.pt 위치(sha256이 perception_node.py가 문서화한
 # 배포본과 같음: bd13ae42...). 저장소 밖 개인 작업 폴더라 커밋에 넣을 수 없어
