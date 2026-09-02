@@ -45,6 +45,7 @@ depth_cam_rotate_node가 내려간 것이다.
 
 import argparse
 import base64
+import os
 import pathlib
 import shutil
 import subprocess
@@ -52,7 +53,11 @@ import sys
 import time
 import webbrowser
 
-PI = "pi@10.82.133.189"
+# ⚠️ Pi IP는 DHCP라 계속 바뀐다(10.82.133.189 -> 192.168.0.7 등, 2026-08-30
+# 이후 여러 번 확인됨). 여기 박아둔 값이 낡으면 SSH가 그냥 조용히 실패해서
+# "프레임을 못 받았습니다"로만 보인다(2026-09-02 실제로 이렇게 겪었다) —
+# IP가 바뀌면 GRIPPERS_PI 환경변수로 덮어쓰거나 아래 기본값을 고친다.
+PI = os.environ.get("GRIPPERS_PI", "pi@192.168.0.7")
 CONTAINER = "IntelPi"
 
 TOPICS = {
