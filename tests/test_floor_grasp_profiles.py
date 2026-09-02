@@ -30,14 +30,14 @@ def test_floor_grasp_profiles_match_measured_object_geometry():
         40.0,
         26.0,
     )
-    assert profiles["cube"].close_width_mm == 25.0
     assert profiles["star_column"].object_width_mm == 45.0
-    assert profiles["star_column"].close_width_mm == 30.0
     assert profiles["soccer_polyhedron"].object_width_mm == 46.0
-    assert profiles["soccer_polyhedron"].close_width_mm == 31.0
-    assert profiles["chess_rook"].close_width_mm == 9.5
-    # 2026-08-25: 파지 전용 하한을 9.0 -> 7.0으로 실측해 내렸다.
-    assert profiles["chess_knight"].close_width_mm == 7.0
+    # 2026-09-02: 물체 폭과 무관하게 여섯 전부 파지 전용 하한(GRIPPER_
+    # GRASP_MIN_MM)을 직접 쓴다(기어 백래시 — 서보 한계까지 밀어붙여야
+    # 한다는 사용자 지시). 2026-08-25에는 얇은 체스말 둘만 이 하한에
+    # 걸렸었다.
+    assert all(profile.close_width_mm == module.GRIPPER_GRASP_MIN_MM
+              for profile in profiles.values())
     assert all(profile.preopen_width_mm == 168.0 for profile in profiles.values())
 
 
@@ -54,13 +54,12 @@ def test_every_profile_squeezes_by_the_same_margin_unless_the_jaw_bottoms_out():
 
 
 def test_the_thin_chess_pieces_are_the_ones_that_bottom_out():
-    """queen(17.0mm)·knight(22.0mm)은 파지 전용 하한에 걸려 GRIPPER_SQUEEZE_MM
-    여유를 다 쓰지 못한다. queen의 실측 마진이 늘 가장 얇았던(2026-08-24,
-    4양자) 이유가 이것이다.
+    """2026-09-02까지는 queen(17.0mm)·knight(22.0mm)만 파지 전용 하한에
+    걸렸다 — 나머지 넷은 (물체폭 - GRIPPER_SQUEEZE_MM)이 하한 위였다.
 
-    2026-08-25에 그 하한을 실측으로 9.0 -> 7.0으로 내려 둘의 파지력을
-    키웠다(knight 기준 부하 0.0235 -> 0.0626). 하한에 걸리는 집합 자체는
-    그대로다 — 물체가 얇다는 사실이 바뀐 게 아니기 때문이다."""
+    2026-09-02 사용자 지시(기어 백래시 — 서보 한계까지 밀어붙여야 한다)로
+    물체 폭에서 빼는 방식 자체를 버리고 모든 라벨이 하한을 직접 쓴다 —
+    이제는 여섯 전부가 "바닥"이다."""
     module = _load_profiles()
     profiles = module.FLOOR_GRASP_PROFILES
 
@@ -69,8 +68,7 @@ def test_the_thin_chess_pieces_are_the_ones_that_bottom_out():
         for name, profile in profiles.items()
         if profile.close_width_mm == module.GRIPPER_GRASP_MIN_MM
     }
-    assert bottomed == {"chess_queen", "chess_knight"}
-    assert profiles["chess_queen"].object_width_mm - profiles["chess_queen"].close_width_mm == 10.0
+    assert bottomed == set(profiles)
     assert (
         profiles["chess_knight"].object_width_mm,
         profiles["chess_knight"].grasp_center_height_mm,
@@ -274,19 +272,17 @@ def test_release_width_never_exceeds_the_mechanical_limit():
     assert module._release_width(1000.0) == module.GRIPPER_OPEN_MM
 
 
-def test_the_thin_chess_pieces_now_use_the_lower_grasp_floor():
-    """사용자 지시(2026-08-25) "최대한 세게 잡자"의 실제 결과 — 하한에 걸려
-    있던 둘만 바뀌고 나머지는 그대로다. queen/knight은 물체 폭이 좁아
-    _close_width가 하한에 clamp되는 유일한 둘이었다."""
+def test_every_label_now_uses_the_grasp_floor_directly():
+    """사용자 지시(2026-09-02, 기어 백래시 — 서보 한계까지 밀어붙여야 한다)의
+    실제 결과 — 2026-08-25에는 하한에 걸려 있던 queen/knight 둘만 바뀌고
+    나머지 넷(rook/cube/star_column/soccer_polyhedron)은 물체 폭 기반
+    공식값을 그대로 썼다. 이제는 물체 폭과 무관하게 여섯 전부가 하한을
+    직접 쓴다."""
     profiles = _load_profiles()
+    floor = profiles.GRIPPER_GRASP_MIN_MM
 
-    assert profiles.FLOOR_GRASP_PROFILES["chess_queen"].close_width_mm == 7.0
-    assert profiles.FLOOR_GRASP_PROFILES["chess_knight"].close_width_mm == 7.0
-    # 하한 위에 있던 넷은 손대지 않는다.
-    assert profiles.FLOOR_GRASP_PROFILES["chess_rook"].close_width_mm == 9.5
-    assert profiles.FLOOR_GRASP_PROFILES["cube"].close_width_mm == 25.0
-    assert profiles.FLOOR_GRASP_PROFILES["star_column"].close_width_mm == 30.0
-    assert profiles.FLOOR_GRASP_PROFILES["soccer_polyhedron"].close_width_mm == 31.0
+    for name in profiles.FLOOR_GRASP_PROFILES:
+        assert profiles.FLOOR_GRASP_PROFILES[name].close_width_mm == floor
 
 
 def test_close_width_clamps_at_the_grasp_floor_not_the_empty_closed_width():

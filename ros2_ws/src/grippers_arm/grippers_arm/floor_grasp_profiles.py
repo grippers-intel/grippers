@@ -97,18 +97,21 @@ def _release_width(object_width_mm: float) -> float:
 
 
 def _close_width(object_width_mm: float) -> float:
-    """물체 폭에서 GRIPPER_SQUEEZE_MM만큼 더 좁힌 목표 폭.
+    """파지 목표 폭 — 이제 물체 폭과 무관하게 GRIPPER_GRASP_MIN_MM이다.
 
-    **파지 전용** 하한(GRIPPER_GRASP_MIN_MM) 아래로는 내려가지 않는다 —
-    빈 닫힘 폭(GRIPPER_CLOSED_MM)이 아니다. 물체가 턱을 멈춰 주므로 파지
-    때는 더 좁게 명령해 위치 오차(=힘)를 키울 수 있기 때문이다.
+    **파지 전용** 하한이지 빈 닫힘 폭(GRIPPER_CLOSED_MM)이 아니다. 물체가
+    턱을 멈춰 주므로 파지 때는 더 좁게 명령해 위치 오차(=힘)를 키울 수
+    있기 때문이다.
 
     2026-08-25 실측으로 하한을 9.0에서 7.0으로 내렸다(사용자 지시 "최대한
-    세게 잡자"). 얇은 체스말 둘이 이 하한에 걸려 있었고, 이제 knight 기준
-    파지 부하가 0.0235에서 0.0626으로 2.7배가 된다. 7.0 아래로는 부하가
-    포화해 더 얻을 것이 없다 — 근거는 GRIPPER_GRASP_MIN_MM 주석 참고.
-    """
-    return max(GRIPPER_GRASP_MIN_MM, round(object_width_mm - GRIPPER_SQUEEZE_MM, 1))
+    세게 잡자") — 당시는 얇은 체스말 둘만 이 하한에 걸렸고 나머지 넷은
+    (물체폭 - GRIPPER_SQUEEZE_MM)이 하한 위라 그대로였다.
+
+    2026-09-02 사용자 지시(기어 백래시 — 서보 한계까지 밀어붙여야 한다)로
+    물체 폭에서 빼는 방식 자체를 버렸다 — 하한(이번에 7.0 -> 0.0)을 모든
+    라벨에 직접 쓴다. baseline_mission.py(도메인, 실제 미션이 쓰는 값)와
+    같은 정책이다."""
+    return GRIPPER_GRASP_MIN_MM
 
 
 # 2026-08-24: 낮은 물체 3종(cube/star_column/soccer_polyhedron)의 파지 중심

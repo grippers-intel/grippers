@@ -53,7 +53,6 @@ from domain.task.floor_grasp_policy import (
     GRIPPER_GRASP_MIN_MM,
     GRIPPER_MAX_SAFE_OPEN_MM,
     HorizontalGraspPlan,
-    _close_width,
     _release_width,
 )
 from domain.task.base_liveness import LivenessLatch
@@ -82,26 +81,22 @@ _OBJECT_WIDTH_MM = {
     "soccer": ("soccer_polyhedron", 46.0),
 }
 
-# rook만 파지 폭을 GRIPPER_GRASP_MIN_MM(2026-08-25 knight 실측 포화점,
-# floor_grasp_policy 주석 참고)까지 강제로 더 좁힌다 (2026-09-02 실기 지시).
+# 모든 라벨의 파지 폭을 GRIPPER_GRASP_MIN_MM까지 강제로 좁힌다(2026-09-02
+# 사용자 지시 — 기어 사이에 이격(백래시)이 있어 서보 한계까지 밀어붙여야
+# 한다).
 #
-# _close_width(24.5) = max(7.0, 24.5-15.0) = **9.5** — 이미 하한(7.0)보다
-# 위라 08-25에 queen/knight을 7.0으로 내린 조정(9.0 -> 7.0)의 혜택을 rook은
-# 못 받았다. 09-02 실기에서 8회 연속 "들어 올리지 못함"이 났고, 그때 부하
-# (0.0235 x3 / 0.0274 / 0.0469)가 knight 실측 스윕의 "9.0mm 명령 -> 0.0235"
-# 대와 같은 대역이었다 — 09-01 이전까지는 헐겁지 않았다는 사용자 관찰과
-# 별개로, 이 폭 자체가 애초에 그 헐거운 대역에 있었다는 뜻이다.
+# 2026-09-02 이전에는 물체 폭에서 GRIPPER_SQUEEZE_MM(15.0)만 뺀 값을
+# 썼다(_close_width) — rook만 예외적으로 이 하한을 직접 썼다(09-02 실기:
+# _close_width(24.5)=9.5가 이미 하한(당시 7.0)보다 위라 08-25의 "최대한
+# 세게 잡자" 조정 혜택을 못 받고 8회 연속 "들어 올리지 못함"이 났다).
 #
-# GRIPPER_SQUEEZE_MM(공용 상수)을 올리면 box/star/soccer(이미 검증된 25.0/
-# 30.0/31.0)까지 같이 좁아진다 — 그건 요청받지 않았으니 rook 하나만 덮어쓴다.
-_CLOSE_WIDTH_OVERRIDE_MM = {
-    "rook": GRIPPER_GRASP_MIN_MM,
-}
-
+# 물체가 턱 사이에 있으면 그 물체가 턱을 멈춰 주므로, 하한까지 명령해도
+# 서보가 갈아 먹는 게 아니라 위치 오차(=힘)만 커진다(GRIPPER_GRASP_MIN_MM
+# 주석 참고) — 그래서 라벨마다 다르게 좁힐 이유가 없다. box/star/soccer도
+# "이미 검증된" 값(25.0/30.0/31.0)에 만족하지 말고 전부 하한으로 민다.
 _PROFILE_BY_LABEL = {
     label: HorizontalGraspPlan(
-        profile, GRIPPER_MAX_SAFE_OPEN_MM,
-        _CLOSE_WIDTH_OVERRIDE_MM.get(label, _close_width(width_mm)),
+        profile, GRIPPER_MAX_SAFE_OPEN_MM, GRIPPER_GRASP_MIN_MM,
         _release_width(width_mm))
     for label, (profile, width_mm) in _OBJECT_WIDTH_MM.items()
 }

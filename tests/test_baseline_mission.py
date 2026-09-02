@@ -405,14 +405,15 @@ def test_재확인에서도_부하가_낮으면_그때는_진짜_실패다():
 
 
 def test_파지_명령_폭은_ros2_프로파일_공식에서_나온다():
-    """도메인과 ros2 프로파일이 갈라져 파지가 헐거워진 2026-08-26 사고 방지."""
-    assert plan_for_label("queen").close_width_mm == 7.0
-    # rook은 공식값(9.5)이 아니라 2026-09-02 지시로 GRIPPER_GRASP_MIN_MM까지
-    # 덮어쓴 값이다 — 09-02 실기에서 이 폭(9.5)이 knight 실측 스윕의
-    # "9.0mm 명령 -> 부하 0.0235"와 같은 헐거운 대역이었다
-    # (baseline_mission._CLOSE_WIDTH_OVERRIDE_MM 참고).
+    """도메인과 ros2 프로파일이 갈라져 파지가 헐거워진 2026-08-26 사고 방지.
+
+    2026-09-02 사용자 지시(기어 백래시 — 서보 한계까지 밀어붙여야 한다)로
+    모든 라벨이 물체 폭과 무관하게 GRIPPER_GRASP_MIN_MM을 직접 쓴다 —
+    rook 하나만 덮어쓰던 09-02 이전 방식(_CLOSE_WIDTH_OVERRIDE_MM)을
+    모든 라벨로 넓혔다."""
+    assert plan_for_label("queen").close_width_mm == GRIPPER_GRASP_MIN_MM
     assert plan_for_label("rook").close_width_mm == GRIPPER_GRASP_MIN_MM
-    assert plan_for_label("soccer").close_width_mm == 31.0
+    assert plan_for_label("soccer").close_width_mm == GRIPPER_GRASP_MIN_MM
 
 
 # ── 임무 4번: INSERT 조건 판정과 수행 ──────────────────────────────────────
