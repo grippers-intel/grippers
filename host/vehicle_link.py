@@ -220,6 +220,16 @@ class BasketFix:
     #: 목표를 빼는 계산을 Host 가 다시 하지 않아도 되고, 두 목표값이 갈라질
     #: 여지도 없어진다.
     forward_m: Optional[float] = None
+    #: Pi 가 직접 계산한 방위 오차(rad, +가 CCW — `mission._yaw_error_to_
+    #: target_deg`와 같은 부호 관례). `corrections.from_insert`가 거리는
+    #: 맞는데 라이다 평면 자체가 정면이 아닐 때(`face_yaw_error_rad` >
+    #: BASKET_YAW_TOLERANCE_RAD) 보내는 값 — 2026-09-02까지 구조화된
+    #: `fix`에서 이 값을 아예 안 읽었다(lateral_m만 봤다). yaw만 어긋나고
+    #: 거리·좌우는 맞는 경우(from_insert의 우선순위상 거리 다음, 좌우
+    #: 이전에 걸린다) `_plan_basket_fix`가 아무 계획도 못 만들어 PLACE에
+    #: 영원히 갇혔다(10:18 실기, INSERT_BLOCKED "정렬이 틀어졌다"가
+    #: 몇 분간 반복).
+    yaw_rad: Optional[float] = None
 
 
 def basket_fix_from_fix(fix) -> Optional[BasketFix]:
@@ -242,10 +252,18 @@ def basket_fix_from_fix(fix) -> Optional[BasketFix]:
     action = fix.get("action")
     forward = fix.get("forward_m")
     lateral = fix.get("lateral_m")
+    yaw = fix.get("yaw_rad")
     if action in ("advance", "retreat") and isinstance(forward, (int, float)):
         return BasketFix(forward_m=float(forward))
-    if action == "rotate" and isinstance(lateral, (int, float)):
-        return BasketFix(lateral_m=float(lateral))
+    if action == "rotate":
+        # from_insert()는 ROTATE를 두 자리에서 낸다 — yaw 오차(거리 다음
+        # 우선순위)와 좌우 오차(그다음). `Correction`은 넷 다 채워서
+        # 보내므로(안 쓰는 축은 0.0 기본값), yaw_rad가 0이 아니면 그쪽이
+        # 진짜 원인이다 — 두 원인이 한 판정에서 같이 나올 수는 없다.
+        if isinstance(yaw, (int, float)) and abs(yaw) > 1e-9:
+            return BasketFix(yaw_rad=float(yaw))
+        if isinstance(lateral, (int, float)):
+            return BasketFix(lateral_m=float(lateral))
     return None
 
 

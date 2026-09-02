@@ -352,6 +352,9 @@ class MissionFSM:
         # step() 의 pose.ok 분기 참고) — 차량 제어에는 안 쓰인다.
         self._last_good_pose: Optional[Pose] = None
         self._nudge_from: Optional[XY] = None   # NUDGE_BOX 진입 시점의 위치
+        # NUDGE_BOX 진입 시점의 방위(도) — axis가 rotate_left/rotate_right일
+        # 때만 쓴다(제자리 회전이라 위치가 아니라 각도로 진행량을 잰다).
+        self._nudge_yaw_from: Optional[float] = None
         # NUDGE_BOX 가 이번에 갈 (거리 m, 방향). PLACE 가 Pi 의 라이다 판독을
         # 보고 채운다. None 이면 첫 진입이라 기존 BOX_NUDGE_M 만큼만 붙인다.
         self._nudge_plan: Optional[tuple] = None
@@ -361,6 +364,8 @@ class MissionFSM:
         self._nudge_stall_warned = False
         # 바구니 앞 폐루프가 지금까지 쓴 총 이동량 — 예산 한계선용.
         self._basket_creep_used = 0.0
+        # 같은 폐루프의 회전판 예산(rad) — 미터 예산과 단위가 달라 따로 둔다.
+        self._basket_yaw_used = 0.0
 
         # GRASP_ALIGN 용. _align 은 지금 수행 중인 보정, _align_from 은 그
         # 보정을 시작한 시점의 pose(얼마나 움직였는지 재는 기준),
@@ -525,8 +530,10 @@ class MissionFSM:
         self._align_tries = 0
         self._reaim_tries = 0
         self._nudge_from = None
+        self._nudge_yaw_from = None
         self._nudge_plan = None
         self._basket_creep_used = 0.0
+        self._basket_yaw_used = 0.0
         self.ready_to_advance = False
         self._path_planner.reset()
         self._drive.reset()
@@ -546,12 +553,19 @@ class MissionFSM:
 
         총 이동량에 예산을 두는 이유: 판독이 이상해서 같은 방향 보정이 계속
         나오면 차가 바구니를 밀고 들어간다. 예산을 다 쓰면 더 안 움직이고
-        Pi 의 거부를 그대로 사람에게 남긴다."""
+        Pi 의 거부를 그대로 사람에게 남긴다. 회전(rad)은 병진(m)과 단위가
+        달라 예산을 따로 둔다 — 둘 중 하나가 소진돼도 다른 쪽 보정은 여전히
+        낼 수 있어야 한다(거리는 맞는데 yaw만 계속 어긋나는 경우, 그 반대도
+        마찬가지).
+
+        ⚠️ 10:18 실기까지 yaw_rad 를 아예 안 읽었다 — corrections.from_insert
+        는 거리 다음으로 yaw 를 보는데(우선순위는 위 참고), 여기는 lateral_m
+        만 읽어서 "거리는 맞는데 라이다 평면 자체가 정면이 아니다"(yaw만
+        어긋난 경우)에는 아무 계획도 못 만들고 PLACE 에서 INSERT_BLOCKED만
+        반복했다."""
         if fix is None:
             return None
         remaining = mcfg.BASKET_CREEP_BUDGET_M - self._basket_creep_used
-        if remaining <= 0.01:
-            return None
 
         # Pi 가 오차를 직접 계산해 줬으면 그것을 쓴다. 없으면 라이다 판독에서
         # Host 목표를 빼서 낸다(옛 Pi 빌드 대비). 부호는 둘 다 +가 "더 가야
@@ -559,12 +573,24 @@ class MissionFSM:
         error = fix.forward_m
         if error is None and fix.distance_m is not None:
             error = fix.distance_m - mcfg.BASKET_TARGET_LIDAR_M
-        if error is not None:
+        if error is not None and remaining > 0.01:
             if abs(error) > mcfg.BASKET_DISTANCE_DEADBAND_M:
                 return (min(abs(error), remaining),
                         "forward" if error > 0 else "back")
 
-        if (fix.lateral_m is not None
+        if fix.yaw_rad is not None:
+            yaw_remaining = mcfg.BASKET_YAW_BUDGET_RAD - self._basket_yaw_used
+            if (yaw_remaining > 0.01
+                    and abs(fix.yaw_rad) > mcfg.BASKET_YAW_DEADBAND_RAD):
+                # yaw_rad 는 `_yaw_error_to_target_deg`와 같은 부호 관례다
+                # (+가 CCW) — 그 방향으로 그만큼 더 돌면 라이다 평면 정면과
+                # 맞아떨어진다(basket_lidar_align.fit_basket_face 주석:
+                # yaw_error = atan2(ny, nx), 로봇을 +yaw_error 만큼 CCW로
+                # 돌리면 그 값이 0으로 수렴한다).
+                return (min(abs(fix.yaw_rad), yaw_remaining),
+                        "rotate_left" if fix.yaw_rad > 0 else "rotate_right")
+
+        if (fix.lateral_m is not None and remaining > 0.01
                 and abs(fix.lateral_m) > mcfg.BASKET_LATERAL_DEADBAND_M):
             # lateral_m 은 바구니 중심이 로봇 기준 어디 있는지다(+가 왼쪽) —
             # 그 방향으로 가야 가운데에 선다.
@@ -1046,16 +1072,28 @@ class MissionFSM:
             self.nav_path = None
             if self._nudge_from is None:
                 self._nudge_from = robot_xy
+                self._nudge_yaw_from = pose.yaw_deg
                 self._nudge_best = 0.0
                 self._nudge_stall_at = time.monotonic() + mcfg.BASKET_NUDGE_STALL_SEC
             # 얼마나 어느 쪽으로 갈지. PLACE 가 Pi 판독을 보고 정해 두면
             # 그것을 쓰고, 없으면(첫 진입) 기존 5 cm 직진이다.
             want_m, axis = self._nudge_plan or (mcfg.BOX_NUDGE_M, "forward")
+            is_rotate = axis in ("rotate_left", "rotate_right")
             heading = math.radians(mcfg.BOX_FACE_YAW_DEG)
-            goal = (self._nudge_from[0] + want_m * math.cos(heading),
-                    self._nudge_from[1] + want_m * math.sin(heading))
-            moved = math.hypot(robot_xy[0] - self._nudge_from[0],
-                               robot_xy[1] - self._nudge_from[1])
+            goal = (robot_xy if is_rotate else
+                    (self._nudge_from[0] + want_m * math.cos(heading),
+                     self._nudge_from[1] + want_m * math.sin(heading)))
+            if is_rotate:
+                # 제자리 회전이라 위치가 아니라 각도로 진행량을 잰다 —
+                # want_m 이 이 axis 에서는 라디안이다(_plan_basket_fix 참고).
+                yaw_from = self._nudge_yaw_from
+                if yaw_from is None:
+                    yaw_from = pose.yaw_deg
+                delta_deg = (pose.yaw_deg - yaw_from + 180.0) % 360.0 - 180.0
+                moved = abs(math.radians(delta_deg))
+            else:
+                moved = math.hypot(robot_xy[0] - self._nudge_from[0],
+                                   robot_xy[1] - self._nudge_from[1])
             yaw_err = (mcfg.BOX_FACE_YAW_DEG - pose.yaw_deg + 180.0) % 360.0 - 180.0
             aligned = abs(yaw_err) <= mcfg.DRIVE_YAW_TOLERANCE_DEG
             # 2026-09-02 실기(2건): 여기서 계획 거리(want_m)를 다 채울 때까지
@@ -1095,6 +1133,13 @@ class MissionFSM:
             # 거리와 yaw 가 같이 틀어져 앞 단계를 되돌리게 된다.
             if done:
                 mode, cmd = DriveMode.STOP, "stop"
+            elif is_rotate:
+                # BOX_FACE_YAW_DEG 정렬(아래 elif not aligned)과 다투지 않게
+                # 최우선으로 처리한다 — 이 축이 도는 목적 자체가 Pi 라이다
+                # 판독을 정면으로 맞추는 것이고, ArUco 기준 BOX_FACE_YAW_DEG
+                # 로 되돌아가 버리면 방금 받은 보정을 무시하는 셈이 된다.
+                mode = DriveMode.ROTATE
+                cmd = "yaw+" if axis == "rotate_left" else "yaw-"
             elif axis in ("left", "right"):
                 mode, cmd = DriveMode.FORWARD, axis
             elif not aligned:
@@ -1114,9 +1159,13 @@ class MissionFSM:
                 mode, cmd = DriveMode.STOP, "stop"
                 if not self._nudge_stall_warned:
                     self._nudge_stall_warned = True
+                    progress = (f"{math.degrees(moved):.1f}도 밖에 못 돌았습니다"
+                                f"(목표 {math.degrees(want_m):.1f}도"
+                                if is_rotate else
+                                f"{moved * 1000:.0f}mm 밖에 못 갔습니다(목표 "
+                                f"{want_m * 1000:.0f}mm")
                     print(f"\n[NUDGE_BOX] {mcfg.BASKET_NUDGE_STALL_SEC:.0f}초 동안 "
-                          f"{moved * 1000:.0f}mm 밖에 못 갔습니다(목표 "
-                          f"{want_m * 1000:.0f}mm, 방향 {axis}) — 정지합니다. "
+                          f"{progress}, 방향 {axis}) — 정지합니다. "
                           f"바퀴 전원과 걸림을 확인하세요\n", flush=True)
 
             self.ready_to_advance = done
@@ -1153,7 +1202,11 @@ class MissionFSM:
                 if plan is not None:
                     self._nudge_plan = plan
                     self._nudge_from = None
-                    self._basket_creep_used += plan[0]
+                    self._nudge_yaw_from = None
+                    if plan[1] in ("rotate_left", "rotate_right"):
+                        self._basket_yaw_used += plan[0]
+                    else:
+                        self._basket_creep_used += plan[0]
                     self.state = State.NUDGE_BOX
                     return self.state
             if self.ready_to_advance and self._should_advance():

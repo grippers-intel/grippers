@@ -154,6 +154,72 @@ def test_좌우_보정은_lateral_로_온다():
     assert fix.forward_m is None
 
 
+# ── yaw 보정 (10:18 실기, 2026-09-02) ────────────────────────────────────
+#
+# corrections.from_insert()는 거리 다음으로 yaw(face_yaw_error_rad)를
+# 본다 — 거리는 맞는데 라이다 평면 자체가 정면이 아닌 경우다. 그런데
+# basket_fix_from_fix()는 여태 lateral_m만 읽고 있어서, 이 경우 Host가
+# 아무 계획도 못 세우고 PLACE에서 INSERT_BLOCKED("정렬이 틀어졌다")만
+# 반복하는 락업이 됐다.
+
+
+def test_yaw_보정은_yaw_rad로_온다():
+    fix = basket_fix_from_fix({"action": "rotate", "yaw_rad": 0.17,
+                               "lateral_m": 0.0})
+    assert fix.yaw_rad == pytest.approx(0.17)
+    assert fix.lateral_m is None
+
+
+def test_yaw가_0이면_평소대로_좌우로_읽는다():
+    """Correction은 안 쓰는 축도 0.0 기본값으로 다 채워 보낸다 — yaw_rad가
+    진짜 0이면 그건 좌우 보정이라는 뜻이지 "값이 있다"는 뜻이 아니다."""
+    fix = basket_fix_from_fix({"action": "rotate", "yaw_rad": 0.0,
+                               "lateral_m": -0.079})
+    assert fix.lateral_m == pytest.approx(-0.079)
+    assert fix.yaw_rad is None
+
+
+@pytest.mark.parametrize("yaw_rad, axis", [(0.17, "rotate_left"),
+                                            (-0.17, "rotate_right")])
+def test_yaw_보정은_방향에_맞는_axis로_계획된다(yaw_rad, axis):
+    """예전에는 여기서 아무 계획도 못 내 PLACE에 영원히 갇혔다(10:18 실기)."""
+    fsm = MissionFSM()
+    fix = basket_fix_from_fix({"action": "rotate", "yaw_rad": yaw_rad,
+                               "lateral_m": 0.0})
+
+    plan = fsm._plan_basket_fix(fix)
+
+    assert plan is not None
+    amount, plan_axis = plan
+    assert plan_axis == axis
+    assert amount == pytest.approx(abs(yaw_rad))
+
+
+def test_yaw_보정은_거리보다_먼저_예산이_바닥나도_그대로_나온다():
+    """회전(rad)과 병진(m) 예산은 단위가 달라 따로 관리한다 — 한쪽이
+    바닥나도 다른 쪽 보정은 여전히 낼 수 있어야 한다."""
+    fsm = MissionFSM()
+    fsm._basket_creep_used = mcfg.BASKET_CREEP_BUDGET_M   # 병진 예산 소진
+    fix = basket_fix_from_fix({"action": "rotate", "yaw_rad": 0.17,
+                               "lateral_m": 0.0})
+
+    plan = fsm._plan_basket_fix(fix)
+
+    assert plan is not None and plan[1] == "rotate_left"
+
+
+def test_yaw_회전_예산도_넘겨서까지_돌지_않는다():
+    fsm = MissionFSM()
+    fsm._basket_yaw_used = mcfg.BASKET_YAW_BUDGET_RAD - 0.05
+    fix = basket_fix_from_fix({"action": "rotate", "yaw_rad": 0.17,
+                               "lateral_m": 0.0})
+
+    plan = fsm._plan_basket_fix(fix)
+
+    assert plan is not None
+    assert plan[0] == pytest.approx(0.05)
+
+
 def test_바구니에_너무_붙으면_후진을_계획한다():
     """예전에는 여기서 아무 계획도 못 내 그 자리에 영원히 섰다."""
     fsm = MissionFSM()

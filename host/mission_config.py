@@ -245,10 +245,21 @@ BASKET_LATERAL_TOLERANCE_M = 0.070  # Pi BASKET_LATERAL_TOLERANCE_M (수용 반�
 # 쫓아 미세이동이 끝나지 않는다.
 BASKET_DISTANCE_DEADBAND_M = 0.007
 BASKET_LATERAL_DEADBAND_M = 0.030
+# Pi의 BASKET_YAW_TOLERANCE_RAD(0.087rad, 5도)보다 타이트하게 잡아 수렴점이
+# 창 한가운데 오게 한다 — 위 거리/좌우 데드밴드와 같은 이유(10:18 실기로
+# 발견: 이 축은 2026-09-02까지 아예 안 보고 있었다 — corrections.py의
+# from_insert()가 거리 다음으로 yaw를 보는데, `_plan_basket_fix`는
+# lateral_m만 읽고 yaw_rad는 안 읽어서 yaw만 어긋난 경우 아무 계획도
+# 못 만들고 PLACE에 영원히 갇혔다).
+BASKET_YAW_DEADBAND_RAD = 0.04
 # 이 폐루프가 쓸 수 있는 총 이동량. 판독이 이상해서 같은 방향 보정이 계속
 # 나오는 경우에 차가 바구니를 밀고 들어가는 것을 막는 한계선이다. 필요한
 # 보정이 20cm 남짓이므로 그 두 배를 준다.
 BASKET_CREEP_BUDGET_M = 0.40
+# 위와 같은 이유의 회전판 예산(rad) — 미터 예산과 단위가 달라 따로 둔다.
+# Pi 판독이 흔들려도 같은 방향 보정이 계속 나오면 제자리에서 계속
+# 도는 것을 막는다. 필요한 보정이 통상 0.1~0.2rad 남짓이므로 그 두 배쯤.
+BASKET_YAW_BUDGET_RAD = 0.40
 # 바구니 앞 미세이동이 "명령은 나가는데 안 움직인다"를 알아채는 시간.
 #
 # 2026-08-28 실기에서 NUDGE_BOX 가 62초 동안 0.06 m/s 전진을 계속 냈다.
