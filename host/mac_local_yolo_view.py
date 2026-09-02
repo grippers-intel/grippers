@@ -217,9 +217,14 @@ def main() -> int:
             if key == ord("s"):
                 args.capture_dir.mkdir(parents=True, exist_ok=True)
                 path = args.capture_dir / f"local_{time.strftime('%Y%m%d_%H%M%S')}.png"
-                cv2.imwrite(str(path), img)
-                saved += 1
-                print(f"캡처 저장: {path} (총 {saved}장)")
+                # ⚠️ 2026-09-02: mac_camera_view.py에서 imwrite 실패를 안
+                # 확인해서 "저장됨"이라고 거짓으로 찍은 버그를 겪었다 —
+                # 여기도 같은 실수를 안 하려고 반환값을 본다.
+                if cv2.imwrite(str(path), img):
+                    saved += 1
+                    print(f"캡처 저장: {path} (총 {saved}장)")
+                else:
+                    print(f"캡처 저장 실패: {path}", file=sys.stderr)
     except KeyboardInterrupt:
         pass
     finally:
