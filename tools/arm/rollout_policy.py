@@ -294,6 +294,10 @@ def main() -> int:
 
     chunk_s = cfg.n_action_steps / args.fps
     fwd, loop, stop, step = [], [], None, 0
+    # 관측 궤적. "팔이 폈나 안 폈나"를 결과 숫자 몇 개로는 못 가른다 - 시작
+    # 자세로 끝난 롤아웃이 한 번도 안 움직인 것인지, 나갔다 돌아온 것인지
+    # 마지막 프레임만 봐서는 같아 보인다(2026-09-02).
+    traj = []
     t_start = time.perf_counter()
     try:
         while time.perf_counter() - t_start < args.seconds:
@@ -335,12 +339,27 @@ def main() -> int:
                 break
 
             robot.send_action({f"{j}.pos": float(act[i]) for i, j in enumerate(JOINTS)})
+            traj.append((time.perf_counter() - t_start,
+                         [float(obs[f"{j}.pos"]) for j in JOINTS]))
             step += 1
             loop.append(time.perf_counter() - t0)
             time.sleep(max(0.0, 1 / args.fps - (time.perf_counter() - t0)))
     finally:
         final = robot.get_observation()
         robot.disconnect()
+
+    if traj:
+        print("\n=== 관측 궤적 (1초 간격) ===")
+        print("  t     " + "".join(f"{j[:9]:>10}" for j in JOINTS))
+        nxt = 0.0
+        for t, v in traj:
+            if t + 1e-9 < nxt:
+                continue
+            print(f"{t:5.1f}s  " + "".join(f"{x:>10.1f}" for x in v))
+            nxt = t + 1.0
+        cols = list(zip(*[v for _, v in traj]))
+        print("  폭    " + "".join(f"{max(c) - min(c):>10.1f}" for c in cols))
+        print("        폭이 전부 작으면 정책이 팔을 아예 안 폈다는 뜻이다.")
 
     elapsed = time.perf_counter() - t_start
     print("\n=== 결과 ===")
