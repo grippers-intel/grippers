@@ -133,10 +133,16 @@ def draw_detections(img):
         conf_ok, y_ok = conf >= CONF_GATE, y2 >= MIN_BOTTOM_Y
         ok = conf_ok and y_ok
         passed += int(ok)
+        # 사용자 지시(2026-09-02): 신뢰도 0.7 이하는 화면에 아예 안 그린다.
+        # 위치 게이트(y_ok)만으로 걸러진 것(신뢰도는 충분한데 화면 아래쪽이
+        # 아닌 경우)은 여전히 얇은 테두리로 보여준다 — 왜 걸렀는지 보려던
+        # 원래 목적은 그쪽에서만 유지된다.
+        if not conf_ok:
+            continue
         color = CLASS_COLORS.get(label, UNKNOWN_CLASS_COLOR)
         thickness = 3 if ok else 1   # 통과=굵게, 탈락=얇게
         cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), color, thickness)
-        why = "" if ok else ("  conf<%.2f" % CONF_GATE if not conf_ok else "  too high")
+        why = "" if ok else "  too high"  # 여기 도달하면 conf_ok는 항상 True
         text = "%s %.2f%s" % (label, conf, why)
         ty = int(y1) - 10 if y1 > 30 else int(y2) + 26
         cv2.putText(img, text, (int(x1), ty), cv2.FONT_HERSHEY_SIMPLEX, 0.85,
