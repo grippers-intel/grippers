@@ -106,16 +106,21 @@ def _load_script():
     ⚠️ 2026-09-01 사용자 지시로 check_grasp()가 그리퍼 부하를 더 이상 보지
     않는다(GraspInputs에서 gripper_load를 뺐다 — preconditions.check_grasp
     문서 참고) — 그래서 예전 1번 자리("GRASP 조건 판정")가 사라졌다.
+
+    ⚠️ 2026-09-03 실기(box, 3번째 시도)로 "midpoint 유지 확인"(재확인) 단계
+    자체를 없앴다 — 서보가 목표 자세에 도달해 정착하면 실제로 여전히 물고
+    있어도 부하가 낮게 읽힐 수 있어서 그 재확인이 오탐을 냈다(정지 뒤
+    사용자가 직접 확인하니 그리퍼가 박스를 꽉 물고 있었다). 그래서 예전
+    2번 자리도 사라졌다.
     """
     return [
         HOLDING,    # 1. 닫은 직후
-        HOLDING,    # 2. midpoint 유지 확인
-        HOLDING,    # 3. CARRY 전환 후 (성공 판정 신호 하나)
-        HOLDING,    # 4. CARRY 표본 1
-        HOLDING,    # 5. CARRY 표본 2
-        HOLDING,    # 6. INSERT 판정 사이클의 표본
-        HOLDING,    # 7. 투하 직전
-        EMPTY,      # 8. 투하 직후 — 손을 떠났다
+        HOLDING,    # 2. CARRY 전환 후 (성공 판정 신호 하나)
+        HOLDING,    # 3. CARRY 표본 1
+        HOLDING,    # 4. CARRY 표본 2
+        HOLDING,    # 5. INSERT 판정 사이클의 표본
+        HOLDING,    # 6. 투하 직전
+        EMPTY,      # 7. 투하 직후 — 손을 떠났다
     ]
 
 

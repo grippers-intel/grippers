@@ -372,17 +372,23 @@ def test_파지에_실패하면_APPROACH로_돌아가고_스스로_재시도하�
     assert isinstance(nxt, BaselineApproachState)
 
 
-def test_들어올린_직후_부하가_한_계단_떨어져도_재확인에서_넘기면_성공한다():
-    """09-02 10:41 실기 재현 — 회귀 방지.
+def test_들어올린_직후_부하가_떨어져도_재확인_없이_성공한다():
+    """09-02 10:41 실기, 이어서 2026-09-03 실기(box, 3번째 시도) 재현 —
+    회귀 방지.
 
-    LOAD_THRESHOLD 자체가 "빈손 11/256"과 "파지 13/256"의 중점이라 두
-    계단 사이 틈이 코드 값 하나(약 0.0039)뿐이다. 실기에서 그리퍼를
-    막 닫고 잰 값(0.0508, 13/256 대역)은 threshold를 넘겼는데, 곧바로
-    이어진 midpoint 이동 직후 다시 잰 값(0.0430, 11/256 대역)만 그 틈
-    하나만큼 밑돌아 "들어 올리지 못함"으로 실패 처리됐다 — 사용자가
-    직접 옆에서 파지 성공을 확인한 자리였다."""
+    처음엔 "closed 직후 판독"과 "midpoint 이후 재확인 판독"이 threshold
+    를 각각 넘겨야(AND) 성공으로 쳤다. 09-02 10:41: 그리퍼를 막 닫고 잰
+    값(0.0508)은 threshold를 넘겼는데, 곧바로 이어진 midpoint 이동 직후
+    재확인 값(0.0430)만 계단 하나(약 0.0039) 밑돌아 실패 처리됐다 —
+    사용자가 직접 옆에서 파지 성공을 확인한 자리였다. 재시도를 추가해
+    한 번 더 버텼지만, 2026-09-03 box 3번째 시도에서 낙차가 훨씬 큰
+    경우(0.2502 -> 0.03대)도 똑같이 오탐임이 확인됐다 — 정지 뒤 그리퍼가
+    여전히 박스를 꽉 물고 있어서 사용자가 힘으로 빼냈다. 서보가 목표
+    자세에 도달해 정착하면 실제로 물고 있어도 부하가 낮게 읽힐 수 있다는
+    뜻이라, 재확인 자체를 없앴다 — closed 직후 판독과 midpoint 도달
+    (서보 위치 확인)만으로 들었다고 본다."""
     host = FakeHostLink()
-    arm = FakeArm(load_ratio=[0.0508, 0.0430, 0.0508, 0.0508])
+    arm = FakeArm(load_ratio=[0.0508, 0.0])  # midpoint 이후엔 아예 안 읽는다
     ports = _ports(host=host, arm=arm)
 
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
@@ -391,50 +397,16 @@ def test_들어올린_직후_부하가_한_계단_떨어져도_재확인에서_�
     assert isinstance(nxt, BaselineCarryState)
 
 
-def test_재확인에서도_부하가_낮으면_그때는_진짜_실패다():
-    """재시도 한 번으로 진짜 실패까지 가려 버리면 안 된다 — 재확인마저
-    낮으면 여전히 실패로 본다."""
-    host = FakeHostLink()
-    arm = FakeArm(load_ratio=[0.0508, 0.0430, 0.0430])
-    ports = _ports(host=host, arm=arm)
-
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
-
-    assert Report.GRASP_FAILED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
-
-
-def test_재확인_탈락_실패_메시지엔_재확인값이_찍힌다():
-    """2026-09-03 실기(box, 3번째 시도) 재현 — 회귀 방지.
-
-    첫 판독은 0.2502로 문턱을 훌쩍 넘겼는데 재확인에서 탈락했다. 그런데
-    실패 메시지엔 그 첫 판독값이 그대로 찍혀서 "세게 물었는데 왜
-    실패냐"로 오인시켰다 — 실제로 떨어뜨린 재확인값이 로그에 안 남아
-    안 보였을 뿐이다. 메시지엔 실제로 그 단계를 떨어뜨린 값(재확인값)이
-    찍혀야 한다."""
-    host = FakeHostLink()
-    arm = FakeArm(load_ratio=[0.2502, 0.0300, 0.0300])
-    ports = _ports(host=host, arm=arm)
-
-    BaselineGraspState("queen", 0.02).execute(ports)
-
-    detail = next(d for r, _s, d, _f in host.reports if r == Report.GRASP_FAILED)
-    assert "재확인 탈락" in detail
-    assert "0.0300" in detail
-    assert "0.2502" not in detail
-
-
-def test_닫자마자_첫_판독이_낮아도_재확인에서_넘기면_성공한다():
+def test_닫자마자_첫_판독이_낮아도_재시도로_넘기면_성공한다():
     """2026-09-03 실기(box) 재현 — 회귀 방지.
 
     그리퍼를 막 닫고 잰 **첫** 판독에는 재시도가 없어서, 3번 중 2번이
     부하 정확히 0.0000으로 실패했다(get_load() 서비스가 응답 없을 때도
     똑같이 0.0을 반환한다 — 진짜 빈손이었는지 서비스 호출이 흔들렸는지
-    이 로그만으로는 구분이 안 됐다). midpoint 이후 재확인(_load_holds)엔
-    이미 재시도가 있었는데 정작 그리로 넘어가는 첫 관문엔 없던 게
-    비대칭이었다 — 통일해서 첫 판독도 한 번 더 잰다."""
+    이 로그만으로는 구분이 안 됐다). `_read_load_retrying`으로 첫 판독도
+    한 번 더 재도록 고쳤다."""
     host = FakeHostLink()
-    arm = FakeArm(load_ratio=[0.0, 0.0508, 0.0508, 0.0508])
+    arm = FakeArm(load_ratio=[0.0, 0.0508])
     ports = _ports(host=host, arm=arm)
 
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
@@ -443,7 +415,7 @@ def test_닫자마자_첫_판독이_낮아도_재확인에서_넘기면_성공�
     assert isinstance(nxt, BaselineCarryState)
 
 
-def test_닫자마자_재확인해도_낮으면_문턱_미달로_실패한다():
+def test_닫자마자_재시도해도_낮으면_문턱_미달로_실패한다():
     """첫 판독의 재시도까지 다 낮으면 여전히 실패다 — 재시도 한 번으로
     진짜 실패까지 가려 버리면 안 된다."""
     host = FakeHostLink()

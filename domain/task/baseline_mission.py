@@ -464,31 +464,31 @@ class BaselineGraspState(State):
         load = _read_load_retrying(ports)
         load_ok = load >= bc.LOAD_THRESHOLD
         midpoint_ok = load_ok and ports.arm.move_to_floor_pose(gp.profile, "midpoint")
-        # 2026-09-03 실기(box, 3번째 시도): 재확인 실패 보고에 이 재확인
-        # 값이 아니라 위 첫 판독(load, 0.2502로 문턱을 훌쩍 넘김)이 찍혀서
-        # "세게 물었는데 왜 실패냐"로 오인시켰다 — 실제 실패 원인은 재확인
-        # 값인데 로그에 안 남아 안 보였을 뿐이다. 재확인 값을 따로 들고
-        # 있다가 실패 메시지에는 실제로 그 단계를 떨어뜨린 값을 쓴다.
-        recheck_load = _read_load_retrying(ports) if midpoint_ok else None
-        held = recheck_load is not None and recheck_load >= bc.LOAD_THRESHOLD
-        cleared = held and ports.arm.move_to_floor_pose(gp.profile, "safe")
+        # ⚠️ 2026-09-03 실기(box, 3번째 시도) — midpoint 이후 부하를 다시
+        # 재서 threshold를 요구하던 "재확인" 단계를 여기서 없앴다. 첫 판독
+        # 0.2502(threshold를 훌쩍 넘김)로 세게 물었는데 재확인에서
+        # 0.0300대로 떨어져 실패 처리됐지만, **정지 뒤 사용자가 직접
+        # 확인하니 그리퍼가 그때까지도 박스를 꽉 물고 있어서 힘으로
+        # 빼냈다** — 그립은 그대로였는데 부하 판독만 낮게 나온 것이었다.
+        # 서보가 목표 자세(midpoint)에 도달해 정지 상태로 안정되면, 물체를
+        # 여전히 꽉 물고 있어도 능동으로 토크를 더 내지 않아 부하가 실제보다
+        # 낮게 읽히는 것으로 보인다(부하는 "지금 얼마나 힘주고 있는가"이지
+        # "지금 뭔가를 물고 있는가"가 아니다). 이 재확인은 애초에 09-02
+        # 10:41의 잔진동 오탐 하나를 막으려고 추가됐는데(그 자리도 결국
+        # 오탐이었다), 이번엔 훨씬 큰 낙차(0.25 -> 0.03)마저 진짜 실패가
+        # 아니었다 — 정착된 자세에서 부하를 다시 재는 방식 자체가 신뢰할
+        # 수 없다는 결론으로 바뀌었다. "닫을 때 세게 물렸다"(load_ok)와
+        # "그 상태로 팔이 물리적으로 들어올려졌다"(midpoint_ok, 서보 위치
+        # 도달)만으로 들었다고 본다.
+        cleared = midpoint_ok and ports.arm.move_to_floor_pose(gp.profile, "safe")
         if not cleared:
-            # 어느 단계에서 막혔는지, 그 단계의 실제 부하값을 남긴다 —
-            # 예전엔 첫 판독값 하나만 찍혀서 "문턱을 못 넘었다"인지 "문턱은
-            # 넘었는데 들어 올리다 막혔다"인지, 막혔다면 그때 부하가 얼마나
-            # 떨어졌는지(잔진동 수준인지 진짜 놓친 수준인지)가 로그만으로는
-            # 구분이 안 됐다.
             if not load_ok:
-                step, step_load = "문턱 미달", load
+                step = "문턱 미달"
             elif not midpoint_ok:
-                step, step_load = "들어올리기(midpoint) 실패", load
-            elif not held:
-                step, step_load = "재확인 탈락", recheck_load
+                step = "들어올리기(midpoint) 실패"
             else:
-                step, step_load = "safe 복귀 실패", recheck_load
-            return self._failed(
-                ports, f"들어 올리지 못함 ({step}, 부하 {step_load:.4f})"
-            )
+                step = "safe 복귀 실패"
+            return self._failed(ports, f"들어 올리지 못함 ({step}, 부하 {load:.4f})")
 
         if not ports.arm.move_to_floor_pose(gp.profile, "carry"):
             return self._failed(ports, "CARRY 전환 실패")
