@@ -24,10 +24,13 @@ def test_동일한_프레임은_diff가_0이고_미확인():
 
 def test_ROI_밖의_변화는_무시한다():
     """배경(ROI 밖)만 크게 바뀌어도 신호가 안 뜬다 — ROI 크롭이 실제로
-    적용되는지 확인."""
+    적용되는지 확인. 프레임 전체를 바꾸고 ROI 영역만 기준값으로 되돌려서,
+    ROI가 어디 있든(현재는 상단, 예전엔 하단) 항상 "ROI 밖만 바뀐" 상태가
+    되도록 한다."""
     ref = _uniform_frame(50)
-    cur = ref.copy()
-    cur[: int(0.55 * FRAME_H), :] = 255  # ROI(y 55%~100%) 밖 상단만 변경
+    cur = _uniform_frame(255)
+    x0, y0, x1, y1 = gcd.GRASP_CAM_ROI
+    cur[int(y0 * FRAME_H) : int(y1 * FRAME_H), int(x0 * FRAME_W) : int(x1 * FRAME_W)] = 50
     verdict = gcd.score_grasp_diff(ref, cur)
     assert verdict.diff_score == 0.0
     assert verdict.confirmed is False

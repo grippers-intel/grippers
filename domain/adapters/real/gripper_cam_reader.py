@@ -14,6 +14,7 @@ diff 신호는 실측으로 무효였던 방식이라 참고/로그용일 뿐, G
 import cv2
 
 from domain.task import grasp_cam_diff as gcd
+from domain.task import grasp_cam_gap as gcg
 
 DEVICE_DEFAULT = "/dev/gripper_cam"
 WIDTH = 640
@@ -90,3 +91,34 @@ class GripperCamDiffConfirm:
         if current is None or self._reference is None:
             return gcd.GraspCamDiffVerdict(confirmed=False, diff_score=0.0, confidence=0.0)
         return gcd.score_grasp_diff(self._reference, current, threshold=self.threshold)
+
+
+class GripperCamGapConfirm:
+    """`grasp_cam_gap` 기반 확인 — 기준 프레임이 필요 없다. 그리퍼를
+    완전히 닫은 뒤 `check()`만 부르면 된다. ⚠️ ROI/threshold 모두 미실측
+    임시치다 — grasp_cam_gap 모듈 docstring 참고."""
+
+    def __init__(
+        self,
+        reader: GripperCamReader | None = None,
+        roi=gcg.GRASP_CAM_GAP_ROI,
+        bright_threshold: int = gcg.BRIGHT_PIXEL_THRESHOLD,
+        ratio_threshold: float = gcg.BRIGHT_RATIO_THRESHOLD_DEFAULT,
+    ):
+        self._reader = reader or GripperCamReader()
+        self.roi = roi
+        self.bright_threshold = bright_threshold
+        self.ratio_threshold = ratio_threshold
+
+    def check(self) -> gcg.GraspGapVerdict:
+        """호출 시점에 그리퍼가 완전히 닫혀 있어야 한다 — 열려 있으면
+        의미 없는 값이 나온다."""
+        frame = self._reader.capture_gray_frame()
+        if frame is None:
+            return gcg.GraspGapVerdict(confirmed=False, bright_ratio=0.0, mean_brightness=0.0)
+        return gcg.score_grasp_gap(
+            frame,
+            roi=self.roi,
+            bright_threshold=self.bright_threshold,
+            ratio_threshold=self.ratio_threshold,
+        )
