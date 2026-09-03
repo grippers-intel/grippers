@@ -404,6 +404,40 @@ def test_재확인에서도_부하가_낮으면_그때는_진짜_실패다():
     assert isinstance(nxt, BaselineApproachState)
 
 
+def test_닫자마자_첫_판독이_낮아도_재확인에서_넘기면_성공한다():
+    """2026-09-03 실기(box) 재현 — 회귀 방지.
+
+    그리퍼를 막 닫고 잰 **첫** 판독에는 재시도가 없어서, 3번 중 2번이
+    부하 정확히 0.0000으로 실패했다(get_load() 서비스가 응답 없을 때도
+    똑같이 0.0을 반환한다 — 진짜 빈손이었는지 서비스 호출이 흔들렸는지
+    이 로그만으로는 구분이 안 됐다). midpoint 이후 재확인(_load_holds)엔
+    이미 재시도가 있었는데 정작 그리로 넘어가는 첫 관문엔 없던 게
+    비대칭이었다 — 통일해서 첫 판독도 한 번 더 잰다."""
+    host = FakeHostLink()
+    arm = FakeArm(load_ratio=[0.0, 0.0508, 0.0508, 0.0508])
+    ports = _ports(host=host, arm=arm)
+
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+
+    assert Report.GRASP_DONE in host.reported_kinds
+    assert isinstance(nxt, BaselineCarryState)
+
+
+def test_닫자마자_재확인해도_낮으면_문턱_미달로_실패한다():
+    """첫 판독의 재시도까지 다 낮으면 여전히 실패다 — 재시도 한 번으로
+    진짜 실패까지 가려 버리면 안 된다."""
+    host = FakeHostLink()
+    arm = FakeArm(load_ratio=[0.0, 0.0])
+    ports = _ports(host=host, arm=arm)
+
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+
+    assert Report.GRASP_FAILED in host.reported_kinds
+    detail = next(d for r, _s, d, _f in host.reports if r == Report.GRASP_FAILED)
+    assert "문턱 미달" in detail
+    assert isinstance(nxt, BaselineApproachState)
+
+
 def test_파지_명령_폭은_ros2_프로파일_공식에서_나온다():
     """도메인과 ros2 프로파일이 갈라져 파지가 헐거워진 2026-08-26 사고 방지.
 

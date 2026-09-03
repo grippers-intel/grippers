@@ -208,23 +208,31 @@ def _base_stopped(ports, command) -> bool:
     return command is None or command.stop or not command.wants_motion
 
 
-def _load_holds(ports) -> bool:
-    """부하가 threshold를 넘기는가 — 못 넘기면 한 번 더 재서 확인한다.
+def _read_load_retrying(ports) -> float:
+    """부하를 읽고, threshold를 못 넘기면 한 번 더 재서 더 높은 쪽을 쓴다.
 
     LOAD_THRESHOLD 자체가 "빈손 실측 11/256"과 "파지 실측 13/256"의
     중점이다(baseline_constants 주석) — 두 계단 사이 틈이 코드 값 하나
-    (약 0.0039)뿐이라, 방금 막 멈춘 팔의 잔진동 하나로도 판독이 계단
-    하나만큼 튈 수 있다. 09-02 10:41 실기가 그 예다: 그리퍼를 막 닫고
+    (약 0.0039)뿐이라, 방금 막 멈춘 팔의 잔진동이나 `get_load()` 서비스
+    호출 한 번의 순간적인 지연/실패(응답 없으면 0.0을 반환한다 —
+    ros2_arm_driver.LOAD_UNKNOWN, real/ros2_arm_driver.py 참고)로도 판독이
+    실제보다 크게 튈 수 있다. 09-02 10:41 실기가 그 예다: 그리퍼를 막 닫고
     잰 값(13/256 대역, 0.0508)은 정상적으로 threshold를 넘겼는데, 곧바로
     이어진 midpoint 이동 직후 다시 잰 값(11/256 대역, 0.0430)만 그 틈
     하나만큼 밑돌아 "들어 올리지 못함"으로 실패 처리됐다 — 사용자가 직접
     옆에서 파지 성공을 확인한 자리였다.
 
-    한 번 더 재서 그중 하나라도 넘기면 쥐고 있는 것으로 본다 — 진짜로
-    놓쳤다면 재확인에서도 낮게 나온다."""
-    if ports.arm.get_load() >= bc.LOAD_THRESHOLD:
-        return True
-    return ports.arm.get_load() >= bc.LOAD_THRESHOLD
+    한 번 더 재서 그중 더 높은 쪽을 쓴다 — 진짜로 놓쳤다면 재확인에서도
+    낮게 나온다."""
+    first = ports.arm.get_load()
+    if first >= bc.LOAD_THRESHOLD:
+        return first
+    return max(first, ports.arm.get_load())
+
+
+def _load_holds(ports) -> bool:
+    """부하가 threshold를 넘기는가 — `_read_load_retrying` 참고."""
+    return _read_load_retrying(ports) >= bc.LOAD_THRESHOLD
 
 
 # ── 상태 ──────────────────────────────────────────────────────────────────
@@ -449,15 +457,34 @@ class BaselineGraspState(State):
             return self._failed(ports, "미세 전진 실패")
 
         ports.arm.set_gripper(gp.close_width_mm)
-        load = ports.arm.get_load()
-        lifted = load >= bc.LOAD_THRESHOLD and ports.arm.move_to_floor_pose(
-            gp.profile, "midpoint")
-        # 2026-09-02 10:41 실기: 여기서 한 번만 재고 threshold를 못 넘기면
-        # 바로 실패 처리했다 — _load_holds() 주석 참고.
-        held = lifted and _load_holds(ports)
+        # 2026-09-03 실기(box): 이 첫 판독만 재확인 없이 한 번으로 끝냈더니
+        # 3번 중 2번이 부하 정확히 0.0000으로 실패했다 — get_load() 서비스가
+        # 응답 없을 때 반환하는 LOAD_UNKNOWN 도 똑같이 0.0이라(real/
+        # ros2_arm_driver.py 참고) 그게 "진짜 빈손"이었는지 "서비스 호출
+        # 한 번이 흔들렸다"였는지 이 로그만으로는 구분이 안 됐다. 아래
+        # `_load_holds`(다시 잰 뒤의 확인)는 이미 재시도가 있는데 정작 그
+        # 재시도로 넘어가는 관문인 이 첫 판독엔 재시도가 없던 게 비대칭이라
+        # `_read_load_retrying`으로 통일했다.
+        load = _read_load_retrying(ports)
+        load_ok = load >= bc.LOAD_THRESHOLD
+        midpoint_ok = load_ok and ports.arm.move_to_floor_pose(gp.profile, "midpoint")
+        held = midpoint_ok and _load_holds(ports)
         cleared = held and ports.arm.move_to_floor_pose(gp.profile, "safe")
         if not cleared:
-            return self._failed(ports, f"들어 올리지 못함 (부하 {load:.4f})")
+            # 어느 단계에서 막혔는지 남긴다 — 예전엔 부하 값 하나만 찍혀서
+            # "문턱을 못 넘었다"인지 "문턱은 넘었는데 들어 올리다 막혔다"인지
+            # 로그만으로 구분이 안 됐다(2026-09-03 실기: box 1번째 시도는
+            # 부하 0.2776으로 문턱을 훌쩍 넘겼는데도 실패라 원인이 불명확
+            # 했다).
+            if not load_ok:
+                step = "문턱 미달"
+            elif not midpoint_ok:
+                step = "들어올리기(midpoint) 실패"
+            elif not held:
+                step = "재확인 탈락"
+            else:
+                step = "safe 복귀 실패"
+            return self._failed(ports, f"들어 올리지 못함 ({step}, 부하 {load:.4f})")
 
         if not ports.arm.move_to_floor_pose(gp.profile, "carry"):
             return self._failed(ports, "CARRY 전환 실패")
