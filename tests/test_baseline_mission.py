@@ -404,6 +404,26 @@ def test_재확인에서도_부하가_낮으면_그때는_진짜_실패다():
     assert isinstance(nxt, BaselineApproachState)
 
 
+def test_재확인_탈락_실패_메시지엔_재확인값이_찍힌다():
+    """2026-09-03 실기(box, 3번째 시도) 재현 — 회귀 방지.
+
+    첫 판독은 0.2502로 문턱을 훌쩍 넘겼는데 재확인에서 탈락했다. 그런데
+    실패 메시지엔 그 첫 판독값이 그대로 찍혀서 "세게 물었는데 왜
+    실패냐"로 오인시켰다 — 실제로 떨어뜨린 재확인값이 로그에 안 남아
+    안 보였을 뿐이다. 메시지엔 실제로 그 단계를 떨어뜨린 값(재확인값)이
+    찍혀야 한다."""
+    host = FakeHostLink()
+    arm = FakeArm(load_ratio=[0.2502, 0.0300, 0.0300])
+    ports = _ports(host=host, arm=arm)
+
+    BaselineGraspState("queen", 0.02).execute(ports)
+
+    detail = next(d for r, _s, d, _f in host.reports if r == Report.GRASP_FAILED)
+    assert "재확인 탈락" in detail
+    assert "0.0300" in detail
+    assert "0.2502" not in detail
+
+
 def test_닫자마자_첫_판독이_낮아도_재확인에서_넘기면_성공한다():
     """2026-09-03 실기(box) 재현 — 회귀 방지.
 

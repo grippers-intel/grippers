@@ -230,9 +230,6 @@ def _read_load_retrying(ports) -> float:
     return max(first, ports.arm.get_load())
 
 
-def _load_holds(ports) -> bool:
-    """부하가 threshold를 넘기는가 — `_read_load_retrying` 참고."""
-    return _read_load_retrying(ports) >= bc.LOAD_THRESHOLD
 
 
 # ── 상태 ──────────────────────────────────────────────────────────────────
@@ -462,29 +459,36 @@ class BaselineGraspState(State):
         # 응답 없을 때 반환하는 LOAD_UNKNOWN 도 똑같이 0.0이라(real/
         # ros2_arm_driver.py 참고) 그게 "진짜 빈손"이었는지 "서비스 호출
         # 한 번이 흔들렸다"였는지 이 로그만으로는 구분이 안 됐다. 아래
-        # `_load_holds`(다시 잰 뒤의 확인)는 이미 재시도가 있는데 정작 그
         # 재시도로 넘어가는 관문인 이 첫 판독엔 재시도가 없던 게 비대칭이라
         # `_read_load_retrying`으로 통일했다.
         load = _read_load_retrying(ports)
         load_ok = load >= bc.LOAD_THRESHOLD
         midpoint_ok = load_ok and ports.arm.move_to_floor_pose(gp.profile, "midpoint")
-        held = midpoint_ok and _load_holds(ports)
+        # 2026-09-03 실기(box, 3번째 시도): 재확인 실패 보고에 이 재확인
+        # 값이 아니라 위 첫 판독(load, 0.2502로 문턱을 훌쩍 넘김)이 찍혀서
+        # "세게 물었는데 왜 실패냐"로 오인시켰다 — 실제 실패 원인은 재확인
+        # 값인데 로그에 안 남아 안 보였을 뿐이다. 재확인 값을 따로 들고
+        # 있다가 실패 메시지에는 실제로 그 단계를 떨어뜨린 값을 쓴다.
+        recheck_load = _read_load_retrying(ports) if midpoint_ok else None
+        held = recheck_load is not None and recheck_load >= bc.LOAD_THRESHOLD
         cleared = held and ports.arm.move_to_floor_pose(gp.profile, "safe")
         if not cleared:
-            # 어느 단계에서 막혔는지 남긴다 — 예전엔 부하 값 하나만 찍혀서
-            # "문턱을 못 넘었다"인지 "문턱은 넘었는데 들어 올리다 막혔다"인지
-            # 로그만으로 구분이 안 됐다(2026-09-03 실기: box 1번째 시도는
-            # 부하 0.2776으로 문턱을 훌쩍 넘겼는데도 실패라 원인이 불명확
-            # 했다).
+            # 어느 단계에서 막혔는지, 그 단계의 실제 부하값을 남긴다 —
+            # 예전엔 첫 판독값 하나만 찍혀서 "문턱을 못 넘었다"인지 "문턱은
+            # 넘었는데 들어 올리다 막혔다"인지, 막혔다면 그때 부하가 얼마나
+            # 떨어졌는지(잔진동 수준인지 진짜 놓친 수준인지)가 로그만으로는
+            # 구분이 안 됐다.
             if not load_ok:
-                step = "문턱 미달"
+                step, step_load = "문턱 미달", load
             elif not midpoint_ok:
-                step = "들어올리기(midpoint) 실패"
+                step, step_load = "들어올리기(midpoint) 실패", load
             elif not held:
-                step = "재확인 탈락"
+                step, step_load = "재확인 탈락", recheck_load
             else:
-                step = "safe 복귀 실패"
-            return self._failed(ports, f"들어 올리지 못함 ({step}, 부하 {load:.4f})")
+                step, step_load = "safe 복귀 실패", recheck_load
+            return self._failed(
+                ports, f"들어 올리지 못함 ({step}, 부하 {step_load:.4f})"
+            )
 
         if not ports.arm.move_to_floor_pose(gp.profile, "carry"):
             return self._failed(ports, "CARRY 전환 실패")
