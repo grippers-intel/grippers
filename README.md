@@ -12,10 +12,14 @@
 
 > [!IMPORTANT]
 > **주제 변경 (8/12)** — *무인 멸균 암실 장물 반출* → *바닥 물건 정리 + 요청 배달*.
-> 하드웨어·아키텍처는 유지, 미션 시나리오와 FSM 구조가 바뀌었습니다.
 >
-> ⚠️ **`domain/` 코드는 아직 이전 주제 기준입니다.** 이 README는 to-be 설계이며
-> 코드 마이그레이션은 [`class_diagram.md` §5](docs/design/class_diagram.md) 의 PR 10건으로 진행합니다 (M2, 8/22).
+> ⚠️ **마이그레이션은 이 README가 그리던 설계(Pi 자율 `SCAN`/`SELECT` 루프)대로 끝나지 않았습니다.**
+> 실제로 팀이 확정·구현한 것은 **Host(관제 콘솔)가 좌표·목표·경로를 전부 갖고 Pi는 지시를
+> 실행 + 자기 센서 판단만 보고하는** 더 단순한 구조(`domain/task/baseline_mission.py`)입니다.
+> 아래 [🧱 Architecture](#-architecture)와 [`state_machine.md`](docs/design/state_machine.md)가
+> 실제 구현 기준이고, 이 README의 나머지(Mission 서술·아키텍처 다이어그램 이전 버전)는
+> **당시 to-be 설계로서 남겨둔 것**입니다 — 물체·클래스·작업 공간 치수 같은 물리적 사실은
+> 유효하지만, FSM·노드 구성은 실제와 다릅니다.
 >
 > 📅 **일정 조정 (8/13)** — M1 재시작으로 **범위 축소**. 파지 정책 학습을 Stretch로 강등하고
 > freeze를 2단으로 분리했습니다. → [`milestones.md`](docs/ops/milestones.md)
@@ -107,25 +111,26 @@ README는 개요만 담고, 상세는 아래 문서로 나눠져 있습니다.
 | [`failure_definition.md`](docs/ops/failure_definition.md) | **무엇을 실패로 셀 것인가** — 지표 계수 규칙 |
 | [`pose_planning.md`](docs/subsystems/pose_planning.md) | ⏸ 보류된 자세 재조정 설계 (재도입 절차 포함) |
 | **설계 다이어그램** | |
-| [`state_machine.md`](docs/design/state_machine.md) | **FSM 전이 단일 소스** |
-| [`class_diagram.md`](docs/design/class_diagram.md) | 값 객체 · 포트 · State · 노드 계층 · 마이그레이션 |
-| [`sequences.md`](docs/design/sequences.md) | 시퀀스 다이어그램 |
-| [`architecture.puml`](docs/design/architecture.puml) | PlantUML 버전 |
+| [`state_machine.md`](docs/design/state_machine.md) | **FSM 전이 단일 소스 · ✅ 실제 코드(`baseline_mission.py`) 기준 갱신됨(9/3)** |
+| [`class_diagram.md`](docs/design/class_diagram.md) | 값 객체 · 포트 · State · 노드 계층 · 마이그레이션 · ⚠️ 미갱신(구 설계 기준) |
+| [`sequences.md`](docs/design/sequences.md) | 시퀀스 다이어그램 · ⚠️ 미갱신(구 설계 기준) |
+| [`architecture.puml`](docs/design/architecture.puml) | PlantUML 버전 · ⚠️ 미갱신 |
+| [`hld.md`](docs/design/hld.md) | High Level Design · ⚠️ 미갱신(구 설계 기준) |
 | [`workspace_layout.html`](docs/design/workspace_layout.html) | **작업 공간 배치도 (Rev.I · 8/20 팀 확정)** — 평면도 · 지점별 기하 · 커버리지 · 배치 규칙 |
+| **Host(관제 콘솔)** | |
+| [`grippers-host-mac`](https://github.com/kica927/grippers-host-mac) | Host 실행 코드(좌표·경로·미션 진행) — macOS 포팅, 설치·실행·"테스트 준비" 절차는 그쪽 README |
 
+각 문서의 최신/구 설계 여부 요약은 [`docs/README.md`](docs/README.md#지금-주의할-것) 참고.
 기여 방법은 [CONTRIBUTING](CONTRIBUTING.md) 참고.
 
 ---
 
 ## 🎯 Mission
 
-| 모드 | 행동을 결정하는 것 | 진입 명령 |
-|---|---|---|
-| **TIDY** | 규칙 (`placement_rule`) | "장난감 정리해줘" |
-| **FETCH** | 사람의 지시 | "체스말 가져와" |
-
-두 모드는 **같은 하드웨어·포트·파지 로직**을 쓰고, **파지 이후 목적지 결정에서만 갈라집니다.**
-분기는 `GraspState.execute()` 의 마지막 한 줄입니다.
+> ⚠️ **FETCH 모드는 빠졌습니다.** 2026-08-23 확정 미션 명세서에 **TIDY(규칙 기반 정리)만
+> 남았습니다** — "체스말 가져와" 같은 사람 지시 기반 FETCH는 이전 설계였고 지금은 구현하지
+> 않습니다(`grippers_language/language_node.py` 주석 참고). 각 물체는 라벨에 따라 고정된
+> 상자로 갑니다(`toy`류 → 초록 상자, `chess`류 → 파랑 상자 — Host의 `PIECE_DEST_BOX`).
 
 ### 작업 공간
 
@@ -148,13 +153,18 @@ README는 개요만 담고, 상세는 아래 문서로 나눠져 있습니다.
               물체 최소 이격 0.30 m · 상자 앞 정렬 통로 0.50 m
 ```
 
+> ⚠️ **아래 표는 검토 당시 C270 실측 기준입니다.** 실제 사용 중인 카메라는 이후 **C920**으로
+> 바뀌었습니다([🔩 Hardware](#-hardware) 참고) — 초점거리(`f`)가 달라지므로 mm/px·고도각 등
+> 픽셀 단위 수치는 **C920 기준으로 재실측 전까지는 그대로 믿지 마세요.** 울타리·상자·물체
+> 치수 같은 물리적 값은 카메라와 무관하므로 유효합니다.
+
 | 항목 | 확정값 |
 |---|---|
 | 울타리 | **1.80 × 1.80 m** · 높이 0.25 m 권장 |
-| 탑뷰 웹캠 | **C270 ×2 대향** · 1280×720 · 실측 `f = 1410 px` |
-| 설치 | 높이 **1.65 m** · 후퇴 **0.95 m** · 피치 44.1° |
-| 고도각 | 29.7 ~ 51.6° |
-| 최악점 | **1.87 mm/px** — **40 mm 물체가 21.4 px** (검출 하한 20 px) · 45 mm 면 24.1 px |
+| 탑뷰 웹캠 | ~~C270 ×2 대향 · 1280×720 · 실측 `f = 1410 px`~~ → **C920으로 교체, 재실측 필요** |
+| 설치 | 높이 **1.65 m** · 후퇴 **0.95 m** · 피치 44.1° (C270 기준 산출값) |
+| 고도각 | 29.7 ~ 51.6° (C270 기준 산출값) |
+| 최악점 | **1.87 mm/px** — **40 mm 물체가 21.4 px** (검출 하한 20 px) · 45 mm 면 24.1 px (C270 기준 산출값) |
 | 물체 폭 | **40 mm** — 검출 하한 37.4 mm 와 그리퍼 설계 상한 45 mm 사이 |
 | 실효 커버 시작 | 0.21 m (울타리 0.25 기준) |
 
@@ -194,22 +204,14 @@ README는 개요만 담고, 상세는 아래 문서로 나눠져 있습니다.
 
 상세 → [`objects.md`](docs/subsystems/objects.md)
 
-### FSM — 루프 구조
+### FSM — Host 지시 실행형
 
-```
-IDLE → SCAN ─┬─ (미처리 대상 0개) ──────────────────────→ DONE
-             │
-             └─ SELECT → APPROACH → GRASP ─┬─ TIDY  → TRANSPORT → POSE_PLAN ─┬─ INSERT ─┐
-                                            │                                 └─ REJECT ─┤
-                                            └─ FETCH → DELIVER → HANDOVER ───────────────┤
-                          ┌──────────────────────────────────────────────────────────────┘
-                          └──→ SCAN 복귀 (루프)
-```
-
-**루프가 핵심입니다.** 로봇 자신의 행동으로 바뀐 바닥 상태를 매 사이클 재관측하며,
-파지에 실패해도 미션이 끝나지 않고 다음 물체로 진행합니다.
-
-전이 그래프의 단일 소스는 [`docs/design/state_machine.md`](docs/design/state_machine.md) 입니다.
+> ⚠️ 이 자리에 있던 `IDLE → SCAN → SELECT → ... → DONE` 루프 다이어그램은 **채택되지
+> 않은 to-be 설계**였습니다. 실제 구현은 Pi가 자율로 바닥을 스캔·순회하지 않고,
+> **Host가 목표·좌표·경로를 정해 지시하면 Pi는 그 지시를 실행 + 자기 센서 판단만
+> 보고**하는 구조입니다(`IDLE/APPROACH/GRASP/CARRY/INSERT/DONE`, ESTOP 인터럽트).
+> 전이 그래프·상태별 계약·왜 이렇게 갈렸는지는 **[`docs/design/state_machine.md`](docs/design/state_machine.md)
+> 하나에만** 두고 여기서는 중복하지 않습니다.
 
 ### 유즈케이스
 
@@ -272,20 +274,22 @@ IDLE → SCAN ─┬─ (미처리 대상 0개) ──────────�
 ### Ports & Adapters
 
 도메인 로직을 하드웨어에서 분리합니다. 태스크 로직은 ROS2도 서보 SDK도 알지 못합니다.
+**실제 구현 기준**(`domain/ports/`)으로 갱신했습니다 — 아래는 이전 표(`Perception.scan_floor()`
+자율 탐색 전제, `CommandInterpreter` 직결)와 갈라진 지점입니다.
 
 | Port | 책임 | Real Adapter | Fake Adapter |
 |---|---|---|---|
-| `BaseDriver` | 주행, 상자 정렬, 오도메트리 | `Ros2MecanumBase` | `FakeBase` |
-| `ArmDriver` | 관절/직교 이동, 엔드이펙터, 부하, 자세 재조정 | `FeetechArm` | `FakeArm` |
-| `Perception` | **바닥 스캔**, 검출, 치수, 상자 색 탐색 | `LearnedPerception` | `ScriptedPerception` |
-| `CommandInterpreter` | 텍스트 → `MissionSpec` | `LanguageAdapter` | `ScriptedInterpreter` |
+| `BaseDriver` | 주행 실행(Host가 준 속도를 그대로), 상자 정렬 보조 | `Ros2MecanumBase` | `FakeBase` |
+| `ArmDriver` | 관절/직교 이동, 엔드이펙터, 부하 읽기 | `FeetechArm` | `FakeArm` |
+| `Perception` | **자기 뎁스캠으로 정면 라벨 확인**, 파지 확인(사라짐 판정) | `LearnedPerception` | `ScriptedPerception` |
+| `Lidar` | 바구니 정면 판독(거리·yaw·좌우 오프셋) | (라이다 real 어댑터) | `FakeLidar` |
+| `HostLink` | Host 명령 수신 + 상태/결과 보고 (UDP+JSON) | (real 링크) | `FakeHostLink` |
+| `CommandInterpreter` | 텍스트 → 배치 규칙(`grippers_language`가 별도 소유, baseline FSM은 직접 안 씀) | `LanguageAdapter` | `ScriptedInterpreter` |
 
+- **목표 선정·좌표·경로는 어떤 포트에도 없습니다** — 전부 Host(`grippers-host-mac`) 소유이고,
+  Pi FSM은 `HostLink`로 받은 명령을 그대로 실행합니다
 - 각 포트는 **Real 어댑터와 Fake 어댑터를 둘 다** 가집니다
 - **CI는 매 push마다 Fake 어댑터로 전체 미션 파이프라인을 실행**합니다 — 인터페이스 불일치를 통합 시점이 아니라 커밋 시점에 검출
-- 로봇 1대를 5명이 나눠 쓰는 병목을 구조로 해소하기 위한 설계입니다
-
-> `Perception.scan_floor()` 는 **목록을 반환**하므로 원소 타입(`Detection`) 정의가 선행되어야 합니다.
-> **음성은 포트를 추가하지 않습니다** — `voice_io` 가 기존 명령 토픽에 발행할 뿐입니다.
 
 ### ROS2 노드 분할
 
@@ -295,15 +299,20 @@ IDLE → SCAN ─┬─ (미처리 대상 0개) ──────────�
 >
 > **분할 기준은 둘 — 동시에 도는가, 하드웨어를 소유하는가.**
 
-| 노드 | 실행 위치 | 책임 | 분리 근거 | 오너 |
-|---|---|---|---|---|
-| `mission_orchestrator` | 로봇 | FSM 전체. 포트를 호출해 순차 로직 진행 | 순차 로직은 한 프로세스에 — 디버거 추적 가능 | 이승용 |
-| `perception` | 로봇 | **웹캠 2대 소유**, 바닥면 호모그래피, 상자 색 탐색, 클리어런스 | 상시 구동 + 디바이스 소유 | 김동혁 · 김희수 |
-| `inference` | 로봇 | 검출 추론 전담 | **Hailo-10H 독점 소유** | 김동혁 |
-| `arm_driver` | 로봇 | Feetech SDK, 관절/직교 이동, 엔드이펙터, 부하 | 상시 구동 + 디바이스 소유 | 임성혁 |
-| `base_driver` | 로봇 | 메카넘 주행, LiDAR | 상시 구동 + 디바이스 소유 | 조현우 |
-| **`voice_io`** | **노트북** | STT → `/command` 발행, `/mission/state` → TTS | **노트북 오디오 장치 소유** | 김희수 |
-| `hud` | 노트북 | 대시보드 — `/mission/state` 만 구독 | 시연 중 끊겨도 미션에 영향 없어야 함 | 김희수 |
+실제 존재하는 패키지(`ros2_ws/src/grippers_*`) 기준입니다. 이전 표에 있던 `grippers_inference`·
+`grippers_console`은 **만들어진 적이 없습니다** — 추론은 `perception` 안에 흡수됐고, 관제 콘솔은
+ROS2 패키지가 아니라 **별도 저장소의 순수 Python 앱**(`grippers-host-mac`)이 됐습니다.
+
+| 노드/패키지 | 실행 위치 | 책임 |
+|---|---|---|
+| `grippers_mission` (`mission_orchestrator_node`) | Pi | `baseline_mission.py` FSM 실행, `HostLink`로 Host와 통신 |
+| `grippers_perception` (`perception_node`, `depth_cam_rotate_node`, `gripper_cam_publisher_node`) | Pi | 뎁스캠 소유·회전보정, YOLO 검출(CPU/Hailo), 그리퍼캠 모니터링 스트림 |
+| `grippers_arm` (`arm_driver_node`) | Pi | Feetech SDK, 관절/직교 이동, 부하, **EEPROM Homing_Offset 교시값 대조** |
+| `grippers_base` (`base_driver_node`) | Pi | 메카넘 주행 실행, LiDAR |
+| `grippers_language` (`language_node`) | Pi | 텍스트 → 배치 규칙(TIDY 전용, Claude 구조화 출력 + 키워드 폴백) |
+| `grippers_bringup` | Pi | launch 재조합 |
+| `grippers_vla` | Pi | SmolVLA/ACT VLA 실험 — **stretch 브랜치, baseline에 병합 안 함** |
+| **Host — `grippers-host-mac`** | **노트북(Mac)** | 오버헤드 웹캠 2대로 좌표 추정, 목표 선정, 경로 계산, 미션 진행 — **ROS2 패키지가 아니라 순수 Python** |
 
 > [!CAUTION]
 > **`/cmd_vel` 발행 주체는 언제나 `base_driver` 하나뿐입니다.** 둘이 되면 명령이 경합해
@@ -311,9 +320,12 @@ IDLE → SCAN ─┬─ (미처리 대상 0개) ──────────�
 
 ### 관측성 3원칙
 
-- **상태 전이를 토픽으로 발행** — `/mission/state` 를 `transient_local` QoS로. 중간에 붙어도 현재 상태 즉시 파악. HUD·TTS 모두 이 토픽 하나만 구독
+- **모든 상태 전이를 Host에 보고** — `HostLink.report()`로 UDP+JSON을 매 사이클 보낸다
+  (`domain/ports/baseline_ports.py`의 `Report` 종류 전부). `hud`/`voice_io` ROS 노드로
+  구독시키는 설계는 채택되지 않았다 — Host 쪽에서 어떻게 쓰는지는 `grippers-host-mac` 참고
 - **포트 호출을 전부 로깅** — 인자와 반환값을 남기면 그것이 곧 재현 가능한 시나리오
-- **`ros2 bag record -a` 습관화** — 실기 시행은 되돌릴 수 없고, 로봇 1대를 5명이 나눠 쓰므로 **녹화가 곧 시간**
+- **`ros2 bag record -a` 습관화**(단, depth/points 등 무거운 토픽은 반드시 제외 — 디스크가
+  20분 안에 찬다) — 실기 시행은 되돌릴 수 없고, 로봇 1대를 여럿이 나눠 쓰므로 **녹화가 곧 시간**
 
 ### 코드 리뷰 기준
 
@@ -321,7 +333,7 @@ IDLE → SCAN ─┬─ (미처리 대상 0개) ──────────�
 |---|---|
 | 원시값(`float`, `tuple`) 직접 전달 금지 | 단위·좌표계 혼동 차단 |
 | `else` 사용 지양 | 조건 분기 대신 State 객체가 다음 상태를 반환 |
-| 클래스당 인스턴스 변수 2개 이하 지향 | God Node 방지 (루프 상태는 `MissionContext` 하나로 묶음) |
+| 클래스당 인스턴스 변수 2개 이하 지향 | God Node 방지 |
 | **호모그래피 입력은 바운딩 박스 아래쪽 모서리** | 비스듬한 시점에서 중심점 사용 시 5~19 cm 위치 오차 |
 
 ### 단위 규약
@@ -348,10 +360,12 @@ GUI 표시·문서만 도(°) 허용 — 변환은 경계에서 한 번
 |---|---|---|
 | 이동 베이스 | **MentorPi** (메카넘 4륜) | ✅ 보유 |
 | 컴퓨트 | **Raspberry Pi 5** / Ubuntu 24.04 · 빌드는 `IntelPi` 컨테이너 | ✅ 보유 |
-| AI 가속기 | **Raspberry Pi AI HAT+ 2** (Hailo-10H, 8GB) | ✅ **8/11 장착** |
+| AI 가속기 | **Raspberry Pi AI HAT+ 2** (Hailo-10H, 8GB) | ✅ **8/11 장착**, HailoRT 5.1.1 연동 완료(8/19) |
 | 로봇 암 | **SO-ARM101** 리더/팔로워 2대 · Feetech STS3215 ×6 | ✅ 보유 |
-| **탑뷰 웹캠 2대** | **Logitech C270 ×2 대향** · 1280×720 · 실측 `f = 1410 px` · **높이 1.65 m · 후퇴 0.95 m (8/20 확정)** | ✅ 확정 |
-| **로봇 탑재 웹캠** | USB — 근거리 파지 확인 · 클리어런스 | 발주 |
+| **오버헤드 웹캠 2대** | **Logitech HD Pro Webcam C920 ×2 대향** — Host(노트북)가 직접 물려 아레나 좌표·목표를 산출(ArUco 기반). [🎯 Mission](#-mission)의 작업 공간 표는 이전 검토안(C270) 기준이라 픽셀 단위 수치는 재실측 필요 | ✅ 사용 중 |
+| **뎁스 카메라** | ascamera SDK 구동, **HP60C 계열**(`ascamera_node`, `depth_cam_rotate_node`가 180° 회전 보정) — Pi 탑재, 바구니 정면(라이다 보조)·GRASP confirm 신호 | ✅ 사용 중 |
+| **LiDAR** | **LDRobot LD19** — 정면 11.3° 하향틸트, 바구니 정면 거리·yaw 판정 전용 | ✅ 보유 |
+| **그리퍼 캠(엔드이펙터 탑재)** | USB, `gripper_cam_publisher_node`로 ROS2 브리지 — 모니터링 전용(자동 GRASP 판정에는 미사용) | ✅ 사용 중 |
 | **웹캠 거치 수단** | **보유 스탠드로 높이 1.65 m 거치 (8/20 확정)** — 발주 없음. 카메라 고정이 호모그래피의 전제 | ✅ 확정 |
 | **상자 2개** | 🟢 초록 · 🔵 파랑 · **0.29 × 0.35 m · 높이 0.22 m** · **먼 쪽 양쪽 모서리** · ⚫🔴 는 ⏸ 미사용 | ✅ 보유 |
 | **`toy` 3형상** | **정육면체 · 축구공형 다면체 · 오각별기둥 (8/20 개정)** · 3D 프린팅 · **폭 40 mm** (검출 하한 37.4 · 그리퍼 설계 상한 45) | 자작 |
@@ -403,23 +417,27 @@ grippers/
 │   └── src/
 │       ├── grippers_interfaces/  # 공통 msg/srv/action (노드 간 유일한 접점)
 │       ├── grippers_base/        # base_driver_node
-│       ├── grippers_arm/         # arm_driver_node — soarm_lab(third_party) 래핑
-│       ├── grippers_perception/  # perception_node — 카메라 소유, 검출, 상자 탐색
-│       ├── grippers_inference/   # inference_node — Hailo-10H 전담
-│       ├── grippers_mission/     # mission_orchestrator_node — domain FSM을 스레드 분리 실행
-│       ├── grippers_console/     # ⭐ 노트북 실행 — voice_io_node, hud_node
+│       ├── grippers_arm/         # arm_driver_node — soarm_lab(third_party) 래핑, EEPROM 교시값 대조
+│       ├── grippers_perception/  # perception_node · depth_cam_rotate_node · gripper_cam_publisher_node
+│       ├── grippers_mission/     # mission_orchestrator_node — domain FSM(baseline_mission.py) 실행
+│       ├── grippers_language/    # language_node — 텍스트 → 배치 규칙 (TIDY 전용)
+│       ├── grippers_vla/         # ⏸ SmolVLA/ACT 실험 — stretch, baseline에 병합 안 함
 │       ├── grippers_bringup/     # launch 재조합
 │       └── (app/ bringup/ driver/ interfaces/ navigation/ peripherals/
 │            simulations/ slam/ yolov5_ros2/ 등 — MentorPi 벤더 소스 보존. lint 제외)
+│
+│       ⚠️ `grippers_inference`·`grippers_console`은 계획만 있었고 만들어지지 않았다 —
+│       추론은 `grippers_perception`에 흡수됐고, 관제 콘솔은 ROS2 패키지가 아니라
+│       별도 저장소(`grippers-host-mac`)의 순수 Python 앱이 됐다.
 ├── third_party/
 │   └── soarm_provided_d/   # git submodule — soarm_lab (FK/IK/시뮬/실물 백엔드)
 ├── tests/                  # pytest — 하드웨어·ROS2 불필요, domain/ + Fake 어댑터만 사용
 ├── docs/                   # snake_case 통일 · 각 폴더에 README.md(폴더 안내)
 │   ├── design/             #   ── 설계 ──
-│   │   ├── state_machine.md    #   ⭐ FSM 전이 단일 소스
-│   │   ├── class_diagram.md    #   클래스 다이어그램 (Mermaid) + 마이그레이션 계획
-│   │   ├── sequences.md        #   시퀀스 다이어그램
-│   │   ├── architecture.puml   #   같은 구조의 PlantUML 버전
+│   │   ├── state_machine.md    #   ⭐ FSM 전이 단일 소스 · ✅ 실 코드 기준 갱신됨(9/3)
+│   │   ├── class_diagram.md    #   클래스 다이어그램 (Mermaid) + 마이그레이션 계획 ⚠️ 갱신 대기
+│   │   ├── sequences.md        #   시퀀스 다이어그램 ⚠️ 갱신 대기
+│   │   ├── architecture.puml   #   같은 구조의 PlantUML 버전 ⚠️ 갱신 대기
 │   │   ├── hld.md              #   High Level Design — 인터페이스 명세 ⚠️ 갱신 대기
 │   │   └── error_budget.md     #   오차 전파 분석 ⚠️ 갱신 대기
 │   ├── subsystems/         #   ── 서브시스템 ──
@@ -459,7 +477,8 @@ cd grippers && export PYTHONPATH="$PWD:$PYTHONPATH"
 python3 -m pytest tests/ -v
 ```
 
-`IDLE → SCAN → ... → DONE` 루프가 **유한 스텝 안에 종료되면** 도메인 로직은 정상입니다.
+`tests/`는 하드웨어·ROS2 없이 `domain/` + Fake 어댑터만으로 FSM 전체(`IDLE → APPROACH →
+GRASP → CARRY → INSERT → IDLE`)를 검증합니다. 전이 상세는 [`state_machine.md`](docs/design/state_machine.md).
 
 실기 실행·컨테이너 설정·트러블슈팅 → [`setup.md`](docs/ops/setup.md)
 

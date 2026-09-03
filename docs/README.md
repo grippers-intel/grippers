@@ -27,8 +27,11 @@
 
 ## 지금 주의할 것
 
-- **FSM 전이는 [`state_machine.md`](design/state_machine.md) 가 단일 소스** — 다른 문서에 중복 정의 금지
-- **[`hld.md`](design/hld.md) · [`error_budget.md`](design/error_budget.md) 는 주제 변경 이전 기준** — 참조 전 확인
+- **FSM 전이는 [`state_machine.md`](design/state_machine.md) 가 단일 소스** — 다른 문서에 중복 정의 금지.
+  **2026-09-03 실제 코드(`domain/task/baseline_mission.py`) 기준으로 갱신 완료.**
+- **[`hld.md`](design/hld.md) · [`error_budget.md`](design/error_budget.md) · [`class_diagram.md`](design/class_diagram.md) ·
+  [`sequences.md`](design/sequences.md) 는 주제 변경 이전 기준(구 SCAN/SELECT 루프 설계)** — 참조 전
+  [`state_machine.md`](design/state_machine.md) §5 as-is 대비표부터 확인
 
 ---
 
