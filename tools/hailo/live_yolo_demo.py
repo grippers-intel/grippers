@@ -30,7 +30,12 @@ from hailo_platform import FormatType, HailoSchedulingAlgorithm, VDevice
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
-HEF_PATH_DEFAULT = "/tmp/best_640.hef"
+# 2026-09-03: /tmp는 컨테이너 자체 파일시스템이라 호스트에 scp해도 안
+# 보이고(재시작하면 사라지기도 한다) — /shared는 ros_start.sh가
+# ${HOME}/docker/shared를 그대로 bind mount하는 자리라 여기 두면 컨테이너를
+# 새로 띄워도 남는다. 최신 export(yolo_4_hailo/hailo10h_640_base/best.hef,
+# 09-02 05:52 — a16 변형보다 늦다)를 여기 옮겨 뒀다.
+HEF_PATH_DEFAULT = "/shared/hailo_models/best_640_base.hef"
 # "input_topic=output_topic" 쌍을 콤마로 구분한다. 카메라 소스를 늘리려면
 # 이 파라미터에 쌍을 더 추가하면 된다 -- 프로세스/VDevice는 그대로 하나.
 CAMERA_TOPICS_DEFAULT = (
@@ -39,7 +44,10 @@ CAMERA_TOPICS_DEFAULT = (
 )
 SCORE_THRESHOLD = 0.35
 # metadata.yaml의 names — HEF 컴파일 당시 클래스 순서와 반드시 일치해야 한다.
-CLASS_NAMES = ["container", "knight", "queen", "rook", "box", "soccer", "star"]
+# 2026-09-03: yolo_4_hailo/hailo10h_640_base/best.hef(가장 최근 export,
+# 09-02 05:52)로 교체 — 그 metadata.yaml의 names는 6클래스(container 없음,
+# knight가 0번)라 옛 7클래스 순서를 그대로 두면 라벨이 다 밀려서 나온다.
+CLASS_NAMES = ["knight", "queen", "rook", "box", "soccer", "star"]
 BOX_COLOR = (0, 255, 0)
 
 
