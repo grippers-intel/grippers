@@ -112,15 +112,22 @@ def launch_setup(context):
                 }
             ],
         ),
-        # 2026-09-04, 사용자 지시 — /ros_robot_controller/battery 가 낮으면
-        # STM32 부저로 짧게 경고한다(domain/task/battery_alert.py). 그 토픽은
-        # controller_launch(실물 베이스)가 떠 있어야 나오므로 같은 조건을 쓴다.
-        Node(
-            package="grippers_mission",
-            executable="battery_buzzer_monitor",
-            output="screen",
-            condition=UnlessCondition(use_fake_base),
-        ),
+        # 2026-09-04 사용자 지시로 추가했다가, 2026-09-03 실기로 다시 껐다
+        # (사용자 지시) — WARN_MV=7800 문턱을 잡은 근거였던 "차가 안 움직인다"
+        # 증상이, 같은 날 다른 세션에서 회전 데드밴드/누적기 문제(순수
+        # 소프트웨어)로 확인됐다. domain/task/battery_alert.py 의
+        # docstring도 처음부터 "원인을 전압이라고 단정하지 않는다"고 못
+        # 박아 뒀던 잠정 경고라, 원인이 다른 곳으로 밝혀진 지금은 그대로
+        # 켜 두면 오히려 다음에 같은 오진(전압 문제로 오해)을 유발한다.
+        # 코드(domain/task/battery_alert.py, battery_buzzer_node.py)는
+        # 지우지 않고 여기서 노드만 뺐다 — 나중에 진짜 저전압 문턱을 다시
+        # 잡을 일이 생기면 재사용할 수 있다.
+        # Node(
+        #     package="grippers_mission",
+        #     executable="battery_buzzer_monitor",
+        #     output="screen",
+        #     condition=UnlessCondition(use_fake_base),
+        # ),
     ]
 
     return [

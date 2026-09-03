@@ -415,12 +415,22 @@ def test_파지_명령_폭은_ros2_프로파일_공식에서_나온다():
     """도메인과 ros2 프로파일이 갈라져 파지가 헐거워진 2026-08-26 사고 방지.
 
     2026-09-02 사용자 지시(기어 백래시 — 서보 한계까지 밀어붙여야 한다)로
-    모든 라벨이 물체 폭과 무관하게 GRIPPER_GRASP_MIN_MM을 직접 쓴다 —
-    rook 하나만 덮어쓰던 09-02 이전 방식(_CLOSE_WIDTH_OVERRIDE_MM)을
-    모든 라벨로 넓혔다."""
+    모든 라벨이 물체 폭과 무관하게 GRIPPER_GRASP_MIN_MM을 직접 쓰게
+    됐었다 — rook 하나만 덮어쓰던 09-02 이전 방식(_CLOSE_WIDTH_OVERRIDE_MM)
+    을 없앴었다. queen/rook/soccer처럼 override가 없는 라벨은 지금도 이
+    하한을 그대로 쓴다."""
     assert plan_for_label("queen").close_width_mm == GRIPPER_GRASP_MIN_MM
     assert plan_for_label("rook").close_width_mm == GRIPPER_GRASP_MIN_MM
     assert plan_for_label("soccer").close_width_mm == GRIPPER_GRASP_MIN_MM
+
+
+def test_부피가_큰_box_star는_완전히_짓누르지_않는다():
+    """2026-09-03 사용자 지시로 _CLOSE_WIDTH_OVERRIDE_MM이 되살아났다 —
+    box/star는 부피가 커서 0.0mm(서보 한계)까지 밀어붙이지 않고
+    2026-09-02 이전 하한이던 7.0mm를 유지한다. soccer는 언급되지 않아
+    여전히 GRIPPER_GRASP_MIN_MM(0.0mm) 그대로다(위 테스트가 이미 덮음)."""
+    assert plan_for_label("box").close_width_mm == 7.0
+    assert plan_for_label("star").close_width_mm == 7.0
 
 
 # ── 임무 4번: INSERT 조건 판정과 수행 ──────────────────────────────────────
@@ -677,45 +687,58 @@ def test_GRASP_FORCE도_영역_안이면_그냥_평소대로_내려간다():
     assert isinstance(nxt, BaselineGraspState)
 
 
-# ── 두 신호 파지 판정 (사용자 지시 2026-08-26, 2026-09-01 AND -> OR) ────────
+# ── 두 신호 파지 판정 (사용자 지시 2026-08-26, 2026-09-01 AND -> OR,
+#    2026-09-03 다시 AND) ────────────────────────────────────────────
 #
 # 2026-08-26 ~ 2026-09-01: 부하와 뎁스(confirm_grasp) 둘 다 있어야 성공
 # (AND)이었다. 2026-09-01 실기에서 CARRY 자세는 카메라 프레임 밖이 맞는데도
 # confirm_grasp() 가 "그대로 있다"를 반환했다(뎁스 오탐) — 정상적으로 문턱을
 # 넘은 부하(0.0547)가 그 오탐 하나 때문에 막혔다. 사용자 지시로 **둘 중
-# 하나만 있어도 성공**으로 바꿨다 — 둘 다 실패를 가리킬 때만 진짜 실패다.
+# 하나만 있어도 성공**으로 바꿨다(OR) — 둘 다 실패를 가리킬 때만 진짜
+# 실패로 봤다.
+#
+# 2026-09-03 star/box 실기: 이번엔 **반대** 방향 오탐이 났다 — 부하가
+# 0.0000/0.0274로 낮은데 뎁스만 "사라짐"이라 OR를 통과해 CARRY_DEST까지
+# 넘어가 버렸다. `arm_driver_node._read_load()`가 서보 읽기 자체가
+# 실패하면(raw is None) "안전값" 0.0을 돌려준다는 것이 드러나(2026-08-19
+# 부터 있던 동작), 부하 0.0000이 "진짜 빈손"과 "읽기 실패"를 구분 못
+# 한다는 뜻임을 확인했다 — OR의 양쪽 신호 모두 근접 상황에서 개별적으로
+# 흔들릴 수 있다는 것이다. 사용자 지시로 **AND로 되돌린다** — 09-01
+# 이전까지 오래 문제없이 썼던 조합이니 그쪽을 신뢰한다. 09-01의 뎁스
+# 오탐 케이스가 다시 나올 수 있다는 걸 알고 하는 결정이다(재발하면
+# 뎁스 신호 자체를 고쳐야 한다).
 
 
-def test_부하만_높아도_뎁스_오탐과_무관하게_성공이다():
-    """뎁스가 "그대로 있다"고 해도 부하가 충분하면 성공이다(OR)."""
+def test_부하만_높고_뎁스는_그대로_보이면_실패다():
+    """AND — 부하가 충분해도 뎁스가 "그대로 있다"고 하면 실패다. 09-01
+    실기 땐 이 경우를 성공(OR)으로 봤지만, 09-03 star/box에서 반대
+    방향 오탐(부하만 낮음)이 나면서 다시 AND로 되돌렸다(위 섹션 코멘트,
+    domain.task.baseline_mission의 같은 판정 자리 코멘트 참고)."""
     host = FakeHostLink()
     perception = ScriptedPerception(grasp_confirmed=False)
     ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), perception=perception)
 
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
-    assert Report.GRASP_DONE in host.reported_kinds
-    assert "뎁스 오탐 무시" in host.reports[-1][2]
-    assert isinstance(nxt, BaselineCarryState)
+    assert Report.GRASP_FAILED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
 
 
-def test_뎁스만_확인돼도_부하_무관하게_성공이다():
-    """부하가 CARRY 도달 후 계속 0이어도, 뎁스가 "사라짐"을 확인하면
-    성공이다(OR) — 사용자 지시 2026-09-03: "CARRY에서 최종 판정이
-    맞다". 이전엔 들어올리기 전에 부하로 미리 걸러서 이 경우 OR 판정까지
-    가지도 못하고 실패했지만, 그 사전 게이트 자체가 2026-09-03 box
-    실측으로 신뢰할 수 없다고 드러나 없앴다(같은 파일의 부하 재확인
-    회귀 테스트 참고) — 이제는 부하 하나만으로 실패를 미리 확정하지
-    않는다."""
+def test_뎁스만_사라지고_부하는_낮으면_실패다():
+    """AND — 2026-09-03 star/box 실기 재현(회귀 방지). 부하가 정확히
+    0.0000/0.0274로 낮은데 뎁스만 "사라짐"이라 그때는 OR를 통과해
+    CARRY_DEST까지 넘어갔었다(3번째 star, 사용자가 직접 지적한 사고).
+    부하 0.0000이 "진짜 빈손"인지 "서보 읽기 실패로 인한 안전값"인지
+    구분할 수 없는 채로 성공 처리하면 안 된다 — AND에서는 이 조합이
+    실패로 잡혀야 한다."""
     host = FakeHostLink()
     ports = _ports(host=host, arm=FakeArm(load_ratio=0.0),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
-    assert Report.GRASP_DONE in host.reported_kinds
-    assert "목표 사라짐 확인" in host.reports[-1][2]
-    assert isinstance(nxt, BaselineCarryState)
+    assert Report.GRASP_FAILED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
 
 
 def test_두_신호가_모두_있으면_당연히_성공이다():

@@ -138,17 +138,30 @@ class LiveYoloDemoNode(Node):
         # get_buffer()가 raw flat 버퍼를 [cls0_dets, cls1_dets, ...] 형태로 바꿔 준다.
         detections_by_class = bindings.output().get_buffer()
 
-        annotated = draw_detections(canvas, detections_by_class)
-        out_msg = self._bridge.cv2_to_imgmsg(annotated, encoding="bgr8")
-        out_msg.header = msg.header
-        publisher.publish(out_msg)
-
         for class_id, dets in enumerate(detections_by_class):
             label = CLASS_NAMES[class_id] if class_id < len(CLASS_NAMES) else str(class_id)
             for det in dets:
                 score = det[4]
                 if score >= SCORE_THRESHOLD:
                     self.get_logger().info(f"[detect] {source_label}: {label} score={score:.2f}")
+
+        # 2026-09-03: 이 컨테이너는 cv_bridge(apt, libopencv-core4.5d에 링크)와
+        # pip의 opencv-python(5.0.0.93, Dockerfile에 없는 라이브 드리프트)이
+        # 섞여 있어 cv2_to_imgmsg가 KeyError로 죽는다(cv_bridge 타입 코드와
+        # OpenCV 5.0의 타입 코드가 안 맞음) — numpy ABI 문제와는 별개다.
+        # 오늘 확인할 건 "Hailo가 실제로 검출하느냐"이지 오버레이 영상
+        # 퍼블리시가 아니므로, 검출 로그는 위에서 먼저 찍고 퍼블리시 실패는
+        # 노드를 죽이지 않도록 감싼다.
+        try:
+            annotated = draw_detections(canvas, detections_by_class)
+            out_msg = self._bridge.cv2_to_imgmsg(annotated, encoding="bgr8")
+            out_msg.header = msg.header
+            publisher.publish(out_msg)
+        except Exception as exc:
+            self.get_logger().warn(
+                f"오버레이 퍼블리시 실패(검출 로그는 정상) — {source_label}: {exc}",
+                throttle_duration_sec=5.0,
+            )
 
 
 def main(args=None):

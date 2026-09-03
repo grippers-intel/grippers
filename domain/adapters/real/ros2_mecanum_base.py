@@ -153,6 +153,15 @@ class Ros2MecanumBase(BaseDriver):
                             and abs(linear_y) < _ROTATE_EPSILON)
         if (not self._rotate_burst_enabled or not is_pure_rotation
                 or abs(angular_z) >= ROTATE_BURST_SPEED_RAD_S):
+            # 2026-09-03 임시 계측: 회전 중이던 누적치를 버리고 리셋하는
+            # 순간을 잡는다 — NUDGE_BOX가 PLACE와 자주 왕복하며 stop 등
+            # 비회전 명령을 자주 끼워 넣어 누적기가 1.0을 못 채우고 계속
+            # 버려지는지 확인하기 위함(제거 예정, 사용자 지시로 추가).
+            if self._rotate_accumulator > 0.0:
+                self._node.get_logger().info(
+                    f"[rotate_burst] 리셋 — 누적 {self._rotate_accumulator:.3f} "
+                    f"버려짐 (요청 lx={linear_x:.3f} ly={linear_y:.3f} "
+                    f"az={angular_z:.3f})")
             self._rotate_accumulator = 0.0
             self._rotate_sign = 0.0
             self._publish(linear_x, linear_y, angular_z)
@@ -162,12 +171,19 @@ class Ros2MecanumBase(BaseDriver):
         if sign != self._rotate_sign:
             # 새로 회전을 시작했거나 방향이 바뀌었다 — 누적기를 리셋해서
             # 이전 방향의 잔여 누적치가 새 방향으로 새지 않게 한다.
+            if self._rotate_accumulator > 0.0:
+                self._node.get_logger().info(
+                    f"[rotate_burst] 방향 전환 리셋 — 누적 "
+                    f"{self._rotate_accumulator:.3f} 버려짐")
             self._rotate_accumulator = 0.0
             self._rotate_sign = sign
         duty = min(1.0, abs(angular_z) / ROTATE_BURST_SPEED_RAD_S)
         self._rotate_accumulator += duty
         if self._rotate_accumulator >= 1.0:
             self._rotate_accumulator -= 1.0
+            self._node.get_logger().info(
+                f"[rotate_burst] 발사 — az={sign * ROTATE_BURST_SPEED_RAD_S:.3f} "
+                f"(누적 {self._rotate_accumulator:.3f} 남음)")
             self._publish(0.0, 0.0, sign * ROTATE_BURST_SPEED_RAD_S)
         else:
             self._publish(0.0, 0.0, 0.0)

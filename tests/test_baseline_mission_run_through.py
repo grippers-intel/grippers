@@ -113,8 +113,14 @@ def _load_script():
     부하가 낮게 읽힐 수 있어서 오탐을 냈다(정지 뒤 사용자가 직접 확인하니
     그리퍼가 박스를 꽉 물고 있었다). 판정은 팔이 물리적으로 끝까지
     움직였는가(move_to_floor_pose)와 CARRY 도달 후 딱 한 번 재는 최종
-    OR 판정에만 맡긴다(사용자 지시 2026-09-03: "CARRY에서 최종 판정이
+    판정에만 맡긴다(사용자 지시 2026-09-03: "CARRY에서 최종 판정이
     맞다") — 그래서 예전 1·2번 자리가 둘 다 사라졌다.
+
+    ⚠️ 그 최종 판정 자체는 2026-09-01에 AND -> OR로 완화됐다가, 같은
+    2026-09-03 실기에서 star/box가 부하 판독만 낮게(0.0000/0.0274)
+    나오는 반대 방향 오탐을 내면서 다시 AND로 되돌아갔다(같은 파일의
+    두 신호 판정 테스트, domain.task.baseline_mission의 판정부 코멘트
+    참고).
     """
     return [
         HOLDING,    # 1. CARRY 전환 후 (성공 판정 신호 하나, 최초이자 유일)
@@ -264,22 +270,23 @@ def test_주행_명령이_합의_속도로_바퀴까지_간다(run_through):
         assert duration_s == pytest.approx(bc.GRASP_CREEP_OPEN_LOOP_SEC)
 
 
-def test_파지_성공은_부하_하나만_있어도_된다(run_through):
-    """부하와 뎁스(confirm_grasp) 중 하나만 있어도 성공이다(OR, 사용자 지시
-    2026-09-01 — AND 였던 이전 계약은 CARRY 자세에서 confirm_grasp() 가
-    뎁스 오탐("그대로 있다")을 낸 실기 사고로 바뀌었다).
-    """
+def test_파지_성공은_부하와_뎁스_둘_다_있어야_한다(run_through):
+    """AND(2026-09-03 재적용) — 부하와 뎁스(confirm_grasp) 둘 다 있어야
+    성공이다. 2026-09-01엔 이 중 하나만 있어도 성공(OR)으로 완화했지만,
+    같은 2026-09-03 실기에서 star/box가 반대 방향 오탐(부하만 낮게
+    읽힘)을 내면서 다시 AND로 되돌렸다(domain.task.baseline_mission의
+    판정부 코멘트 참고)."""
     _names, host, ports = run_through()
     assert ports.perception.confirm_grasp_calls >= 1
     assert Report.GRASP_DONE in host.reported_kinds
 
-    # 뎁스만 뒤집어도(오탐 흉내) 부하가 정상이면 통주행은 여전히 성공이다.
+    # 뎁스가 뒤집히면(오탐 흉내) 부하가 정상이어도 AND에서는 실패다.
     _names, host, _ports = run_through(
         perception=ScriptedPerception(
             script=[TargetObservation(LABEL, JAW_LINE_M + 0.02, 0.0, True)],
             grasp_confirmed=False))
-    assert Report.GRASP_DONE in host.reported_kinds
-    assert Report.GRASP_FAILED not in host.reported_kinds
+    assert Report.GRASP_DONE not in host.reported_kinds
+    assert Report.GRASP_FAILED in host.reported_kinds
 
 
 def test_부하도_뎁스도_없으면_실패다(run_through):

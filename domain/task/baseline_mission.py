@@ -92,11 +92,21 @@ _OBJECT_WIDTH_MM = {
 #
 # 물체가 턱 사이에 있으면 그 물체가 턱을 멈춰 주므로, 하한까지 명령해도
 # 서보가 갈아 먹는 게 아니라 위치 오차(=힘)만 커진다(GRIPPER_GRASP_MIN_MM
-# 주석 참고) — 그래서 라벨마다 다르게 좁힐 이유가 없다. box/star/soccer도
-# "이미 검증된" 값(25.0/30.0/31.0)에 만족하지 말고 전부 하한으로 민다.
+# 주석 참고) — 그래서 라벨마다 다르게 좁힐 이유가 없었다.
+#
+# ⚠️ 2026-09-03 사용자 지시로 box/star는 예외를 둔다 — 부피가 큰 물체라
+# 0.0mm까지 완전히 짓누르지 않고 7.0mm(2026-09-02 이전 하한)를 유지한다.
+# soccer는 언급되지 않아 그대로 0.0mm다. box/star가 부하 읽기 실패로
+# 의심되는 0에 가까운 값을 반복해 보인 것(위 confirm_grasp AND 복귀
+# 코멘트 참고)과 무관하지 않을 수 있다 — 서보가 한계까지 밀어붙여져
+# 있으면 그 자체로 읽기가 더 불안정해질 수 있다는 심증이다(확인된 인과는
+# 아니다).
+_CLOSE_WIDTH_OVERRIDE_MM = {"box": 7.0, "star": 7.0}
+
 _PROFILE_BY_LABEL = {
     label: HorizontalGraspPlan(
-        profile, GRIPPER_MAX_SAFE_OPEN_MM, GRIPPER_GRASP_MIN_MM,
+        profile, GRIPPER_MAX_SAFE_OPEN_MM,
+        _CLOSE_WIDTH_OVERRIDE_MM.get(label, GRIPPER_GRASP_MIN_MM),
         _release_width(width_mm))
     for label, (profile, width_mm) in _OBJECT_WIDTH_MM.items()
 }
@@ -446,11 +456,13 @@ class BaselineGraspState(State):
         #
         # 그래서 부하로 미리 거르지 않는다 — **판정은 팔이 물리적으로
         # 끝까지 움직였는가(move_to_floor_pose의 reached, 서보 위치 확인
-        # 이라 신뢰할 수 있다)와, CARRY 자세에 도달한 뒤의 최종 OR 판정
-        # (부하 OR 뎁스 "사라짐", 아래)에 맡긴다**(사용자 지시 2026-09-03:
-        # "CARRY에서 최종 판정이 맞다"). 이렇게 하면 이번처럼 중간에 부하가
-        # 잘못 낮게 읽혀도, CARRY 도달 후 뎁스가 "사라짐"을 확인하거나 그때
-        # 다시 잰 부하가 정상이면 성공으로 넘어간다.
+        # 이라 신뢰할 수 있다)와, CARRY 자세에 도달한 뒤 딱 한 번 하는
+        # 최종 판정(아래)에 맡긴다**(사용자 지시 2026-09-03: "CARRY에서
+        # 최종 판정이 맞다"). 이렇게 하면 이번처럼 중간에 부하가 잘못
+        # 낮게 읽혀도 도중에 실패로 확정되지 않고 CARRY까지 간다 — 다만
+        # 그 최종 판정 자체는 AND다(부하와 뎁스 둘 다 있어야 성공, 아래
+        # 판정부 코멘트 참고) — star/box에서 부하 판독 하나만 믿을 수
+        # 없다고 해서 남은 신호(뎁스) 하나로 성공을 만들어주지는 않는다.
         if not ports.arm.move_to_floor_pose(gp.profile, "midpoint"):
             return self._failed(ports, "들어올리기(midpoint) 실패")
         if not ports.arm.move_to_floor_pose(gp.profile, "safe"):
@@ -462,19 +474,30 @@ class BaselineGraspState(State):
         # 모두** 있어야 했다(AND). 부하는 "무언가를 쥐고 있다"를, 뎁스
         # 카메라는 "있던 물체가 그 자리에서 사라졌다"를 말한다는 전제였다.
         #
-        # ⚠️ 2026-09-01 실기: CARRY 자세에서는 팔·기물이 카메라 프레임
-        # 밖에 있는 게 맞다(floor_grasp_profiles.CARRY_RAW 로 확인된 설계
-        # 그대로) — 그런데도 confirm_grasp() 가 "그대로 있다"를 반환했다.
-        # 즉 눈앞에 없는 rook 을 있다고 오검출한 것이다(뎁스 카메라 쪽의
-        # 오탐). 그 사이 부하(0.0547)는 LOAD_THRESHOLD 를 정상적으로
-        # 넘겼고, 사용자가 직접 파지 성공을 눈으로 확인했다. 뎁스 오탐
-        # 하나가 정상적인 부하 신호를 막는 것을 사용자 지시로 없앤다 —
-        # AND 를 **OR** 로 바꾼다. 부하가 낮고 뎁스도 "그대로 있다"고
-        # 하는, **둘 다 실패를 가리키는 경우만** 진짜 실패로 본다.
+        # 2026-09-01 실기: CARRY 자세에서는 팔·기물이 카메라 프레임 밖에
+        # 있는 게 맞는데도 confirm_grasp() 가 "그대로 있다"를 반환한
+        # 오탐(rook) 때문에 AND -> OR 로 한 번 완화했었다(부하만 정상이면
+        # 뎁스 오탐을 무시). 그런데 2026-09-03 star/box에서 **반대** 방향
+        # 오탐이 났다 — 부하가 정확히 0.0000/0.0274로 낮은데 vanished만
+        # True 라 OR를 통과해 버렸다. 조사해 보니 `arm_driver_node._read_
+        # load()`는 서보 읽기 자체가 실패하면(raw is None) "안전값"으로
+        # 그냥 0.0을 돌려준다(2026-08-19부터 있던 동작) — 즉 부하 0.0000은
+        # "진짜 빈손"과 "읽기 실패"를 구분 못 한다. vanished 신호도 "그
+        # 자리에서 안 보인다"만 볼 뿐 "그리퍼 안에 실제로 있다"를 보지
+        # 않는다 — 밀려서 화각 밖으로 나가기만 해도 뜬다. 즉 OR의 양쪽
+        # 신호 모두 근접 상황에서 개별적으로 흔들릴 수 있다는 뜻이라,
+        # 사용자 지시로 **AND로 되돌린다**(2026-09-03) — 09-01 이전까지
+        # 오래 문제없이 썼던 조합이었으니 그쪽을 신뢰한다. 09-01의 rook
+        # 오탐(뎁스만 걸림) 케이스가 다시 나올 수는 있다는 걸 알고 있는
+        # 채로 하는 결정이다 — 재발하면 이번엔 뎁스 신호 자체(confirm_
+        # grasp)를 고치는 쪽으로 가야 한다. box/star는 그리퍼캠+YOLO로
+        # "그리퍼 안에 실제로 있다"는 세 번째 독립 신호를 검토 중이다.
         carried = ports.arm.get_load()
         vanished = ports.perception.confirm_grasp()
-        if carried < bc.LOAD_THRESHOLD and not vanished:
-            return self._failed(ports, f"부하도 낮고 물체도 그대로다 (부하 {carried:.4f})")
+        if carried < bc.LOAD_THRESHOLD:
+            return self._failed(ports, f"부하가 낮다 (부하 {carried:.4f})")
+        if not vanished:
+            return self._failed(ports, f"목표가 그대로 보인다 (부하 {carried:.4f})")
 
         detail = f"{self.label} 부하 {carried:.4f}"
         detail += " · 목표 사라짐 확인" if vanished else " · 부하로 확인(뎁스 오탐 무시)"
