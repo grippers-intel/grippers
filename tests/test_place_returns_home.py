@@ -25,6 +25,16 @@ from conftest import PiSim                    # noqa: E402
 
 MAX_STEPS = 900
 
+# 2026-09-02, AWAIT_CONTINUE 신설로 이 테스트들의 전제가 바뀌었다: PLACE
+# 완료 시 방금 옮긴 라벨(rook, chess 그룹)과 **같은 그룹의 다른 개체가
+# 화면에 하나도 안 남으면** RETURN_HOME 대신 AWAIT_CONTINUE 로 간다(사용자
+# 확인 대기). 이 파일의 테스트는 "PLACE -> RETURN_HOME -> SEARCH_TARGET"
+# 루프 메커니즘 자체를 보는 것이지 그룹 소진 판정을 보는 게 아니므로,
+# knight(같은 chess 그룹)가 하나 더 남아 있는 피지도를 줘서 그룹이 아직
+# 안 끝난 것으로 만든다 — AWAIT_CONTINUE 자체는 test_await_continue.py 가
+# 따로 검증한다.
+_OTHER_CHESS_PIECE_REMAINS = {"knight": [(0.9, 0.9)]}
+
 
 def test_PLACE_완료는_SEARCH_TARGET이_아니라_RETURN_HOME으로_간다():
     sim = PiSim()
@@ -37,7 +47,7 @@ def test_PLACE_완료는_SEARCH_TARGET이_아니라_RETURN_HOME으로_간다():
     was_place = False
     for _ in range(MAX_STEPS):
         was_place = fsm.state == State.PLACE
-        fsm.step(sim.pose(), {}, sim)
+        fsm.step(sim.pose(), _OTHER_CHESS_PIECE_REMAINS, sim)
         if was_place and fsm.state == State.RETURN_HOME:
             break
         if was_place and fsm.state not in (State.PLACE, State.NUDGE_BOX):
@@ -54,7 +64,7 @@ def test_RETURN_HOME을_거쳐_결국_SEARCH_TARGET에_도착한다():
     assert fsm.begin_carrying("rook")
 
     for n in range(1, MAX_STEPS + 1):
-        fsm.step(sim.pose(), {}, sim)
+        fsm.step(sim.pose(), _OTHER_CHESS_PIECE_REMAINS, sim)
         if fsm.state == State.SEARCH_TARGET:
             break
     else:
@@ -69,7 +79,7 @@ def test_RETURN_HOME_도착지는_DEFAULT_HOME_XY다():
     assert fsm.begin_carrying("rook")
 
     for _ in range(MAX_STEPS):
-        fsm.step(sim.pose(), {}, sim)
+        fsm.step(sim.pose(), _OTHER_CHESS_PIECE_REMAINS, sim)
         if fsm.state == State.SEARCH_TARGET:
             break
     else:

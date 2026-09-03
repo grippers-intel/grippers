@@ -47,11 +47,13 @@ ANTHROPIC_API_KEY 환경변수 필요, 없으면 이 기능만 조용히 꺼진�
 from __future__ import annotations
 
 import argparse
+import queue
 import signal
 import sys
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 import cv2
 
@@ -92,6 +94,7 @@ def _on_sigint(signum, frame):
 
 
 def main() -> int:
+    global _stop
     ap = argparse.ArgumentParser()
     ap.add_argument("--cams", type=int, nargs="+", default=list(cfg.CAM_INDICES))
     ap.add_argument("--no-view", action="store_true")
@@ -235,51 +238,26 @@ def main() -> int:
           " (체스말→chess, 나머지→toy).")
     print("q 또는 Ctrl+C 로 종료\n")
 
-    # --- Enter 로 즉시 정지 (2026-08-28, 실차 예행연습용) ---
+    # --- 터미널 입력 한 줄 (2026-08-28 Enter 즉시정지 / 2026-09-01 자연어
+    # 지시 / 2026-09-02 AWAIT_CONTINUE·AWAIT_COMMAND 로 확장) ---
     #
     # 실제로 바퀴가 도는 동안 사람이 손닿는 곳에 정지 수단이 있어야 한다.
     # cv2 창의 q 는 창에 포커스가 있어야 먹으므로 터미널에서는 못 쓴다.
     # ⚠️ stdin 이 TTY 가 아니면(백그라운드·nohup·파이프) readline 이 EOF 로
     # 즉시 돌아온다. 그걸 Enter 로 오해하면 기동하자마자 멈춘다 — 실제로
     # 그랬다. 사람이 칠 수 있는 터미널일 때만 감시를 건다.
-    # 수동 모드에서 Enter 는 "정지"가 아니라 "다음 단계"다. 두 의미를 같은
-    # 키에 걸 수 없으므로 감시를 통째로 바꿔 단다.
-    if args.manual and sys.stdin.isatty():
-        def _manual_watch():
-            global _stop
-            while not _stop:
-                try:
-                    line = sys.stdin.readline()
-                except Exception:
-                    return
-                if line == "":
-                    return                      # EOF 는 입력이 아니다
-                key = line.strip().lower()
-                if key in ("q", "quit", "exit"):
-                    _stop = True
-                    print("\n[STOP] q — 정지하고 종료합니다", flush=True)
-                    return
-                if key == "b":
-                    fsm.request_back()
-                    print("\n[수동] 한 단계 되돌립니다", flush=True)
-                    continue
-                fsm.request_advance()
-        threading.Thread(target=_manual_watch, daemon=True).start()
-        print("\n>>> 수동 모드 — Enter: 다음 단계 / b: 되돌리기 / q: 정지 <<<\n",
-              flush=True)
-    elif args.manual:
-        print("\n[주의] stdin 이 터미널이 아니라 수동 진행을 못 겁니다\n",
-              flush=True)
-
-    _enter_armed = (not args.no_stop_on_enter) and sys.stdin.isatty() \
-        and not args.manual
-    if _enter_armed:
-        def _instruct_watch():
-            # 예전엔 아무 줄이나 치면(내용 무관) 정지였다 — 이제 **빈 줄**만
-            # 정지고, 글자가 있으면 지시 문장으로 본다(사용자 지시,
-            # 2026-09-01 — 팀원의 2026-08-31 handoff 델타 이식). manual
-            # 모드에서는 안 켠다 — 그쪽은 stdin 을 단계 진행(Enter/b/q)에
-            # 이미 쓰고 있어서 같은 채널을 나눠 쓸 수 없다.
+    #
+    # 스레드는 하나만 둔다 — 줄을 읽어 큐에 넣기만 하고, 그 줄이 무슨
+    # 뜻인지(다음 단계냐/지시 문장이냐/AWAIT_CONTINUE 응답이냐)는 전부
+    # 메인 루프에서 그때그때의 fsm.state 를 보고 해석한다. 두 스레드가
+    # 같은 stdin 을 동시에 readline() 하면 어느 쪽이 줄을 가져갈지 알 수
+    # 없어서(레이스), 예전처럼 모드별로 스레드를 따로 두지 않는다 — 또한
+    # FSM 을 건드리는 코드는 메인 루프에만 두는 기존 원칙(자연어 지시
+    # 결과 처리부 참고)과도 맞다.
+    _line_q: "queue.Queue[str]" = queue.Queue()
+    _stdin_ready = sys.stdin.isatty()
+    if _stdin_ready:
+        def _line_reader():
             global _stop
             while not _stop:
                 try:
@@ -288,32 +266,26 @@ def main() -> int:
                     return
                 if line == "":
                     return               # EOF 는 입력이 아니다
-                text = line.strip()
-                if text == "":
-                    _stop = True
-                    print("\n[STOP] Enter — 정지합니다", flush=True)
-                    return
-                if resolver is None:
-                    print(f"\n[지시] 무시함 — 자연어 지시 비활성화"
-                          f"({_instruction_resolver_import_error or '초기화 실패'})\n",
-                          flush=True)
-                    continue
-                if resolver.busy:
-                    print("\n[지시] 이전 요청을 아직 처리 중입니다 — 잠시 후 다시 시도하세요\n",
-                          flush=True)
-                    continue
-                labels = visible_labels(pmap)
-                if not labels:
-                    print("\n[지시] 지금 화면에 보이는 기물이 없습니다\n", flush=True)
-                    continue
-                print(f"\n[지시] \"{text}\" 처리 중...\n", flush=True)
-                resolver.submit(text, labels)
-        threading.Thread(target=_instruct_watch, daemon=True).start()
-        print("\n>>> 빈 줄+Enter: 즉시 정지 / 문장+Enter: 그 기물을 지시"
-              "(예: '퀸 가져와', '룩 정리해') <<<\n", flush=True)
-    elif not args.no_stop_on_enter and not args.manual:
-        print("\n[주의] stdin 이 터미널이 아니라 Enter 정지·자연어 지시를 못 겁니다 — "
-              "--seconds 로 시간 제한을 두세요\n", flush=True)
+                _line_q.put(line.strip())
+        threading.Thread(target=_line_reader, daemon=True).start()
+        if args.manual:
+            print("\n>>> 수동 모드 — Enter: 다음 단계 / b: 되돌리기 / q: 정지 <<<\n",
+                  flush=True)
+        elif not args.no_stop_on_enter:
+            print("\n>>> 빈 줄+Enter: 즉시 정지 / 문장+Enter: 그 기물을 지시"
+                  "(예: '퀸 가져와', '룩 정리해') <<<\n", flush=True)
+        print(">>> 체스말/장난감 한 그룹을 다 옮기면 계속할지 물어봅니다"
+              "(Enter: 계속 / 아무 글자+Enter: 정지) <<<\n", flush=True)
+    else:
+        print("\n[주의] stdin 이 터미널이 아니라 Enter 정지·자연어 지시·"
+              "AWAIT_CONTINUE 응답을 못 겁니다 — --seconds 로 시간 제한을 두세요\n",
+              flush=True)
+
+    # AWAIT_COMMAND 에서 지시 문장을 넣으면 그 결과(poll_result())를 일반
+    # 라이브 오버라이드(set_instruction)가 아니라 submit_next_command() 로
+    # 돌려야 한다 — 이 플래그로 두 경로를 가른다.
+    _next_command_pending = False
+    _await_prompted_state: Optional[State] = None   # AWAIT_* 배너 중복 출력 방지
 
     # --- 기록 ---
     _log_path = None
@@ -366,23 +338,113 @@ def main() -> int:
             _t_fsm = time.perf_counter(); hz_acc["fsm"] += _t_fsm - _t_geti
             frames_seen += 1
 
+            # AWAIT_CONTINUE/AWAIT_COMMAND 진입 배너 — 상태가 바뀐 첫
+            # 사이클에만 한 번 찍는다(2026-09-02).
+            if fsm.state != _await_prompted_state:
+                if fsm.state == State.AWAIT_CONTINUE:
+                    print("\n[미션] 한 그룹(체스말 또는 장난감)을 다 옮겼습니다 — "
+                          "계속할까요? (Enter: 계속 / 아무 글자+Enter: 정지)\n",
+                          flush=True)
+                elif fsm.state == State.AWAIT_COMMAND:
+                    print("\n[미션] 다음 지시를 입력하세요 (예: '축구공 정리해', "
+                          "'퀸 가져와')\n", flush=True)
+                elif fsm.state == State.IDLE:
+                    print("\n[미션] 정지했습니다 — 다시 돌리려면 프로그램을 "
+                          "재시작하세요\n", flush=True)
+                _await_prompted_state = fsm.state
+
+            # 터미널 입력 한 줄 처리 — 지금 fsm.state 기준으로 해석한다
+            # (2026-09-02, 위 "터미널 입력 한 줄" 설명 참고).
+            try:
+                while True:
+                    line = _line_q.get_nowait()
+                    if fsm.state == State.AWAIT_CONTINUE:
+                        if line == "":
+                            fsm.on_continue()
+                            print("\n[미션] 계속합니다\n", flush=True)
+                        else:
+                            fsm.on_stop()
+                            print("\n[미션] 정지합니다 — 기본 위치로 복귀 후 대기\n",
+                                  flush=True)
+                    elif fsm.state == State.AWAIT_COMMAND:
+                        if line == "":
+                            print("\n[지시] 빈 줄은 명령이 아닙니다 — 다시 입력하세요\n",
+                                  flush=True)
+                        elif resolver is None:
+                            print(f"\n[지시] 무시함 — 자연어 지시 비활성화"
+                                  f"({_instruction_resolver_import_error or '초기화 실패'})\n",
+                                  flush=True)
+                        elif resolver.busy:
+                            print("\n[지시] 이전 요청을 아직 처리 중입니다 — 잠시 후 다시 시도하세요\n",
+                                  flush=True)
+                        else:
+                            labels = visible_labels(pmap)
+                            if not labels:
+                                print("\n[지시] 지금 화면에 보이는 기물이 없습니다 — "
+                                      "다시 입력하세요\n", flush=True)
+                            else:
+                                print(f"\n[지시] \"{line}\" 처리 중...\n", flush=True)
+                                _next_command_pending = True
+                                resolver.submit(line, labels)
+                    elif args.manual:
+                        key = line.lower()
+                        if key in ("q", "quit", "exit"):
+                            _stop = True
+                            print("\n[STOP] q — 정지하고 종료합니다", flush=True)
+                        elif key == "b":
+                            fsm.request_back()
+                            print("\n[수동] 한 단계 되돌립니다", flush=True)
+                        else:
+                            fsm.request_advance()
+                    elif not args.no_stop_on_enter:
+                        if line == "":
+                            _stop = True
+                            print("\n[STOP] Enter — 정지합니다", flush=True)
+                        elif resolver is None:
+                            print(f"\n[지시] 무시함 — 자연어 지시 비활성화"
+                                  f"({_instruction_resolver_import_error or '초기화 실패'})\n",
+                                  flush=True)
+                        elif resolver.busy:
+                            print("\n[지시] 이전 요청을 아직 처리 중입니다 — 잠시 후 다시 시도하세요\n",
+                                  flush=True)
+                        else:
+                            labels = visible_labels(pmap)
+                            if not labels:
+                                print("\n[지시] 지금 화면에 보이는 기물이 없습니다\n", flush=True)
+                            else:
+                                print(f"\n[지시] \"{line}\" 처리 중...\n", flush=True)
+                                resolver.submit(line, labels)
+            except queue.Empty:
+                pass
+
             # 자연어 지시 결과 — resolver.submit() 은 백그라운드 스레드에서
-            # 돌므로, FSM 을 건드리는 건(set_instruction) 여기 메인 루프
-            # 안에서만 한다(2026-09-01).
+            # 돌므로, FSM 을 건드리는 건(set_instruction/submit_next_command)
+            # 여기 메인 루프 안에서만 한다(2026-09-01, 2026-09-02 확장).
+            # _next_command_pending 이 서 있으면 이 결과는 AWAIT_COMMAND 에서
+            # 넣은 "다음 명령"이다 — 라이브 오버라이드(set_instruction)가
+            # 아니라 submit_next_command() 로 돌린다(곧장 SEARCH_TARGET).
             if resolver is not None:
                 result = resolver.poll_result()
                 if result is not None:
                     if result.error:
                         print(f"\n[지시] API 오류: {result.error}\n", flush=True)
+                        _next_command_pending = False
                     elif not result.matched:
                         print(f"\n[지시] 못 알아들음 — {result.reasoning}\n", flush=True)
+                        _next_command_pending = False
                     else:
                         dest_xy = mcfg.DELIVER_HERE_XY if result.intent == "fetch" else None
-                        applied_now = fsm.set_instruction(result.target_label, dest_xy=dest_xy)
                         where = "저한테" if result.intent == "fetch" else "정해진 상자로"
-                        when = "바로 전환" if applied_now else "지금 든 것 마친 뒤 적용"
-                        print(f"\n[지시] '{result.target_label}' 를 {where} "
-                              f"({when}) — {result.reasoning}\n", flush=True)
+                        if _next_command_pending:
+                            _next_command_pending = False
+                            fsm.submit_next_command(result.target_label, dest_xy=dest_xy)
+                            print(f"\n[지시] '{result.target_label}' 를 {where} "
+                                  f"— 재개합니다 ({result.reasoning})\n", flush=True)
+                        else:
+                            applied_now = fsm.set_instruction(result.target_label, dest_xy=dest_xy)
+                            when = "바로 전환" if applied_now else "지금 든 것 마친 뒤 적용"
+                            print(f"\n[지시] '{result.target_label}' 를 {where} "
+                                  f"({when}) — {result.reasoning}\n", flush=True)
 
             # 사이클마다 넘긴다 — 무엇이 사건인지는 logger 가 판단한다.
             logger.record(

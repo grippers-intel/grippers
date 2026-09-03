@@ -136,6 +136,14 @@ _STATE_TO_PI = {
     # 씀)도 빠져 있었다. GRASP_ALIGN과 이유가 같다 — Pi 쪽에 특별한 판정이
     # 필요 없는 순수 주행이라 APPROACH로 보낸다.
     "RETURN_HOME":    MissionState.APPROACH,
+    # 2026-09-02, AWAIT_CONTINUE/AWAIT_COMMAND/IDLE 신설(그룹(chess/toy)
+    # 소진 시 계속/정지를 사람에게 묻는 기능) — 셋 다 Pi 쪽엔 할 일이
+    # 없다. 차체는 이미 RETURN_HOME으로 기본 위치까지 멈춰 서 있고, 사람
+    # 응답을 기다리는 동안 Pi는 SEARCH_TARGET과 똑같이 그냥 대기하면
+    # 된다(SEARCH_TARGET -> IDLE과 같은 이유).
+    "AWAIT_CONTINUE": MissionState.IDLE,
+    "AWAIT_COMMAND":  MissionState.IDLE,
+    "IDLE":           MissionState.IDLE,
 }
 
 # Pi 가 돌려주는 Report -> mission.py 가 기다리는 옛 문자열

@@ -40,13 +40,22 @@ from vehicle_link import parse_basket_fix  # noqa: E402
 # 442사이클에 끝남). 800으로 두 배 가까운 여유를 준다.
 MAX_STEPS = 800
 
+# 2026-09-02, AWAIT_CONTINUE 신설: PLACE 완료 시 방금 옮긴 라벨(rook, chess
+# 그룹)과 같은 그룹의 다른 개체가 화면에 하나도 안 남으면 RETURN_HOME 대신
+# AWAIT_CONTINUE 로 간다(사용자 확인 대기 — 빈 피지도 `{}` 를 주던 이
+# 파일의 헬퍼들이 전부 그 경우였다). 이 파일은 RETURN_HOME 이후 이어지는
+# 루프 자체가 아니라 INSERT 정렬 폐루프를 보는 파일이므로, knight(같은
+# chess 그룹)가 하나 더 남아 있는 피지도를 줘서 그룹이 아직 안 끝난 것으로
+# 만든다.
+_OTHER_CHESS_PIECE_REMAINS = {"knight": [(0.9, 0.9)]}
+
 
 def _run(sim: PiSim, max_steps: int = MAX_STEPS) -> tuple[MissionFSM, int]:
     """룩을 든 상태로 시작해 PLACE 가 끝날 때까지 돌린다."""
     fsm = MissionFSM()
     assert fsm.begin_carrying("rook")
     for n in range(1, max_steps + 1):
-        fsm.step(sim.pose(), {}, sim)
+        fsm.step(sim.pose(), _OTHER_CHESS_PIECE_REMAINS, sim)
         if fsm.state == State.SEARCH_TARGET:
             return fsm, n          # PLACE 를 끝내고 다음 대상을 찾으러 갔다
     pytest.fail(
@@ -70,7 +79,7 @@ def _run_to_place_done(sim: PiSim, max_steps: int = MAX_STEPS) -> tuple[MissionF
     was_place = False
     for n in range(1, max_steps + 1):
         was_place = fsm.state == State.PLACE
-        fsm.step(sim.pose(), {}, sim)
+        fsm.step(sim.pose(), _OTHER_CHESS_PIECE_REMAINS, sim)
         if was_place and fsm.state == State.RETURN_HOME:
             return fsm, n
     pytest.fail(

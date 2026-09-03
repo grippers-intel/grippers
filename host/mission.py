@@ -53,7 +53,10 @@ class State(Enum):
     FACE_BOX = auto()          # 상자 앞 도착 후 정해진 방향(BOX_FACE_YAW_DEG)으로 제자리 회전
     NUDGE_BOX = auto()         # 그 방향으로 BOX_NUDGE_M 만큼만 더 전진하고 정지
     PLACE = auto()             # 차량이 SmolVLA 로 내려놓는 동안 대기
-    RETURN_HOME = auto()       # 기물을 포기하고 mcfg.DEFAULT_HOME_XY 로 복귀 중
+    AWAIT_CONTINUE = auto()    # 한 그룹(chess/toy) 소진 — 계속/정지 사용자 응답 대기 (2026-09-02)
+    AWAIT_COMMAND = auto()     # AWAIT_CONTINUE 에서 '계속' 선택 — 다음 지시 문장 대기
+    RETURN_HOME = auto()       # 기물을 포기하고(또는 그룹 소진 후 정지 확정) mcfg.DEFAULT_HOME_XY 로 복귀 중
+    IDLE = auto()              # 정지 확정 후 영구 대기 — 빠져나가는 경로 없음(재시작해야 함)
     DONE = auto()
 
 
@@ -117,6 +120,27 @@ def _nearest_piece(piece_map: PieceMap, robot_xy: XY,
     return found
 
 
+def _group_has_remaining(piece_map: PieceMap, group: str) -> bool:
+    """작업 영역 안에 `group`(mcfg.PIECE_DEST_BOX 의 값, "chess"/"toy") 소속
+    라벨이 하나라도 남아 있는가 — AWAIT_CONTINUE 진입 판정에 쓴다
+    (2026-09-02, 사용자 지시: 그룹이 소진돼야만 계속/정지를 묻는다).
+
+    지금 화면(피지도)에 보이는 것만 본다 — 카메라 사각지대로 일시적으로
+    안 보이는 경우까지 추적하지는 않는다(구현 단순화, 사용자 확인).
+    skip(포기한 기물)도 "아직 못 옮겼다"는 사실은 그대로이므로 여기서는
+    빼지 않는다 — _nearest_piece/_find_label 과 달리 이 함수는 "다음에
+    무엇을 집을지"가 아니라 "이 그룹에 아직 할 일이 남았는지"만 본다."""
+    wx0, wx1 = cfg.WORKSPACE_X
+    wy0, wy1 = cfg.WORKSPACE_Y
+    for label, pts in piece_map.items():
+        if mcfg.PIECE_DEST_BOX.get(label) != group:
+            continue
+        for p in pts:
+            if wx0 <= p[0] <= wx1 and wy0 <= p[1] <= wy1:
+                return True
+    return False
+
+
 def _find_label(piece_map: PieceMap, label: str, robot_xy: XY,
                 skip: Optional[list[XY]] = None) -> Optional[tuple[str, XY]]:
     """특정 라벨만 대상으로 로봇과 가장 가까운 것 하나를 고른다 — 사용자
@@ -178,6 +202,9 @@ def _box_front_xy(box_name: str) -> XY:
     """
     bx, by, _byaw = box_pose(box_name)
     offset = cfg.BOX_L / 2.0 + mcfg.BOX_APPROACH_MARGIN_M
+    if box_name == "toy":
+        # 2026-09-03 실기 — mission_config.TOY_DEST_X_SHIFT_LEFT_M 참고.
+        bx -= mcfg.TOY_DEST_X_SHIFT_LEFT_M
     return (bx, by - offset)
 
 
@@ -271,6 +298,34 @@ class MissionFSM:
         않는다(지금은 차량 없이 시험하는 용도)."""
         self._back_requested = True
 
+    def on_continue(self) -> None:
+        """AWAIT_CONTINUE 에서 '계속'을 선택했다 — 다음 지시를 받는 상태로
+        (2026-09-02, 사용자 지시). manual_mode 의 _should_advance() 게이트를
+        타지 않는다 — request_back() 과 같은 이유로, 이건 조건이 아니라
+        사용자의 1회성 결정이다. AWAIT_CONTINUE 가 아닐 때 불리면 무시."""
+        if self.state == State.AWAIT_CONTINUE:
+            self.state = State.AWAIT_COMMAND
+
+    def on_stop(self) -> None:
+        """AWAIT_CONTINUE 에서 '정지'를 선택했다 — 기본 위치로 복귀한 뒤
+        IDLE 로 들어가 영구 정지한다(2026-09-02, 사용자 지시. IDLE 은
+        빠져나가는 경로가 없다 — run_mission.py 를 재시작해야 함)."""
+        if self.state == State.AWAIT_CONTINUE:
+            self._halt_after_home = True
+            self.state = State.RETURN_HOME
+
+    def submit_next_command(self, target_label: str, dest_xy: Optional[XY] = None) -> None:
+        """AWAIT_COMMAND 에서 다음 지시(라벨 + fetch/organize 의도)가
+        확정됐다 — RETURN_HOME 을 거치지 않고 곧장 SEARCH_TARGET 으로
+        간다(사용자 지시: 이미 기본 위치 근처이므로 다시 들를 필요 없음).
+        AWAIT_COMMAND 가 아닐 때 불리면 무시."""
+        if self.state != State.AWAIT_COMMAND:
+            return
+        self._instructed_label = target_label
+        self._instructed_dest_xy = dest_xy
+        self.ready_to_advance = False
+        self.state = State.SEARCH_TARGET
+
     def _go_back(self) -> None:
         prev = {
             State.APPROACH_PIECE: State.SEARCH_TARGET,
@@ -338,6 +393,9 @@ class MissionFSM:
         # set_instruction() 이 여기 쌓아 둔다.
         self._queued_instruction_label: Optional[str] = None
         self._queued_instruction_dest_xy: Optional[XY] = None
+        # AWAIT_CONTINUE 에서 '정지'를 선택했다는 표시 — RETURN_HOME 도착
+        # 시 SEARCH_TARGET 대신 IDLE 로 가라는 뜻(on_stop() 참고).
+        self._halt_after_home = False
 
         # LiveMap 이 "지금 어디로 가는 중인지" 그릴 수 있게 마지막 계산을 남겨둔다.
         # goal 은 이번 단계의 최종 목적지(기물 또는 상자), corner 는 축정렬
@@ -360,6 +418,12 @@ class MissionFSM:
         self._nudge_plan: Optional[tuple] = None
         # 진전 감시 — 마지막으로 인정한 이동량과 그 시각의 마감.
         self._nudge_best = 0.0
+        # Pi 라이다 기준 오차(축에 맞게 forward_m/yaw_rad/lateral_m)로 본
+        # 최선값 — 2026-09-03 실기: ArUco 자세 추정 노이즈만으로 moved 가
+        # 흔들려서, 차가 눈으로는 안 움직였는데도 정지 감시가 한 번도 안
+        # 걸린 사고가 있었다. Pi 값이 있으면 그쪽을 우선한다(아래 step()
+        # NUDGE_BOX 참고).
+        self._nudge_best_pi_error: Optional[float] = None
         self._nudge_stall_at = 0.0
         self._nudge_stall_warned = False
         # 바구니 앞 폐루프가 지금까지 쓴 총 이동량 — 예산 한계선용.
@@ -544,6 +608,23 @@ class MissionFSM:
         self._drive.reset()
         self.state = State.CARRY_TO_DEST
         return True
+
+    def _retreat_for_overhead_reapproach(self) -> None:
+        """바구니 폐루프(PLACE↔NUDGE_BOX)가 막혔다 — 라이다 평면을 못
+        잡았거나(lost) 국소 보정 예산을 다 썼는데도 안 풀렸거나, 둘 중
+        어느 쪽이든 국소 보정으로는 더 못 고친다는 뜻이다. 접고
+        CARRY_TO_DEST 로 돌아가 오버헤드 좌표로 크게 다시 접근한다
+        (PLACE 의 두 호출 지점이 똑같은 정리를 하길래 2026-09-03에 묶었다)."""
+        self._basket_lost_tries = 0
+        self._nudge_from = None
+        self._nudge_yaw_from = None
+        self._nudge_plan = None
+        self._basket_creep_used = 0.0
+        self._basket_yaw_used = 0.0
+        self.ready_to_advance = False
+        self._path_planner.reset()
+        self._drive.reset()
+        self.state = State.CARRY_TO_DEST
 
     def _plan_basket_fix(self, fix) -> Optional[tuple]:
         """Pi 가 준 바구니 판독 -> (이동량 m, 방향). 고칠 게 없으면 None.
@@ -1079,7 +1160,12 @@ class MissionFSM:
                 self._nudge_from = robot_xy
                 self._nudge_yaw_from = pose.yaw_deg
                 self._nudge_best = 0.0
+                self._nudge_best_pi_error = None
                 self._nudge_stall_at = time.monotonic() + mcfg.BASKET_NUDGE_STALL_SEC
+                # 이전 진입에서 이미 경고를 찍었어도, 이번 진입은 별개의
+                # 시도다 — 2026-09-03 실기: 이걸 리셋 안 해서 두 번째
+                # 스톨부터는 메시지도 없이 조용히 멈췄다.
+                self._nudge_stall_warned = False
             # 얼마나 어느 쪽으로 갈지. PLACE 가 Pi 판독을 보고 정해 두면
             # 그것을 쓰고, 없으면(첫 진입) 기존 5 cm 직진이다.
             want_m, axis = self._nudge_plan or (mcfg.BOX_NUDGE_M, "forward")
@@ -1130,8 +1216,38 @@ class MissionFSM:
             fix = link.last_basket_fix
             live_too_close = fix is not None and fix.forward_m is not None \
                 and fix.forward_m < 0
-            done = (moved >= want_m or link.take_basket_ready_early()
-                    or live_too_close)
+            # 2026-09-03 실기(rook/box, 두 바구니 다): 여기서 매 사이클
+            # take_basket_ready_early()를 무조건 소비해서 회전(rotate)·좌우
+            # (left/right) 축의 "끝났다"에도 같이 넣고 있었다. 그런데
+            # APPROACH_BOX_READY는 Pi의 "라이다 거리가 이미 목표창 안"
+            # (전후 축) 신호일 뿐이다 — NUDGE_BOX가 바구니 가까이 붙은
+            # 뒤에는 이 신호가 사실상 항상 참이라, 회전판을 새로 계획해
+            # NUDGE_BOX에 들어가는 바로 그 첫 사이클에 "이미 끝났다"고
+            # 오판하고 즉시 PLACE로 돌아갔다. 그 결과가 실측으로도 드러난다
+            # — want_m(~0.1rad)을 AGREED_ROTATION_RAD_S(0.25rad/s)로 돌면
+            # 최소 0.4초는 걸려야 하는데, 로그의 NUDGE_BOX→PLACE 왕복은
+            # 0.1~0.2초 만에 끝났다 — 실제로 거의 안 돈 것이다. 그래서
+            # yaw -0.09~-0.13rad대가 수십 번 보정을 거쳐도 전혀 안 줄었다.
+            #
+            # ready_early는 거리(전후) 축에서만 "끝났다"에 넣는다. 회전·좌우
+            # 축은 거리와 무관한 오차라 이 신호로 끝났다고 보면 안 된다.
+            # 그래도 매 사이클 take()는 해서(값을 쓰든 안 쓰든) 다음 순수
+            # 전후 판정에 낡은 표시가 새지 않게 한다.
+            ready_early = link.take_basket_ready_early()
+            if is_rotate:
+                if fix is not None and fix.yaw_rad is not None:
+                    # 회전판은 Pi 라이다가 직접 확인해 줄 때만 "끝났다"로
+                    # 본다 — check_insert가 실제로 판정하는 기준과 맞춘다.
+                    done = (abs(fix.yaw_rad) <= mcfg.BASKET_YAW_DEADBAND_RAD
+                            or live_too_close)
+                else:
+                    # Pi 값이 아직 없을 때만 쓰는 ArUco 폴백. ready_early는
+                    # 절대 안 넣는다 — 위 주석 참고.
+                    done = moved >= want_m or live_too_close
+            elif axis in ("left", "right"):
+                done = moved >= want_m or live_too_close
+            else:
+                done = moved >= want_m or ready_early or live_too_close
             # 전후 이동 중에 방위가 틀어지면 다시 맞춘다 — 5 cm 라도 비스듬히
             # 들어가면 상자 정면에 안 선다. 좌우 이동은 방위를 안 건드리므로
             # (메카넘 횡이동) 회전으로 끊지 않는다 — 여기서 돌면 방금 맞춘
@@ -1156,12 +1272,53 @@ class MissionFSM:
                 mode, cmd = DriveMode.FORWARD, "go"
             # 진전이 멈추면 멈춘다. 안 움직이는데 계속 미는 것은 어느
             # 원인(바퀴 정지·걸림)에서도 나아지지 않는다.
+            #
+            # ⚠️ 2026-09-03 실기: moved(ArUco 로 잰 이동량) 만으로 진전을
+            # 인정했더니, 차가 육안으로 안 움직이는데도 자세 추정 노이즈만
+            # 으로 매번 1cm 문턱을 넘겨서 정지 감시가 6초 안에 단 한 번도
+            # 안 걸렸다(13초 넘게 INSERT_BLOCKED 만 반복). Pi 라이다는
+            # ArUco 와 다른 센서라 이 노이즈에 안 걸리므로, Pi 값이 있으면
+            # (이 축에 해당하는 값이 오면) 그쪽을 우선해서 진전을 판정한다
+            # — moved 는 Pi 값이 아직 없을 때(첫 사이클 등)의 보조 수단으로만
+            # 남긴다.
+            pi_error: Optional[float] = None
+            pi_margin = mcfg.BASKET_NUDGE_PROGRESS_M
+            if fix is not None:
+                if is_rotate and fix.yaw_rad is not None:
+                    pi_error, pi_margin = abs(fix.yaw_rad), mcfg.BASKET_YAW_DEADBAND_RAD
+                elif axis in ("left", "right") and fix.lateral_m is not None:
+                    pi_error, pi_margin = abs(fix.lateral_m), mcfg.BASKET_LATERAL_DEADBAND_M
+                elif not is_rotate and axis not in ("left", "right"):
+                    if fix.forward_m is not None:
+                        pi_error = abs(fix.forward_m)
+                    elif fix.distance_m is not None:
+                        pi_error = abs(fix.distance_m - mcfg.BASKET_TARGET_LIDAR_M)
+                    if pi_error is not None:
+                        pi_margin = mcfg.BASKET_DISTANCE_DEADBAND_M
             now = time.monotonic()
-            if moved > self._nudge_best + mcfg.BASKET_NUDGE_PROGRESS_M:
+            if pi_error is not None:
+                if (self._nudge_best_pi_error is None
+                        or pi_error < self._nudge_best_pi_error - pi_margin):
+                    self._nudge_best_pi_error = pi_error
+                    self._nudge_stall_at = now + mcfg.BASKET_NUDGE_STALL_SEC
+            elif moved > self._nudge_best + mcfg.BASKET_NUDGE_PROGRESS_M:
                 self._nudge_best = moved
                 self._nudge_stall_at = now + mcfg.BASKET_NUDGE_STALL_SEC
             if not done and now >= self._nudge_stall_at:
+                # 2026-09-03 실기: 여기서 멈추기만 하고 done 을 안 세웠더니
+                # NUDGE_BOX 에 영영 눌러앉았다 — 그사이 Pi 는 이미 INSERT를
+                # 자체 판단으로 끝내고 IDLE 로 복귀했는데(정지 감시가 걸린
+                # 것 자체가 Host 계획이 이미 낡은 판독 기준이었다는 신호였다,
+                # 아래 주석 참고) Host 는 그걸 들을 상태(PLACE)에 있지도
+                # 않았다. 여기서도 done=True 로 세워 PLACE 로 돌려보낸다 —
+                # PLACE 가 poll_status() 로 PLACE_DONE 을 직접 물어보므로,
+                # 이미 끝난 배치라면 그대로 다음 기물로 넘어가고, 아직이면
+                # 처음부터 다시 계획한다. "바퀴가 진짜 걸렸다"는 가능성은
+                # 남아 있지만, 그 경우도 done=False 로 얼어붙는 것보다PLACE
+                # 가 다시 INSERT_BLOCKED 를 받아 사람이 볼 수 있는 상태로
+                # 표시하는 편이 낫다.
                 mode, cmd = DriveMode.STOP, "stop"
+                done = True
                 if not self._nudge_stall_warned:
                     self._nudge_stall_warned = True
                     progress = (f"{math.degrees(moved):.1f}도 밖에 못 돌았습니다"
@@ -1170,8 +1327,9 @@ class MissionFSM:
                                 f"{moved * 1000:.0f}mm 밖에 못 갔습니다(목표 "
                                 f"{want_m * 1000:.0f}mm")
                     print(f"\n[NUDGE_BOX] {mcfg.BASKET_NUDGE_STALL_SEC:.0f}초 동안 "
-                          f"{progress}, 방향 {axis}) — 정지합니다. "
-                          f"바퀴 전원과 걸림을 확인하세요\n", flush=True)
+                          f"{progress}, 방향 {axis}) — 정지하고 PLACE로 돌아가 "
+                          f"다시 확인합니다. 계속 반복되면 바퀴 전원과 걸림을 "
+                          f"확인하세요\n", flush=True)
 
             self.ready_to_advance = done
             nav = DriveCommand(
@@ -1198,6 +1356,27 @@ class MissionFSM:
             status = link.poll_status() if not self.ready_to_advance else "IDLE"
             if status == "PLACE_DONE":
                 self.ready_to_advance = True
+            elif status == "FAILED":
+                # 2026-09-03 실기(queen): Pi 가 투하 부하 판정으로 FAILED 를
+                # 보고했는데(부하 0.0469 -> 0.0352, RELEASE_LOAD_DROP=0.015
+                # 문턱을 못 넘음) 실제로는 바구니에 들어가 있었다 — 이 문턱이
+                # 너무 빡빡했던 오탐이었다. 그런데 그 이전엔 이 분기 자체가
+                # 없어서 FAILED 가 아래 else(아직 안 끝남, 다시 nudge)로
+                # 빠졌고, 그 시점엔 Pi 가 이미 IDLE 로 접어 들어간 뒤라 새
+                # fix 가 안 와서 PLACE 가 "stop" 만 영원히 반복하며 얼어붙었다.
+                #
+                # INSERT 는 판정 결과와 무관하게 그리퍼를 이미 열었다
+                # (baseline_mission.py BaselineInsertState 참고) — 그러니
+                # FAILED 라고 다시 옮겨 잡을 물건이 없다. "바구니 안착
+                # 여부"는 애초에 Pi 가 아니라 오버헤드 카메라를 든 Host 가
+                # 판단할 몫이라는 게 그 쪽 docstring의 설계 의도이기도 하다
+                # — 그래서 여기서도 그냥 넘어간다: 실제로 안 들어갔으면
+                # 다음 SEARCH_TARGET 에서 바닥에 남은 채로 다시 잡힐 것이고,
+                # 들어갔으면 더 안 보일 것이다.
+                print(f"[mission] 투하 확인 실패(Pi 부하 판정, 오탐 가능) — "
+                      f"바구니 안착 여부는 다음 SEARCH_TARGET 에서 다시 "
+                      f"보이는지로 판단됩니다. 넘어갑니다.", flush=True)
+                self.ready_to_advance = True
             else:
                 # Pi 가 "여기서는 못 넣는다"고 하면 그 이유에 실린 숫자를
                 # 보고 조금 움직인 뒤 다시 묻는다. 서서 기다리기만 하면
@@ -1217,30 +1396,41 @@ class MissionFSM:
                     if self._basket_lost_tries >= mcfg.BASKET_LOST_REPLAN_AFTER_TRIES:
                         print(f"[mission] 바구니를 {self._basket_lost_tries}회 "
                               f"연속 못 찾음 — 오버헤드 재접근", flush=True)
-                        self._basket_lost_tries = 0
-                        self._nudge_from = None
-                        self._nudge_yaw_from = None
-                        self._nudge_plan = None
-                        self._basket_creep_used = 0.0
-                        self._basket_yaw_used = 0.0
-                        self.ready_to_advance = False
-                        self._path_planner.reset()
-                        self._drive.reset()
-                        self.state = State.CARRY_TO_DEST
+                        self._retreat_for_overhead_reapproach()
                         return self.state
                 else:
-                    self._basket_lost_tries = 0
-                plan = self._plan_basket_fix(fix)
-                if plan is not None:
-                    self._nudge_plan = plan
-                    self._nudge_from = None
-                    self._nudge_yaw_from = None
-                    if plan[1] in ("rotate_left", "rotate_right"):
-                        self._basket_yaw_used += plan[0]
-                    else:
-                        self._basket_creep_used += plan[0]
-                    self.state = State.NUDGE_BOX
-                    return self.state
+                    plan = self._plan_basket_fix(fix)
+                    if plan is not None:
+                        self._basket_lost_tries = 0
+                        self._nudge_plan = plan
+                        self._nudge_from = None
+                        self._nudge_yaw_from = None
+                        if plan[1] in ("rotate_left", "rotate_right"):
+                            self._basket_yaw_used += plan[0]
+                        else:
+                            self._basket_creep_used += plan[0]
+                        self.state = State.NUDGE_BOX
+                        return self.state
+                    elif fix is not None:
+                        # 2026-09-03 실기(soccer 두 번째 시도): fix 는 있다
+                        # (바구니는 보인다) — 그런데 오차가 커서 처음 한두
+                        # 번의 보정으로 BASKET_CREEP_BUDGET_M 을 다 써버리면
+                        # (전후·좌우가 예산을 공유한다, _plan_basket_fix 참고)
+                        # plan 이 계속 None 만 나온다. 예전엔 이 경우
+                        # _basket_lost_tries 를 안 건드려서 — lost 도 아니고
+                        # 진전도 없으니 — PLACE 가 stop 만 8초 넘게 반복하며
+                        # 영구히 얼어붙었다. lost 와 같은 카운터로 묶어
+                        # 똑같이 오버헤드 재접근으로 빠져나간다.
+                        self._basket_lost_tries += 1
+                        if self._basket_lost_tries >= mcfg.BASKET_LOST_REPLAN_AFTER_TRIES:
+                            print(f"[mission] 바구니 보정이 "
+                                  f"{self._basket_lost_tries}회 연속 막힘"
+                                  f"(예산 소진 등) — 오버헤드 재접근", flush=True)
+                            self._retreat_for_overhead_reapproach()
+                            return self.state
+                    # fix 가 없으면(아직 새 판독 없음) 카운터를 안 건드리고
+                    # 다음 사이클을 기다린다 — "안 왔다"를 실패로도 성공으로도
+                    # 치지 않는다.
             if self.ready_to_advance and self._should_advance():
                 # 하나 끝났다고 멈추지 않는다 — 다음 기물을 다시 찾는다.
                 # 화면에 기물이 더 없으면 SEARCH_TARGET 에서 계속 대기한다.
@@ -1254,13 +1444,25 @@ class MissionFSM:
                 # 지시(_queued_instruction_label)는 여기서 바로 적용하지
                 # 않는다 — RETURN_HOME 완료 시점에 적용하는 기존 경로(아래)
                 # 하나로 합친다.
+                #
+                # 2026-09-02 추가(사용자 지시): 방금 넣은 기물의 그룹(chess/
+                # toy)에 아직 작업 영역에 남은 게 있으면 지금처럼 곧장
+                # RETURN_HOME(그리고 자동으로 다음 SEARCH_TARGET)으로 간다.
+                # 그 그룹이 이번에 다 떨어졌으면(같은 그룹 다른 개체가
+                # 화면에 하나도 안 남았으면) 대신 AWAIT_CONTINUE 로 가서
+                # "계속할지/멈출지" 사용자에게 먼저 묻는다 — 그룹 하나가
+                # 끝날 때마다 한 번만 묻고, 그 안의 개체마다는 안 묻는다.
+                group = mcfg.PIECE_DEST_BOX.get(self.target_label)
                 self.ready_to_advance = False
                 self.target_label = None
                 self._target_xy = None
                 self.dest_xy = None
                 self._path_planner.reset()
                 self._drive.reset()
-                self.state = State.RETURN_HOME
+                if group is not None and _group_has_remaining(piece_map, group):
+                    self.state = State.RETURN_HOME
+                else:
+                    self.state = State.AWAIT_CONTINUE
 
         elif self.state == State.RETURN_HOME:
             # 기물을 포기한 뒤(_skip_target) 실패한 자리에 그대로 남지 않고
@@ -1277,17 +1479,57 @@ class MissionFSM:
             self.ready_to_advance = dist <= mcfg.HOME_ARRIVE_TOL_M
             if self.ready_to_advance and self._should_advance():
                 self.ready_to_advance = False
-                # PLACE 완료 경로와 같은 이유로 여기서도 큐를 비운다 —
-                # 포기한 기물을 쫓는 동안 새 지시가 들어왔을 수 있다
-                # (set_instruction() 이 GRASP/GRASP_ALIGN 도 "손이 안
-                # 비었다"로 보고 큐에 쌓아 두므로, 2026-09-01).
-                if self._queued_instruction_label is not None:
-                    self._instructed_label = self._queued_instruction_label
-                    self._instructed_dest_xy = self._queued_instruction_dest_xy
-                    self._queued_instruction_label = None
-                    self._queued_instruction_dest_xy = None
                 self._path_planner.reset()   # 새 구간 시작
                 self._drive.reset()
-                self.state = State.SEARCH_TARGET
+                if self._halt_after_home:
+                    # AWAIT_CONTINUE 에서 '정지'를 선택했다(on_stop()) —
+                    # 기본 위치에 도착했으니 이제 진짜로 멈춘다(2026-09-02).
+                    self._halt_after_home = False
+                    self.state = State.IDLE
+                else:
+                    # PLACE 완료 경로와 같은 이유로 여기서도 큐를 비운다 —
+                    # 포기한 기물을 쫓는 동안 새 지시가 들어왔을 수 있다
+                    # (set_instruction() 이 GRASP/GRASP_ALIGN 도 "손이 안
+                    # 비었다"로 보고 큐에 쌓아 두므로, 2026-09-01).
+                    if self._queued_instruction_label is not None:
+                        self._instructed_label = self._queued_instruction_label
+                        self._instructed_dest_xy = self._queued_instruction_dest_xy
+                        self._queued_instruction_label = None
+                        self._queued_instruction_dest_xy = None
+                    self.state = State.SEARCH_TARGET
+
+        elif self.state == State.AWAIT_CONTINUE:
+            # 그룹(chess/toy) 하나를 다 옮겼다 — 계속/정지는 run_mission.py
+            # 가 on_continue()/on_stop() 으로 알려줄 때까지 여기서 정지한
+            # 채 기다린다(2026-09-02). 차체는 이미 RETURN_HOME 으로 기본
+            # 위치까지 온 상태이므로 그 자리에 서 있기만 하면 된다.
+            self.nav_goal = None
+            self.nav_corner = None
+            self.nav_path = None
+            self.last_nav = None
+            self.last_cmd = "stop"
+            link.send(MissionCommand("stop", "AWAIT_CONTINUE", pose.x, pose.y,
+                                      pose.yaw_deg))
+
+        elif self.state == State.AWAIT_COMMAND:
+            # '계속'을 선택했다 — 다음 지시 문장이 submit_next_command() 로
+            # 들어올 때까지 정지한 채 기다린다(2026-09-02).
+            self.nav_goal = None
+            self.nav_corner = None
+            self.nav_path = None
+            self.last_nav = None
+            self.last_cmd = "stop"
+            link.send(MissionCommand("stop", "AWAIT_COMMAND", pose.x, pose.y,
+                                      pose.yaw_deg))
+
+        elif self.state == State.IDLE:
+            # 영구 정지 — 빠져나가는 경로가 없다(사용자 결정, 2026-09-02).
+            # 다시 돌리려면 run_mission.py 를 재시작해야 한다.
+            self.nav_goal = None
+            self.nav_corner = None
+            self.nav_path = None
+            self.last_nav = None
+            self.last_cmd = "stop"
+            link.send(MissionCommand("stop", "IDLE", pose.x, pose.y, pose.yaw_deg))
 
         return self.state

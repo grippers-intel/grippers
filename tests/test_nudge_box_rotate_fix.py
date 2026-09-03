@@ -29,6 +29,7 @@ sys.path.insert(0, str(_HOST / "aruco"))
 
 import mission_config as mcfg                                    # noqa: E402
 from mission import MissionFSM, State                             # noqa: E402
+from vehicle_link import BasketFix                                # noqa: E402
 
 from conftest import PiSim                                        # noqa: E402
 
@@ -96,6 +97,54 @@ def test_목표_회전량만큼_돌면_멈추고_PLACE로_넘어간다():
     cmds = {c for c, status in link.sent if status == "NUDGE_BOX"}
     # 회전만 썼다 — 전후·좌우 이동으로 새지 않았다.
     assert cmds <= {"yaw+", "stop"}
+
+
+def test_거리가_이미_목표창_안이어도_회전판은_그것만으로_끝나지_않는다():
+    """2026-09-03 실기(rook/box, 두 바구니 다) — 진짜 원인.
+
+    APPROACH_BOX_READY(basket_ready_early)는 Pi의 "라이다 거리가 이미
+    목표창 안"이라는 **전후 축** 신호일 뿐인데, 회전판의 "끝났다" 판정에도
+    그대로 섞여 있었다. NUDGE_BOX가 바구니 가까이 붙은 뒤에는 이 신호가
+    사실상 항상 참이라, 회전판을 새로 계획해 NUDGE_BOX에 들어가는 바로 그
+    첫 사이클에 "이미 끝났다"고 오판하고 즉시 PLACE로 돌아갔다 — 실제
+    회전은 거의 안 하고서. want_m(~0.1rad)을 AGREED_ROTATION_RAD_S로
+    돌면 최소 0.4초는 걸려야 하는데, 실기 로그의 NUDGE_BOX→PLACE 왕복은
+    0.1~0.2초 만에 끝나 있었다 — 이 테스트가 바로 그 오판을 재현한다."""
+    fsm, link = _rotate_fsm("rotate_left", amount_rad=0.15)
+    link.basket_ready_early = True   # Pi가 조금 전 "거리는 이미 됐다"고 알려온 상태
+
+    fsm.step(link.pose(), {}, link)
+
+    cmds = [c for c, status in link.sent if status == "NUDGE_BOX"]
+    assert cmds and cmds[0] == "yaw+", (
+        "거리 신호(ready_early)만으로 회전판을 끝내 버렸다 — 실제로는 거의 안 돌았다")
+    assert fsm.state == State.NUDGE_BOX
+
+
+def test_ArUco상_계획량을_다_돌아도_Pi_라이다가_안_맞으면_안_끝난다():
+    """2026-09-03 실기(toy/box): ArUco로 잰 회전량(moved)이 want_m을
+    채워도, Pi 라이다가 보는 정렬(check_insert가 실제로 판정하는 기준)이
+    그대로면 "끝났다"로 치면 안 된다 — 그렇게 치면 다음 PLACE에서 똑같은
+    크기의 INSERT_BLOCKED가 반복된다(실측: yaw 오차가 수십 번 보정에도
+    전혀 안 줄었다)."""
+    fsm, link = _rotate_fsm("rotate_left", amount_rad=0.05)
+    link.last_basket_fix = BasketFix(yaw_rad=0.15)   # 여전히 크게 어긋나 있다
+
+    for _ in range(5):   # 5스텝이면 ArUco상 moved(약 0.09rad)가 want_m(0.05)을 넘는다
+        fsm.step(link.pose(), {}, link)
+
+    assert fsm.state == State.NUDGE_BOX, "Pi 라이다가 안 맞는데 PLACE로 넘어갔다"
+
+
+def test_Pi_라이다가_먼저_맞으면_ArUco_계획량_전에도_끝난다():
+    """반대 방향 회귀도 지킨다 — Pi가 이미 맞다고 하면 ArUco 계획량을 다
+    안 돌았어도 과잉 회전 없이 바로 멈춘다."""
+    fsm, link = _rotate_fsm("rotate_left", amount_rad=0.5)
+    link.last_basket_fix = BasketFix(yaw_rad=0.01)   # 이미 데드밴드 안
+
+    fsm.step(link.pose(), {}, link)
+
+    assert fsm.state == State.PLACE
 
 
 def test_회전판은_거리_기반_goal을_계산하지_않는다():
