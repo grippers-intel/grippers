@@ -22,6 +22,7 @@ def _grasp(**overrides):
 
 def _insert(**overrides):
     base = dict(estop_set=False, base_stopped=True, gripper_load=0.0626,
+                grasp_confirmed=True,
                 face_ok=True, face_distance_m=bc.BASKET_STOP_LIDAR_M,
                 face_yaw_error_rad=0.0, face_reason="정면 확보", profile="chess_queen",
                 # 2026-08-26 검증 지점의 실측 수준 값들.
@@ -120,11 +121,25 @@ def test_정렬이_허용치를_넘으면_막는다():
 
 
 def test_빈손이면_막는다():
-    """빈손으로 투하 자세를 펼쳐 봐야 팔만 위험하게 뻗는다."""
-    report = check_insert(_insert(gripper_load=0.0313))
+    """빈손으로 투하 자세를 펼쳐 봐야 팔만 위험하게 뻗는다.
+
+    2026-09-03부터: "비어 있다"는 raw 부하를 다시 재서 판정하지 않는다 —
+    GRASP가 CARRY 진입 때 이미 끝낸 판정(grasp_confirmed)을 믿는다. 그래서
+    낮은 gripper_load가 아니라 grasp_confirmed=False로 이 경로를 켠다
+    (box처럼 성공해도 부하가 낮게 읽히는 물체가 있어, 부하만으로는 더 이상
+    "비었다"를 판정할 수 없다 — baseline_mission.py의 BaselineGraspState
+    주석 참고)."""
+    report = check_insert(_insert(grasp_confirmed=False, gripper_load=0.0313))
 
     assert not report.ok
     assert any("비어 있다" in reason for reason in report.reasons)
+
+
+def test_확인된_파지는_부하가_낮아도_비었다고_안_한다():
+    """box처럼 파지에 성공해도 부하가 낮게 읽히는 물체를 위한 회귀 테스트."""
+    report = check_insert(_insert(grasp_confirmed=True, gripper_load=0.0))
+
+    assert not any("비어 있다" in reason for reason in report.reasons)
 
 
 def test_무엇을_들고_있는지_모르면_막는다():

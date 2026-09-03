@@ -16,6 +16,7 @@ from domain.task.preconditions import InsertInputs
 def _insert(**overrides):
     base = dict(
         estop_set=False, base_stopped=True, gripper_load=0.07,
+        grasp_confirmed=True,
         face_ok=True, face_distance_m=bc.BASKET_STOP_LIDAR_M,
         face_yaw_error_rad=0.0, profile="chess_queen",
         face_point_count=90, face_lateral_offset_m=0.0, face_lateral_known=True,

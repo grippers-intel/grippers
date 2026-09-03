@@ -79,13 +79,14 @@ def _good_face(distance_m=None):
                       lateral_offset_m=0.0, lateral_known=False)
 
 
-def _carry_with_previous(label="queen", face=None, load=HOLDING_LOAD):
+def _carry_with_previous(label="queen", face=None, load=HOLDING_LOAD,
+                          grasp_confirmed=True):
     """직전 사이클 표본을 이미 들고 있는 CARRY 상태.
 
     안정성 검사가 표본 비교라, 한 사이클만 돌리는 테스트는 이걸 써야
     "직전 판독이 없다"에 걸리지 않는다."""
     return BaselineCarryState(label, MissionState.CARRY,
-                              (face or _good_face(), load))
+                              (face or _good_face(), load), grasp_confirmed)
 
 
 # ── 명령 실행 ──────────────────────────────────────────────────────────────
@@ -460,12 +461,29 @@ def test_바구니가_절벽보다_가까우면_INSERT를_막는다():
 
 
 def test_빈손이면_INSERT를_막는다():
+    """2026-09-03부터: raw 부하가 아니라 CARRY 진입 때 이미 끝난 판정
+    (grasp_confirmed)으로 막는다 — box처럼 파지에 성공해도 부하가 낮게
+    읽히는 물체가 있어, 여기서 낮은 load만으로는 더 이상 "비었다"를
+    판정할 수 없다(preconditions.InsertInputs.grasp_confirmed 주석 참고)."""
     host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
     ports = _ports(host=host, arm=FakeArm(load_ratio=0.0), lidar=FakeLidar([_good_face()]))
 
-    nxt = _carry_with_previous(load=0.0).execute(ports)
+    nxt = _carry_with_previous(load=0.0, grasp_confirmed=False).execute(ports)
 
     assert Report.INSERT_BLOCKED in host.reported_kinds
+
+
+def test_부하가_낮아도_파지가_확인됐으면_INSERT를_막지_않는다():
+    """box 회귀 테스트 — grasp_confirmed=True면 부하 0이어도 이 게이트는
+    통과한다(다른 조건은 별개로 여전히 본다)."""
+    host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0), lidar=FakeLidar([_good_face()]))
+
+    nxt = _carry_with_previous(load=0.0, grasp_confirmed=True).execute(ports)
+
+    details = [detail for report, _state, detail, _fix in host.reports
+               if report == Report.INSERT_BLOCKED]
+    assert not any("비어 있다" in detail for detail in details)
 
 
 def test_투하_후_부하가_줄면_성공으로_보고하고_IDLE로_돌아간다():

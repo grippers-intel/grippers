@@ -66,6 +66,15 @@ class InsertInputs:
     estop_set: bool
     base_stopped: bool
     gripper_load: float
+    # GRASP가 CARRY 도달 시점에 이미 끝낸 "정말 물었는가" 판정(부하 OR
+    # 뎁스 "사라짐")을 그대로 넘겨받은 값. 2026-09-03 실기(box)까지는 여기서
+    # gripper_load를 다시 문턱과 비교해 "비어 있다"를 판정했는데, box는
+    # 파지에 성공해도 부하가 계속 0에 가깝게 읽혀서(그리퍼가 정착하면
+    # 실제로 물고 있어도 능동 토크를 안 낸다 — baseline_mission.py의
+    # BaselineGraspState 주석 참고) 이 게이트가 영원히 막혔다. 이제는 그때
+    # 끝난 판정을 다시 재지 않고 그대로 믿는다 — gripper_load는 여기 아래
+    # ④ 부하 안정성(직전 사이클 대비 변화량)에만 쓴다.
+    grasp_confirmed: bool
     face_ok: bool
     face_distance_m: float
     face_yaw_error_rad: float
@@ -127,11 +136,14 @@ def check_insert(inputs: InsertInputs) -> PreconditionReport:
     if not inputs.base_stopped:
         reasons.append("차체가 아직 정지하지 않았다")
 
-    if inputs.gripper_load < bc.LOAD_THRESHOLD:
+    if not inputs.grasp_confirmed:
         # 빈손으로 투하 자세를 펼쳐 봐야 얻을 것이 없고, 팔만 위험하게 뻗는다.
+        # 2026-09-03부터: 여기서 raw 부하를 문턱과 다시 비교하지 않는다 —
+        # GRASP가 CARRY 진입 때 이미 내린 판정(grasp_confirmed 필드 설명
+        # 참고)을 믿는다. 현재 부하는 참고용으로만 같이 보고한다.
         reasons.append(
-            f"그리퍼가 비어 있다 (부하 {inputs.gripper_load:.4f} < "
-            f"{bc.LOAD_THRESHOLD:.4f})")
+            f"그리퍼가 비어 있다 (파지 판정 때 확인되지 않았다 — "
+            f"현재 부하 {inputs.gripper_load:.4f})")
 
     if inputs.profile is None:
         reasons.append("무엇을 들고 있는지 모른다 — 놓기 폭을 정할 수 없다")
