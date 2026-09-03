@@ -363,8 +363,14 @@ def test_파지_후_IDLE이_아니라_CARRY로_접는다():
 
 
 def test_파지에_실패하면_APPROACH로_돌아가고_스스로_재시도하지_않는다():
+    """부하 0(빈손)이어도, 뎁스가 "그대로 있다"고 같이 말해야 진짜
+    실패다(아래 OR 판정 참고) — 2026-09-03 이후로는 부하 하나만으로
+    미리 거르지 않는다."""
     host = FakeHostLink()
-    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0))
+    ports = _ports(
+        host=host, arm=FakeArm(load_ratio=0.0),
+        perception=ScriptedPerception(grasp_confirmed=False),
+    )
 
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
@@ -372,62 +378,36 @@ def test_파지에_실패하면_APPROACH로_돌아가고_스스로_재시도하�
     assert isinstance(nxt, BaselineApproachState)
 
 
-def test_들어올린_직후_부하가_떨어져도_재확인_없이_성공한다():
+def test_부하_판독이_흔들려도_CARRY_최종_판정만으로_성공한다():
     """09-02 10:41 실기, 이어서 2026-09-03 실기(box, 3번째 시도) 재현 —
     회귀 방지.
 
-    처음엔 "closed 직후 판독"과 "midpoint 이후 재확인 판독"이 threshold
-    를 각각 넘겨야(AND) 성공으로 쳤다. 09-02 10:41: 그리퍼를 막 닫고 잰
-    값(0.0508)은 threshold를 넘겼는데, 곧바로 이어진 midpoint 이동 직후
-    재확인 값(0.0430)만 계단 하나(약 0.0039) 밑돌아 실패 처리됐다 —
-    사용자가 직접 옆에서 파지 성공을 확인한 자리였다. 재시도를 추가해
-    한 번 더 버텼지만, 2026-09-03 box 3번째 시도에서 낙차가 훨씬 큰
-    경우(0.2502 -> 0.03대)도 똑같이 오탐임이 확인됐다 — 정지 뒤 그리퍼가
-    여전히 박스를 꽉 물고 있어서 사용자가 힘으로 빼냈다. 서보가 목표
-    자세에 도달해 정착하면 실제로 물고 있어도 부하가 낮게 읽힐 수 있다는
-    뜻이라, 재확인 자체를 없앴다 — closed 직후 판독과 midpoint 도달
-    (서보 위치 확인)만으로 들었다고 본다."""
+    처음엔 "closed 직후 판독"과 "midpoint 이후 재확인 판독"이 threshold를
+    각각 넘겨야(AND) 성공으로 쳤다. 09-02 10:41: 닫고 잰 값(0.0508)은
+    threshold를 넘겼는데, 곧바로 이어진 재확인 값(0.0430)만 계단 하나
+    (약 0.0039) 밑돌아 실패 처리됐다 — 사용자가 직접 파지 성공을 확인한
+    자리였다. 재시도를 추가해 한 번 더 버텼지만, 2026-09-03 box 3번째
+    시도에서 낙차가 훨씬 큰 경우(0.2502 -> 0.03대)도 똑같이 오탐임이
+    확인됐다 — 정지 뒤 그리퍼가 여전히 박스를 꽉 물고 있어서 사용자가
+    힘으로 빼냈다. 서보가 목표 자세에 도달해 정착하면 실제로 물고 있어도
+    부하가 낮게 읽힐 수 있다는 뜻이다.
+
+    그래서 이제 들어올리는 과정에서는 부하를 아예 안 잰다 — 팔이
+    물리적으로 끝까지 움직였는지(move_to_floor_pose)만 보고 CARRY까지
+    간 뒤, 거기서 딱 한 번 재는 부하 OR 뎁스 "사라짐"이 유일한 최종
+    판정이다(사용자 지시 2026-09-03: "CARRY에서 최종 판정이 맞다").
+    이 표본 리스트에서 앞쪽 낮은/불안정한 값들은 어차피 안 읽히고, CARRY
+    도달 후 딱 한 번(마지막 값)만 쓰인다."""
     host = FakeHostLink()
-    arm = FakeArm(load_ratio=[0.0508, 0.0])  # midpoint 이후엔 아예 안 읽는다
+    arm = FakeArm(load_ratio=HOLDING_LOAD)  # CARRY 도달 후 딱 한 번만 읽는다
     ports = _ports(host=host, arm=arm)
 
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
     assert Report.GRASP_DONE in host.reported_kinds
     assert isinstance(nxt, BaselineCarryState)
-
-
-def test_닫자마자_첫_판독이_낮아도_재시도로_넘기면_성공한다():
-    """2026-09-03 실기(box) 재현 — 회귀 방지.
-
-    그리퍼를 막 닫고 잰 **첫** 판독에는 재시도가 없어서, 3번 중 2번이
-    부하 정확히 0.0000으로 실패했다(get_load() 서비스가 응답 없을 때도
-    똑같이 0.0을 반환한다 — 진짜 빈손이었는지 서비스 호출이 흔들렸는지
-    이 로그만으로는 구분이 안 됐다). `_read_load_retrying`으로 첫 판독도
-    한 번 더 재도록 고쳤다."""
-    host = FakeHostLink()
-    arm = FakeArm(load_ratio=[0.0, 0.0508])
-    ports = _ports(host=host, arm=arm)
-
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
-
-    assert Report.GRASP_DONE in host.reported_kinds
-    assert isinstance(nxt, BaselineCarryState)
-
-
-def test_닫자마자_재시도해도_낮으면_문턱_미달로_실패한다():
-    """첫 판독의 재시도까지 다 낮으면 여전히 실패다 — 재시도 한 번으로
-    진짜 실패까지 가려 버리면 안 된다."""
-    host = FakeHostLink()
-    arm = FakeArm(load_ratio=[0.0, 0.0])
-    ports = _ports(host=host, arm=arm)
-
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
-
-    assert Report.GRASP_FAILED in host.reported_kinds
-    detail = next(d for r, _s, d, _f in host.reports if r == Report.GRASP_FAILED)
-    assert "문턱 미달" in detail
-    assert isinstance(nxt, BaselineApproachState)
+    # 들어올리는 과정에서는 부하를 안 읽는다 — CARRY 도달 후 딱 1번뿐.
+    assert arm._load_call_count == 1
 
 
 def test_파지_명령_폭은_ros2_프로파일_공식에서_나온다():
@@ -701,17 +681,23 @@ def test_부하만_높아도_뎁스_오탐과_무관하게_성공이다():
     assert isinstance(nxt, BaselineCarryState)
 
 
-def test_부하가_거의_없으면_뎁스가_뭐라든_실패다():
-    """들어올리기 자체를 못 하면(부하 0.0) OR 판정까지 갈 필요도 없이
-    실패다 — 뎁스만으로 성공을 만들어내지 않는다는 하한선."""
+def test_뎁스만_확인돼도_부하_무관하게_성공이다():
+    """부하가 CARRY 도달 후 계속 0이어도, 뎁스가 "사라짐"을 확인하면
+    성공이다(OR) — 사용자 지시 2026-09-03: "CARRY에서 최종 판정이
+    맞다". 이전엔 들어올리기 전에 부하로 미리 걸러서 이 경우 OR 판정까지
+    가지도 못하고 실패했지만, 그 사전 게이트 자체가 2026-09-03 box
+    실측으로 신뢰할 수 없다고 드러나 없앴다(같은 파일의 부하 재확인
+    회귀 테스트 참고) — 이제는 부하 하나만으로 실패를 미리 확정하지
+    않는다."""
     host = FakeHostLink()
     ports = _ports(host=host, arm=FakeArm(load_ratio=0.0),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
-    assert Report.GRASP_FAILED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
+    assert Report.GRASP_DONE in host.reported_kinds
+    assert "목표 사라짐 확인" in host.reports[-1][2]
+    assert isinstance(nxt, BaselineCarryState)
 
 
 def test_두_신호가_모두_있으면_당연히_성공이다():

@@ -208,28 +208,6 @@ def _base_stopped(ports, command) -> bool:
     return command is None or command.stop or not command.wants_motion
 
 
-def _read_load_retrying(ports) -> float:
-    """부하를 읽고, threshold를 못 넘기면 한 번 더 재서 더 높은 쪽을 쓴다.
-
-    LOAD_THRESHOLD 자체가 "빈손 실측 11/256"과 "파지 실측 13/256"의
-    중점이다(baseline_constants 주석) — 두 계단 사이 틈이 코드 값 하나
-    (약 0.0039)뿐이라, 방금 막 멈춘 팔의 잔진동이나 `get_load()` 서비스
-    호출 한 번의 순간적인 지연/실패(응답 없으면 0.0을 반환한다 —
-    ros2_arm_driver.LOAD_UNKNOWN, real/ros2_arm_driver.py 참고)로도 판독이
-    실제보다 크게 튈 수 있다. 09-02 10:41 실기가 그 예다: 그리퍼를 막 닫고
-    잰 값(13/256 대역, 0.0508)은 정상적으로 threshold를 넘겼는데, 곧바로
-    이어진 midpoint 이동 직후 다시 잰 값(11/256 대역, 0.0430)만 그 틈
-    하나만큼 밑돌아 "들어 올리지 못함"으로 실패 처리됐다 — 사용자가 직접
-    옆에서 파지 성공을 확인한 자리였다.
-
-    한 번 더 재서 그중 더 높은 쪽을 쓴다 — 진짜로 놓쳤다면 재확인에서도
-    낮게 나온다."""
-    first = ports.arm.get_load()
-    if first >= bc.LOAD_THRESHOLD:
-        return first
-    return max(first, ports.arm.get_load())
-
-
 
 
 # ── 상태 ──────────────────────────────────────────────────────────────────
@@ -454,42 +432,29 @@ class BaselineGraspState(State):
             return self._failed(ports, "미세 전진 실패")
 
         ports.arm.set_gripper(gp.close_width_mm)
-        # 2026-09-03 실기(box): 이 첫 판독만 재확인 없이 한 번으로 끝냈더니
-        # 3번 중 2번이 부하 정확히 0.0000으로 실패했다 — get_load() 서비스가
-        # 응답 없을 때 반환하는 LOAD_UNKNOWN 도 똑같이 0.0이라(real/
-        # ros2_arm_driver.py 참고) 그게 "진짜 빈손"이었는지 "서비스 호출
-        # 한 번이 흔들렸다"였는지 이 로그만으로는 구분이 안 됐다. 아래
-        # 재시도로 넘어가는 관문인 이 첫 판독엔 재시도가 없던 게 비대칭이라
-        # `_read_load_retrying`으로 통일했다.
-        load = _read_load_retrying(ports)
-        load_ok = load >= bc.LOAD_THRESHOLD
-        midpoint_ok = load_ok and ports.arm.move_to_floor_pose(gp.profile, "midpoint")
-        # ⚠️ 2026-09-03 실기(box, 3번째 시도) — midpoint 이후 부하를 다시
-        # 재서 threshold를 요구하던 "재확인" 단계를 여기서 없앴다. 첫 판독
-        # 0.2502(threshold를 훌쩍 넘김)로 세게 물었는데 재확인에서
-        # 0.0300대로 떨어져 실패 처리됐지만, **정지 뒤 사용자가 직접
-        # 확인하니 그리퍼가 그때까지도 박스를 꽉 물고 있어서 힘으로
+        # ⚠️ 2026-09-03 실기(box) — 여기서 부하를 미리 재서 문턱을 넘겨야만
+        # 들어올리기를 시도하던 게이트를 없앴다. 3번째 시도는 첫 판독
+        # 0.2502(문턱을 훌쩍 넘김)로 세게 물었는데, midpoint 이동 뒤 다시
+        # 잰 값(0.03대)이 떨어져 실패 처리됐다. 그런데 **정지 뒤 사용자가
+        # 직접 확인하니 그리퍼가 그때까지도 박스를 꽉 물고 있어서 힘으로
         # 빼냈다** — 그립은 그대로였는데 부하 판독만 낮게 나온 것이었다.
-        # 서보가 목표 자세(midpoint)에 도달해 정지 상태로 안정되면, 물체를
-        # 여전히 꽉 물고 있어도 능동으로 토크를 더 내지 않아 부하가 실제보다
-        # 낮게 읽히는 것으로 보인다(부하는 "지금 얼마나 힘주고 있는가"이지
-        # "지금 뭔가를 물고 있는가"가 아니다). 이 재확인은 애초에 09-02
-        # 10:41의 잔진동 오탐 하나를 막으려고 추가됐는데(그 자리도 결국
-        # 오탐이었다), 이번엔 훨씬 큰 낙차(0.25 -> 0.03)마저 진짜 실패가
-        # 아니었다 — 정착된 자세에서 부하를 다시 재는 방식 자체가 신뢰할
-        # 수 없다는 결론으로 바뀌었다. "닫을 때 세게 물렸다"(load_ok)와
-        # "그 상태로 팔이 물리적으로 들어올려졌다"(midpoint_ok, 서보 위치
-        # 도달)만으로 들었다고 본다.
-        cleared = midpoint_ok and ports.arm.move_to_floor_pose(gp.profile, "safe")
-        if not cleared:
-            if not load_ok:
-                step = "문턱 미달"
-            elif not midpoint_ok:
-                step = "들어올리기(midpoint) 실패"
-            else:
-                step = "safe 복귀 실패"
-            return self._failed(ports, f"들어 올리지 못함 ({step}, 부하 {load:.4f})")
-
+        # 서보가 목표 자세에 도달해 정착하면 실제로 물고 있어도 능동으로
+        # 토크를 더 내지 않아 부하가 실제보다 낮게 읽히는 것으로 보인다
+        # (부하는 "지금 얼마나 힘주고 있는가"이지 "지금 뭔가를 물고
+        # 있는가"가 아니다). 09-02 10:41도 같은 종류의 오탐이었다 — 정착된
+        # 자세에서 부하를 다시 재는 방식 자체가 신뢰할 수 없다는 뜻이다.
+        #
+        # 그래서 부하로 미리 거르지 않는다 — **판정은 팔이 물리적으로
+        # 끝까지 움직였는가(move_to_floor_pose의 reached, 서보 위치 확인
+        # 이라 신뢰할 수 있다)와, CARRY 자세에 도달한 뒤의 최종 OR 판정
+        # (부하 OR 뎁스 "사라짐", 아래)에 맡긴다**(사용자 지시 2026-09-03:
+        # "CARRY에서 최종 판정이 맞다"). 이렇게 하면 이번처럼 중간에 부하가
+        # 잘못 낮게 읽혀도, CARRY 도달 후 뎁스가 "사라짐"을 확인하거나 그때
+        # 다시 잰 부하가 정상이면 성공으로 넘어간다.
+        if not ports.arm.move_to_floor_pose(gp.profile, "midpoint"):
+            return self._failed(ports, "들어올리기(midpoint) 실패")
+        if not ports.arm.move_to_floor_pose(gp.profile, "safe"):
+            return self._failed(ports, "safe 복귀 실패")
         if not ports.arm.move_to_floor_pose(gp.profile, "carry"):
             return self._failed(ports, "CARRY 전환 실패")
 

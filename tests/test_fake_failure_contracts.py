@@ -318,10 +318,15 @@ def test_파지_실패는_팔을_바닥에_두고_끝내지_않는다():
     )
 
     host = _Host()
-    # 부하가 안 오르는 팔 — 닫았는데 아무것도 안 물린 경우다.
+    # 부하가 안 오르는 팔 — 닫았는데 아무것도 안 물린 경우다. 2026-09-03
+    # 실기(box) 이후로 부하만으로는 미리 안 거르고 CARRY 도달 후 최종
+    # OR 판정(부하 OR 뎁스 "사라짐")에 맡기므로, 여기서 진짜 실패를
+    # 재현하려면 뎁스도 같이 "그대로 있다"여야 한다 — 안 그러면
+    # 뎁스만으로 성공 처리된다.
     arm = FakeArm(load_ratio=0.03)
     ports = BaselinePorts(
-        base=FakeBase(), arm=arm, perception=ScriptedPerception(),
+        base=FakeBase(), arm=arm,
+        perception=ScriptedPerception(grasp_confirmed=False),
         host=host, lidar=FakeLidar(), estop=threading.Event(),
         watchdog=LinkWatchdog(),
     )
@@ -355,9 +360,12 @@ def test_복구도_실패하면_붙잡고_사람에게_알린다():
             return False if stage == "recover_idle" else ok
 
     host = _Host()
+    # 2026-09-03 실기(box) 이후로 부하만으로는 미리 안 거르므로, 뎁스도
+    # 같이 "그대로 있다"여야 진짜 실패가 재현된다 — 위 test 참고.
     arm = StuckArm(load_ratio=0.03)
     ports = BaselinePorts(
-        base=FakeBase(), arm=arm, perception=ScriptedPerception(),
+        base=FakeBase(), arm=arm,
+        perception=ScriptedPerception(grasp_confirmed=False),
         host=host, lidar=FakeLidar(), estop=threading.Event(),
         watchdog=LinkWatchdog(),
     )
