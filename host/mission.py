@@ -222,6 +222,11 @@ def _send_drive(link: VehicleLink, pose: Pose, status: str, nav: DriveCommand,
         cmd = "go"
     elif nav.mode == DriveMode.STOP:
         cmd = "stop"
+    elif nav.mode == DriveMode.ESCAPE:
+        # yaw+/yaw- 헌팅 워치독(navigator.DriveSequencer._enter_rotate) 이
+        # 끼워 넣은, 정렬 무시한 짧은 전진 — cmd 상으로는 FORWARD와 같은
+        # "go"지만 목표를 정면으로 보고 있다는 보장이 없다.
+        cmd = "go"
     else:   # ROTATE
         cmd = "yaw+" if nav.yaw_error_deg >= 0 else "yaw-"
     link.send(MissionCommand(
@@ -1234,20 +1239,44 @@ class MissionFSM:
             # 그래도 매 사이클 take()는 해서(값을 쓰든 안 쓰든) 다음 순수
             # 전후 판정에 낡은 표시가 새지 않게 한다.
             ready_early = link.take_basket_ready_early()
+            # 절대 안전 반경 — Pi 라이다 신뢰도와 완전히 무관한, Host 자체
+            # ArUco 판정(2026-09-03 실기, 장난감 바구니 우측 입구 충돌 뒤
+            # 사용자 지시). 라이다가 "테두리를 넘겨보고 있을 수 있다"고
+            # 스스로 불안정을 알리는 바로 그 근접 구간에서, 유일한 안전장치가
+            # 그 흔들리는 신호뿐이면 안 된다 — 이 반경 안이면 무조건
+            # 멈춘다(mission_config.BASKET_HARD_STOP_MARGIN_M 주석 참고).
+            #
+            # ⚠️ "back"(후진)만은 예외다(2026-09-03, 사용자 지시) — 완전
+            # 정지로 가두면 반경 안에 갇힌 채 스스로 빠져나올 방법이 없다.
+            # 후진은 위험 반경에서 멀어지는 방향이니 그대로 허용한다. 실제로
+            # `_plan_basket_fix`는 너무 가까우면(forward_m<0) 애초에 axis
+            # ="back" 계획을 낸다 — 이 반경 안에서 가장 먼저 나올 계획이
+            # 바로 그것이다.
+            hard_stop = False
+            dest_box_name = mcfg.PIECE_DEST_BOX.get(self.target_label)
+            if dest_box_name is not None:
+                box_x, box_y, _box_yaw = box_pose(dest_box_name)
+                dist_to_box_center = math.hypot(robot_xy[0] - box_x,
+                                                robot_xy[1] - box_y)
+                hard_radius = cfg.BOX_L / 2.0 + mcfg.BASKET_HARD_STOP_MARGIN_M
+                hard_stop = dist_to_box_center <= hard_radius
             if is_rotate:
                 if fix is not None and fix.yaw_rad is not None:
                     # 회전판은 Pi 라이다가 직접 확인해 줄 때만 "끝났다"로
                     # 본다 — check_insert가 실제로 판정하는 기준과 맞춘다.
                     done = (abs(fix.yaw_rad) <= mcfg.BASKET_YAW_DEADBAND_RAD
-                            or live_too_close)
+                            or live_too_close or hard_stop)
                 else:
                     # Pi 값이 아직 없을 때만 쓰는 ArUco 폴백. ready_early는
                     # 절대 안 넣는다 — 위 주석 참고.
-                    done = moved >= want_m or live_too_close
+                    done = moved >= want_m or live_too_close or hard_stop
             elif axis in ("left", "right"):
-                done = moved >= want_m or live_too_close
-            else:
+                done = moved >= want_m or live_too_close or hard_stop
+            elif axis == "back":
                 done = moved >= want_m or ready_early or live_too_close
+            else:   # "forward"
+                done = (moved >= want_m or ready_early or live_too_close
+                        or hard_stop)
             # 전후 이동 중에 방위가 틀어지면 다시 맞춘다 — 5 cm 라도 비스듬히
             # 들어가면 상자 정면에 안 선다. 좌우 이동은 방위를 안 건드리므로
             # (메카넘 횡이동) 회전으로 끊지 않는다 — 여기서 돌면 방금 맞춘

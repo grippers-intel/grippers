@@ -25,5 +25,20 @@ matplotlib==3.11.1
 # 나머지 기능은 정상 동작(ANTHROPIC_API_KEY도 따로 필요)
 anthropic==1.3.0
 
+# host/mac_local_yolo_view.py 전용(맥에 직접 물린 카메라로 YOLO 실시간 확인,
+# tools/mac_camera_view.py --live 의 대안) — try/except 없이 하드 import라
+# 없으면 이 스크립트 하나만 ModuleNotFoundError로 죽는다. run_mission.py를
+# 포함한 나머지 전체 파이프라인은 이것 없이도 정상 동작.
+ultralytics==8.4.138
+torch==2.13.0
+torchvision==0.28.0
+
+# host/window_layout.py, host/mac_live_view.py 전용(--display 1 확장화면
+# 창 배치) — try/except로 감싸져 있어 없어도 에러는 안 나지만, 창 배치가
+# 조용히 OS 기본 위치로 떨어진다(위 "macOS 에서 달라지는 것" 절과 같은
+# 유형의 조용한 실패).
+pyobjc-framework-Cocoa==12.2.2
+pyobjc-framework-Quartz==12.2.2
+
 # 시험용 (tests/)
-pytest==8.4.2
+pytest==9.1.1

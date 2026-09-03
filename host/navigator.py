@@ -132,6 +132,11 @@ class DriveMode(Enum):
     FORWARD = auto()
     STOP = auto()
     ROTATE = auto()
+    # yaw+/yaw- 가 계속 방향을 바꾸며 제자리 헌팅할 때(아래 DriveSequencer
+    # 토글 워치독 참고) 강제로 끼워 넣는, 정렬을 무시한 짧은 전진. FORWARD와
+    # cmd 상으로는 똑같이 "go"지만, 목표 방향으로 가고 있다는 보장이 없다는
+    # 걸 호출부가 구분할 수 있게 별도 값으로 둔다.
+    ESCAPE = auto()
 
 
 @dataclass
@@ -153,6 +158,12 @@ class DriveSequencer:
         self._next_after_stop = DriveMode.FORWARD
         # ROTATE 진입 시점에 한 번 정한 목표각(2026-09-02, 아래 update() 참고).
         self._rotate_target_yaw: Optional[float] = None
+        # ROTATE 방향 토글 워치독 상태(2026-09-03, mission_config 주석 참고).
+        # 시간이 아니라 사이클 수로 잰다 — 이유는 ROTATE_OSCILLATION_ESCAPE_
+        # CYCLES 정의부(mission_config.py) 주석 참고.
+        self._last_rotate_sign: Optional[float] = None
+        self._toggle_count = 0
+        self._escape_remaining = 0   # 0이면 ESCAPE 중이 아니다.
 
     def reset(self) -> None:
         """새 구간(다른 기물/상자로 향할 때)을 시작할 때 부른다.
@@ -161,10 +172,32 @@ class DriveSequencer:
         아니면(예: 상자 쪽으로 막 돌아선 뒤 다음 기물이 대각선에 있는 경우)
         굳이 FORWARD를 한 사이클 내보내고서야 STOP/ROTATE로 넘어가는 게 아니라,
         첫 update() 에서 정렬 여부를 보고 바로 알맞은 모드로 시작한다.
-        """
+
+        토글 워치독도 같이 초기화한다 — 다른 목표로 향하는 새 구간의 회전을
+        이전 구간의 방향 이력과 섞으면 안 된다."""
         self._mode = None
         self._next_after_stop = DriveMode.FORWARD
         self._rotate_target_yaw = None
+        self._last_rotate_sign = None
+        self._toggle_count = 0
+        self._escape_remaining = 0
+
+    def _enter_rotate(self, yaw_err: float) -> DriveMode:
+        """ROTATE 로 들어가려는 시점에 부른다. 방향이 바로 전 ROTATE 와
+        반대면 토글로 센다(같은 방향이면 0으로 되돌린다) — 다다르면 ROTATE
+        대신 ESCAPE 로 들어가게 한다."""
+        sign = math.copysign(1.0, yaw_err) if yaw_err != 0.0 else 1.0
+        if self._last_rotate_sign is not None and sign != self._last_rotate_sign:
+            self._toggle_count += 1
+        else:
+            self._toggle_count = 0
+        self._last_rotate_sign = sign
+        if self._toggle_count >= mcfg.ROTATE_OSCILLATION_TOGGLE_LIMIT:
+            self._toggle_count = 0
+            self._last_rotate_sign = None
+            self._escape_remaining = mcfg.ROTATE_OSCILLATION_ESCAPE_CYCLES
+            return DriveMode.ESCAPE
+        return DriveMode.ROTATE
 
     def update(
         self,
@@ -183,14 +216,34 @@ class DriveSequencer:
         else:
             fresh_target_yaw = float(np.degrees(np.arctan2(dy, dx)))
 
+        if self._mode == DriveMode.ESCAPE:
+            # 정렬 무시하고 잠깐 전진하는 중 — 사이클이 다 찰 때까지는 판단
+            # 로직 전체를 건너뛴다(회전 이력도 안 쌓는다). 다 차면 처음
+            # 사이클(mode=None)처럼 처음부터 다시 판단한다.
+            self._escape_remaining -= 1
+            if self._escape_remaining > 0:
+                yaw_err = (fresh_target_yaw - robot_yaw_deg + 180.0) % 360.0 - 180.0
+                return DriveCommand(
+                    mode=DriveMode.ESCAPE, waypoint=nav.waypoint,
+                    target_yaw_deg=fresh_target_yaw, yaw_error_deg=yaw_err,
+                    dist_to_target=nav.dist_to_target, blocked_by=nav.blocked_by,
+                )
+            self._mode = None
+
         if self._mode is None:
             # 구간의 첫 사이클 — STOP 전이 신호 없이 바로 알맞은 모드로 시작.
             yaw_err = (fresh_target_yaw - robot_yaw_deg + 180.0) % 360.0 - 180.0
             self._mode = (DriveMode.FORWARD
                           if abs(yaw_err) <= self.yaw_tolerance_deg
-                          else DriveMode.ROTATE)
+                          else self._enter_rotate(yaw_err))
             if self._mode == DriveMode.ROTATE:
                 self._rotate_target_yaw = fresh_target_yaw
+            elif self._mode == DriveMode.ESCAPE:
+                return DriveCommand(
+                    mode=DriveMode.ESCAPE, waypoint=nav.waypoint,
+                    target_yaw_deg=fresh_target_yaw, yaw_error_deg=yaw_err,
+                    dist_to_target=nav.dist_to_target, blocked_by=nav.blocked_by,
+                )
 
         # 회전 중엔 매 사이클 다시 잰 목표각을 쫓지 않는다(2026-09-02 실기
         # — GRASP_REPLAN/RETURN_HOME에서 76도로 시작해 같은 방향으로
@@ -216,6 +269,9 @@ class DriveSequencer:
             self._mode = self._next_after_stop
             if self._mode == DriveMode.ROTATE:
                 self._rotate_target_yaw = fresh_target_yaw
+                self._mode = self._enter_rotate(yaw_err)
+                if self._mode == DriveMode.ESCAPE:
+                    self._rotate_target_yaw = None
 
         return DriveCommand(
             mode=out_mode, waypoint=nav.waypoint, target_yaw_deg=target_yaw,

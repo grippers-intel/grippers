@@ -3,7 +3,13 @@
 `grippers` 프로젝트의 **Host PC 코드를 macOS(Apple Silicon)에서 돌아가게** 옮긴
 것이다. 원본은 Windows 전용이었다.
 
-원본: `kica927/grippers` 의 `host/` (PR #44, `sysy009/host-topview-merge`)
+원본: `kica927/grippers` 의 `host/` (PR #44, `sysy009/host-topview-merge` — 팀 origin에는
+병합되지 않았고 sysy009 fork 브랜치에만 있다).
+
+프로젝트 전체 개요·FSM·하드웨어 구성은 메인 저장소(Pi 쪽) 참고 —
+[`kica927/grippers`](https://github.com/kica927/grippers) `kica927/baseline_mission` 브랜치, 특히
+[`docs/design/state_machine.md`](https://github.com/kica927/grippers/blob/kica927/baseline_mission/docs/design/state_machine.md).
+이 저장소는 Host(관제 콘솔)의 macOS 포팅 세부사항만 다루고 중복 설명하지 않는다.
 
 ---
 
@@ -229,6 +235,79 @@ pip install -r requirements.txt
 파이썬 3.11 고정은 원본과 같은 이유다 — 3.13 이상에서는 pip 이 옛 geti-sdk
 2.1.0 으로 되돌아가 깨진다. 실제로 깔린 전체 목록은
 `requirements.lock.macos.txt` 참고.
+
+## Pi 실기 테스트 준비 — "테스트 준비" 매크로
+
+"테스트 준비"라고 하면 Pi의 `tools/ops/test_ready.sh` 딱 하나만 실행한다(이
+저장소가 아니라 Pi 쪽 `grippers` 체크아웃에 있는 스크립트다 — 실기 전체 흐름의
+일부라 여기 운영 문서로 같이 적어 둔다). 그 전까지는 코드 배포 확인 -> EEPROM
+비교 -> bringup을 매번 손으로 하나씩 ssh 왕복하며 했고 bringup 쪽에서만 env·
+워크스페이스·패키지명 문제로 세 번 헤맸다(그 root cause는 아래 3단계에 이미
+반영돼 있다). 이 스크립트는 그 세 단계를 이어 붙인 것뿐이고 **kill은 전혀
+하지 않는다** — 그래서 사람 확인 없이 바로 실행해도 안전하다.
+
+```
+ssh pi@<라즈베리파이 IP 또는 호스트> 'bash ~/docker/shared/grippers/tools/ops/test_ready.sh'
+```
+
+git 동기화는 컨테이너 밖 Pi 호스트에서, EEPROM 확인과 bringup은 `docker exec`로
+컨테이너(`IntelPi`) 안에서 한다.
+
+**포함되지 않는 것** — 이 둘은 항상 사용자가 직접 한다.
+- `run_mission.py` 실행(실제 미션 구동)
+- `stop_bringup.sh`(kill을 포함하는 정지)
+
+### 1/3 — 코드 상태 확인
+
+`~/docker/shared/grippers`(Pi 호스트에 바인드 마운트된 그리퍼스 저장소 체크아웃)
+에서 `git fetch --all`, `git status -sb`. `origin/kica927/baseline_mission`
+보다 몇 커밋 뒤처졌는지 세서, 뒤처졌으면 `git merge --ff-only origin/
+kica927/baseline_mission`으로만 받는다 — rebase나 강제 merge는 없다. fast-
+forward가 안 되면(로컬에 갈라진 커밋이 있으면) 그대로 실패해서 사람이 보게
+한다.
+
+### 2/3 — EEPROM 캘리브레이션 비교 (읽기 전용)
+
+컨테이너 안에서 `tools/arm/restore_taught_offsets.py`를 **`--apply` 없이**
+실행한다 — 현재 서보 6개의 `Homing_Offset`을 읽어 `floor_grasp_profiles.
+TAUGHT_HOMING_OFFSETS`(교시 당시 값)와 비교만 한다(`calib_identity.py`).
+불일치가 있어도 이 스크립트는 절대 고치지 않는다 — 되돌리려면 `--apply
+--yes`가 필요한데, 그건 서보 토크를 꺼서 팔이 중력으로 내려오기 때문에
+반드시 사람이 직접 실행해야 한다.
+
+### 3/3 — bringup
+
+컨테이너 안에서 `tools/ops/bringup_now.sh 192.168.0.9`:
+
+- 이미 뜬 노드(`ros_robot_controller`/`odom_publisher`/`ekf_node`/
+  `joint_state_publisher`/`ascamera_node`/`arm_driver_node`/
+  `perception_node`/`robot_state_publisher`, 좀비 제외)가 있으면 **kill하지
+  않고** `stop_bringup.sh`를 먼저 돌리라는 안내만 찍고 종료한다(중복 기동
+  방지).
+- `ROS_DOMAIN_ID=21`(기본값), `need_compile=False`, `DEPTH_CAMERA_TYPE=
+  ascamera`, ascamera 라이브러리용 `LD_LIBRARY_PATH`를 지정한다.
+- 워크스페이스 4개를 **이 순서로** source한다(하나라도 빠지면 그 안 패키지가
+  조용히 "not found"가 된다):
+  1. `/opt/ros/humble` — ROS2 자체
+  2. `~/ros2_ws` — MentorPi 벤더 스택(`bringup` 패키지가 여기 있음 — LD19/
+     제스처/라인추적 등 범용 데모지 그리퍼스 전용이 아니다)
+  3. `~/third_party_ros2/third_party_ws` — ascamera 드라이버
+  4. `/ros2_ws` — **그리퍼스 프로젝트 전용** 워크스페이스(이 저장소의
+     `ros2_ws/`를 컨테이너에 바인드 마운트한 것). `grippers_arm`/
+     `grippers_perception`/`grippers_bringup`이 전부 여기 있다.
+
+  ⚠️ `grippers_bringup`(4번)과 `bringup`(2번)은 이름이 겹치지만 완전히
+  다른 패키지다 — `bringup`으로 launch하면 벤더 데모 스택만 뜨고
+  `arm_driver_node`/`perception_node`는 아예 안 뜬다.
+- `setsid ros2 launch grippers_bringup bringup.launch.py use_fake_base:=false
+  use_fake_arm:=false use_fake_perception:=false host_ip:=<인자, 기본
+  192.168.0.9>`를 백그라운드로 launch한다. 로그는 `/tmp/bringup.log`,
+  launch PID/PGID는 `/tmp/bringup.pgid`에 기록해 둔다(나중에
+  `stop_bringup.sh`가 이 PGID로 정확히 정지시킨다).
+
+### 마지막 — 노드 확인
+
+컨테이너 안에서 `ros2 node list`로 실제로 떴는지 확인하고 끝난다.
 
 ## `domain/` 사본 관리
 
