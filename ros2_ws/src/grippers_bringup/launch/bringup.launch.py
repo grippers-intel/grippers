@@ -112,6 +112,15 @@ def launch_setup(context):
                 }
             ],
         ),
+        # 2026-09-04, 사용자 지시 — /ros_robot_controller/battery 가 낮으면
+        # STM32 부저로 짧게 경고한다(domain/task/battery_alert.py). 그 토픽은
+        # controller_launch(실물 베이스)가 떠 있어야 나오므로 같은 조건을 쓴다.
+        Node(
+            package="grippers_mission",
+            executable="battery_buzzer_monitor",
+            output="screen",
+            condition=UnlessCondition(use_fake_base),
+        ),
     ]
 
     return [

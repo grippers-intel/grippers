@@ -20,6 +20,7 @@ setup(
     entry_points={
         "console_scripts": [
             "mission_orchestrator = grippers_mission.mission_orchestrator_node:main",
+            "battery_buzzer_monitor = grippers_mission.battery_buzzer_node:main",
         ],
     },
 )
