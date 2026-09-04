@@ -110,15 +110,25 @@ GRIPPER_SQUEEZE_MM = 15.0
 # GRIPPER_SQUEEZE_MM과 같은 15.0을 쓴다 — 닫을 때 폭에서 15 빼고, 놓을 때
 # 폭에 15 더한다. 대칭이라 기억하기 쉽고, rook(24.5) 기준 39.5mm로 열려
 # 168mm 대비 훨씬 좁다.
+#
+# ⚠️ 2026-09-04 사용자 지시로 뒤집혔다 — host+Pi 연동 실기에서 물체가
+# 그리퍼에서 안 떨어지는 사고가 반복됐다("바구니에 내려놓을 때, 그리퍼
+# 최대로 열어. 물체가 그리퍼에서 안 떨어져"). `_release_width()`가 이제
+# 이 상수를 안 쓰고 무조건 `GRIPPER_OPEN_MM`까지 연다 — 이 상수는 그
+# 이전 결정의 기록으로만 남겨 둔다. domain/task/floor_grasp_policy.py의
+# 같은 자리(계층 분리로 복제된 짝)와 반드시 같이 바꿀 것.
 GRIPPER_RELEASE_MM = 15.0
 
 
 def _release_width(object_width_mm: float) -> float:
-    """물체가 턱 사이에서 빠져나올 만큼만 벌린 목표 폭.
+    """투하 시 여는 폭 — 2026-09-04부터 무조건 기구 최대 개구다.
 
-    기구 상한(GRIPPER_OPEN_MM)을 넘지 않는다. 넓은 물체
-    (soccer_polyhedron 46.0 -> 61.0)도 상한에 한참 못 미친다."""
-    return min(GRIPPER_OPEN_MM, round(object_width_mm + GRIPPER_RELEASE_MM, 1))
+    예전엔 물체가 턱 사이에서 빠져나올 만큼만(GRIPPER_RELEASE_MM 여유)
+    벌렸는데, 실기에서 물체가 계속 걸려 안 떨어져 사용자 지시로 최대로
+    여는 쪽으로 바꿨다(GRIPPER_RELEASE_MM 주석 참고). `object_width_mm`
+    인자는 더 안 쓰지만, 호출부(FLOOR_GRASP_PROFILES 구성)를 안
+    건드리려고 시그니처는 그대로 둔다."""
+    return GRIPPER_OPEN_MM
 
 
 def _close_width(object_width_mm: float) -> float:

@@ -303,9 +303,14 @@ def test_the_gripper_closes_before_folding_back_to_idle():
     assert release < close < fold
 
 
-def test_the_release_width_is_not_the_full_opening():
-    """활짝 여는 대신 물체 폭 + 여유만 연다 — 손가락 판이 바구니 위로
-    쓸리지 않게(사용자 지시, 2026-08-25)."""
+def test_release_uses_the_release_field_not_preopen():
+    """투하 단계에서는 preopen이 아니라 release 필드를 쓴다.
+
+    ⚠️ 이름과 달리 지금은 `release_width_mm`의 실제 값이 최대 개구다
+    (2026-09-04, floor_grasp_profiles.py의 같은 자리 코멘트 참고 — 물체가
+    그리퍼에서 안 떨어지는 사고로 2026-08-25 결정을 뒤집었다). 이
+    테스트는 값이 아니라 "투하 시 preopen이 아니라 release 필드를 쓴다"
+    는 코드 구조만 본다."""
     source = ast.unparse(_function("run_cycle"))
     assert "set_gripper(spec.preopen_width_mm)" in source
     # 투하 단계에서는 preopen이 아니라 release를 쓴다.
