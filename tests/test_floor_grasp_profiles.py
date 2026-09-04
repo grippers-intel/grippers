@@ -131,7 +131,10 @@ def test_every_object_profile_has_a_horizontal_arm_pose():
 def test_idle_cradle_and_transition_waypoints_match_measured_contract():
     module = _load_profiles()
 
-    assert module.IDLE_CRADLE_RAW == (2066, 829, 3092, 2751, 3071)
+    # 2026-09-05 reteach_idle_pose.py 실측. 앞의 (2066, 829, 3092, 2751, 3071)
+    # 은 08-25 값이고, 그 사이 08-30 커밋이 자세를 옮겼다가 되돌린 이력이
+    # 있다 — 자세한 경위는 floor_grasp_profiles.IDLE_CRADLE_RAW 주석에 있다.
+    assert module.IDLE_CRADLE_RAW == (2096, 822, 3101, 2949, 3023)
     assert module.VERTICAL_SAFE_OVERHEAD_DEG == (0.0, 9.2, 20.8, 55.3, 0.4)
     assert module.HORIZONTAL_OVERHEAD_RAW == (2044, 2712, 2380, 1000, 3006)
 
