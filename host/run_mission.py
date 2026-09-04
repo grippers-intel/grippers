@@ -327,6 +327,17 @@ def main() -> int:
                             live_map.set_instruction_text(heard.text)
                         _feedback(f'음성 인식: "{heard.text}" (확인 후 전송)')
 
+            # ⚠️ pose 를 잃으면 FSM 이 step() 입구에서 그대로 나가고
+            # 명령도 안 나간다. 그런데 화면에도 아무것도 안 찍혀서, 밖에서 보면
+            # "hz 만 도는데 차가 안 움직임"으로만 보인다 — 2026-09-05 실기에서
+            # 이걸 Pi 쪽 문제로 오해해 한참 찾았다. Pi 워치독이 알아서 세우므로
+            # 동작은 안전하지만, 이유는 보여 줘야 한다.
+            if not pose.ok and frames_seen % 10 == 0:
+                line = (f"[로봇 잃음] 마커가 안 보입니다 — 명령을 보내지 않습니다 "
+                        f"(cams={pose.n_cams}). 팔이 마커를 가렸거나 작업 영역 밖입니다")
+                width = shutil.get_terminal_size((100, 24)).columns - 1
+                print("\r" + line[:width].ljust(width), end="", flush=True)
+
             if fsm.state == State.SEARCH_TARGET and frames_seen % 10 == 0:
                 # 수동 모드에서는 기물을 **찾고도** SEARCH_TARGET 에 머무른다
                 # (Next 를 기다린다). 그때까지 "남은 기물 없음"이라고 찍으면
