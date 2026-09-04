@@ -78,6 +78,21 @@ POSITION_RAW_MAX = 4095
 # 1.0s 안정 + 여유로 1.5s. 정착 타이밍은 서보 물리 지식이므로 도메인이 아니라
 # 여기 둔다 — GraspState 에 sleep 을 넣지 않는다.
 GRASP_SETTLE_SEC = 1.5
+# 개방(놓기) 명령 뒤에 얹는 추가 여유. GRASP_SETTLE_SEC 은 "닫힘 부하가
+# 안정되는" 시간으로 실측된 값이라 서보 자체의 물리다 — 물체가 손끝
+# 사이에서 실제로 벗어나 떨어지는 것은 전혀 다른 물리 현상이라 같은 값을
+# 못 쓴다. 2026-09-04 실기: INSERT 에서 놓기 직후 접기 전 CLOSED_MM(9mm)
+# 으로 바로 오므리는데, 사용자 관찰로는 물체가 다 벗어나기 전에 손끝이
+# 다시 닫히는 것처럼 보였다("그리퍼가 안 열리고 바로 IDLE로 복귀했다") —
+# 개방 명령에만 이 여유를 더해 준다(사용자 지시: "그리퍼가 움직일 충분한
+# 시간을 줘"). 정확한 하한은 아직 미실측이라 넉넉하게 잡았다.
+RELEASE_SETTLE_EXTRA_SEC = 1.5
+# 이 폭(mm) 이상을 요청하면 "쥐기"가 아니라 "놓기"로 본다. 파지 폭은
+# GRIPPER_GRASP_MIN_MM(0mm)까지 강제로 좁혀지고(baseline_mission의
+# _CLOSE_WIDTH_OVERRIDE_MM), 접기 전 예비폭(CLOSED_MM)은 9mm, 놓기 폭은
+# 항상 최대(168mm, 2026-09-04 사용자 지시 "그리퍼 최대로 열어")라 이
+# 문턱과 겹칠 일이 없다.
+RELEASE_WIDTH_THRESHOLD_MM = 100.0
 # 그리퍼 개폐 "이동이 끝났는가" 판정 — 시간이 아니라 위치 정지로 본다
 # (_wait_gripper_motion_settled 참고, 2026-08-24 실기로 필요성 확인).
 GRIPPER_MOTION_POLL_SEC = 0.1
@@ -1371,7 +1386,10 @@ class ArmDriverNode(Node):
             # 행정 길이는 요청 폭에 따라 달라지므로 상수를 다시 튜닝하는 대신
             # **위치가 멈출 때까지 기다린 뒤** 부하 정착을 기다린다.
             self._wait_gripper_motion_settled(backend)
-            time.sleep(GRASP_SETTLE_SEC)
+            settle_sec = GRASP_SETTLE_SEC
+            if width_mm >= RELEASE_WIDTH_THRESHOLD_MM:
+                settle_sec += RELEASE_SETTLE_EXTRA_SEC
+            time.sleep(settle_sec)
             response.ok = True
             response.load_ratio = self._read_load()
         except Exception as e:
