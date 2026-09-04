@@ -1,5 +1,5 @@
 @startuml Grippers_Architecture
-title Grippers — Ports & Adapters (to-be · 8/14 freeze 대상)
+title Grippers — Host 지시 실행형 FSM (실제 배포, 2026-08-26 확정)
 
 skinparam classAttributeIconSize 0
 skinparam shadowing false
@@ -13,51 +13,36 @@ skinparam note {
 }
 
 legend top left
-  <b>이 다이어그램은 to-be 설계입니다.</b>
-  현재 main 브랜치 코드는 아직 이전 주제(암실 반출) 기준입니다.
-  as-is → to-be 마이그레이션은 class_diagram.md §5 참조.
+  <b>2026-09-04 전면 재작성.</b>
+  이 다이어그램의 이전 판(SCAN/SELECT 장난감 정리, 8/14 freeze 목표)은
+  채택되지 않았다. 실제 구현은 domain/task/baseline_mission.py —
+  전이 그래프 단일 소스는 state_machine.md, 죽은 코드 목록은 class_diagram.md §5.
 endlegend
 
 ' ============================================================
-package "domain :: values" #E8F4FD {
-  enum ObjectClass {
-    GABE
-    CHESS_PIECE
+package "domain :: values (baseline이 실제 쓰는 것)" #E8F4FD {
+  class HostCommand <<dataclass, frozen>> {
+    + state : str
+    + linear_x : float
+    + linear_y : float
+    + angular_z : float
+    + stop : bool
+    + wants_motion : bool
   }
-  enum BoxColor {
-    BLACK
-    RED
-    BLUE
-    GREEN
+  class BasketFace <<dataclass, frozen>> {
+    + ok : bool
+    + distance_m : float
+    + yaw_error_rad : float
+    + reason : str
+    + point_count : int
+    + lateral_offset_m : float
+    + lateral_known : bool
   }
-  enum MissionMode {
-    TIDY
-    FETCH
-  }
-
-  class Pose2D <<dataclass>> {
-    + x_m : float
-    + y_m : float
-    + theta_rad : float
-  }
-  class Point3 <<dataclass>> {
-    + x_m : float
-    + y_m : float
-    + z_m : float
-  }
-  class Detection <<dataclass>> {
-    + track_id : int
-    + cls : ObjectClass
-    + pose_m : Point3
-    + dims_m : Point3
-    + yaw_rad : float
-    + confidence : float
-  }
-  class BoxObservation <<dataclass>> {
-    + color : BoxColor
-    + pose_m : Pose2D
-    + opening_mm : float
-    + long_axis_rad : float
+  class TargetObservation <<dataclass, frozen>> {
+    + label : str
+    + forward_m : float
+    + lateral_m : float
+    + metric_ok : bool
   }
   class Clearance <<dataclass>> {
     + front_m : float
@@ -65,308 +50,227 @@ package "domain :: values" #E8F4FD {
     + right_m : float
     + contact_risk : bool
   }
-  class MissionSpec <<dataclass>> {
-    + mode : MissionMode
-    + target_cls : ObjectClass
-    + placement_rule : dict
-    + raw_text : str
+  class Point3 <<dataclass>> {
+    + x : float
+    + y : float
+    + z : float
   }
-  class MissionContext <<dataclass>> {
-    + spec : MissionSpec
-    + done_ids : frozenset
-    + held_ids : frozenset
-    + grasp_attempts : int
-    + complete(id) : MissionContext
-    + hold(id) : MissionContext
-    + retry() : MissionContext
-  }
-
-  Detection --> ObjectClass
-  Detection --> Point3
-  BoxObservation --> BoxColor
-  BoxObservation --> Pose2D
-  MissionSpec --> MissionMode
-  MissionContext --> MissionSpec
 }
 
-note right of MissionContext
-  <b>불변 객체.</b>
-  complete/hold/retry 는 새 인스턴스를 반환한다.
-  루프에서 재시도 카운터를 가변으로 두면
-  누가 언제 증가시켰는지 추적 불가.
-end note
-
-note bottom of Pose2D
-  <b>단위는 필드명에 박는다.</b>
-  _m (길이) · _rad (각도) · _mm (개구 폭)
-  변환은 어댑터 경계에서 한 번만.
+note right of HostCommand
+  <b>좌표가 없다.</b> state 하나 + 속도 셋뿐.
+  MissionState/Report는 클래스가 아니라
+  문자열 상수 — UDP+JSON, MissionState.msg에
+  그대로 실려 나가야 해서 Enum을 안 쓴다.
 end note
 
 ' ============================================================
-package "domain :: ports (ABC)" #EDE7F6 {
+package "domain :: ports (ABC, 5종)" #EDE7F6 {
   interface BaseDriver {
-    + drive_to(target) : bool
-    + align_to_box(box) : float
-    + stop() : None
+    + apply_velocity(lx, ly, az)* : None
+    + creep_forward(distance_m)* : bool
+    + creep_forward_timed(speed, dur)* : bool
+    + stop()* : None
+    + liveness() : LivenessVerdict|None
   }
   interface ArmDriver {
-    + move_to_cartesian(xyz_m, down) : bool
-    + set_gripper(width_mm) : None
-    + get_load() : float
-    + reorient(phi_rad) : bool
-    + fold_to_cradle() : bool
-    + hold_position() : None
+    + move_to_floor_pose(profile, stage)* : bool
+    + move_to_cartesian(xyz_m, down)* : bool
+    + set_gripper(width_mm)* : None
+    + get_load()* : float
+    + reorient(phi_rad)* : bool
+    + fold_to_cradle()* : bool
+    + offset_base_yaw(offset_rad)* : bool
+    + hold_position()* : None
   }
   interface Perception {
-    + scan_floor() : list<Detection>
-    + find_box(color) : BoxObservation
-    + measure_opening(box) : float
-    + monitor_clearance() : Clearance
+    + identify_target()* : TargetObservation|None
+    + monitor_clearance()* : Clearance
+    + remember_target(raw_cls)* : bool
+    + confirm_grasp()* : bool
   }
-  interface CommandInterpreter {
-    + parse(text) : MissionSpec
-    + confirm_phrase(spec) : str
+  interface HostLink {
+    + latest_command()* : HostCommand|None
+    + report(report, state, detail, fix)* : None
+  }
+  interface Lidar {
+    + basket_face(bearing_rad)* : BasketFace
   }
 }
 
-Perception ..> Detection
-Perception ..> BoxObservation
+Perception ..> TargetObservation
 Perception ..> Clearance
-BaseDriver ..> Pose2D
-CommandInterpreter ..> MissionSpec
+ArmDriver ..> Point3
+HostLink ..> HostCommand
+Lidar ..> BasketFace
 
-note right of CommandInterpreter
-  <b>신규 포트 (4번째).</b>
-  자연어가 placement_rule 을 실제로 바꾸므로
-  도메인 로직이며 포트 뒤에 있어야 한다.
-  "체스말은 검은 상자에" -> rule[CHESS_PIECE]=BLACK
+note right of BaseDriver
+  <b>좌표 있는 메서드 전부 삭제됨.</b>
+  drive_to()/align_to_box() 없음 —
+  2026-08-26 팀 확정으로 좌표·경로는
+  전부 Host 소유. 남은 건 "속도를 낸다"/
+  "멈춘다"뿐. creep_forward* 만 예외
+  (GRASP 전용 정지-상태 미세전진).
 end note
 
-note right of ArmDriver
-  <b>set_gripper 단위 변경.</b>
-  deg -> width_mm (단위 규약 준수)
-  서보 각도 변환은 FeetechArm 내부
-  캘리브레이션 테이블에서 처리.
+note right of HostLink
+  <b>CommandInterpreter가 빠진 자리의 신규 포트.</b>
+  자연어 대신 Host UDP 명령을 받는다.
+end note
+
+note right of Lidar
+  <b>신규 포트.</b> INSERT 판정 전용.
+  바닥 위 140mm·11.3도 하향틸트라
+  바닥 물체 회피엔 못 쓴다.
 end note
 
 ' ============================================================
 package "domain :: task" #FFF4E5 {
-  class Ports <<dataclass>> {
+  class BaselinePorts <<dataclass>> {
     + base : BaseDriver
     + arm : ArmDriver
     + perception : Perception
-    + interpreter : CommandInterpreter
+    + host : HostLink
+    + lidar : Lidar
     + estop : Event
+    + watchdog : LinkWatchdog
+    + base_liveness : LivenessLatch
   }
-
-  class MissionTask {
-    - ports : Ports
+  class LinkWatchdog {
+    - timeout_cycles : int
+    - misses : int
+    + observe(command) : bool
+  }
+  class BaselineMission {
     + run() : Generator<State>
   }
 
   abstract class State {
     + name : str
-    + {abstract} execute(ports) : State
+    + {abstract} execute(ports) : State|None
   }
 
-  class IdleState
-  class ScanState {
-    - MAX_RESCAN = 3
-  }
-  class SelectState {
-    - _pick(detections) : Detection
-  }
-  class ApproachState
-  class GraspState {
-    - MAX_GRASP_RETRY = 3
-    - LOAD_THRESHOLD = 0.04
-  }
-  class TransportState
-  class PosePlanState {
-    - _solve_phi(dims_m, opening_mm) : float
-  }
-  class InsertState {
-    - phi_rad : float
-  }
-  class DeliverState
-  class HandoverState
-  class RejectState {
-    - reason : str
-  }
-  class DoneState
-  class EstopState
+  class BaselineIdleState
+  class BaselineApproachState
+  class BaselineGraspState
+  class BaselineCarryState
+  class BaselineInsertState
+  class BaselineDoneState
+  class BaselineEstopState
 
-  State <|-- IdleState
-  State <|-- ScanState
-  State <|-- SelectState
-  State <|-- ApproachState
-  State <|-- GraspState
-  State <|-- TransportState
-  State <|-- PosePlanState
-  State <|-- InsertState
-  State <|-- DeliverState
-  State <|-- HandoverState
-  State <|-- RejectState
-  State <|-- DoneState
-  State <|-- EstopState
+  State <|-- BaselineIdleState
+  State <|-- BaselineApproachState
+  State <|-- BaselineGraspState
+  State <|-- BaselineCarryState
+  State <|-- BaselineInsertState
+  State <|-- BaselineDoneState
+  State <|-- BaselineEstopState
 
-  MissionTask *-- Ports
-  MissionTask ..> State : yield
+  BaselinePorts --> LinkWatchdog
+  BaselineMission ..> BaselinePorts
+  BaselineMission ..> State : yield
 }
 
-State ..> MissionContext : ctx 로 보유
+BaselinePorts --> BaseDriver
+BaselinePorts --> ArmDriver
+BaselinePorts --> Perception
+BaselinePorts --> HostLink
+BaselinePorts --> Lidar
 
-Ports --> BaseDriver
-Ports --> ArmDriver
-Ports --> Perception
-Ports --> CommandInterpreter
-
-note right of ScanState
-  <b>루프의 유일한 진입점.</b>
-  INSERT / HANDOVER / REJECT / 각종 실패가
-  모두 여기로 되돌아온다.
-  전이 그래프는 state_machine.md 가 단일 소스.
+note bottom of BaselineGraspState
+  execute() 한 번에 시퀀스 전체 수행
+  (safe -> preopen -> grasp자세 -> 미세전진
+   -> close -> midpoint -> safe -> carry).
+  최종 판정은 부하 AND 뎁스confirm —
+  세 번 오락가락한 끝에 09-03 AND로 복귀.
+  실패해도 재시도 상한 없음 —
+  APPROACH로 돌아가 Host 판단을 기다린다.
 end note
 
-note right of PosePlanState
-  H_proj = L*|cos φ| + w*|sin φ| <= W_open - margin
-  -> φ >= 0.83 rad (48°)
-
-  <b>보류 — 대상 클래스 미정.</b>
-  긴 물체가 정리 대상에서 제외되어
-  실행할 물체가 없다. 구조는 유지하며
-  미배정 상자에 배정 시 즉시 부활.
-end note
-
-note bottom of GraspState
-  재시도는 상태 변경이 아니라
-  <b>새 인스턴스 반환</b>으로 표현.
-  소진 시 미션 종료가 아니라
-  held_ids 등록 후 SCAN 복귀.
+note bottom of BaselineCarryState
+  <b>이전 판의 ctx/MissionContext 패턴 없음.</b>
+  물체 하나만 알고, 재시도 예산·완료 목록
+  개념 자체가 없다. 사이클을 건너는 값
+  (watchdog 결측, base_liveness)은
+  State가 아니라 BaselinePorts가 든다.
 end note
 
 ' ============================================================
 package "domain :: adapters.real" #E8F5E9 {
-  class Ros2MecanumBase {
-    - _node
-    - _drive_client : ActionClient
-  }
-  class FeetechArm {
-    - _node
-    - _move_client : ActionClient
-  }
-  class LearnedPerception {
-    - _node
-    - _scan_client
-  }
-  class LanguageAdapter {
-    - _node
-    - _parser
-  }
+  class Ros2MecanumBase
+  class Ros2ArmDriver
+  class Ros2Perception
+  class UdpHostLink
+  class Ros2Lidar
 }
 
 package "domain :: adapters.fake" #FCE4EC {
-  class FakeBase {
-    - _arrive : bool
-  }
-  class FakeArm {
-    - _move_ok : bool
-    - _load : float
-  }
-  class ScriptedPerception {
-    - _script : list<list<Detection>>
-  }
-  class ScriptedInterpreter {
-    - _table : dict<str, MissionSpec>
-  }
+  class FakeBase
+  class FakeArm
+  class ScriptedPerception
+  class FakeHostLink
+  class FakeLidar
 }
 
 BaseDriver <|.. Ros2MecanumBase
 BaseDriver <|.. FakeBase
-ArmDriver <|.. FeetechArm
+ArmDriver <|.. Ros2ArmDriver
 ArmDriver <|.. FakeArm
-Perception <|.. LearnedPerception
+Perception <|.. Ros2Perception
 Perception <|.. ScriptedPerception
-CommandInterpreter <|.. LanguageAdapter
-CommandInterpreter <|.. ScriptedInterpreter
-
-note bottom of ScriptedPerception
-  <b>_script 는 사이클별 검출 목록.</b>
-  같은 목록을 계속 반환하도록 설정해
-  무한 루프 방지 로직을 CI에서 검증한다.
-  루프 FSM의 최대 리스크는 하드웨어 없이 잡힌다.
-end note
+HostLink <|.. UdpHostLink
+HostLink <|.. FakeHostLink
+Lidar <|.. Ros2Lidar
+Lidar <|.. FakeLidar
 
 ' ============================================================
 package "ros2_ws :: nodes" #ECEFF1 {
   class MissionOrchestratorNode {
-    - _state_pub
-    - _estop_flag : Event
-    - _fsm_thread : Thread
+    - Publisher _state_pub
+    - Thread _fsm_thread
   }
-  class PerceptionNode {
-    - _bridge : CvBridge
-  }
-  class InferenceNode {
-    - _device : HailoDevice
-  }
-  class BaseDriverNode {
-    - _cmd_vel_pub
-    - _drive_action_server
-  }
+  class PerceptionNode
   class ArmDriverNode {
-    - _move_action_server
+    - _check_taught_calibration()
   }
-  class VoiceIoNode {
-    - _stt : SttEngine
-    - _command_pub
-  }
-  class HudNode {
-    - _overlay_pub
-  }
+  class GripperCamPublisherNode
+  class DepthCamRotateNode
+  class BatteryBuzzerNode
+  class Controller
+  class LanguageNode
 }
 
-MissionOrchestratorNode ..> MissionTask
+MissionOrchestratorNode ..> BaselineMission : 별도 데몬 스레드
+MissionOrchestratorNode ..> UdpHostLink
 MissionOrchestratorNode ..> Ros2MecanumBase
-MissionOrchestratorNode ..> FeetechArm
-MissionOrchestratorNode ..> LearnedPerception
-MissionOrchestratorNode ..> LanguageAdapter
+MissionOrchestratorNode ..> Ros2ArmDriver
+MissionOrchestratorNode ..> Ros2Perception
+MissionOrchestratorNode ..> Ros2Lidar
+Controller ..> MissionOrchestratorNode : /cmd_vel 구독 -> STM32 모터 명령
 
-Ros2MecanumBase ..> BaseDriverNode : action / service
-FeetechArm ..> ArmDriverNode : action / service
-LearnedPerception ..> PerceptionNode : service
-InferenceNode ..> PerceptionNode : /detections
-VoiceIoNode ..> MissionOrchestratorNode : /command (String)
-
-note right of BaseDriverNode
-  <b>/cmd_vel 발행 주체는 이 노드 하나뿐.</b>
+note right of Controller
+  <b>/cmd_vel 을 실제로 STM32에 쓰는 것은 이 노드다.</b>
+  Ros2MecanumBase는 발행만 한다 — 이 노드가
+  없으면 구독자 0으로 명령이 조용히 버려진다
+  (2026-09-08 RUNBOOK §3.5 핵심 경고).
 end note
 
-note right of InferenceNode
-  Hailo-10H (AI HAT+ 2) 독점 소유.
-  분할 기준은 기능이 아니라
-  <b>하드웨어 소유</b>.
-  성능 예산은 26 TOPS 급으로 잡을 것
-  (40 TOPS 는 INT4 LLM/VLM 기준).
+note right of ArmDriverNode
+  <b>기동 시 EEPROM Homing_Offset을 교시값과 대조.</b>
+  다르면 ArmCalibrationMismatchError로
+  기동 자체를 거부한다.
 end note
 
-note bottom of VoiceIoNode
-  <b>도메인 코드 0줄 변경.</b>
-  기존 명령 토픽에 텍스트를 발행할 뿐.
-  TTS 는 /mission/state 구독.
-  USB 오디오 필수 — Pi 5 에 3.5mm 잭 없음.
+note bottom of LanguageNode
+  <b>빌드되지만 연결 안 됨.</b>
+  CommandInterpreter/LanguageAdapter를
+  import하는 코드가 baseline 경로 어디에도 없다.
 end note
 
-note bottom of PerceptionNode
-  <b>BLACK 상자는 LAB 탐색 불가.</b>
-  a*~0 · b*~0 -> L* 임계값만 남고
-  그림자와 구분되지 않는다.
-  밝은 테두리 / ArUco 로 대체할 것.
-
-  <b>안전 기본값 — 모르면 멈춘다.</b>
-  monitor_clearance 는 실측 전까지
-  항상 contact_risk=True 반환.
-  scan_floor 는 빈 목록 -> DONE.
+note bottom of GripperCamPublisherNode
+  <b>모니터링 전용.</b>
+  GRASP 판정에는 미사용 (2026-09-03
+  gripper-cam 자동판정 시도 종료).
 end note
 
 @enduml

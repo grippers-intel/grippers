@@ -1,77 +1,99 @@
 # Class Diagrams
 
-> **읽는 법** — 이 문서는 두 층으로 되어 있습니다.
-> **as-is** 는 현재 `main` 브랜치에 실제로 있는 코드, **to-be** 는 장난감 정리 주제 전환 목표입니다.
-> to-be 시그니처는 **8/14 freeze 대상**이며 변경은 PR + 3인 합의로만 가능합니다.
-> 아직 이 둘은 상당히 다릅니다 — [§5 마이그레이션](#5-마이그레이션-as-is--to-be) 참조.
+> **상태: 실제 코드 기준으로 전면 재작성 (2026-09-04).** 이 문서가 이전에 그리던 "as-is/to-be"
+> 구도(암실 반출 as-is, 장난감 정리 SCAN/SELECT to-be)는 **둘 다 채택되지 않았다.** 팀이
+> 2026-08-26에 확정해 실제로 구현·배포한 것은 `domain/task/baseline_mission.py`의
+> **Host 지시 실행형 FSM**이다 — 전이 그래프의 단일 소스는
+> [`state_machine.md`](state_machine.md)이고, 이 문서는 그 밑을 받치는 값 객체·포트·
+> 어댑터·ROS2 노드의 **클래스 구조**만 다룬다.
+>
+> `domain/values.py`·`domain/ports/perception.py`·`domain/ports/command_interpreter.py`에는
+> 이전 SCAN/SELECT 설계가 쓰던 값 객체·포트가 **코드로 여전히 남아 있지만 baseline_mission
+> 경로 어디서도 import되지 않는다** — grep으로 확인됨(2026-09-04). 이 문서 §5에서 무엇이
+> 죽은 코드인지 밝힌다.
 
-핵심 원칙은 그대로입니다 — **`domain/` 은 ROS2를 모릅니다.** `rclpy`, `geometry_msgs`,
+핵심 원칙은 그대로다 — **`domain/` 은 ROS2를 모른다.** `rclpy`, `geometry_msgs`,
 `grippers_interfaces` 를 import하는 곳은 `domain/adapters/real/` 과 `ros2_ws/src/grippers_*` 뿐이고,
-그 경계에서 `domain.values` 로 변환합니다.
+그 경계에서 `domain.values`/`domain.ports.baseline_ports` 자료형으로 변환한다.
 
-- [1. 값 객체](#1-값-객체)
+- [1. 값 객체 — 실제 쓰는 것](#1-값-객체--실제-쓰는-것)
 - [2. Ports & Adapters](#2-ports--adapters)
 - [3. FSM State 계층](#3-fsm-state-계층)
 - [4. ROS2 노드 계층](#4-ros2-노드-계층)
-- [5. 마이그레이션 (as-is → to-be)](#5-마이그레이션-as-is--to-be)
+- [5. 죽은 코드 — 남아 있지만 baseline이 쓰지 않는 것](#5-죽은-코드--남아-있지만-baseline이-쓰지-않는-것)
 
 ---
 
-## 1. 값 객체
+## 1. 값 객체 — 실제 쓰는 것
 
-주제 전환으로 **가장 많이 늘어난 부분**입니다. 이전에는 대상이 1개였으므로 `detect_target()` 이
-튜플 하나를 반환하면 충분했지만, 이제 `scan_floor()` 가 **목록을 반환**하므로 원소 타입이 필요합니다.
+`baseline_mission.py`가 실제로 주고받는 자료형은 두 파일에 나뉘어 있다 —
+Host↔Pi 링크 자료형은 `domain/ports/baseline_ports.py`, Pi 내부 관측 자료형은
+`domain/values.py`(일부)와 `domain/ports/perception.py`.
 
 ```mermaid
 classDiagram
     direction LR
 
-    class ObjectClass {
-        <<enum>>
-        GABE
-        CHESS_PIECE
+    class HostCommand {
+        <<dataclass, frozen>>
+        +state : str
+        +linear_x : float
+        +linear_y : float
+        +angular_z : float
+        +stop : bool
+        +wants_motion : bool
     }
-    class BoxColor {
-        <<enum>>
-        BLACK
-        RED
-        BLUE
-        GREEN
+    class MissionState {
+        <<문자열 상수>>
+        IDLE
+        APPROACH
+        GRASP
+        GRASP_FORCE
+        CARRY
+        APPROACH_BOX
+        INSERT
+        DONE
+        ESTOP
     }
-    class MissionMode {
-        <<enum>>
-        TIDY
-        FETCH
+    class Report {
+        <<문자열 상수>>
+        STATE
+        GRASP_READY
+        GRASP_BLOCKED
+        GRASP_CENTERING
+        GRASP_DONE
+        GRASP_FAILED
+        INSERT_READY
+        INSERT_BLOCKED
+        INSERT_DONE
+        INSERT_FAILED
+        IDLE_DONE
+        APPROACH_BOX_READY
+        REJECTED
+        BASE_UNRESPONSIVE
     }
-
-    class Pose2D {
-        <<dataclass>>
-        +x_m : float
-        +y_m : float
-        +theta_rad : float
+    class BasketFace {
+        <<dataclass, frozen>>
+        +ok : bool
+        +distance_m : float
+        +yaw_error_rad : float
+        +reason : str
+        +point_count : int
+        +lateral_offset_m : float
+        +lateral_known : bool
     }
     class Point3 {
         <<dataclass>>
-        +x_m : float
-        +y_m : float
-        +z_m : float
+        +x : float
+        +y : float
+        +z : float
     }
-
-    class Detection {
-        <<dataclass>>
-        +track_id : int
-        +cls : ObjectClass
-        +pose_m : Point3
-        +dims_m : Point3
-        +yaw_rad : float
-        +confidence : float
-    }
-    class BoxObservation {
-        <<dataclass>>
-        +color : BoxColor
-        +pose_m : Pose2D
-        +opening_mm : float
-        +long_axis_rad : float
+    class TargetObservation {
+        <<dataclass, frozen>>
+        +label : str
+        +forward_m : float
+        +lateral_m : float
+        +metric_ok : bool
     }
     class Clearance {
         <<dataclass>>
@@ -80,185 +102,157 @@ classDiagram
         +right_m : float
         +contact_risk : bool
     }
-    class MissionSpec {
-        <<dataclass>>
-        +mode : MissionMode
-        +target_cls : ObjectClass
-        +placement_rule : dict
-        +raw_text : str
-    }
-    class MissionContext {
-        <<dataclass>>
-        +spec : MissionSpec
-        +done_ids : frozenset
-        +held_ids : frozenset
-        +grasp_attempts : int
-        +last_scan : tuple
-        +complete(id) MissionContext
-        +hold(id) MissionContext
-        +retry() MissionContext
-        +reset_attempts() MissionContext
-    }
 
-    Detection --> ObjectClass
-    Detection --> Point3
-    BoxObservation --> BoxColor
-    BoxObservation --> Pose2D
-    MissionSpec --> MissionMode
-    MissionSpec --> ObjectClass
-    MissionContext --> MissionSpec
+    HostCommand --> MissionState : state 필드가 이 상수 중 하나
 ```
 
-> **`ObjectClass` 는 배정된 상자와 1:1입니다.** 상자는 4개지만 **2개는 미배정**입니다.
-> [!WARNING]
-> **코드의 열거형 이름과 문서의 클래스 이름이 어긋나 있습니다.** `domain/values.py` 는
-> 여전히 `ObjectClass.GABE` · `ObjectClass.CHESS_PIECE` 인데, README·`objects.md` 를 비롯한
-> 문서는 8/14 이후 `toy` · `chess` 를 씁니다. **가리키는 대상은 같습니다.**
-> 열거형 개명은 도메인 변경이라 별도 결정이 필요합니다 — 아래 서술의 `GABE` 는 `toy` 로 읽으세요.
+**좌표가 없다는 것이 이 자료형 집합의 핵심이다.** `HostCommand`에는 Pose도 waypoint도 없고,
+Host→Pi로 오는 것은 상태 이름 하나와 속도 셋(`linear_x`/`linear_y`/`angular_z`)뿐이다
+(`domain/ports/baseline_ports.py` — 팀 확정, 2026-08-26). `MissionState`·`Report`가
+클래스가 아니라 **문자열 상수 모음**인 이유도 이 문서 초판(§1의 `ObjectClass`류 Enum)과
+다르다 — 그대로 UDP+JSON과 `MissionState.msg`의 `string state`로 나가야 해서, Enum으로
+두면 양쪽에서 직렬화 규약을 따로 맞춰야 한다(`baseline_ports.py` 주석).
 
-> `GABE`(문서상 `toy`) 안에 정육면체·축구공형 다면체·오각별기둥이
+`TargetObservation`·`BasketFace`는 Pi 자기 센서가 본 것만 담는다 — Host가 보내주지 않는
+"지금 앞에 뭐가 있나"(뎁스캠)·"바구니 정면이 어디 있나"(라이다)를 Pi 스스로 관측해야
+하기 때문이다(§2 참고).
 
-> **`dims_m` 는 단안 추정값입니다.** 변 중앙 고정 C270 ×2 + 바닥면 호모그래피로 산출하므로
-> **바닥 평면 치수는 실측**이지만 높이(z)는 얻을 수 없습니다. 눕힌 물체는 길이·지름이 모두
-> 투영에 나타나고, 세운 물체는 클래스 사전값으로 폴백합니다.
-
-> **⚫ `BLACK` 은 LAB 탐색이 불가능합니다.** 색 성분(`a*` · `b*`)이 모두 0에 가까워
-> 명도(`L*`) 임계값에만 의존하게 되며, 그림자와 구분되지 않습니다.
-> **밝은 색 테두리 또는 ArUco 마커로 탐색 대상을 대체**해야 합니다 → README 인식 구성 절.
-
-**단위 규약이 필드명에 박혀 있습니다.** `_m` · `_rad` · `_mm`. 이름만 보고 단위를 알 수 없으면
-경계에서 변환 사고가 납니다. `opening_mm` 만 mm인 이유는 상자 입구를 mm로 실측하기 때문이고,
-`_mm` 접미사는 **길이**에만 쓰며 각도에는 절대 쓰지 않습니다.
-
-`MissionContext` 는 **불변**입니다. `complete()` · `hold()` · `retry()` · `reset_attempts()` 는
-새 인스턴스를 반환하고, State가 이걸 다음 State 생성자에 넘깁니다. 재시도 카운터를 가변 필드로
-두면 루프 안에서 누가 언제 증가시켰는지 추적이 안 됩니다.
-
-`grasp_attempts` 만 스코프가 **대상 1개**입니다 — `SELECT` 가 새 대상을 고를 때
-`reset_attempts()` 로 되돌립니다. 나머지 필드는 미션 전체 스코프입니다
-([`state_machine.md` §4](state_machine.md#4-재진입-방지--처리-완료-목록)).
-
-> **미결** — `placement_rule` 의 타입. `dict[ObjectClass, BoxColor]` 가 자연스럽지만
-> ROS2 메시지로 넘길 때 dict가 없으므로 `MissionSpec.msg` 에서는 병렬 배열 2개로 평탄화해야 합니다.
-> 배포판 확정(#1) 이후 결정.
+**단위 규약은 여전히 필드명에 박혀 있다.** `_m`·`_rad`·`_mm`. `HostCommand`의 속도 필드만
+예외적으로 접미사가 없는데, 이는 ROS `geometry_msgs/Twist` 관례(`linear.x` 등)를 그대로
+따른 것이다.
 
 ---
 
 ## 2. Ports & Adapters
 
+`baseline_mission.BaselinePorts`가 실제로 조립하는 포트는 **다섯 종 + 인터럽트 둘**이다.
+이전 판(§2 "포트가 4종이 된 이유")의 `CommandInterpreter`는 이 다섯 종에 들어 있지 않다 —
+자연어 명령이 baseline 경로에 존재하지 않기 때문이다(§5).
+
 ```mermaid
 classDiagram
     direction TB
 
-    class MissionTask {
-        -Ports ports
-        +run() Generator~State~
-    }
-    class Ports {
+    class BaselinePorts {
         <<dataclass>>
         +base : BaseDriver
         +arm : ArmDriver
         +perception : Perception
-        +interpreter : CommandInterpreter
+        +host : HostLink
+        +lidar : Lidar
         +estop : Event
+        +watchdog : LinkWatchdog
+        +base_liveness : LivenessLatch
     }
-
-    MissionTask *-- Ports
 
     class BaseDriver {
         <<abstract>>
-        +drive_to(target)* bool
-        +align_to_box(box)* float
+        +apply_velocity(linear_x, linear_y, angular_z)* None
+        +creep_forward(distance_m)* bool
+        +creep_forward_timed(speed_mps, duration_s)* bool
         +stop()* None
+        +liveness() LivenessVerdict|None
     }
     class ArmDriver {
         <<abstract>>
+        +move_to_floor_pose(profile, stage)* bool
         +move_to_cartesian(xyz_m, down)* bool
         +set_gripper(width_mm)* None
         +get_load()* float
         +reorient(phi_rad)* bool
         +fold_to_cradle()* bool
+        +offset_base_yaw(offset_rad)* bool
         +hold_position()* None
     }
     class Perception {
         <<abstract>>
-        +scan_floor()* list~Detection~
-        +find_box(color)* BoxObservation
-        +measure_opening(box)* float
+        +identify_target()* TargetObservation|None
         +monitor_clearance()* Clearance
+        +remember_target(raw_cls)* bool
+        +confirm_grasp()* bool
     }
-    class CommandInterpreter {
+    class HostLink {
         <<abstract>>
-        +parse(text)* MissionSpec
-        +confirm_phrase(spec)* str
+        +latest_command()* HostCommand|None
+        +report(report, state, detail, fix)* None
+    }
+    class Lidar {
+        <<abstract>>
+        +basket_face(bearing_rad)* BasketFace
     }
 
-    Ports --> BaseDriver
-    Ports --> ArmDriver
-    Ports --> Perception
-    Ports --> CommandInterpreter
+    BaselinePorts --> BaseDriver
+    BaselinePorts --> ArmDriver
+    BaselinePorts --> Perception
+    BaselinePorts --> HostLink
+    BaselinePorts --> Lidar
 
     class Ros2MecanumBase
-    class FeetechArm
-    class LearnedPerception
-    class LanguageAdapter
+    class Ros2ArmDriver
+    class Ros2Perception
+    class UdpHostLink
+    class Ros2Lidar
 
     class FakeBase
     class FakeArm
     class ScriptedPerception
-    class ScriptedInterpreter
+    class FakeHostLink
+    class FakeLidar
 
     BaseDriver <|.. Ros2MecanumBase
     BaseDriver <|.. FakeBase
-    ArmDriver <|.. FeetechArm
+    ArmDriver <|.. Ros2ArmDriver
     ArmDriver <|.. FakeArm
-    Perception <|.. LearnedPerception
+    Perception <|.. Ros2Perception
     Perception <|.. ScriptedPerception
-    CommandInterpreter <|.. LanguageAdapter
-    CommandInterpreter <|.. ScriptedInterpreter
+    HostLink <|.. UdpHostLink
+    HostLink <|.. FakeHostLink
+    Lidar <|.. Ros2Lidar
+    Lidar <|.. FakeLidar
 ```
 
 | 계층 | 경로 | ROS2 의존 |
 |---|---|---|
-| Domain | `domain/task/`, `domain/values.py` | ❌ |
-| Ports (ABC) | `domain/ports/` | ❌ |
+| Domain | `domain/task/`, `domain/values.py`(일부) | ❌ |
+| Ports (ABC) | `domain/ports/baseline_ports.py`, `base_driver.py`, `arm_driver.py`, `perception.py` | ❌ |
 | Real Adapters | `domain/adapters/real/` | ✅ **변환 경계** |
-| Fake Adapters | `domain/adapters/fake/` | ❌ (CI에서 사용) |
+| Fake Adapters | `domain/adapters/fake/` | ❌ (테스트·CI 전용) |
 
-### 포트가 4종이 된 이유
+### 왜 좌표 있는 메서드가 사라졌나 (`BaseDriver`)
 
-`CommandInterpreter` 는 신규입니다. 이전 주제에서 명령은 미션 시작 시 한 번 들어오는
-입력이었으므로 포트일 필요가 없었지만, 새 주제에서는 **자연어가 `placement_rule` 을 실제로 바꿉니다.**
+이전 판(§ "포트가 4종이 된 이유")이 그리던 `drive_to(target)`/`align_to_box(box)`는 전부
+없다. 2026-08-26 팀 확정으로 좌표·경로는 전부 Host 소유가 됐고, Pi에 남은 것은 "받은
+속도를 낸다"(`apply_velocity`)와 "멈춘다"(`stop`)뿐이다. `creep_forward*`만 예외인데,
+이것도 좌표가 아니라 GRASP 파지 시퀀스 전용의 "정지 상태에서 정확히 이만큼만 밀어라"다
+(`base_driver.py` 참고).
 
-```
-"체스말은 검은 상자에 넣어줘"  →  placement_rule[CHESS_PIECE] = BLACK
-```
+### `Perception`이 `scan_floor`/`find_box`가 아닌 이유
 
-미션 파라미터를 바꾸는 것은 도메인 로직이므로 포트 뒤에 있어야 하고, `ScriptedInterpreter` 로
-Fake 대체가 되어야 CI에서 명령 문형 회귀 테스트가 돌아갑니다.
+이전 판의 `scan_floor()`(목록 반환)·`find_box(color)`는 "Pi가 아레나 전체를 봐서 목표를
+고른다"는 전제 위에 있었다. 실제 Perception 포트는 **이미 Host가 지시한 목표 하나**를
+Pi 자기 뎁스 카메라로 확인만 한다 — `identify_target()`은 라벨 하나와 전방·좌우 거리만
+낸다. `remember_target`/`confirm_grasp`은 "그때 거기 있던 게 지금 없다"로 파지 성공을
+판정하는 독립 신호쌍이다(`perception.py` 참고, `state_machine.md` §3).
 
-### 음성은 포트가 아닙니다
+### `HostLink`가 신규 포트다
 
-`voice_io` 노드가 STT 결과를 **기존 명령 토픽에 텍스트로 발행**할 뿐입니다.
-도메인 코드는 0줄 바뀝니다. TTS는 `/mission/state` 를 구독합니다.
+`CommandInterpreter`가 빠진 자리에 `HostLink`가 들어왔다 — 자연어 대신 Host가 UDP로
+보내는 `HostCommand`를 받고 `Report` 상수로 응답하는 양방향 링크다. 좌표·목표 선정이
+전부 Host로 넘어간 것과 짝을 이루는 변화다.
 
-> Ports & Adapters의 실증 사례로 발표에서 쓸 수 있는 지점입니다 —
-> "입력 채널을 하나 추가했는데 도메인 계층 diff가 0줄입니다."
+### `Lidar`도 신규 포트다
 
-### `set_gripper` 단위 변경 ⚠️
-
-현행 코드는 `set_gripper(deg: float)` 입니다. **`set_gripper(width_mm: float)` 로 바꿔야 합니다.**
-
-단위 규약(README §단위 규약)이 "개구 폭은 mm, 각도 아님"인데 코드가 도(°)를 받고 있어 규약 위반이고,
-⌀45 mm 대상을 잡는 프로젝트에서 "몇 도 닫을까"보다 "몇 mm 벌릴까"가 도메인 언어입니다.
-서보 각도 변환은 `FeetechArm` 어댑터 내부에서 캘리브레이션 테이블로 처리하세요.
-**미결 #4 (엔드이펙터 개구 폭 실측)의 결과가 이 변환 테이블입니다.**
+바구니 정면 판정(INSERT 전환 조건) 전용이다. 바닥 물체 회피에는 못 쓴다 — 라이다 평면이
+바닥 위 140mm에서 11.3도 아래로 기울어 체스말 위를 지나간다(`lidar.py` 주석,
+`grippers-sensor-tilt` 메모리와 일치).
 
 ---
 
 ## 3. FSM State 계층
 
-전이 그래프는 **[`state_machine.md`](state_machine.md)** 가 단일 소스입니다. 여기서는 클래스 구조만 다룹니다.
+전이 그래프는 **[`state_machine.md`](state_machine.md)** 가 단일 소스다. 여기서는
+클래스 구조만 다룬다. 이전 판의 13개 State(`ScanState`~`RejectState`)는 전부 사라지고
+**7개 State + 1 Ports 데이터클래스 + 2개 헬퍼(카운터) 클래스**로 대체됐다.
 
 ```mermaid
 classDiagram
@@ -267,102 +261,52 @@ classDiagram
     class State {
         <<abstract>>
         +name : str
-        +execute(ports)* State
+        +execute(ports)* State|None
     }
 
-    class IdleState {
-        -ctx : MissionContext
-    }
-    class ScanState {
-        -ctx : MissionContext
-        -MAX_RESCAN = 3
-    }
-    class SelectState {
-        -ctx : MissionContext
-        -detections : list~Detection~
-        -_pick(detections) Detection
-    }
-    class ApproachState {
-        -ctx : MissionContext
-        -target : Detection
-    }
-    class GraspState {
-        -ctx : MissionContext
-        -target : Detection
-        -MAX_GRASP_RETRY = 3
-        -LOAD_THRESHOLD = 0.04
-    }
-    class TransportState {
-        -ctx : MissionContext
-        -target : Detection
-    }
-    class PosePlanState {
-        -ctx : MissionContext
-        -_solve_phi(dims_m, opening_mm) float
-    }
-    class InsertState {
-        -ctx : MissionContext
-        -phi_rad : float
-    }
-    class DeliverState {
-        -ctx : MissionContext
-        -target : Detection
-    }
-    class HandoverState {
-        -ctx : MissionContext
-    }
-    class RejectState {
-        -ctx : MissionContext
-        -reason : str
-    }
-    class DoneState {
-        -ctx : MissionContext
-    }
-    class EstopState
+    class BaselineIdleState
+    class BaselineApproachState
+    class BaselineGraspState
+    class BaselineCarryState
+    class BaselineInsertState
+    class BaselineDoneState
+    class BaselineEstopState
 
-    State <|-- IdleState
-    State <|-- ScanState
-    State <|-- SelectState
-    State <|-- ApproachState
-    State <|-- GraspState
-    State <|-- TransportState
-    State <|-- PosePlanState
-    State <|-- InsertState
-    State <|-- DeliverState
-    State <|-- HandoverState
-    State <|-- RejectState
-    State <|-- DoneState
-    State <|-- EstopState
+    State <|-- BaselineIdleState
+    State <|-- BaselineApproachState
+    State <|-- BaselineGraspState
+    State <|-- BaselineCarryState
+    State <|-- BaselineInsertState
+    State <|-- BaselineDoneState
+    State <|-- BaselineEstopState
+
+    class LinkWatchdog {
+        -timeout_cycles : int
+        -misses : int
+        +observe(command) bool
+    }
+    class BaselineMission {
+        +run() Generator~State~
+    }
+
+    BaselineMission ..> BaselinePorts
+    BaselineMission ..> State : yield
+    BaselinePorts --> LinkWatchdog
 ```
 
-`execute()` 가 **다음 State 인스턴스를 반환**하는 체인 구조는 그대로입니다.
-`DoneState.execute()` 만 `None` 을 반환하고, 나머지는 실패해도 `ScanState` 를 반환합니다.
+### 인스턴스 변수 제약이 사라진 자리
 
-### 인스턴스 변수 2개 제약과 `ctx`
+이전 판의 "State당 인스턴스 변수 2개 이하 → `MissionContext` 하나로 묶는다"는 제약과
+`ctx` 패턴은 baseline에 없다. `MissionContext`(재시도 카운터·완료 목록을 담는 불변
+값 객체) 자체를 baseline이 쓰지 않기 때문이다 — Pi FSM은 한 번에 물체 하나만 알고,
+재시도 예산·완료 목록 같은 "여러 물체를 순회하는" 개념 자체가 없다
+(`state_machine.md` §1 대비표). 대신 사이클을 건너 들고 다녀야 하는 두 값
+(`LinkWatchdog`의 결측 횟수, `base_liveness`의 직전 상태)은 State가 아니라
+**`BaselinePorts`가 직접 들고 있다** — State는 전이마다 새로 만들어지지만 이 둘은
+미션 전체에 걸쳐 유지돼야 하기 때문이다(`baseline_mission.py` 주석).
 
-코드 리뷰 제약 "클래스당 인스턴스 변수 2개 이하"를 지키려면 루프에서 넘겨야 할 상태
-(모드 · 배치 규칙 · 처리 완료 목록 · 재시도 횟수)를 개별 필드로 둘 수 없습니다.
-**`ctx` 하나에 묶어서 각 State는 `ctx` + 작업 대상 1개, 최대 2개**로 맞춥니다.
-
-`MissionContext` 자체는 값 객체(dataclass)이므로 이 제약의 대상이 아닙니다 —
-제약은 **행위를 가진 클래스**의 결합도를 낮추기 위한 것입니다.
-
-### `_solve_phi` — 보류 (대상 클래스 미정)
-
-```
-H_proj(φ) = L·|cos φ| + w·|sin φ|  ≤  W_open − margin
-→ φ ≥ 0.83 rad (48°)   — W_open = 0.40 m 기준
-```
-
-> **⚠️ 부등호 방향이 이전과 반대입니다.** 이전 주제는 낮은 개구부 **밑을 지나느라 눕혔고**
-> (`φ ≲ 27°`), 지금은 좁은 입구에 **넣느라 세웁니다** (`φ ≥ 48°`). `sin`/`cos` 위치도 바뀝니다.
-> 이전 코드의 `_solve_phi` 를 복사해 오면 부호가 틀립니다.
-
-해 구간이 없으면 `RejectState` 를 반환합니다. **이 반환 경로가 유즈케이스 2 그 자체입니다** —
-"못 넣습니다"라고 판단하는 능력이 여기 한 줄로 표현됩니다.
-
-`margin` 은 이 프로젝트에서 **유일하게 정직한 학습 적용 지점**입니다 (추정 오차 ↔ 성공률
-트레이드오프에 닫힌 해가 없음). 나머지는 전부 닫힌 형태 해입니다. 미결 #7.
+`execute()`가 **다음 State 인스턴스(또는 종료 시 `None`)를 반환**하는 체인 구조는
+이전 판과 같다. `BaselineDoneState.execute()`만 `None`을 반환한다.
 
 ---
 
@@ -378,105 +322,77 @@ classDiagram
 
     class MissionOrchestratorNode {
         -Publisher _state_pub
-        -Event _estop_flag
         -Thread _fsm_thread
-        +_on_command(msg)
+        +_on_command(...)
         +_run_fsm()
     }
     class PerceptionNode {
-        -CvBridge _bridge
-        +_on_scan_floor(req, res)
-        +_on_find_box(req, res)
-        +_on_monitor_clearance(req, res)
-    }
-    class InferenceNode {
-        -HailoDevice _device
-        +_on_image(msg)
-        +_publish_detections()
-    }
-    class BaseDriverNode {
-        -Publisher _cmd_vel_pub
-        -ActionServer _drive_action_server
-        +_execute_drive_to(goal)
-        +_on_align_to_box(req, res)
+        +identify_target 서비스
+        +monitor_clearance 서비스
     }
     class ArmDriverNode {
-        -ActionServer _move_action_server
-        +_execute_move(goal)
-        +_on_set_gripper(req, res)
+        -_check_taught_calibration()
     }
-    class VoiceIoNode {
-        -SttEngine _stt
-        -Publisher _command_pub
-        +_on_ptt_pressed()
-        +_on_mission_state(msg)
-    }
-    class HudNode {
-        -Publisher _overlay_pub
-    }
+    class GripperCamPublisherNode
+    class DepthCamRotateNode
+    class BatteryBuzzerNode
+    class Controller
+    class LanguageNode
 
     Node <|-- MissionOrchestratorNode
     Node <|-- PerceptionNode
-    Node <|-- InferenceNode
-    Node <|-- BaseDriverNode
     Node <|-- ArmDriverNode
-    Node <|-- VoiceIoNode
-    Node <|-- HudNode
+    Node <|-- GripperCamPublisherNode
+    Node <|-- DepthCamRotateNode
+    Node <|-- BatteryBuzzerNode
+    Node <|-- Controller
+    Node <|-- LanguageNode
 
-    MissionOrchestratorNode ..> MissionTask : 실행
-    VoiceIoNode ..> MissionOrchestratorNode : /command (std_msgs/String)
-    InferenceNode ..> PerceptionNode : /detections
+    MissionOrchestratorNode ..> BaselineMission : 별도 데몬 스레드로 실행
+    MissionOrchestratorNode ..> UdpHostLink
+    MissionOrchestratorNode ..> Ros2MecanumBase
+    MissionOrchestratorNode ..> Ros2ArmDriver
+    MissionOrchestratorNode ..> Ros2Perception
+    MissionOrchestratorNode ..> Ros2Lidar
+    Controller ..> MissionOrchestratorNode : /cmd_vel 구독 -> STM32 모터 명령
 ```
 
-| 노드 | 소유 자원 | 비고 |
-|---|---|---|
-| `mission_orchestrator` | 없음 (포트만 호출) | FSM은 **별도 데몬 스레드**, rclpy는 `MultiThreadedExecutor` |
-| `perception` | 카메라 | 기하 변환 · 상자 색 탐색(LAB) · 클리어런스 |
-| `inference` | **Hailo-10H (AI HAT+ 2)** | 검출 추론 전담. 하드웨어 소유가 분리 근거 |
-| `base_driver` | `/cmd_vel` 발행, `/odom` 구독 | **`/cmd_vel` 발행 주체는 이 노드 하나뿐** |
-| `arm_driver` | SO-ARM101 (Feetech STS3215 ×6) | 3S LiPo 전원 도메인 |
-| `voice_io` | **USB 마이크 · 스피커** | Pi 5에 3.5 mm 잭 없음 → USB 필수 |
-| `hud` | 없음 | rviz `MarkerArray` 오버레이 발행 |
+| 노드 | 패키지 | 소유 자원 | baseline 연결 |
+|---|---|---|---|
+| `mission_orchestrator` | `grippers_mission` | 없음(포트만 호출) | FSM 본체, `MultiThreadedExecutor` — E-STOP이 FSM 블로킹 중에도 즉시 들어와야 해서 |
+| `perception` | `grippers_perception` | 뎁스 카메라 | `identify_target`/`monitor_clearance`/`remember_target`/`confirm_grasp` 서비스 |
+| `arm_driver` | `grippers_arm` | SO-ARM101(Feetech STS3215 ×6) | `move_to_floor_pose`/`get_load` 등. **기동 시 교시 오프셋 대조**(`_check_taught_calibration`) — EEPROM이 다르면 `ArmCalibrationMismatchError`로 기동 자체를 거부 |
+| `controller`(`Controller` 클래스) | `driver/controller`(MentorPi 벤더) | `/cmd_vel` 구독 → STM32 모터 명령 | **`/cmd_vel`에 실제로 쓰는 것은 이 노드다** — `Ros2MecanumBase`는 발행만 하고, 이 노드가 없으면 바퀴가 안 돈다(2026-09-08 RUNBOOK §3.5) |
+| `gripper_cam_publisher` | `grippers_perception` | 그리퍼캠(USB) | **모니터링 전용** — GRASP 판정에 안 쓴다(2026-09-03, gripper-cam 시도 종료) |
+| `depth_cam_rotate` | `grippers_perception` | — | 뎁스 이미지 회전 보정 |
+| `battery_buzzer` | `grippers_mission` | STM32 부저 | 저전압 경고. **2026-09-03 알람 로직 자체를 제거**(오탐) — 노드는 남아 있으나 baseline이 알람을 안 낸다 |
+| `language`(`LanguageNode`) | `grippers_language` | — | **baseline과 연결 안 됨** — `CommandInterpreter`/`LanguageAdapter`를 쓰는 코드가 어디에도 없음(§5) |
 
-**분할 기준은 "동시에 도는가 / 하드웨어를 소유하는가"입니다.** 기능 축이 아닙니다.
-`perception` 과 `inference` 를 나눈 것도 기능이 달라서가 아니라 `inference` 가 가속기를
-독점하기 때문입니다.
-
-> **AI HAT+ 2 성능 예산 주의** — 40 TOPS는 INT4 LLM/VLM 기준입니다.
-> 비전 처리량은 26 TOPS(Hailo-8)급으로 잡으세요. 40을 예산에 쓰면 M2에서 프레임레이트가 안 나옵니다.
-
-### 안전 기본값
-
-`monitor_clearance()` 는 실제 측정이 되기 전까지 **항상 `contact_risk=True` (정지)** 를 반환합니다.
-"모르면 멈춘다"가 기본값입니다. `scan_floor()` 는 빈 목록을 반환해 `DONE` 으로 빠지게 하고,
-`find_box()` 는 `None` 을 반환해 보류 등록을 유도합니다.
+**`Ros2MecanumBase`가 `/cmd_vel`에 publish만 하고, `Controller`(`odom_publisher_node.py`)가
+그걸 받아 STM32에 쓴다는 이 두 단계 분리**가 09-08 RUNBOOK의 "모터 컨트롤러를 먼저
+띄워야 한다" 경고의 근거다 — `Controller`가 없으면 명령이 구독자 0으로 조용히 버려진다.
 
 ---
 
-## 5. 마이그레이션 (as-is → to-be)
+## 5. 죽은 코드 — 남아 있지만 baseline이 쓰지 않는 것
 
-현재 `main` 과 이 문서의 차이입니다. **각 항목이 PR 단위입니다.**
+grep으로 확인(2026-09-04): 아래 값·포트·어댑터를 import하는 곳이
+`domain/task/baseline_mission.py` 경로 어디에도 없다. 지우지 않은 이유는 문서에
+남아 있지 않아 이 문서에서 확인할 수 없지만, **파지·판정 로직에 아무 영향이 없다**는
+점은 이번 재작성으로 확인됐다.
 
-| # | 파일 | 변경 | 규모 |
-|---|---|---|---|
-| 1 | `domain/values.py` | `Detection` · `BoxObservation` · `Clearance` · `MissionSpec` · `MissionContext` · enum 3종 추가, 필드명에 `_m`/`_rad` 접미사 | **대** |
-| 2 | `domain/ports/perception.py` | `detect_target`/`measure_gap`/`set_light_profile` 삭제 → `scan_floor`/`find_box`/`measure_opening` | **대** |
-| 3 | `domain/ports/base_driver.py` | `align_to_centerline()` → `align_to_box(box)` | 소 |
-| 4 | `domain/ports/arm_driver.py` | `set_gripper(deg)` → `set_gripper(width_mm)`, `reorient`/`fold_to_cradle`/`hold_position` 추가 | 중 |
-| 5 | `domain/ports/command_interpreter.py` | **신규 파일** | 중 |
-| 6 | `domain/task/states.py` | 전면 재작성 (상태 15개 → 13개, 루프 구조) | **대** |
-| 7 | `domain/task/mission_task.py` | `Ports` 에 `interpreter` 추가 | 소 |
-| 8 | `domain/adapters/fake/*` | 신규 시그니처 대응, `ScriptedInterpreter` 추가 | 중 |
-| 9 | `domain/adapters/real/*` | 신규 시그니처 대응 | 중 |
-| 10 | `tests/` | 무한 루프 방지 테스트 신규 | 중 |
+| 이전 판이 다루던 것 | 실제 위치 | baseline에서 |
+|---|---|---|
+| `ObjectClass`, `Destination`(舊 `BoxColor`), `MissionMode`, `MissionSpec`, `MissionContext` | `domain/values.py` | 미사용 — GRASP 라벨은 문자열(`"queen"`/`"box"`/…)로 `baseline_mission._OBJECT_WIDTH_MM`에서 직접 처리 |
+| `Detection`, `BoxObservation` | `domain/values.py` | 미사용 — `Perception.identify_target()`이 `TargetObservation` 하나만 반환 |
+| `Perception.scan_floor`/`find_box`/`measure_opening` | `domain/ports/perception.py`에 문서 흔적만 있고 실제 클래스에는 없음 | 애초에 정의 자체가 없음 |
+| `CommandInterpreter`, `ScriptedInterpreter`, `LanguageAdapter` | `domain/ports/command_interpreter.py`, `domain/adapters/fake/scripted_interpreter.py` | 포트·어댑터는 존재하나 `BaselinePorts`에 자리가 없어 인스턴스화되는 경로가 없음 |
+| `LanguageNode`(ROS2) | `ros2_ws/src/grippers_language/` | 노드는 빌드되나 `mission_orchestrator_node`가 구독하지 않음 |
+| `MissionTask`, 13개 舊 State(`ScanState` 등) | 문서에만 존재 — `domain/task/states.py` 자체가 저장소에 없음 | — |
 
-**순서 주의** — 1 → 2·3·4·5 → 8 → 6 → 7 → 9 → 10.
-값 객체가 먼저 들어가지 않으면 포트 시그니처를 쓸 수 없고, Fake가 먼저 들어가지 않으면
-`states.py` 재작성 중에 CI가 계속 빨간불입니다.
-
-**#2 는 배포판 확정(미결 #1) 전에는 머지하지 마세요.** `scan_floor()` 가 목록을 반환하므로
-`grippers_interfaces` 에 `Detection.msg` / `DetectionArray.msg` 가 필요하고,
-Humble(3.10)과 Jazzy(3.12)는 타입 해시가 달라 통신이 안 됩니다.
+**가장 큰 구조 변화는 [`state_machine.md`](state_machine.md) §5가 이미 기록했다** — Pi가
+자율적으로 여러 물체를 스캔·선정·순회하던 설계에서, Host가 모든 지능을 갖고 Pi는
+지시를 실행 + 자기 센서 판단만 보고하는 구조로 전환됐다.
 
 ---
 

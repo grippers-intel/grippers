@@ -30,8 +30,10 @@
 - **FSM 전이는 [`state_machine.md`](design/state_machine.md) 가 단일 소스** — 다른 문서에 중복 정의 금지.
   **2026-09-03 실제 코드(`domain/task/baseline_mission.py`) 기준으로 갱신 완료.**
 - **[`hld.md`](design/hld.md) · [`error_budget.md`](design/error_budget.md) · [`class_diagram.md`](design/class_diagram.md) ·
-  [`sequences.md`](design/sequences.md) 는 주제 변경 이전 기준(구 SCAN/SELECT 루프 설계)** — 참조 전
-  [`state_machine.md`](design/state_machine.md) §5 as-is 대비표부터 확인
+  [`sequences.md`](design/sequences.md) · [`architecture.puml`](design/architecture.puml) 도 전부
+  2026-09-04에 같은 실제 코드 기준으로 갱신 완료** — 더 이상 구 SCAN/SELECT 루프 설계가 아니다.
+  `design/` 아래 유일하게 남은 구 설계 문서는 [`pose_planning.md`](subsystems/pose_planning.md)뿐이며,
+  이건 ⏸ 보류 표시가 이미 붙어 있다.
 
 ---
 

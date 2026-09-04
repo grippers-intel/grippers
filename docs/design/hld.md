@@ -1,51 +1,56 @@
 # HLD — High Level Design
 
-> **문서 상태**: 초안 · **freeze 목표: 2026-08-14 (금)**
-> **기준 커밋**: `main` (구현이 문서보다 앞서 있는 부분은 구현을 기준으로 기술)
-> **관련 이슈**: #25 (본 문서) · #15 유즈케이스 · #17 노드 구성 · #24 명령 문형 · #27 메시지 스키마 · #29 UML
-> **변경 규칙**: freeze 이후 변경은 PR + 섹션 오너 승인. §4는 3인 합의.
+> **상태: 실제 코드 기준으로 전면 재작성 (2026-09-04).** 이 문서는 원래 **암실 반출**
+> 미션(§1의 "작업실/암실/좁은 출구", §6의 `TRANSIT_OUT`/`DOCKING`/`NARROW_EXIT` 등)을
+> 기술했다 — 이 프로젝트의 **첫 번째** 설계였고 8/14 freeze를 목표했지만 채택되지
+> 않았다. 그 뒤 장난감 정리(TIDY/FETCH, `SCAN`/`SELECT` 루프, [`class_diagram.md`](class_diagram.md)
+> 이전 판)로 한 번, 2026-08-26 Host 지시 실행형 FSM(`baseline_mission.py`)으로 다시 한 번
+> 아키텍처가 바뀌었다. 이 문서는 이제 **세 번째이자 실제 배포된 설계**만 기술한다 —
+> FSM 전이 자체의 단일 소스는 여전히 [`state_machine.md`](state_machine.md)다.
 
 ---
 
 ## 0. 이 문서의 범위
 
-README는 **왜 이 문제인가**를 설명합니다. HLD는 **무엇을 어떻게 만드는가**를 정의합니다.
-구현자가 이 문서만 보고 자기 모듈을 짤 수 있어야 합니다.
+README는 **왜 이 문제인가**를 설명한다. HLD는 **무엇을 어떻게 만드는가**를 정의한다.
 
 | 다루는 것 | 다루지 않는 것 |
 |---|---|
 | 컴포넌트 분해와 책임 경계 | 프로젝트 동기·배경 → README |
-| 인터페이스 명세 (서비스·액션·포트) | 함수 단위 구현 |
-| 상태 전이와 실패 처리 | 실측 데이터 → `measurements.md` |
-| 좌표계·데이터 흐름 | 채택하지 않은 설계 → `rejected_designs.md` |
-| 예산 배분 | |
+| 인터페이스 명세 (UDP 링크·ROS 토픽/서비스/액션) | 함수 단위 구현 |
+| 상태 전이와 실패 처리 → `state_machine.md`가 단일 소스 | 클래스 구조 → `class_diagram.md` |
+| 하드웨어 구성·좌표계 | 오차/문턱값 실측치 → `error_budget.md` |
 
 ---
 
 ## 1. 시스템 컨텍스트
 
-### 1.1 외부 경계
+### 1.1 Host / Pi 역할 분담 (팀 확정, 2026-08-26)
+
+**Host(`grippers-host-mac`, 노트북)가 공간에 관한 모든 것을 소유한다** — 오버헤드 웹캠
+2대로 물체·차량 좌표를 추정하고, 목표를 선정하고, 경로를 계산하고, 매 사이클 속도
+명령을 만든다. **Pi는 그 명령을 실행하고, 자기 센서로만 알 수 있는 것을 판단해
+보고할 뿐이다.** 이것이 이 문서 전체를 관통하는 단일 결정이다 —
+`domain/ports/baseline_ports.py` 최상단 docstring이 이 결정의 원문이다.
 
 | 액터 / 외부 요소 | 상호작용 | 방향 |
 |---|---|---|
-| 작업자 (격벽 밖) | 키보드 텍스트 명령 | → 시스템 |
-| 작업자 | 결과 보고 (성공 여부·접촉·시간) | 시스템 → |
-| 작업자 | E-STOP (`/mission/emergency_stop`) | → 시스템 |
-| 작업실 (정상광) | 출발·복귀 지점, 장물 배치 슬롯 | 환경 |
-| 암실 겸 멸균실 (무광) | 파지 대상, 접촉 금지 구조물 | 환경 |
-| 좁은 출구 (높이 ~300mm) | 자세 재조정 통과 대상 | 환경 |
-| AI training server | 모델 학습 (오프라인) | 개발 시점만 |
+| Host(맥) | UDP 명령(`HostCommand`) 5005 | → Pi |
+| Pi | UDP 보고(`Report`+`MissionState`) 5006 | → Host |
+| 작업자 | E-STOP(`threading.Event`, Pi 로컬) | → Pi FSM |
+| 아레나(정상광) | 파지 대상 6클래스(체스말 3·장난감 3, 3D 프린팅), 바구니 2개(좌/우) | 환경 |
+| 하드웨어 종료일 | **2026-09-08** | 제약 |
 
 ### 1.2 제약 조건
 
 | 구분 | 제약 |
 |---|---|
-| 조명 | 암실 구간 가시광 사용 불가 → IR 능동 조명 |
-| 오염 | 구조물 접촉 0회. 물체를 내려놓을 수 없음 |
-| 정보 | `L`, `w`, `H_gap` 을 **사전에 주지 않음** |
-| 자율성 | 암실 진입 후 추가 명령 없음 |
-| 전원 | 팔 서보와 로직 전원 도메인 분리 |
-| 기간 | 2026-09-08 발표 |
+| 좌표 | Pi 어떤 포트에도 좌표·경로가 없다 — 있으면 Host의 일이 새는 신호 |
+| `/cmd_vel` | 발행 주체는 `base_driver`(`Ros2MecanumBase`) 하나뿐 — 실제로 STM32에 쓰는 것은 별도의 `controller`/`odom_publisher_node`(`Controller`) |
+| 링크 | UDP는 최신 명령만 본다 — 재전송 대기 없음. `None`(안 옴)과 정지 명령은 다르다(`LinkWatchdog`) |
+| 라이다 | 바닥 위 140mm·11.3° 하향틸트 — 바닥 물체 회피엔 못 쓴다, 바구니 정면 판정 전용 |
+| 전원 | 팔 서보(3S LiPo)와 로직 전원 도메인 분리 |
+| 기간 | 하드웨어 접근 2026-09-08 종료 — 이후 녹화 데이터·순수 소프트웨어만 |
 
 ---
 
@@ -54,59 +59,72 @@ README는 **왜 이 문제인가**를 설명합니다. HLD는 **무엇을 어떻
 ### 2.1 계층
 
 ```
-작업자 텍스트 명령
-      │
+Host(맥, grippers-host-mac)
+      │  UDP 5005 HostCommand{state, linear_x, linear_y, angular_z, stop}
       ▼
-┌──────────────────────────────────────────────┐
-│ domain/  (순수 Python · ROS2 타입 모름)        │
-│   task/mission_task.py   MissionTask (제너레이터)│
-│   task/states.py         State 체인             │
-│   values.py              Pose2D / Point3        │
-└──────────────────┬───────────────────────────┘
-                   │ domain/ports/ (ABC)
-      ┌────────────┼────────────┐
-      ▼            ▼            ▼
-  BaseDriver   ArmDriver   Perception        + estop (threading.Event)
-      │            │            │
- real │ fake  real │ fake  real │ fake
-      ▼            ▼            ▼
- Ros2Mecanum  Ros2ArmDriver  Ros2Perception   ← geometry_msgs ↔ values 변환 경계
-   FakeBase      FakeArm     FakePerception
+┌──────────────────────────────────────────────────────┐
+│ domain/  (순수 Python · ROS2 타입 모름)                │
+│   task/baseline_mission.py   BaselineMission FSM        │
+│   ports/baseline_ports.py    HostCommand/MissionState/Report │
+└──────────────────┬─────────────────────────────────────┘
+                   │ domain/ports/ (ABC) — 5종
+      ┌────────────┼─────────────┬────────────┬──────────┐
+      ▼            ▼             ▼            ▼          ▼
+  HostLink     BaseDriver    ArmDriver   Perception    Lidar
+      │            │             │            │          │
+ real│fake    real│fake     real│fake    real│fake  real│fake
+      ▼            ▼             ▼            ▼          ▼
+ UdpHostLink  Ros2MecanumBase Ros2ArmDriver Ros2Perception Ros2Lidar
+                                                                  + FakeHostLink/FakeBase/FakeArm/ScriptedPerception/FakeLidar
+      │
+      ▼ UDP 5006 Report+MissionState
+   Host(맥)
 ```
 
-> 클래스 단위 구조는 [`class_diagram.md`](class_diagram.md) 를 참고하세요.
+> 클래스 단위 구조는 [`class_diagram.md`](class_diagram.md)를 참고하라. 포트는 **5종**이다
+> (`HostLink`·`BaseDriver`·`ArmDriver`·`Perception`·`Lidar`). 이전 판의 `TransformProvider`·
+> `CommandInterpreter`는 baseline 경로에 없다 — 좌표 변환 자체가 필요 없고(좌표가 Pi에
+> 안 옴), 자연어 명령 경로가 배포되지 않았다(`class_diagram.md` §5).
 
-- **포트는 3종**입니다 (`BaseDriver`, `ArmDriver`, `Perception`). `TransformProvider` 는 도입하지 않았고, 좌표 변환은 각 Real 어댑터 안에서 수행합니다.
-- `Ports` 데이터클래스는 여기에 **`estop` (threading.Event 유사 객체)** 를 하나 더 들고 있습니다. 포트 ABC가 아니라 인터럽트 플래그입니다.
-- `MissionTask.run()` 은 **제너레이터**로, 매 전이마다 상태를 `yield` 합니다. 노드가 이를 받아 `/mission/state` 로 발행합니다.
+- `BaselinePorts` 데이터클래스는 여기에 **`estop`(threading.Event)과 `watchdog`
+  (`LinkWatchdog`)**을 포트 ABC가 아닌 인터럽트/카운터로 들고 있다.
+- `BaselineMission.run()`은 **제너레이터**로, 매 사이클 상태를 `yield`한다. 노드가 이를
+  받아 `/mission/state`로 발행한다(ROS 쪽 관측용 — Host로 가는 실제 보고는 UDP로
+  별도로 나간다).
 
 ### 2.2 ROS2 패키지 구성
 
-| 패키지 | 산출물 | 상태 |
+| 패키지 | 산출물 | baseline 연결 |
 |---|---|---|
-| `grippers_interfaces` | msg 1 · srv 7 · action 3 | ✅ |
-| `grippers_mission` | `mission_orchestrator_node` | ✅ |
+| `grippers_interfaces` | msg 4 · srv 9 · action 3 | 일부만 baseline이 실제로 씀(§4.5) |
+| `grippers_mission` | `mission_orchestrator_node`, `battery_buzzer_node` | ✅ FSM 본체 |
 | `grippers_base` | `base_driver_node` | ✅ |
-| `grippers_arm` | `arm_driver_node` | ✅ |
-| `grippers_perception` | `perception_node` | ✅ |
-| `grippers_vla` | — | ⚠️ **패키지만 있고 노드 없음** |
-| `grippers_bringup` | `bringup.launch.py` | ✅ |
-| `hud` | — | ⚠️ 미착수 |
+| `grippers_arm` | `arm_driver_node` | ✅ 기동 시 교시 캘리브레이션 대조 |
+| `grippers_perception` | `perception_node`, `depth_cam_rotate_node`, `gripper_cam_publisher_node` | ✅ (그리퍼캠은 모니터링 전용) |
+| `grippers_language` | `language_node` | ⚠️ **빌드되지만 mission_orchestrator가 구독 안 함**(`class_diagram.md` §5) |
+| `grippers_vla` | SmolVLA/ACT 실험 | ⚠️ **stretch 브랜치, baseline에 미병합**(`grippers-smolvla-is-a-stretch-branch`) |
+| `grippers_bringup` | launch 재조합 | ✅ |
+| `driver/controller` | `odom_publisher_node`(`Controller`) | ✅ **`/cmd_vel`을 실제로 STM32에 쓰는 노드** — MentorPi 벤더 스택 |
 
-MentorPi 벤더 스택(`app`, `bringup`, `driver`, `peripherals`, `navigation`, `slam`, `yolov5_ros2` …)이 `ros2_ws/src` 에 함께 들어 있습니다. `grippers_bringup` 은 대회용 `bringup.launch.py` 를 통째로 쓰지 않고 `controller` / `depth_camera` / `lidar` 만 골라 포함합니다 — **`/cmd_vel` 경쟁 방지**가 이유입니다.
+MentorPi 벤더 스택(`app`, `driver`, `peripherals`, `navigation`, `slam`, `yolov5_ros2` 등)이
+`ros2_ws/src`에 함께 들어 있다. `grippers_bringup`은 대회용 `bringup.launch.py`를 통째로
+쓰지 않고 `controller`/`depth_camera`/`lidar`만 골라 포함한다 — `/cmd_vel` 경쟁 방지가
+이유다.
 
 ### 2.3 컴포넌트 책임
 
-| 노드 | 책임 | 하지 않는 것 | 오너 |
+| 노드 | 위치 | 책임 | 하지 않는 것 |
 |---|---|---|---|
-| `mission_orchestrator` | FSM 실행, 상태 발행, E-STOP 수신 | 직접 하드웨어 접근 | |
-| `perception` | 카메라 소유, 조명 프로파일, 검출, 여유 거리 | 모션 결정 | |
-| `arm_driver` | 서보 통신, IK, 그리퍼, 부하 조회 | 무엇을 잡을지 결정 | |
-| `base_driver` | 주행, LiDAR, 회피기동, 정렬 | 미션 순서 판단 | |
-| `vla_inference` | V/L/A 추론 — **실행 기준선은 Pi 5 CPU**. Hailo 오프로드는 연산자 지원 확인 후 (→ §9 #10) | 상태 관리 | |
-| `hud` | 시각화 (`/mission/state` 만 구독) | 제어 명령 발행 | |
+| `mission_orchestrator` | Pi | FSM 실행, UDP 송수신, `/mission/state` 발행 | 직접 하드웨어 접근, 좌표 계산 |
+| `perception` | Pi | 뎁스캠 소유, `identify_target`/`monitor_clearance`/`remember_target`/`confirm_grasp` | 목표 선정(그건 Host의 Geti 모델) |
+| `arm_driver` | Pi | Feetech SDK, 관절 이동, 부하 조회, **기동 시 EEPROM 오프셋 대조** | 무엇을 잡을지 결정 |
+| `base_driver`(`Ros2MecanumBase`) | Pi | `/cmd_vel` 발행만 | STM32에 실제로 쓰기(그건 `controller`) |
+| `controller`(`Controller`) | Pi | `/cmd_vel` 구독 → STM32 모터 명령 | 명령 판단 |
+| Host(`grippers-host-mac`) | 맥 | 좌표 추정, 목표 선정, 경로 계산, UDP 송수신 | ROS2 패키지가 아니라 순수 Python |
 
-> `/cmd_vel` 발행 주체는 `base_driver` **하나뿐**입니다.
+> `/cmd_vel` 발행 주체는 `base_driver` 하나뿐이지만, **바퀴를 실제로 돌리는 것은
+> `controller`다** — 이 두 노드가 모두 떠 있어야 한다는 것이 2026-09-08 RUNBOOK
+> §3.5의 핵심 경고다(`controller`가 없으면 명령이 구독자 0으로 조용히 버려진다).
 
 ---
 
@@ -114,277 +132,153 @@ MentorPi 벤더 스택(`app`, `bringup`, `driver`, `peripherals`, `navigation`, 
 
 ### 3.1 스레딩 모델
 
-`mission_orchestrator_node` 는 FSM을 **별도 데몬 스레드**에서 순차 실행하고, rclpy는 `MultiThreadedExecutor` 로 스핀합니다. FSM이 액션 완료를 기다리며 블로킹 중이어도 E-STOP 콜백이 즉시 들어오게 하기 위함입니다. E-STOP 구독은 `ReentrantCallbackGroup` 을 씁니다.
+`mission_orchestrator_node`는 FSM을 **별도 데몬 스레드**에서 순차 실행하고, rclpy는
+`MultiThreadedExecutor`로 스핀한다. FSM이 포트 호출로 블로킹 중이어도 E-STOP이 즉시
+들어오게 하기 위함이다.
 
 ```
-[FSM thread]  IdleState → ... → execute(ports) → 블로킹 대기
-[executor]    /mission/emergency_stop 수신 → threading.Event.set()
-              → 다음 루프 진입 시 EstopState로 전이
+[FSM thread]  BaselineIdleState → ... → execute(ports) → 포트 호출 대기
+[executor]    ports.estop.is_set() 를 매 루프 확인
+              → 다음 사이클 진입 시 BaselineEstopState로 전이
 ```
 
 ### 3.2 배치
 
 | 실행 위치 | 구동 요소 | 상태 |
 |---|---|---|
-| Raspberry Pi 5 (온보드) | 전 노드 | |
-| AI 가속기 (**Raspberry Pi AI HAT+ 2** — Hailo-10H·8GB LPDDR4X 기판 실장, 16핀 PCIe FFC로 Pi 5 직결) | **YOLO 검출·세그멘테이션 추론** (`.hef` 컴파일 필요) | ✅ **채택 확정 · 실물 보유 · PCIe 물리 장착 완료(8/11)**. 캐리어 불필요. ✅ 드라이버/HailoRT 인식 및 컨테이너 Python 3.10 연동 완료(8/19, HailoRT 5.1.1, HAILO10H PCIe 장치 인식 확인). **VLA 3분할 상주는 미확정** (§9 #10) |
-| **x86_64 Ubuntu 호스트** | **Hailo DFC — ONNX→HEF 컴파일** (ARM 미지원, Pi에서 실행 불가) | ⚠️ **환경 확보 미확인** — 8/18 판정 (§9 #11) |
-| 호스트 PC (격벽 밖) | 명령 입력 · HUD | |
-| AI training server | 모델 학습 | 오프라인 |
+| Raspberry Pi 5 (`IntelPi` 컨테이너, Ubuntu 24.04) | 전 노드 | ✅ |
+| Raspberry Pi AI HAT+ 2 (Hailo-10H, 8GB) | YOLO 검출 추론 | ✅ HailoRT 5.1.1 연동, HEF 09-02 최신 export 배포 |
+| Host(맥) | 오버헤드 웹캠 C920 ×2, 좌표 추정, 경로 계산, UDP 송수신 | ✅ ROS2 불필요 — 순수 Python |
+| x86_64 Ubuntu 호스트 | Hailo DFC(ONNX→HEF 컴파일) | 이 문서 갱신 시점엔 이미 해소된 과거 이슈 — HEF는 매 학습마다 재컴파일해 배포 중 |
 
-**해소 (8/18)** — `docker/Dockerfile` 신설로 컨테이너 정의를 명시했습니다. 컨테이너 배포(레지스트리 push)는 전제하지 않으며, 이 파일은 Pi 로컬 재현용입니다. `mission_orchestrator_node` 의 `sys.path.insert(0, '/grippers')` 는 Dockerfile 의 `PYTHONPATH` 설정으로 대체 가능하나, 컨테이너 밖 실행 대비 안전장치로 유지합니다. → §9
-
-| 항목 | 값 |
-|---|---|
-| 로봇 ↔ 호스트 연결 | |
-| `ROS_DOMAIN_ID` | |
-| 시연 중 네트워크 단절 시 동작 | |
+컨테이너 정의는 `docker/Dockerfile`. `mission_orchestrator_node`의
+`sys.path.insert(0, '/grippers')`는 PYTHONPATH 미설정 환경 대비 안전장치로 유지된다.
 
 ---
 
-## 4. 인터페이스 명세 ★ freeze 대상
+## 4. 인터페이스 명세
 
-### 4.1 토픽
+### 4.1 Host↔Pi 링크 (UDP, ROS 밖)
 
-| 이름 | 타입 | 발행 | 구독 | QoS |
-|---|---|---|---|---|
-| `/mission/state` | `grippers_interfaces/MissionState` | mission_orchestrator | hud | **RELIABLE + TRANSIENT_LOCAL, depth 1** |
-| `/mission/emergency_stop` | `std_msgs/Empty` | 호스트 | mission_orchestrator | depth 10 |
-| `/cmd_vel` | `geometry_msgs/Twist` | **base_driver 단독** | — | |
+**`state_machine.md`/`baseline_ports.py`가 단일 소스다.** ROS 토픽이 아니라 JSON-over-UDP다.
 
-### 4.2 서비스
-
-| 이름 | 타입 | 요청 | 응답 |
-|---|---|---|---|
-| `perception/detect_target` | `DetectTarget` | — | `bool found`, `Pose pose`, `Vector3 dims` |
-| `perception/measure_gap` | `MeasureGap` | — | `float64 h_gap`, `Pose2D centerline` |
-| `perception/set_light_profile` | `SetLightProfile` | `string profile` | `bool ready` |
-| `perception/monitor_clearance` | `MonitorClearance` | — | `front`, `left`, `right`, `top`, `bool contact_risk` |
-| `arm_driver/set_gripper` | `SetGripper` | `bool closed` | `bool ok`, `float32 load_ratio` |
-| `arm_driver/get_load` | `GetLoad` | — | `float32 load_ratio` |
-| `base_driver/align` | `AlignToCenterline` | — | `bool aligned`, `float64 yaw_error` |
-| `base_driver/stop` | `std_srvs/Trigger` | — | 표준 |
-
-### 4.3 액션
-
-| 이름 | 타입 | Goal | Result | Feedback |
-|---|---|---|---|---|
-| `base_driver/drive_to` | `DriveTo` | `Pose2D target` | `bool arrived` | `distance_remaining` |
-| `arm_driver/move_to_cartesian` | `MoveToCartesian` | `Point target`, `float32 grip`, `bool down` | `bool reached` | `distance_remaining` |
-| *(미사용)* | `ReorientArm` | `float64 phi` | `bool settled` | `current_phi`, `wrist_load` |
-
-> `ReorientArm` 은 정의만 되어 있고 호출부가 없습니다. `NARROW_EXIT` 이 이를 쓰도록 바꿀지 결정 필요 → §6.4
-
-### 4.4 메시지
-
-```
-# MissionState.msg
-string state          # State.name
-uint32 contact_count  # 현재 미채움
-float64 elapsed_s     # 현재 미채움
-```
-
-> `contact_count` 와 `elapsed_s` 는 **성공 기준(접촉 0회 / 소요 시간)의 측정 채널**입니다. 지금은 `state` 만 채워집니다. → §6.4
-
-### 4.5 포트 시그니처
-
-| Port | 메서드 | 인자 | 반환 |
-|---|---|---|---|
-| `BaseDriver` | `drive_to(target)` | `Pose2D` | `bool` 도착 여부 |
-| | `align_to_centerline()` | — | `float` yaw 오차(rad) |
-| | `stop()` | — | `None` |
-| `ArmDriver` | `move_to_cartesian(xyz, grip=None, down=False)` | `list[float]`, `float?`, `bool` | `bool` 도달 여부 |
-| | `set_gripper(deg)` | `float` (도) | `None` |
-| | `get_load()` | — | `float` 부하 비율 |
-| `Perception` | `detect_target()` | — | `(found, Point3 pose, Point3 dims)` |
-| | `measure_gap()` | — | `.h_gap`, `.centerline` |
-| | `set_light_profile(profile)` | `str` | `bool` |
-| | `monitor_clearance()` | — | `.front/.left/.right/.top/.contact_risk` |
-
-**결정 필요**
-
-| 항목 | 현재 | 검토 |
+| 방향 | 포트 | 페이로드 |
 |---|---|---|
-| `set_gripper` 단위 | 포트는 `deg`, 어댑터는 `closed=(deg<50)` 로 이진화 | 각도 제어를 살릴지, `bool` 로 단순화할지 |
-| `detect_target` 반환 | 튜플 3개, `dims` 가 `Point3` | 값 객체 하나로 묶을지 |
-| `measure_gap`/`monitor_clearance` 반환 | `SimpleNamespace` | `values.py` 에 dataclass 정의 |
-| 파지 자세(orientation) | srv는 `Pose` 지만 어댑터가 `Point3` 로 축소 → **회전 정보 손실** | Top-down 고정이면 명시, 아니면 타입 확장 |
+| Host → Pi | 5005 | `{state, linear_x, linear_y, angular_z, stop}` (`HostCommand`) |
+| Pi → Host | 5006 | `{report, state, detail, fix?}` (`Report`/`MissionState`/`Correction`) |
 
-### 4.6 VLA 텐서 인터페이스
+`fix`는 선택 필드다 — `*_BLOCKED`류 보고에만 Host가 그대로 실행할 수 있는 보정값이
+함께 실린다(`domain.task.corrections.Correction`).
 
-모듈 명칭을 `VLA-V/L/A` 에서 `perception` / `language` / `action` 으로 바꾸면서 기존 V/L/A 텐서 명세는 무효가 되었습니다. 인터페이스 정의는 §4.1–4.5 가 단일 소스입니다.
+### 4.2 ROS2 토픽
+
+| 이름 | 타입 | 발행 | 구독 | 비고 |
+|---|---|---|---|---|
+| `/mission/state` | `grippers_interfaces/MissionState` | `mission_orchestrator` | (관중 오버레이·디버깅, `hud` 미착수) | `state`·`contact_count`·`elapsed_s` **전부 채워짐**(과거 HLD가 미채움으로 기록했던 것과 다름 — `mission_orchestrator_node.py:118-119` 확인) |
+| `/cmd_vel` | `geometry_msgs/Twist` | `base_driver` 단독 | `controller` | 경쟁 시 진동/비재현 버그 |
+| `/scan_raw` | `sensor_msgs/LaserScan` | LiDAR 드라이버 | `Ros2Lidar` 어댑터 | 서비스 왕복 없이 직접 구독 |
+
+### 4.3 서비스·액션 — 실제 사용 vs 미사용
+
+`grippers_interfaces`에 정의된 것과 baseline이 실제로 부르는 것이 갈린다.
+
+| 이름 | 대응 포트 메서드 | baseline에서 |
+|---|---|---|
+| `ObserveTarget.srv` | `Perception.identify_target()` | ✅ |
+| `MonitorClearance.srv` | `Perception.monitor_clearance()` | ✅ |
+| `ConfirmGrasp.srv` | `Perception.confirm_grasp()` | ✅ |
+| `SetGripper.srv` | `ArmDriver.set_gripper()` | ✅ |
+| `GetLoad.srv` | `ArmDriver.get_load()` | ✅ |
+| `OffsetBaseYaw.srv` | `ArmDriver.offset_base_yaw()` | ✅ |
+| `GetArmState.srv` | 캘리브레이션 대조 등 | ✅ (`arm_driver_node._check_taught_calibration`) |
+| `MoveToFloorPose.action` | `ArmDriver.move_to_floor_pose()` | ✅ GRASP/INSERT 시퀀스의 주력 |
+| `MoveToCartesian.action` | `ArmDriver.move_to_cartesian()` | ⚠️ **정의·서버는 있으나 baseline FSM은 안 부름**(좌표 기반 파지였던 이전 설계의 흔적, `arm_driver.py` 포트 docstring) |
+| `ReorientArm.action` | `ArmDriver.reorient()` | ⚠️ **서버가 스텁**(`settled=True`만 반환) — baseline도 안 부름 |
+| `Parse.srv` | `CommandInterpreter.parse()` | ❌ baseline 미사용(`class_diagram.md` §5) |
+| `ConfirmPhrase.srv` | `CommandInterpreter.confirm_phrase()` | ❌ baseline 미사용 |
+| `Detection.msg`/`DetectionArray.msg`/`MissionSpec.msg` | 이전 SCAN/SELECT 설계 | ❌ baseline 미사용 — `identify_target()`은 `TargetObservation` 하나만 반환하고 목록형이 아니다 |
+
+### 4.4 `MissionState.msg`
+
+```
+string state          # State.name — UDP Report의 state와 별개 채널
+uint32 contact_count  # 채워짐 (mission_orchestrator_node.py:118)
+float64 elapsed_s     # 채워짐 — 이번 미션 경과 시간(mission_orchestrator_node.py:119)
+```
 
 ---
 
 ## 5. 좌표계
 
-### 5.1 규약
+Pi 쪽 포트에는 좌표가 **없다** — §2.1의 핵심 결정과 같은 이유다. 좌표계가 남아 있는
+곳은 Host(`grippers-host-mac`, ArUco 기준 아레나 좌표계)와, Pi 내부의 두 로컬 판정뿐이다.
 
-| 항목 | 현재 | 비고 |
+| 판정 | 기준 | 단위 |
 |---|---|---|
-| 길이 단위 | m | `move_to_cartesian(xyz)` 주석 기준 |
-| 각도 단위 | rad (`yaw_error`), deg (`set_gripper`) | **혼재 — 통일 필요** |
-| 회전 표현 | 미정 | `Pose2D.theta` 만 사용 중 |
-| `φ` 정의 | 장축과 **수평면** 사이 각도. 수직 파지 시 90° | |
-| 포즈 전달 | `Pose2D` / `Point3` — **프레임 ID 없음** | 어느 프레임 기준인지 타입에 없음 |
+| GRASP 정렬(`grasp_alignment.judge`) | Pi 자기 뎁스캠, 차체 정면 기준 전후·좌우 | m |
+| INSERT 판정(`Lidar.basket_face`) | 라이다 원점 기준 거리·yaw·좌우 오프셋 | m, rad |
 
-### 5.2 프레임 트리 — *작성 필요*
-
-```
-map → odom → base_link → { laser, camera_link → camera_optical, arm_base → gripper_tcp }
-```
-
-`move_to_cartesian` 의 `xyz` 가 `base_link` 기준인지 `arm_base` 기준인지 문서에 없습니다. **M2 전에 확정해야 합니다.**
+단위 규약은 필드명에 그대로 박혀 있다 — `_m`(미터), `_mm`(밀리미터, 개구 폭 전용),
+`_rad`(각도). 이전 판이 지적했던 "`set_gripper`가 deg를 받는다"는 불일치는 이미
+해소됐다 — 현재 시그니처는 `set_gripper(width_mm: float)`이다.
 
 ---
 
 ## 6. FSM 상태 전이
 
-> **출처: `domain/task/states.py`, `domain/task/mission_task.py`**
-
-### 6.1 정상 경로
-
-```
-IDLE → TRANSIT_OUT → LIGHT_ADAPT → DOCKING → IDENTIFY
-     → GRASP → POSE_PLAN → NARROW_EXIT → RETURN → RELEASE → (None)
-```
-
-각 `State.execute(ports)` 가 다음 State 인스턴스를 반환하고, 미션 종료 시 `None` 을 반환합니다. State 클래스 계층은 [`class_diagram.md`](class_diagram.md#fsm-state-계층) 에 있습니다. 상태는 불변이며 재시도는 새 인스턴스로 표현합니다.
-
-### 6.2 상태 표
-
-| 상태 | 호출 포트 | 정상 종료 | 실패 전이 | 재시도 상한 |
-|---|---|---|---|---|
-| `IDLE` | — | 즉시 | — | — |
-| `TRANSIT_OUT` | `base.drive_to()` | 도착 | `TRANSIT_OUT_FAILED` | **5** |
-| `LIGHT_ADAPT` | `perception.set_light_profile("default")` | 즉시 | — | — |
-| `DOCKING` | `base.align_to_centerline()` | 즉시 | — | — |
-| `IDENTIFY` | `perception.detect_target()` | 검출 성공 | `IDENTIFY_FAILED` | **3** |
-| `GRASP` | `arm.move_to_cartesian()`, `arm.set_gripper(0.0)` | 이동 성공 | `GRASP_FAILED` | **없음** |
-| `POSE_PLAN` | `perception.measure_gap()` | 항상 | — | — |
-| `NARROW_EXIT` | `arm.move_to_cartesian()`, `perception.monitor_clearance()`, `base.drive_to()` | 복귀 완료 | `NARROW_EXIT_FAILED` | — |
-| `RETURN` | — | 즉시 | — | — |
-| `RELEASE` | `arm.set_gripper(100.0)` | 종료 | — | — |
-
-### 6.3 종료 · 인터럽트 상태
-
-| 상태 | 동작 | 진입 경로 |
-|---|---|---|
-| `TRANSIT_OUT_FAILED` | `base.stop()` | 주행 5회 실패 |
-| `IDENTIFY_FAILED` | 즉시 종료 | 검출 3회 실패 |
-| `GRASP_FAILED` | 즉시 종료 | `move_to_cartesian` 실패 |
-| `NARROW_EXIT_FAILED` | `base.stop()` | `contact_risk` 감지 |
-| `ESTOP` | `base.stop()` | **`MissionTask.run()` 이 매 루프 `estop.is_set()` 확인 → 전역 인터럽트로 동작** |
-
-> E-STOP은 `arm.hold_position()` 을 호출하지 않습니다. 장물 파지 중 정지 시 **낙하 가능성**이 있습니다. → §6.4
-
-### 6.4 구현과 설계의 차이 — 해소 필요
-
-| # | 항목 | 현재 구현 | 설계 요구 | 우선도 |
-|---|---|---|---|---|
-| 1 | **부하 기반 파지 검증** | `get_load()` 가 포트에 있으나 `GraspState` 가 호출하지 않음 | README 핵심 기능 | **P0** |
-| 2 | **파지 실패 재시도** | `GRASP_FAILED` 즉시 종료 | 재인식 → 보정 → 재시도 | **P0** |
-| 3 | **통과 불가 판정 (유즈케이스 2)** | `_solve_phi()` 가 `0.0` 고정, 항상 `NARROW_EXIT` | 해 없으면 거부·복귀 → `REJECT` 상태 | **P0** |
-| 4 | **`ReorientArm` 액션 미사용** | `NARROW_EXIT` 이 `_phi_to_xyz()` 스텁으로 `[0.2, 0, 0.15]` 고정 | φ 기반 자세 전환 | **P0** |
-| 5 | **`contact_count` / `elapsed_s` 미채움** | `state` 만 발행 | 성공 기준 측정 채널 | **P0** |
-| 6 | **E-STOP 시 팔 자세 유지 없음** | `base.stop()` 만 | 낙하 방지 | P1 |
-| 7 | **`NARROW_EXIT` 무한 루프** | `while True` 에 타임아웃 없음 | 전 상태 타임아웃 | P1 |
-| 8 | **조명 프로파일 문자열** | `"default"` 하드코딩 | `NORMAL` / `DARKROOM` 열거 | P1 |
-| 9 | **`RETURN` 이 빈 상태** | 복귀 주행이 `NARROW_EXIT` 내부 | 상태 분리 | P1 |
-| ~~10~~ | ~~**`align_to_centerline()` 반환 무시**~~ | **✅ 해소 (2026-08-19)** — 포트는 `align_to_box(box)` 로 개명됐지만 반환값(정렬 후 yaw 오차, rad)은 그대로이고, `TransportState` 가 이를 `ALIGN_TOLERANCE_RAD` 와 비교해 **초과 시 대상 보류 + `SCAN` 복귀**로 흡수합니다 (이슈 #139). 판정을 `math.isinf()` 로 좁히지 않는 이유를 포함한 계약은 [`state_machine.md` §3](state_machine.md#transport-의-정렬-판정). ⚠️ 임계값 자체는 아직 **미실측 자리 표시자**(0.05 rad)이며 미결 #4·#7 실측과 함께 확정합니다 | — | — |
-| 11 | **하드코딩 좌표** | `Pose2D(1.0, 0, 0)`, `[0.2, 0, 0.15]` | launch 파라미터화 | P1 |
-| 12 | **`sys.path.insert('/grippers')`** | 노드에 하드코딩 | 패키징 또는 환경변수 | P2 |
-| 13 | **`grippers_vla` 빈 패키지** | 노드 없음 | VLA 추론 노드 | P1 |
-| 14 | **프레임 ID 없는 좌표 전달** | `Point3` / `Pose2D` | 프레임 명시 | P2 |
+전이 그래프·상태별 계약은 전부 **[`state_machine.md`](state_machine.md)**가 단일 소스다.
+이 문서(이전 판)가 그리던 `TRANSIT_OUT`/`DOCKING`/`IDENTIFY`/`NARROW_EXIT`/`RETURN`/
+`RELEASE` 선형 체인은 존재한 적이 없는 설계이고, 실제 상태는 `IDLE`/`APPROACH`/
+`GRASP`/`CARRY`/`INSERT`/`DONE`(+`ESTOP` 인터럽트) 6+1개다.
 
 ---
 
-## 7. 핵심 알고리즘
+## 7. 핵심 알고리즘 — 위치만 안내
 
-### 7.1 자세 재조정 계획
+기하 해석적 자세계획(φ-solve, `H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap - margin`)은
+암실 반출 설계 전용이었고, 뒤이은 상자 투입 설계에서도 결국 보류됐다(`sequences.md`
+이전 판 §3 "보류" 표기). **현재 INSERT는 기하 해석이 아니라 라이다 정면 판정의 문턱값
+비교**로 대체됐다 — 알고리즘이랄 것이 없고, 실측 상수 비교만 있다.
 
-```
-H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
-```
-
-전제: 요(yaw)는 `align_to_centerline()` 에서 진행축과 정렬됨 → 높이 1자유도 문제로 축소.
-설계 기준값(`L=0.5, H_gap=0.3, margin=0.03, w≈0.02`)에서 **`φ ≲ 30°`** — 거의 눕혀야 합니다.
-
-> **현재 구현**: `PosePlanState._solve_phi()` 가 `0.0` 고정 반환, `_phi_to_xyz()` 도 스텁입니다. 위 수식은 아직 코드에 없습니다. (#47)
-
-| 항목 | 결정 |
+| 판정 | 문서 |
 |---|---|
-| `margin` 결정 방식 | 고정값 / 추정 오차 연동 / 학습 — **택 1 필요** |
-| 해 구간 중 선택 | 손목 서보 부하 최소 |
-| 해 없음 | `REJECT` 로 전이 |
-| 실행 경로 | 손목 단독 불가 → **IK 전체**. `ReorientArm` 액션 사용 검토 |
-
-### 7.2 조명 도메인 전환
-
-| 단계 | 동작 | 정착 대기 |
-|---|---|---|
-| 진입 감지 | | |
-| 파라미터 적용 | 노출·WB 고정 | |
-| IR 조명 점등 | | |
-| 인식 재개 | | |
-
-프로파일 문자열 집합을 확정해야 합니다 (현재 `"default"` 만 사용).
-
-### 7.3 파지 검증
-
-`get_load()` 임계값 — **`LOAD_THRESHOLD = 0.04`** (2026-08-18 실측, n=25). 빈 채 0.027~0.031 과
-파지 성공 최소 0.047 사이입니다. 분포와 정착 시간은 [`sequences.md` §2](sequences.md#2-파지-검증-및-자동-재시도).
-
-`load_ratio` 는 **0~1 정규화 비율**입니다. 서보 원시값(0~1023)을 비율로 바꾸는 것은
-`arm_driver_node` 의 몫이고 도메인은 서보 레지스터 범위를 알지 못합니다.
-`SetGripper` 응답에도 `load_ratio` 가 있어 별도 호출 없이 검증 가능합니다.
+| GRASP 정렬·파지 시퀀스 | [`sequences.md`](sequences.md) §1·§2 |
+| INSERT 판정·투하 시퀀스 | [`sequences.md`](sequences.md) §3·§4 |
+| 실측 문턱값 전부 | [`error_budget.md`](error_budget.md) |
 
 ---
 
 ## 8. 예산 배분
 
-### 8.1 오차 예산 → [`error_budget.md`](error_budget.md)
+오차/문턱값 실측은 **[`error_budget.md`](error_budget.md)**로 이동했다 — 이전 판의
+"도킹 정렬 오차·개구부 추정 오차" RSS 합성 모델은 좌표 기반 설계 전용이라 지금은
+성립하지 않는다. 지금 있는 것은 그리퍼 부하·라이다 거리/yaw/좌우·INSERT 안정성처럼
+**직접 실측한 개별 문턱값**이다.
 
-| 항목 | 목표 (1σ) |
-|---|---|
-| 도킹 정렬 (`yaw_error`) | |
-| 치수 추정 (`dims`) | |
-| 개구부 추정 (`h_gap`) | |
-| **합성 3σ vs 통과 마진** | |
-
-### 8.2 성능 예산
-
-| 구간 | 실행 위치 | 목표 지연 |
-|---|---|---|
-| 검출 1프레임 | Hailo-10H (HEF, INT8) | |
-| VLA 추론 | Pi 5 CPU (기준선) | |
-| `monitor_clearance` 폴링 주기 | Pi 5 CPU | |
-| 미션 전체 | — | |
-
-> **10H의 "40 TOPS"를 비전 예산에 그대로 넣지 마십시오.** 40 TOPS는 INT4 LLM/VLM 기준 수치이고, **비전 처리량은 벤더 설명 기준 26 TOPS급(Hailo-8) 수준**입니다. 이 표의 검출 지연은 26 TOPS급을 가정해 세웁니다.
-
-측정치는 [`measurements.md`](../ops/measurements.md) §3 에서 올라옵니다. HEF 컴파일 결과(양자화 정확도 손실 포함)가 이 표의 입력이므로, §3 이 비어 있는 동안은 이 예산도 미확정입니다. **HEF 추론 검증이 8/25로 이월**되어(§9 #11) 이 표의 확정 시점도 M3 초반으로 밀립니다.
+성능 예산(추론 지연·미션 전체 소요)은 이번 재작성 시점에도 여전히 별도로 실측된 적이
+없다 — §9 미결에 남긴다.
 
 ---
 
-## 9. 미결 사항 (Open Questions)
+## 9. 미결 사항 (2026-09-04 기준)
 
-| # | 항목 | 선택지 | 기한 | 담당 |
-|---|---|---|---|---|
-| ~~1~~ | ~~컨테이너 배포 전제 여부~~ | **✅ 해소 (8/18)** — 컨테이너 배포 미전제로 확정. `docker/Dockerfile` 신설(PR #133), CI `docker-build` 잡은 두지 않음. 베이스 `ros:humble-export` 가 공개 레지스트리에 없고 Hiwonder 벤더 드라이버 소스를 보유하지 않아 CI 재현이 불가능하기 때문. | — | — |
-| 2 | `move_to_cartesian` 기준 프레임 | `base_link` / `arm_base` | 8/14 | |
-| 3 | 각도 단위 통일 | rad 통일 / 경계에서만 deg | 8/14 | |
-| 4 | `ReorientArm` 액션 채택 여부 | 채택 / `move_to_cartesian` 유지 | 8/14 | |
-| 5 | 자연어 명령 입력 경로 | `grippers_vla` 노드 / 별도 포트 | 8/14 | |
-| 6 | 암실 구조 통과형(입구≠출구) | 통과형 / 왕복형 | | |
-| 7 | 접촉 감지 수단 | 센서 / 도전성 테이프 / 영상 판독 | | |
-| 8 | `margin` 결정 방식 | 고정 / 오차연동 / 학습 | | |
-| 9 | MentorPi 벤더 스택 유지 범위 | 전체 유지 / 필요 패키지만 | | |
-| 10 | **VLA 실행 위치** — Hailo 오프로드 가능 여부 | Hailo 상주 / CPU 추론 유지 / 경량화 후 재판단 | 8/23 (M2) | 임성혁 · 이승용 |
-| 11 | **ONNX→HEF 컴파일 환경·담당** — DFC는 **x86_64 Ubuntu 전용**(ARM 미지원, Pi에서 실행 불가. RAM 16GB↑, 일부 최적화는 NVIDIA GPU 필요) | AI training server 겸용 / 팀원 x86 랩탑(WSL2 포함) / 클라우드 x86 인스턴스 / **없으면 Hailo 가속 포기 후 CPU 추론** | **8/18 (호스트 유무 판정)** → 환경 구성 8/21 · 추론 검증 8/25 | 호스트 확인 김동혁 · **DFC 담당 미확정(8/14 결정)** |
-| ~~12~~ | ~~**가속기 모델 확정** — 교수님 공수분이 8L인지 10H인지~~ | **✅ 해소 (2026-08-12)** — AI HAT+ 2(Hailo-10H, 40 TOPS INT4 / 8GB) 실물 보유. PCIe 직결로 확정, 캐리어·모듈 분리 불필요 | — | — |
-| ~~13~~ | ~~**기준 ROS 2 배포판** — 호스트는 Jazzy, 실제 빌드·실행은 Humble 컨테이너로 이원화~~ | **✅ 해소 (2026-08-17)** — **Humble 컨테이너 유지(현행)** 로 확정. `IntelPi` 컨테이너(`ros:humble-export`)가 이미 실질 표준이었고(`setup.md`), Jazzy 네이티브 전환은 MentorPi 벤더 스택 전체 재검증 + Python 3.10→3.12 전환 비용을 남은 일정(9/8 발표)에서 감당할 수 없어 기각. 양쪽 병기는 Humble/Jazzy 타입 해시 불일치로 노드 간 직접 통신이 안 돼 실익 없이 이중 빌드 부담만 남아 기각. 근거 → [`rejected_designs.md`](../ops/rejected_designs.md#9-ros2-배포판-통일) | — | 조현우 · 이승용 |
-| 14 | **HailoRT 설치 경로 · 컨테이너 디바이스 접근** — 실제 호스트는 **Debian 13 (trixie)**, 컨테이너는 Ubuntu 22.04 jammy. **8/19 해결**: 호스트의 `h10-hailort-pcie-driver 5.1.1`을 사용하고 `/dev`를 컨테이너에 bind mount. 컨테이너에는 `h10-hailort_5.1.1_arm64.deb`에서 `libhailort.so.5.1.1`·`hailortcli`를 추출하고, Developer Zone의 `hailort-5.1.1-cp310-cp310-linux_aarch64.whl`을 설치. Python 3.10.12에서 `import hailo_platform` 성공, `hailortcli scan` 및 `Device.scan()`으로 PCIe 장치 `0001:01:00.0` 인식 확인. **HEF inference 검증은 별도 단계** | `docker/vendor/`에 `.deb`·`.whl` 배치 후 `docker/Dockerfile` 빌드 | **해결 (2026-08-19)** | 조현우 |
+이전 판의 미결 14건은 전부 암실/장난감-정리 설계 전용(조명 프로파일, `ReorientArm`
+채택 여부, MentorPi 벤더 스택 범위 등)이라 이 아키텍처엔 적용되지 않는다. 실제로
+남아 있는 것은 다음이다(출처: `grippers-baseline-wt` 핸드오버 09-01/09-03).
+
+| # | 항목 | 상태 |
+|---|---|---|
+| 1 | RETURN_HOME 오실레이션 탈출 로직 | 커밋됨(`0552ee0`), **실기 미검증** — Pi 재연결 후 최우선 |
+| 2 | NUDGE_BOX 하드스톱 안전반경 | 커밋됨, **실기 미검증** |
+| 3 | GRASP AND 판정이 실제 무부하에서 오탐 없이 도는지 | 09-03 star/box 대응 후 재확인 필요 |
+| 4 | GRASP 사이클 중 27~28초 구간 지연 원인 | 09-01 사용자 리뷰 발견, 로그/rosbag 대조 필요 |
+| 5 | INSERT 낙하 위치가 바구니 안쪽으로 치우치는 경향 | 09-01 사용자 리뷰 발견, 반복 투입 데이터 필요 |
+| 6 | INSERT 드롭 높이(약 250~270mm 안착 이격) 재설계 | 실행 가능성 조사 이전부터 미해결 |
+| 7 | 바구니 충돌 근본원인(좌표 정확도·LiDAR 정렬·투입 높이) | 여력 되면 |
+| 8 | `class_diagram.md` 등 나머지 설계 문서 갱신 | ✅ 이번 재작성으로 해소(2026-09-04) |
+
+**하드웨어 접근이 2026-09-08 종료**된다 — #1~#3은 그 전에 실기로 확인해야 하고, 그 뒤로는
+녹화 데이터·순수 소프트웨어(RoboSec in-process probe 등)만으로 작업이 이어진다.
 
 ---
 
@@ -392,27 +286,20 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 
 | 문서 | 내용 |
 |---|---|
-| [`../README.md`](../README.md) | 배경, 미션 시나리오, 성공 기준 |
+| [`../../README.md`](../../README.md) | 배경, 미션 시나리오, 하드웨어 목록 |
+| [`state_machine.md`](state_machine.md) | **FSM 전이 단일 소스** |
 | [`sequences.md`](sequences.md) | 시퀀스 다이어그램 |
-| [`class_diagram.md`](class_diagram.md) | 클래스 다이어그램 — 포트·State·노드 계층 (Mermaid) |
+| [`class_diagram.md`](class_diagram.md) | 클래스 다이어그램 — 포트·State·노드 계층 |
 | [`architecture.puml`](architecture.puml) | 위와 같은 구조의 PlantUML 버전 |
-| [`error_budget.md`](error_budget.md) | 오차 전파 |
-| [`rejected_designs.md`](../ops/rejected_designs.md) | 채택하지 않은 설계 |
-| [`measurements.md`](../ops/measurements.md) | 실측 데이터 |
-| [`purchase_ledger.md`](../ops/purchase_ledger.md) | 구매 장부 |
+| [`error_budget.md`](error_budget.md) | 실측 문턱값 |
 
 ---
 
 ## 11. 변경 이력
 
-| 날짜 | 버전 | 변경 | PR | 승인 |
-|---|---|---|---|---|
-| 2026-08-19 | 0.9 | **HailoRT 컨테이너 연동 완료** — 호스트 `h10-hailort-pcie-driver 5.1.1` + 컨테이너 `libhailort.so.5.1.1`/`hailortcli 5.1.1` + Python 3.10용 `hailort-5.1.1-cp310-cp310-linux_aarch64.whl` 조합 검증. `import hailo_platform`, `hailortcli scan`, `Device.scan()` 성공, PCIe 장치 `0001:01:00.0` 인식 확인. 미결 #14 해소. 실제 HEF inference는 별도 검증 항목으로 유지. | | |
-| 2026-08-19 | 0.8 | **§6.4 #10 해소** — `TransportState` 가 `align_to_box()` 의 yaw 오차를 `ALIGN_TOLERANCE_RAD` 와 비교해 정렬 실패를 보류로 흡수. 같은 PR에서 `IDLE` 의 `parse()` 실패 처리(해석 불가 시 IDLE 유지)와 `grasp_attempts` 의 대상별 리셋(이슈 #139)도 함께 반영했고, 전이 계약은 `state_machine.md` §3·§4 갱신 | | |
-| 2026-08-17 | 0.7 | **기준 ROS 2 배포판 확정 (#96)** — 미결 #13 해소: Humble 컨테이너 유지로 확정, Jazzy 네이티브 전환·양쪽 병기 기각. 근거는 `rejected_designs.md` §9 | | |
-| 2026-08-12 | 0.6 | **가속기 확보 확정 + 캐리어 기재 정정** — 0.4의 "AI HAT+로는 10H 불가 → M.2 HAT+ 별도 발주"는 **오기**. **Raspberry Pi AI HAT+ 2**(2026-01-15 출시, Hailo-10H·8GB LPDDR4X 기판 실장, 16핀 PCIe FFC 직결) **실물을 교수님 공수로 보유 · 8/11 PCIe 물리 장착 완료** — 2품목 발주 전제 폐기, 모듈 분리 불가·불필요 (§3.2). 드라이버/런타임 확인은 미결 #14로 분리(8/14). 미결 #12(모델 확정) 즉시 해소. **DFC의 x86_64 Ubuntu 전용 제약** 명시 및 미결 #11 확장, HEF 일정 8/21·8/25로 조정. 비전 처리량은 26 TOPS급 가정 (§8.2). ROS 2 배포판 이원화 미결 #13 신설 | | |
-| 2026-08-11 | 0.5 | **Hailo 적용 범위를 YOLO로 한정.** VLA 실행 기준선을 Pi 5 CPU로 명시 (§2.3, §3.2, §8.2), ONNX→HEF 컴파일을 M2 태스크로 신설, 미결 #10·#11 추가 | | |
-| 2026-08-11 | 0.4 | 가속기를 **Hailo-10H** 로 변경 (8L → 10H). VLA-L 상주에 온보드 DRAM 필요. 캐리어도 AI HAT+ → M.2 HAT+ (§3.2) | | |
-| 2026-08-11 | 0.3 | AI 가속기 채택 확정 — 미결 사항에서 해소 (§3.2, §9) | | |
-| 2026-08-10 | 0.2 | 구현(`main`) 기준으로 §2·§4·§6 재작성 | 이승용 | 김동혁, 조현우 |
-| | 0.1 | 초안 골격 | | |
+| 날짜 | 변경 |
+|---|---|
+| 2026-09-04 | **전면 재작성** — 암실 반출 설계(§1의 원안)를 실제 배포된 Host 지시 실행형 FSM 기준으로 교체. §4 인터페이스를 UDP 링크 + 실제 사용 중인 srv/action만으로 재정리, §6·§7·§8을 각각 `state_machine.md`/`sequences.md`/`error_budget.md`로 위임, §9 미결 사항을 현재 유효한 8건으로 교체 |
+| 2026-08-19 | (이전 판 이력 — 암실 반출 설계 당시) HailoRT 컨테이너 연동 완료 |
+| 2026-08-17 | (이전 판 이력) 기준 ROS 2 배포판 확정 |
+| 2026-08-12 | (이전 판 이력) 가속기 확보 확정 |

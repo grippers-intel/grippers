@@ -112,10 +112,11 @@ README는 개요만 담고, 상세는 아래 문서로 나눠져 있습니다.
 | [`pose_planning.md`](docs/subsystems/pose_planning.md) | ⏸ 보류된 자세 재조정 설계 (재도입 절차 포함) |
 | **설계 다이어그램** | |
 | [`state_machine.md`](docs/design/state_machine.md) | **FSM 전이 단일 소스 · ✅ 실제 코드(`baseline_mission.py`) 기준 갱신됨(9/3)** |
-| [`class_diagram.md`](docs/design/class_diagram.md) | 값 객체 · 포트 · State · 노드 계층 · 마이그레이션 · ⚠️ 미갱신(구 설계 기준) |
-| [`sequences.md`](docs/design/sequences.md) | 시퀀스 다이어그램 · ⚠️ 미갱신(구 설계 기준) |
-| [`architecture.puml`](docs/design/architecture.puml) | PlantUML 버전 · ⚠️ 미갱신 |
-| [`hld.md`](docs/design/hld.md) | High Level Design · ⚠️ 미갱신(구 설계 기준) |
+| [`class_diagram.md`](docs/design/class_diagram.md) | 값 객체 · 포트 · State · 노드 계층 · 죽은 코드 목록 · ✅ 갱신됨(9/4) |
+| [`sequences.md`](docs/design/sequences.md) | 시퀀스 다이어그램 · ✅ 갱신됨(9/4) |
+| [`architecture.puml`](docs/design/architecture.puml) | PlantUML 버전 · ✅ 갱신됨(9/4) |
+| [`hld.md`](docs/design/hld.md) | High Level Design · ✅ 갱신됨(9/4) |
+| [`error_budget.md`](docs/design/error_budget.md) | 판정 문턱값 실측 · ✅ 갱신됨(9/4) |
 | [`workspace_layout.html`](docs/design/workspace_layout.html) | **작업 공간 배치도 (Rev.I · 8/20 팀 확정)** — 평면도 · 지점별 기하 · 커버리지 · 배치 규칙 |
 | **Host(관제 콘솔)** | |
 | [`grippers-host-mac`](https://github.com/kica927/grippers-host-mac) | Host 실행 코드(좌표·경로·미션 진행) — macOS 포팅, 설치·실행·"테스트 준비" 절차는 그쪽 README |

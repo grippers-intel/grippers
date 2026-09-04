@@ -10,9 +10,8 @@
 FSM 상태 전이의 **단일 소스**입니다. `hld.md` · `class_diagram.md` · `sequences.md` 는
 전이 그래프를 중복 정의하지 말고 이 문서를 참조하세요.
 
-> ⚠️ `class_diagram.md` · `sequences.md` · `hld.md`는 **아직 이 갱신을 반영하지 않았습니다.**
-> 위 세 문서를 참조하기 전에 이 문서와 실제 코드(`domain/task/baseline_mission.py`)를
-> 먼저 확인하세요.
+> ✅ `class_diagram.md` · `sequences.md` · `hld.md` · `error_budget.md` · `architecture.puml`도
+> 2026-09-04에 이 갱신을 반영했습니다 — 전이 그래프 자체는 여전히 이 문서가 단일 소스입니다.
 
 - [1. 핵심 — 설계 철학](#1-핵심--설계-철학)
 - [2. 전이 그래프](#2-전이-그래프)
@@ -217,7 +216,9 @@ drop 자세 실패 시엔 `grasp_confirmed`를 유지한 채 `CARRY`로 되돌�
 
 | 문서 | 내용 | 갱신 상태 |
 |---|---|---|
-| [`class_diagram.md`](class_diagram.md) | State 클래스 계층, 포트 시그니처 | ⚠️ 미갱신 — 구 설계 기준 |
-| [`sequences.md`](sequences.md) | 상태 내부의 포트 호출 순서 | ⚠️ 미갱신 — 구 설계 기준 |
-| [`hld.md`](hld.md) | 인터페이스 명세, 미결 사항 | ⚠️ 미갱신 — 구 설계 기준(`docs/README.md`가 이미 경고) |
+| [`class_diagram.md`](class_diagram.md) | State 클래스 계층, 포트 시그니처 | ✅ 갱신됨(2026-09-04) |
+| [`sequences.md`](sequences.md) | 상태 내부의 포트 호출 순서 | ✅ 갱신됨(2026-09-04) |
+| [`hld.md`](hld.md) | 인터페이스 명세, 미결 사항 | ✅ 갱신됨(2026-09-04) |
+| [`error_budget.md`](error_budget.md) | 판정 문턱값 실측 | ✅ 갱신됨(2026-09-04) |
+| [`architecture.puml`](architecture.puml) | 같은 구조의 PlantUML 버전 | ✅ 갱신됨(2026-09-04) |
 | [`domain/task/baseline_mission.py`](../../domain/task/baseline_mission.py) | 이 문서가 기술하는 실제 코드 | ✅ 이 문서의 근거 |

@@ -1,359 +1,260 @@
 # Sequence Diagrams
 
-> **상태: to-be 설계 (8/14 freeze 대상).** 현재 `main` 코드는 아직 이전 주제 기준입니다.
+> **상태: 실제 코드 기준으로 전면 재작성 (2026-09-04).** 이 문서가 이전에 그리던 TIDY/FETCH
+> 루프(자연어 명령 → `CommandInterpreter` → `scan_floor`/`SELECT` → `TRANSPORT`/`POSE_PLAN` →
+> `DELIVER`/`HANDOVER`, 8/14 freeze 목표)는 **채택되지 않았다.** 실제로 팀이 확정해 구현한
+> 것은 `domain/task/baseline_mission.py`의 Host 지시 실행형 FSM이다. 전이 그래프의 단일
+> 소스는 [`state_machine.md`](state_machine.md)이고, 이 문서는 그 상태들 **내부에서** 포트를
+> 어떤 순서로 부르는지만 다룬다.
 
-모든 상호작용은 도메인(`MissionTask`)과 **포트** 사이에서만 일어납니다.
-ROS2 노드, Feetech 서보 SDK, OpenCV, Hailo 런타임은 다이어그램에 등장하지 않습니다 —
-어댑터 뒤에 숨어 있기 때문입니다. 다이어그램에 `rclpy` 가 보인다면 그건 설계가 샌 것입니다.
+모든 상호작용은 도메인(`BaselineMission`)과 **포트**(`BaselinePorts`: `host`·`base`·`arm`·
+`perception`·`lidar`) 사이에서만 일어난다. ROS2 노드, Feetech 서보 SDK, UDP 소켓은
+다이어그램에 등장하지 않는다 — 어댑터 뒤에 숨어 있기 때문이다.
 
-- [1. TIDY 전체 루프](#1-tidy-전체-루프)
-- [2. 파지 검증 및 자동 재시도](#2-파지-검증-및-자동-재시도)
-- [3. 상자 투입 자세 재조정 (⏸ 보류)](#3-상자-투입-자세-재조정--보류)
-- [4. FETCH 분기](#4-fetch-분기)
-- [5. 음성 명령 — 복창과 되묻기](#5-음성-명령--복창과-되묻기)
+- [1. APPROACH — GRASP 조건 판정](#1-approach--grasp-조건-판정)
+- [2. GRASP — 파지 시퀀스 (execute 1회로 끝까지)](#2-grasp--파지-시퀀스-execute-1회로-끝까지)
+- [3. CARRY — INSERT 조건 판정](#3-carry--insert-조건-판정)
+- [4. INSERT — 투하 시퀀스](#4-insert--투하-시퀀스)
+- [5. 공통 인터럽트 — E-STOP · LinkWatchdog](#5-공통-인터럽트--e-stop--linkwatchdog)
 
 ---
 
-## 1. TIDY 전체 루프
+## 1. APPROACH — GRASP 조건 판정
 
-바닥에 흩어진 N개를 종류별 색 상자에 넣는 기본 미션입니다.
-**루프가 핵심**이므로 개별 사이클보다 사이클이 반복되는 구조에 주목하세요.
+Host가 `state=GRASP`(또는 `GRASP_FORCE`)를 보내는 순간 시작된다. 판정은 두 겹이고,
+어느 하나라도 막히면 **그 자리에 머물며** Host에 보정값을 실어 보낸다 — Pi가 스스로
+자세를 고치지 않는다.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor OP as 사용자
-    participant I as CommandInterpreter
-    participant T as MissionTask<br/>(FSM · Domain)
+    participant H as Host<br/>(UDP)
+    participant M as BaselineApproachState
     participant P as Perception
     participant B as BaseDriver
+
+    H->>M: HostCommand(state=GRASP)
+    M->>B: stop()
+    M->>P: identify_target()
+    P-->>M: TargetObservation|None
+
+    Note over M: 1겹 — 기본 전제(check_grasp)<br/>정지 + 라벨 식별
+    alt 기본 전제 미충족
+        M->>H: report(GRASP_BLOCKED, detail, fix)
+        Note right of M: force 여도 이 겹은 건너뛰지 않는다
+    else 기본 전제 충족
+        Note over M: 2겹 — 정렬 판정(grasp_alignment.judge)<br/>물체가 턱이 쓸고 갈 영역(READY) 안인가
+        alt READY (또는 force && HOST_CORRECTION)
+            M->>H: report(GRASP_READY, detail)
+            Note right of M: BaselineGraspState로 전이 (§2)
+        else HOST_CORRECTION / UNKNOWN
+            M->>H: report(GRASP_BLOCKED, detail, fix)
+            Note right of M: UNKNOWN(관측 자체 실패)은<br/>force여도 건너뛰지 않는다
+        end
+    end
+```
+
+**이 판정 한 번에 약 1.7초가 든다**(오검출을 거르는 5프레임 합의 × 프레임당 CPU 추론
+0.3초). 그동안 Host 명령을 읽지도 보고하지도 않는다 — 워치독은 "명령이 안 온 것"과
+"안 읽은 것"을 구분하므로 여기서는 안 걸리지만, **Host 쪽 타임아웃은 이보다 넉넉해야
+한다**(`baseline_mission.py` 주석).
+
+---
+
+## 2. GRASP — 파지 시퀀스 (execute 1회로 끝까지)
+
+`BaselineGraspState.execute()` 한 번 안에서 순서대로 진행한다. Host 명령을 중간에 읽지
+않는다 — 이 상태에 있는 동안 Host는 다음 지시를 낼 수 없다.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as BaselineGraspState
+    participant P as Perception
     participant A as ArmDriver
+    participant B as BaseDriver
+    participant H as Host
 
-    Note over OP,A: IDLE
-    OP->>I: "장난감 정리해줘"
-    I-->>T: MissionSpec(mode=TIDY, placement_rule)
-    Note right of I: 규칙 변경 문형도 여기서 흡수<br/>"체스말은 검은 상자에" → rule[CHESS_PIECE]=BLACK
+    M->>B: stop()
+    M->>P: remember_target(label)
+    Note right of P: grasp 자세로 내려가면<br/>팔이 뎁스캠을 가린다 — 마지막 기회
 
-    loop 미처리 대상이 없어질 때까지
-        Note over T,A: ① SCAN — 정지 상태에서만 관측
-        T->>P: scan_floor()
-        P-->>T: list[Detection] (3범주 · pose · dims · yaw)
-        Note right of P: 변 중앙 고정 C270 ×2 (720p)<br/>담당 절반씩 관측 · 경계는 중첩<br/>호모그래피 입력은 바닥 접지점<br/>상자 영역 마스킹 · 로봇 차폐 시 이월
+    M->>A: move_to_floor_pose(profile, "safe")
+    M->>A: set_gripper(preopen_width_mm)
+    Note right of A: 내려가기 전에 연다 —<br/>닫힌 손가락은 물체를 밀어낸다
+    M->>A: move_to_floor_pose(profile, "grasp")
 
-        alt 미처리 대상 0개
-            T-->>OP: DONE — 결과 보고
-        else 미처리 대상 ≥ 1
-            Note over T: ② SELECT — 포트 호출 없음<br/>최근접 미처리 대상 1개 선정
+    M->>B: creep_forward_timed(0.1 m/s, 1.5s)
+    Note right of B: 팔이 내려가 그리퍼가 열린 **뒤**에만.<br/>회전 절대 금지 — 열린 그리퍼가<br/>바닥·물체를 옆으로 쓴다
 
-            Note over T,A: ③ APPROACH
-            T->>B: drive_to(파지 접근 지점)
-            B-->>T: arrived
+    M->>A: set_gripper(close_width_mm)
+    Note right of A: 여기서 부하를 미리 재지 않는다(09-03) —<br/>정착된 자세에서 부하 판독은 낮게<br/>오탐할 수 있다(box 실측)
 
-            Note over T,A: ④ GRASP — 부하 검증 (상세: §2)
-            T->>A: 파지 + load 확인
-            A-->>T: 파지 성공 (시도 n회)
+    M->>A: move_to_floor_pose(profile, "midpoint")
+    M->>A: move_to_floor_pose(profile, "safe")
+    M->>A: move_to_floor_pose(profile, "carry")
 
-            Note over T,A: ⑤ TRANSPORT
-            T->>P: find_box(rule[cls])
-            P-->>T: BoxObservation (색 랜드마크 · LAB)
-        Note right of P: ⚫ BLACK 상자는 밝은 테두리/ArUco 로 탐색
-            T->>B: drive_to(상자 앞) → align_to_box()
-            B-->>T: yaw 오차 이내
-            Note right of A: 이송 중 물체는 수평 유지<br/>Transport Pose — 무게중심 안쪽
+    M->>A: get_load()
+    A-->>M: carried
+    M->>P: confirm_grasp()
+    P-->>M: vanished
 
-            Note over T,A: ⑥ POSE_PLAN → ⑦ INSERT (상세: §3)
-            T->>P: measure_opening(box)
-            P-->>T: opening_mm
-            alt φ 해 없음
-                T-->>OP: REJECT — "이 물체는 넣을 수 없습니다"
-                Note right of T: held_ids 등록 후 SCAN 복귀
-            else φ 해 존재
-                T->>A: reorient(φ) → 투입 → set_gripper(OPEN)
-                A-->>T: 투입 완료
-                Note right of T: done_ids 등록 후 SCAN 복귀
+    alt carried >= LOAD_THRESHOLD AND vanished
+        M->>H: report(GRASP_DONE, state=CARRY, detail)
+        Note right of M: BaselineCarryState(grasp_confirmed=True)로 전이
+    else 둘 중 하나라도 미충족
+        M->>A: move_to_floor_pose(profile, "recover_idle")
+        Note right of A: 실패해도 hold_position() —<br/>팔을 바닥 높이에 남기지 않는다
+        M->>H: report(GRASP_FAILED, state=APPROACH, detail)
+        Note right of M: 재시도 상한 없음 — Host가 다음을 정한다
+    end
+```
+
+**AND 판정의 이력이 중요하다** — 2026-08-26~09-01엔 AND, 09-01 rook 뎁스 오탐으로 OR로
+완화, 09-03 star/box가 반대 방향(부하만 낮게 오탐)을 내면서 다시 AND로 돌아왔다. 두 신호
+모두 근접 상황에서 개별적으로 흔들릴 수 있다는 뜻이라, 어느 한쪽만 믿는 설계는 이미 두
+번 실패했다(`baseline_mission.py` GRASP 판정부 주석 전문 참고).
+
+---
+
+## 3. CARRY — INSERT 조건 판정
+
+CARRY는 매 사이클 라이다와 부하를 떠 둔다 — INSERT 판정이 "직전 사이클 대비 안정적인가"를
+보려면 비교할 표본이 이미 있어야 왕복이 한 번 줄기 때문이다.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant H as Host
+    participant M as BaselineCarryState
+    participant L as Lidar
+    participant A as ArmDriver
+    participant B as BaseDriver
+
+    H->>M: HostCommand(state=CARRY|APPROACH_BOX|INSERT)
+    M->>L: basket_face()
+    L-->>M: BasketFace
+    M->>A: get_load()
+    A-->>M: load
+    Note right of M: (face, load)를 이번 사이클 표본으로 보관
+
+    alt state == APPROACH_BOX
+        Note over M: 접근 중에도 매 사이클 확인(09-02 사고 이후)
+        alt 라이다 거리 < BASKET_MIN_LIDAR_M
+            M->>B: stop()
+            M->>H: report(INSERT_BLOCKED, "너무 가깝다", fix)
+        else 목표창 안(BASKET_STOP_TOLERANCE_M 이내)
+            M->>B: stop()
+            M->>H: report(APPROACH_BOX_READY, "그만 밀어도 된다")
+        else 아직 창 밖
+            M->>B: apply_velocity(Host 속도)
+        end
+    else state == INSERT
+        M->>B: stop()
+        Note over M: check_insert — 아래 조건 전부 AND
+        Note right of M: E-STOP 안 걸림 · 정지 상태 ·<br/>grasp_confirmed(=GRASP에서 이미 확정, 재판정 안 함) ·<br/>라이다 정면 확보(점수·거리·yaw·좌우 허용치) ·<br/>직전 사이클 대비 거리·부하 변화가 허용치 안
+        alt 전부 충족
+            M->>H: report(INSERT_READY, detail)
+            Note right of M: BaselineInsertState로 전이 (§4)
+        else 하나라도 미충족
+            M->>H: report(INSERT_BLOCKED, detail, fix)
+            Note right of M: 표본 없으면 판정 보류,<br/>한 사이클 더 본다
+        end
+    else state == CARRY
+        M->>B: apply_velocity(Host 속도)
+    end
+```
+
+**`grasp_confirmed`를 여기서 raw 부하로 다시 재지 않는다.** GRASP가 CARRY 진입 시점에
+이미 내린 판정(§2)을 그대로 믿는다 — box처럼 부하가 계속 낮게 읽히는 물체에서 재판정이
+영원히 막히는 사고가 2026-09-03에 있었다(`baseline_mission.py` 주석).
+
+---
+
+## 4. INSERT — 투하 시퀀스
+
+바닥 파지 높이로 내려가지 않는다. 실측 DROP 자세로 직접 전개한 뒤 그리퍼를 열고,
+**부하 변화량**으로 놓임을 판정한다 — 별도 힘 센서가 없다.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as BaselineInsertState
+    participant A as ArmDriver
+    participant H as Host
+
+    M->>H: report(STATE, INSERT)
+    M->>A: move_to_floor_pose(profile, "drop")
+
+    alt drop 자세 실패
+        M->>A: hold_position()
+        M->>H: report(INSERT_FAILED, "투하 자세 실패")
+        Note right of M: grasp_confirmed는 유지한 채 CARRY로 복귀 —<br/>그리퍼가 놓친 게 아니라 팔 자세만 실패
+    else drop 자세 성공
+        M->>A: get_load()
+        A-->>M: before
+        M->>A: set_gripper(release_width_mm)
+        M->>A: get_load()
+        A-->>M: after
+
+        alt after <= before - RELEASE_LOAD_DROP(0.008)
+            M->>H: report(INSERT_DONE, "부하 {before}→{after}")
+        else 부하가 충분히 안 줄었다
+            M->>H: report(INSERT_FAILED, "부하가 안 줄었다")
+            Note right of M: 실패해도 접기는 한다 —<br/>전개한 채 두는 편이 더 위험
+        end
+
+        M->>A: set_gripper(CLOSED_MM)
+        M->>A: move_to_floor_pose(profile, "idle")
+        M->>H: report(IDLE_DONE, state=IDLE)
+        Note right of M: 성공/실패 무관하게 무조건 IDLE로 복귀
+    end
+```
+
+**`RELEASE_LOAD_DROP = 0.008`은 실측 2건(둘 다 실제 성공, 감소폭 0.0313·0.0117)에서
+역산한 임시치다** — 실패(안 떨어짐) 사례가 아직 실측된 적이 없어 정확한 경계는 여전히
+미실측이다. 옛 문턱 0.015는 2026-09-03 queen의 실제 성공(감소폭 0.0117)을 실패로
+오판했다(`baseline_mission.py` `BaselineInsertState` docstring).
+
+---
+
+## 5. 공통 인터럽트 — E-STOP · LinkWatchdog
+
+전이 그래프에는 등장하지 않는(`state_machine.md` §2 참고) 두 인터럽트다. 어느 State의
+`execute()` 안에서도 같은 방식으로 작동한다.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Run as BaselineMission.run()
+    participant S as 현재 State
+    participant W as LinkWatchdog
+    participant B as BaseDriver
+    participant A as ArmDriver
+    participant H as Host
+
+    loop 매 사이클
+        Run->>Run: ports.estop.is_set() ?
+        alt E-STOP 걸림
+            Run->>B: stop()
+            Run->>A: hold_position()
+            Note right of Run: BaselineEstopState로 강제 전환 —<br/>정상 전이가 아니라 인터럽트
+        else E-STOP 안 걸림
+            Run->>S: execute(ports)
+            S->>H: latest_command()
+            H-->>S: HostCommand|None
+            S->>W: observe(command)
+            alt 결측이 HOST_COMMAND_TIMEOUT_CYCLES(3) 미만
+                W-->>S: True — 정상 진행
+            else 3사이클 연속 결측
+                W-->>S: False
+                S->>B: stop()
+                S->>H: report(REJECTED, "Host 명령이 N사이클 연속 없음 — 정지")
+                Note right of S: None(안 옴)과 정지 명령은<br/>엄격히 다르게 취급한다
             end
         end
     end
-
-    opt E-STOP (임의 시점)
-        OP->>T: estop.set()
-        T->>B: stop()
-        T->>A: hold_position()
-        Note right of A: 현재 자세 래치 · 낙하 방지
-    end
 ```
-
-> **관측은 정지 상태에서만** 합니다. 주행 중 모션 블러와 진동으로 검출 신뢰도가 떨어지고,
-> 이는 음성을 정지 상태에서만 녹음하는 것과 같은 원칙입니다 — **자기 소음·자기 진동 배제.**
-
----
-
-## 2. 파지 검증 및 자동 재시도
-
-그리퍼를 닫은 뒤 **서보 부하값으로 물체 유무를 판정**합니다.
-별도 힘/토크 센서 없이 폐루프를 구성하는 것이 핵심입니다.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant T as MissionTask<br/>(GraspState)
-    participant P as Perception
-    participant A as ArmDriver
-
-    Note over T,A: 부하 기반 파지 검증 — 힘 센서 없음
-
-    loop 대상 1개 기준 · attempt ≤ MAX_GRASP_RETRY (3)
-        T->>A: move_to_floor_pose(profile, safe=145 mm; minimum=140 mm)
-        T->>A: set_gripper(80 mm)
-        T->>A: move_to_floor_pose(profile, grasp)
-        T->>A: set_gripper(profile.close_width_mm)
-        T->>A: get_load()
-        A-->>T: load_ratio (0.0~1.0)
-
-        alt load_ratio ≥ LOAD_THRESHOLD
-            T->>A: move_to_floor_pose(profile, midpoint)
-            T->>A: get_load()
-            T->>A: move_to_floor_pose(profile, safe=145 mm; minimum=140 mm)
-            T->>A: move_to_floor_pose(profile, idle=CARRY_IDLE)
-            T->>A: get_load()
-            Note right of A: 중간 부하 유지 + SAFE_145 + CARRY_IDLE<br/>재검증 후 TRANSPORT / DELIVER
-        else load_ratio < LOAD_THRESHOLD
-            Note right of A: 빈손 — 그리퍼가 끝까지 닫힘
-            T->>A: set_gripper(OPEN_MM)
-            T->>P: scan_floor()
-            P-->>T: 갱신된 목록 — 대상 pose 보정
-            Note right of P: 실패한 파지가 물체를 밀었을 수 있음<br/>이전 pose 재사용은 같은 실패를 반복
-        end
-    end
-
-    Note over T,A: 첫 safe 액션을 사용할 수 없을 때만 기존 down=True 수직 파지를 1회 fallback
-
-    Note over T,A: 재시도 소진 → held_ids 등록 후 SCAN 복귀<br/>미션은 끝나지 않는다
-```
-
-| 항목 | 내용 |
-|---|---|
-| 감지 방식 | 그리퍼 서보(id6) 부하 비율 `load_ratio` |
-| 값의 범위 | **0.0~1.0 정규화 비율.** 서보 원시값(STS3215 `PRESENT_LOAD` = 0~1023)을 `abs(raw)/1023` 으로 바꾸는 것은 `arm_driver_node` 의 몫입니다 — 서보 각도 변환과 같은 이유입니다(`class_diagram.md` §2). 부호(0x400 비트)는 방향인데 실측에서 일관되지 않아(같은 '빈 채'가 −88 로도 +124 로도) 버립니다 |
-| 임계값 | **`LOAD_THRESHOLD = 0.04`** — 실측(2026-08-18, n=25, 정착 후) 두 분포 사이. 아래 표 참조 |
-| 정착 대기 | **`GRASP_SETTLE_SEC = 1.5`** (노드). 정착 전에는 빈 채와 물체가 모두 포화값(±500)이라 구분이 불가능합니다 |
-| 재시도 상한 | `MAX_GRASP_RETRY = 3` — **대상 1개당**. `SELECT` 가 새 대상을 고를 때 예산을 되돌립니다 (`state_machine.md` §3) |
-| 실패 시 동작 | 개방 → **재스캔** → 보정된 pose로 재시도 |
-| 소진 시 | `held_ids` 등록 → `SCAN` 복귀 (**미션 계속**) |
-
-> **선형 FSM과의 결정적 차이가 마지막 줄입니다.** 이전에는 `GraspFailedState` 가 `None` 을 반환해
-> 미션이 종료됐습니다. 지금은 실패한 물체를 보류하고 다음 물체로 갑니다 — **유즈케이스 3.**
-
-### 부하 임계값 실측 (2026-08-18, n=25)
-
-정착 2초 후 · 절대값 기준. 정규화는 `raw / 1023`.
-
-| 상황 | raw | 정규화 |
-|---|---|---|
-| 빈 채 / 파지 실패(놓침) | 28, 32 | 0.027 ~ 0.031 |
-| 체스말(나이트·룩) | 48 ~ 124 | 0.047 ~ 0.121 |
-| 가베(정육면체) | 140 (5/5 일관) | 0.137 |
-| 체스말(퀸, 유선형이라 불안정) | 32(놓침) 또는 160 ~ 168 | 0.031 / 0.156 ~ 0.164 |
-
-**빈 채 최대 0.031 < `LOAD_THRESHOLD` = 0.04 < 파지 성공 최소 0.047.**
-⚠️ 여유가 크지 않습니다 — raw 기준 32 대 48로 **16틱** 차이입니다. 파지 대상 클래스가
-추가되면 재측정해야 합니다.
-
-> **이전 값 `0.15` 는 어떤 물체도 넘지 못했습니다** — 가베조차 0.137 로 미달이라 실기에서
-> 파지 판정이 항상 실패했습니다. 여기에 real 어댑터가 정규화하지 않은 원시값(−88, 124)을
-> 돌려주고 Fake 는 0~1 값을 돌려주던 계약 분기가 겹쳐, **CI는 통과하는데 실기만 실패하는**
-> 상태였습니다.
-
-### 정착 시간 실측
-
-닫힘 명령 후 시간별 부하:
-
-| 경과 | 부하 | 판정 가능? |
-|---|---|---|
-| 0.26 ~ 0.51s | 500 (포화) | ❌ 이동 중 — 빈 채/물체 동일 |
-| 0.77s | 거의 안정 | △ |
-| 1.03s 이후 | 완전 고정 (10초까지 한 틱도 변화 없음) | ✅ |
-
-`set_gripper` 가 위치를 명령한 뒤 `GRASP_SETTLE_SEC` 만큼 기다린 다음 응답합니다.
-**타이밍 지식은 노드에 둡니다** — `GraspState` 에 `sleep` 을 넣으면 도메인이 서보 물리를
-알게 됩니다. `GraspState` 는 `set_gripper()` 응답을 쓰지 않고 `get_load()` 를 따로 부르지만,
-`set_gripper` 가 정착까지 붙들고 있으므로 그 다음 호출이 정착 후 값을 읽습니다.
-
----
-
-## 3. 바구니 투입
-
-현재 대상은 바구니 바닥까지 팔을 내리지 않고 개구 중심 위에서 낙하시킨다.
-베이스가 정지·정렬된 뒤 CARRY_IDLE에서 SAFE_145로 전개하고 그리퍼만 연다.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant T as MissionTask<br/>(PosePlan → Insert)
-    participant P as Perception
-    participant B as BaseDriver
-    participant A as ArmDriver
-
-    Note over T,A: 전제 — CARRY_IDLE로 운반 완료<br/>베이스는 바구니 개구 중심에 정렬
-
-    T->>P: measure_opening(box)
-    P-->>T: opening_mm (상자 입구 짧은 변)
-    Note right of P: dims_m 은 SCAN 시점 확보<br/>단안이므로 눕힌 물체의 바닥 평면 치수<br/>세운 물체는 클래스 사전값 폴백
-
-    Note over T: solve φ<br/>L·|cos φ| + w·|sin φ| ≤ W_open − margin<br/>φ = 장축과 수평면 사이 각도 (rad)
-
-    alt 해 구간 없음
-        T-->>T: REJECT — 투입 불가 판정
-        T->>A: move_to_cartesian(바닥 내려놓기)
-        T->>A: set_gripper(OPEN_MM)
-        Note right of T: 물체를 든 채 미션을 끝내지 않는다<br/>held_ids 등록 후 SCAN 복귀
-    else 해 구간 존재
-        T->>B: stop()
-        T->>A: move_to_floor_pose(profile, safe=145 mm)
-
-        loop 투입 중
-            T->>P: monitor_clearance()
-            P-->>T: front/left/right + contact_risk
-            Note right of P: 상자·가구 접촉 = 성공 기준 위반<br/>접촉 예상 시 즉시 정지
-        end
-
-        T->>A: set_gripper(OPEN_MM)
-        T->>A: move_to_floor_pose(profile, idle)
-        A-->>T: 투입 완료 (접촉 0회)
-    end
-```
-
-### 자세 계획
-
-```
-H_proj(φ) = L·|cos φ| + w·|sin φ|   ≤   W_open − margin
-
-  L      = 0.50 m   막대 길이 (추정값, SCAN에서 측정)
-  w      = 0.045 m  지름 (추정값)
-  W_open = 0.40 m   상자 입구 짧은 변 (미결 #8 — 발주 후 실측)
-  margin = 0.03 m   안전 여유 (미결 #7 — 고정 / 학습)
-  φ      = 장축과 수평면 사이 각도 (rad), 파지 직후 0°
-
-→ φ ≥ 0.83 rad (48°)
-```
-
-| W_open | 최소 φ |
-|---|---|
-| 0.35 m | 55.5° |
-| 0.40 m | 47.7° |
-| 0.45 m | 41.8° |
-
-> **⚠️ 이전 주제와 부등호가 반대입니다.** 암실 시나리오는 낮은 개구부 **밑을 지나느라 눕혔고**
-> (`sin`/`cos` 위치가 반대, `φ ≲ 27°`), 지금은 좁은 입구에 **넣느라 세웁니다.**
-> 수식 계열은 같지만 코드를 복사하면 부호가 틀립니다.
-
-> [!NOTE]
-> **이 시퀀스는 현재 보류 상태입니다.** 긴 물체가 정리 대상에서 제외되어 자세 재조정을
-> 실행할 클래스가 없습니다. 가베·체스말은 모두 `φ=0` 으로 통과합니다.
-> 미배정 상자에 긴 물체를 배정하면 즉시 되살아나므로 시퀀스는 그대로 보존합니다.
-
----
-
-## 4. FETCH 분기
-
-TIDY와 **같은 하드웨어·같은 포트·같은 파지 로직**을 씁니다. 파지 이후 목적지 결정에서만 갈라집니다.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor OP as 사용자
-    participant I as CommandInterpreter
-    participant T as MissionTask
-    participant P as Perception
-    participant B as BaseDriver
-    participant A as ArmDriver
-
-    OP->>I: "체스말 가져와"
-    I-->>T: MissionSpec(mode=FETCH, target_cls=CHESS_PIECE)
-
-    T->>P: scan_floor()
-    P-->>T: list[Detection]
-    Note over T: SELECT — target_cls 일치 필터 추가<br/>TIDY와 다른 유일한 판단 지점
-
-    Note over T,A: APPROACH → GRASP — TIDY와 완전 동일 (§2)
-
-    Note over T,A: DELIVER
-    T->>B: drive_to(사용자 위치)
-    B-->>T: arrived
-    Note right of B: 상자가 아니라 사람이 목적지<br/>find_box() 호출 없음
-
-    Note over T,A: HANDOVER
-    T->>A: move_to_cartesian(인계 높이)
-    T->>A: set_gripper(OPEN_MM)
-    T->>A: get_load()
-    A-->>T: load_ratio ≈ 0 (사람이 받아감)
-    T-->>OP: "여기 있습니다"
-    Note right of T: done_ids 등록 후 SCAN 복귀
-```
-
-**분기점은 `GraspState.execute()` 의 마지막 한 줄입니다.**
-
-```python
-return TransportState(...) if self.ctx.spec.mode is MissionMode.TIDY else DeliverState(...)
-```
-
-> 두 모드가 공유하는 코드량이 이렇게 큰 것은 설계 의도입니다.
-> 모드가 늘어도 파지 로직은 한 곳에만 있습니다.
-
----
-
-## 5. 음성 명령 — 복창과 되묻기
-
-**도메인 코드는 0줄 바뀝니다.** `voice_io` 노드가 기존 명령 토픽에 텍스트를 발행할 뿐입니다.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor OP as 사용자
-    participant V as voice_io 노드<br/>(STT · TTS)
-    participant I as CommandInterpreter
-    participant T as MissionTask
-
-    Note over OP,T: 케이스 A — 명확한 명령
-    OP->>V: [푸시투토크 누름] "긴 막대 가져와"
-    Note right of V: 정지 상태에서만 녹음<br/>모터·서보 소음이 마이크를 덮음
-    V->>I: /command "체스말 가져와" (std_msgs/String)
-    I-->>V: confirm_phrase → "체스말을 가져올게요"
-    V-->>OP: [TTS] "체스말을 가져올게요"
-    OP->>V: "응"
-    V->>T: MissionSpec 확정 → 실행
-
-    Note over OP,T: 케이스 B — 모호한 명령
-    OP->>V: [PTT] "그거 가져와"
-    V->>I: /command "그거 가져와"
-    I-->>V: CLARIFY — 대상 미상
-    V-->>OP: [TTS] "가베인가요, 체스말인가요?"
-    OP->>V: "체스말"
-    V->>I: /command "체스말" (CORRECT)
-    I-->>V: confirm_phrase → "체스말을 가져올게요"
-    V-->>OP: [TTS] 복창
-    OP->>V: "응"
-    V->>T: MissionSpec 확정 → 실행
-
-    Note over OP,T: 케이스 C — STT 오인식
-    OP->>V: [PTT] "체스말은 검은 상자에"
-    V->>I: /command "체스팔은 검은 상자에" ← 오인식
-    I-->>V: CLARIFY — 클래스 미상
-    V-->>OP: [TTS] "다시 말씀해 주세요"
-    Note right of V: 오실행률 0% 가 성공 기준<br/>확인 없는 실행 경로는 존재하지 않는다
-```
-
-| 항목 | 결정 | 이유 |
-|---|---|---|
-| 푸시투토크 | ✅ 채택 | 로봇 소음이 마이크를 덮음, 시연장 오인식 방지 |
-| 웨이크워드 상시 대기 | ❌ 미채택 | 위와 동일 + 시연 통제 |
-| 녹음 시점 | **정지 상태에서만** | 자기 소음 배제 (관측과 동일 원칙) |
-| 실행 전 복창 | ✅ 필수 | STT는 반드시 틀림 |
-| 텍스트 폴백 | ✅ 유지 | 음성만 되는 상태를 만들지 않음 |
-
-> **비전공자가 가장 크게 반응하는 장면은 로봇이 되묻는 순간입니다.**
-> 기존 `CLARIFY` → `CORRECT` 문형이 그대로 음성 대화가 되므로,
-> 명령 해석 로직을 새로 만드는 게 아니라 입출력 채널만 붙이면 됩니다.
 
 ---
 
@@ -362,4 +263,5 @@ sequenceDiagram
 | 문서 | 내용 |
 |---|---|
 | [`state_machine.md`](state_machine.md) | **FSM 전이 단일 소스** |
-| [`class_diagram.md`](class_diagram.md) | 포트 시그니처, 값 객체 |
+| [`class_diagram.md`](class_diagram.md) | 포트 시그니처, 값 객체, ROS2 노드 계층 |
+| [`architecture.puml`](architecture.puml) | 같은 구조의 PlantUML 버전 |
