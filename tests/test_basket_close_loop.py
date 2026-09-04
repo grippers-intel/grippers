@@ -25,9 +25,21 @@ from conftest import (PI_LATERAL_TOLERANCE_M, PI_STOP_LIDAR_M,  # noqa: E402
 _HOST = Path(__file__).resolve().parent.parent / "host"
 sys.path.insert(0, str(_HOST))
 
+import config as cfg                       # noqa: E402
 import mission_config as mcfg              # noqa: E402
 from mission import MissionFSM, State      # noqa: E402
 from vehicle_link import parse_basket_fix  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _freeze_chess_box_at_2026_08_28_position(monkeypatch):
+    """이 파일은 2026-08-28 그날의 실측(라이다 0.351m, 좌우 -79mm)을 그대로
+    재현한다 — `PiSim`이 그 숫자를 내려면 그날 기준이던 상자 좌표
+    (chess 중심 1.350, 1.625)를 그대로 써야 한다. 2026-09-04에 사용자가
+    (아마 그사이 실제로 상자가 옮겨져서) chess 중심을 (1.450, 1.450)으로
+    재실측했지만, 그건 **오늘의** 물리적 위치일 뿐 그날 재현에는 안 맞는다
+    — 이 파일 안에서만 그날 좌표로 되돌려 얼린다."""
+    monkeypatch.setitem(cfg.BOXES, "chess", (1.350, 1.625, 180.0))
 
 # 무한 루프가 이 프로젝트의 최대 리스크다. "느리게라도 끝났다"가 아니라
 # 상한 안에 못 끝나면 그 자체를 실패로 본다(Pi 저장소 conftest 와 같은 원칙).
@@ -40,13 +52,13 @@ from vehicle_link import parse_basket_fix  # noqa: E402
 # 442사이클에 끝남). 800으로 두 배 가까운 여유를 준다.
 MAX_STEPS = 800
 
-# 2026-09-02, AWAIT_CONTINUE 신설: PLACE 완료 시 방금 옮긴 라벨(rook, chess
-# 그룹)과 같은 그룹의 다른 개체가 화면에 하나도 안 남으면 RETURN_HOME 대신
-# AWAIT_CONTINUE 로 간다(사용자 확인 대기 — 빈 피지도 `{}` 를 주던 이
-# 파일의 헬퍼들이 전부 그 경우였다). 이 파일은 RETURN_HOME 이후 이어지는
-# 루프 자체가 아니라 INSERT 정렬 폐루프를 보는 파일이므로, knight(같은
-# chess 그룹)가 하나 더 남아 있는 피지도를 줘서 그룹이 아직 안 끝난 것으로
-# 만든다.
+# 2026-09-02~09-04 사이 한동안 있던 AWAIT_CONTINUE(그룹이 화면에서 다
+# 소진되면 RETURN_HOME 대신 사람에게 물어보는 기능) 때문에, PLACE 완료 시
+# 빈 피지도 `{}` 를 주면 RETURN_HOME 이 아니라 그쪽으로 새 버릴 수 있어
+# knight(같은 chess 그룹)가 하나 더 남아 있는 피지도를 줬었다.
+# 2026-09-04 밤 사용자 지시로 그 기능이 통째로 없어져 지금은 굳이 필요
+# 없지만, 있어도 결과가 같으므로(이 파일은 어차피 RETURN_HOME 이후가
+# 아니라 INSERT 정렬 폐루프를 본다) 그대로 둔다.
 _OTHER_CHESS_PIECE_REMAINS = {"knight": [(0.9, 0.9)]}
 
 

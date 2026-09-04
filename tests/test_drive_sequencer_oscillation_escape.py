@@ -110,3 +110,24 @@ def test_ESCAPE는_설정된_사이클_동안만_지속되고_그다음_처음�
     # 있으니(robot_yaw=0) FORWARD 로 나가야 한다.
     cmd = seq.update(robot_xy, 0.0, (1.0, 0.0), [])
     assert cmd.mode == DriveMode.FORWARD
+
+
+def test_ESCAPE로_넘어갈_때마다_escape_count가_누적된다():
+    """2026-09-05: "yaw 진동으로 시간이 지체된다"는 보고를 받고 추가한
+    계측값 — 실기에서 이게 얼마나 자주 늘어나는지가 DRIVE_YAW_TOLERANCE_DEG
+    를 더 넓힐지 판단하는 근거가 된다(정의부 코멘트 참고). reset()으로는
+    지워지지 않아야 한다 — 구간이 아니라 실행 전체의 빈도를 센다."""
+    seq = DriveSequencer(yaw_tolerance_deg=5.0)
+    robot_xy = (0.0, 0.0)
+    assert seq.escape_count == 0
+
+    seq.update(robot_xy, 170.0, (1.0, 0.0), [])
+    flips = [170.0, -170.0] * mcfg.ROTATE_OSCILLATION_TOGGLE_LIMIT
+    for flip_yaw in flips:
+        cmd = _round_trip(seq, robot_xy, flip_yaw)
+        if cmd.mode == DriveMode.ESCAPE:
+            break
+
+    assert seq.escape_count == 1
+    seq.reset()
+    assert seq.escape_count == 1, "reset()이 누적 카운터까지 지워 버렸다"

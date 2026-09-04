@@ -164,6 +164,15 @@ class DriveSequencer:
         self._last_rotate_sign: Optional[float] = None
         self._toggle_count = 0
         self._escape_remaining = 0   # 0이면 ESCAPE 중이 아니다.
+        # ESCAPE 로 실제로 넘어간 누적 횟수(2026-09-05, 사용자가 "yaw 진동
+        # 때문에 시간이 지체된다"고 보고해서 추가) — 이 모듈은 순수 상태기계라
+        # 여기서 직접 로그를 찍지 않는다(reset() 코멘트 참고, 실시간
+        # sleep 없이 호출만 반복하는 테스트도 있다). 호출부(mission.py
+        # _approach())가 이 값이 늘었는지 보고 필요하면 사용자에게 보고한다
+        # — DRIVE_YAW_TOLERANCE_DEG(현재 12도)를 더 넓혀야 할지는 실기에서
+        # 이게 얼마나 자주 뛰는지를 보고 판단해야 한다(mission_config.py의
+        # ROTATE_OSCILLATION_TOGGLE_LIMIT 정의부 코멘트 참고).
+        self.escape_count = 0
 
     def reset(self) -> None:
         """새 구간(다른 기물/상자로 향할 때)을 시작할 때 부른다.
@@ -174,7 +183,11 @@ class DriveSequencer:
         첫 update() 에서 정렬 여부를 보고 바로 알맞은 모드로 시작한다.
 
         토글 워치독도 같이 초기화한다 — 다른 목표로 향하는 새 구간의 회전을
-        이전 구간의 방향 이력과 섞으면 안 된다."""
+        이전 구간의 방향 이력과 섞으면 안 된다.
+
+        `escape_count` 는 여기서 초기화하지 않는다 — 구간이 아니라 이
+        인스턴스가 살아 있는 동안(대략 한 번의 run_mission.py 실행) 전체
+        오실레이션 빈도를 세려는 값이다."""
         self._mode = None
         self._next_after_stop = DriveMode.FORWARD
         self._rotate_target_yaw = None
@@ -196,6 +209,7 @@ class DriveSequencer:
             self._toggle_count = 0
             self._last_rotate_sign = None
             self._escape_remaining = mcfg.ROTATE_OSCILLATION_ESCAPE_CYCLES
+            self.escape_count += 1
             return DriveMode.ESCAPE
         return DriveMode.ROTATE
 

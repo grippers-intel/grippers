@@ -28,8 +28,22 @@ sys.path.insert(0, str(_HOST))
 sys.path.insert(0, str(_HOST / "aruco"))
 
 import config as cfg              # noqa: E402
+import mission_config as mcfg     # noqa: E402
 from localizer import Pose        # noqa: E402
 from vehicle_link import MissionCommand, VehicleLink  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _assume_pi_lidar_gate_on(monkeypatch):
+    """이 파일의 PiSim은 Pi가 라이다로 거절·보정하는(LIDAR_INSERT_CHECK_
+    ENABLED=True) 옛 동작을 흉내낸다 — NUDGE_BOX<->PLACE 왕복으로 거리를
+    좁혀 가는 폐루프 전체가 그 전제 위에 있다. mission_config.LIDAR_
+    INSERT_CHECK_ENABLED의 "지금 실기에서 뭘 믿고 도는가"라는 실제 값
+    (2026-09-04 현재 False)과는 별개로, 이 파일을 쓰는 테스트들은 항상
+    켜진 상태를 전제로 짜여 있다. 그 실제 값 자체를 시험하는 테스트는
+    monkeypatch로 각자 원하는 값을 다시 덮어써서 이 기본값을 무시한다
+    (domain 저장소 tests/test_preconditions.py의 같은 패턴)."""
+    monkeypatch.setattr(mcfg, "LIDAR_INSERT_CHECK_ENABLED", True)
 
 # 라이다가 차체 기준점보다 얼마나 앞에 있는가.
 #

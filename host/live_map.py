@@ -61,6 +61,7 @@ sys.path.insert(0, str(Path(__file__).parent / "aruco"))
 import config as cfg
 from localizer import Pose
 from navigator import DriveCommand
+import basket_target   # basket_target도 config/localizer를 bare import하므로 위 경로 삽입 뒤에 와야 한다
 
 PieceMap = dict[str, list[tuple[float, float]]]
 XY = tuple[float, float]
@@ -325,6 +326,18 @@ class LiveMap:
                 facecolor="saddlebrown", edgecolor="black", alpha=0.6))
             self.ax.text(bx, by, name, ha="center", va="center",
                          fontsize=9, color="white", weight="bold")
+
+        # 바구니 입구 목표 영역 중심(basket_target.py가 INSERT 게이트로
+        # 실제 겨냥하는 지점) — 사용자 지시(2026-09-04): 실기에서 라이다가
+        # 한참 먼 거리(0.373m 등)에서 투하돼 목표 지점이 실제로 어디인지
+        # 눈으로 바로 확인하려고 X로 찍는다. 상자 사각형과 겹칠 수 있는데,
+        # 그 자체가 정보다 — 겹치면 목표가 상자 안쪽에 있다는 뜻이다.
+        for name in cfg.BOXES:
+            tx, ty = basket_target.target_center(name)
+            # red는 로봇 화살표 색과 겹치고 이 프로젝트 관례상 경고색으로
+            # 아껴 둔다 — 목표 표시는 orange로 구분한다.
+            self.ax.plot(tx, ty, marker="x", color="orange", markersize=10,
+                        markeredgewidth=2.5, zorder=5)
 
         self._build_legend()
         self.fig.tight_layout()

@@ -25,14 +25,13 @@ from conftest import PiSim                    # noqa: E402
 
 MAX_STEPS = 900
 
-# 2026-09-02, AWAIT_CONTINUE 신설로 이 테스트들의 전제가 바뀌었다: PLACE
-# 완료 시 방금 옮긴 라벨(rook, chess 그룹)과 **같은 그룹의 다른 개체가
-# 화면에 하나도 안 남으면** RETURN_HOME 대신 AWAIT_CONTINUE 로 간다(사용자
-# 확인 대기). 이 파일의 테스트는 "PLACE -> RETURN_HOME -> SEARCH_TARGET"
-# 루프 메커니즘 자체를 보는 것이지 그룹 소진 판정을 보는 게 아니므로,
-# knight(같은 chess 그룹)가 하나 더 남아 있는 피지도를 줘서 그룹이 아직
-# 안 끝난 것으로 만든다 — AWAIT_CONTINUE 자체는 test_await_continue.py 가
-# 따로 검증한다.
+# 2026-09-02~09-04 사이 한동안 AWAIT_CONTINUE(그룹이 화면에서 다 소진되면
+# RETURN_HOME 대신 사람에게 "계속할까요?"를 묻는 기능)가 있어서, 이 파일의
+# 테스트는 그 판정을 피하려고 knight(같은 chess 그룹)가 남아 있는 피지도를
+# 줬었다. 2026-09-04 밤 사용자 지시로 AWAIT_CONTINUE 가 통째로 없어져
+# PLACE 완료는 언제나 RETURN_HOME 이므로 지금은 이 값이 굳이 필요하지
+# 않지만, 있어도 결과가 달라지지 않으므로(다른 그룹 기물이 화면에 있는
+# 상태를 그대로 재현) 그대로 둔다.
 _OTHER_CHESS_PIECE_REMAINS = {"knight": [(0.9, 0.9)]}
 
 

@@ -123,6 +123,12 @@ class _Track:
     last_seen: float = 0.0
     first_seen: float = 0.0
     n_obs: int = 0
+    # 파지되거나(GRASP_DONE) 바구니에 놓인(INSERT_DONE) "바로 그 개체"만
+    # 지도 출력에서 뺄 때 켠다(2026-09-05, 사용자 지시 — PieceTracker.
+    # suppress_at() 참고). 트랙 자체는 지우지 않는다 — 위 클래스 docstring과
+    # 같은 이유로, 계속 관측되더라도(예: 옮겨지는 동안 잠깐 다시 잡힘) 계속
+    # 숨겨진 채로 유지하려는 것이다.
+    suppressed: bool = False
 
     def confirmed(self, now: float) -> bool:
         return now - self.first_seen >= mcfg.PIECE_CONFIRM_SEC
@@ -169,6 +175,34 @@ class PieceTracker:
         """모든 트랙을 지운다 — 화면/상태를 강제로 초기화할 때 쓴다(LiveMap 리셋 버튼)."""
         self._tracks = []
 
+    def suppress_at(self, label: str, xy: tuple[float, float],
+                     radius: float = mcfg.PIECE_MERGE_DIST_M) -> bool:
+        """`label` 트랙 중 `xy`에 가장 가까운 것 하나만 골라 영구히 지도
+        출력에서 뺀다(2026-09-05, 사용자 지시).
+
+        같은 라벨의 기물이 여러 개 있을 때(rook 두 개 등), 방금 파지했거나
+        (GRASP_DONE) 바구니에 놓은(INSERT_DONE) **바로 그 개체 하나만**
+        숨기고 나머지는 그대로 후보/지도에 남겨야 한다 — 라벨 전체를
+        지우면 안 된다. 이 트래커는 위치로 트랙을 구분하므로(모듈
+        docstring 참고), "그 개체"는 곧 "호출 시점에 그 라벨로, 그
+        좌표에서 가장 가까운 트랙"이다.
+
+        트랙 자체는 지우지 않는다(반환 좌표만 감춘다) — 계속 관측돼도
+        숨김이 풀리지 않는다. radius 안에 맞는 트랙이 없으면(이미 트랙이
+        만료됐거나 애초에 여기서 잡힌 적이 없으면) 아무 일도 안 하고
+        False를 돌려준다 — 호출부가 로그로 남길 수 있게."""
+        best, best_d = None, radius
+        for t in self._tracks:
+            if t.suppressed or t.label != label:
+                continue
+            d = math.hypot(t.x - xy[0], t.y - xy[1])
+            if d <= best_d:
+                best, best_d = t, d
+        if best is None:
+            return False
+        best.suppressed = True
+        return True
+
     def update(self, obs_lists: list[list[PieceObs]]) -> dict[str, list[tuple[float, float]]]:
         now = time.monotonic()
 
@@ -202,6 +236,8 @@ class PieceTracker:
         for t in self._tracks:
             if not t.confirmed(now):
                 continue   # 아직 확정 안 된 트랙 — 내부적으로는 계속 추적하되 출력엔 안 냄
+            if t.suppressed:
+                continue   # suppress_at()으로 숨긴 트랙 — 위 메서드 문서 참고
             by_label.setdefault(t.label, []).append(t)
 
         result: dict[str, list[tuple[float, float]]] = {}

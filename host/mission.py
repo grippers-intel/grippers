@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent / "aruco"))
 
 import config as cfg
 from localizer import Pose, box_pose
+import basket_target
 from navigator import GridPathPlanner, DriveCommand, DriveMode, DriveSequencer
 from vehicle_link import (BACK_OFF, CREEP_IN, RE_AIM, GraspCorrection,
                           MissionCommand, VehicleLink)
@@ -53,10 +54,7 @@ class State(Enum):
     FACE_BOX = auto()          # 상자 앞 도착 후 정해진 방향(BOX_FACE_YAW_DEG)으로 제자리 회전
     NUDGE_BOX = auto()         # 그 방향으로 BOX_NUDGE_M 만큼만 더 전진하고 정지
     PLACE = auto()             # 차량이 SmolVLA 로 내려놓는 동안 대기
-    AWAIT_CONTINUE = auto()    # 한 그룹(chess/toy) 소진 — 계속/정지 사용자 응답 대기 (2026-09-02)
-    AWAIT_COMMAND = auto()     # AWAIT_CONTINUE 에서 '계속' 선택 — 다음 지시 문장 대기
-    RETURN_HOME = auto()       # 기물을 포기하고(또는 그룹 소진 후 정지 확정) mcfg.DEFAULT_HOME_XY 로 복귀 중
-    IDLE = auto()              # 정지 확정 후 영구 대기 — 빠져나가는 경로 없음(재시작해야 함)
+    RETURN_HOME = auto()       # 기물을 포기했거나 하나를 다 옮긴 뒤 mcfg.DEFAULT_HOME_XY 로 복귀 중
     DONE = auto()
 
 
@@ -118,27 +116,6 @@ def _nearest_piece(piece_map: PieceMap, robot_xy: XY,
     if found is None and skip:
         found = _search(use_skip=False)
     return found
-
-
-def _group_has_remaining(piece_map: PieceMap, group: str) -> bool:
-    """작업 영역 안에 `group`(mcfg.PIECE_DEST_BOX 의 값, "chess"/"toy") 소속
-    라벨이 하나라도 남아 있는가 — AWAIT_CONTINUE 진입 판정에 쓴다
-    (2026-09-02, 사용자 지시: 그룹이 소진돼야만 계속/정지를 묻는다).
-
-    지금 화면(피지도)에 보이는 것만 본다 — 카메라 사각지대로 일시적으로
-    안 보이는 경우까지 추적하지는 않는다(구현 단순화, 사용자 확인).
-    skip(포기한 기물)도 "아직 못 옮겼다"는 사실은 그대로이므로 여기서는
-    빼지 않는다 — _nearest_piece/_find_label 과 달리 이 함수는 "다음에
-    무엇을 집을지"가 아니라 "이 그룹에 아직 할 일이 남았는지"만 본다."""
-    wx0, wx1 = cfg.WORKSPACE_X
-    wy0, wy1 = cfg.WORKSPACE_Y
-    for label, pts in piece_map.items():
-        if mcfg.PIECE_DEST_BOX.get(label) != group:
-            continue
-        for p in pts:
-            if wx0 <= p[0] <= wx1 and wy0 <= p[1] <= wy1:
-                return True
-    return False
 
 
 def _find_label(piece_map: PieceMap, label: str, robot_xy: XY,
@@ -303,34 +280,6 @@ class MissionFSM:
         않는다(지금은 차량 없이 시험하는 용도)."""
         self._back_requested = True
 
-    def on_continue(self) -> None:
-        """AWAIT_CONTINUE 에서 '계속'을 선택했다 — 다음 지시를 받는 상태로
-        (2026-09-02, 사용자 지시). manual_mode 의 _should_advance() 게이트를
-        타지 않는다 — request_back() 과 같은 이유로, 이건 조건이 아니라
-        사용자의 1회성 결정이다. AWAIT_CONTINUE 가 아닐 때 불리면 무시."""
-        if self.state == State.AWAIT_CONTINUE:
-            self.state = State.AWAIT_COMMAND
-
-    def on_stop(self) -> None:
-        """AWAIT_CONTINUE 에서 '정지'를 선택했다 — 기본 위치로 복귀한 뒤
-        IDLE 로 들어가 영구 정지한다(2026-09-02, 사용자 지시. IDLE 은
-        빠져나가는 경로가 없다 — run_mission.py 를 재시작해야 함)."""
-        if self.state == State.AWAIT_CONTINUE:
-            self._halt_after_home = True
-            self.state = State.RETURN_HOME
-
-    def submit_next_command(self, target_label: str, dest_xy: Optional[XY] = None) -> None:
-        """AWAIT_COMMAND 에서 다음 지시(라벨 + fetch/organize 의도)가
-        확정됐다 — RETURN_HOME 을 거치지 않고 곧장 SEARCH_TARGET 으로
-        간다(사용자 지시: 이미 기본 위치 근처이므로 다시 들를 필요 없음).
-        AWAIT_COMMAND 가 아닐 때 불리면 무시."""
-        if self.state != State.AWAIT_COMMAND:
-            return
-        self._instructed_label = target_label
-        self._instructed_dest_xy = dest_xy
-        self.ready_to_advance = False
-        self.state = State.SEARCH_TARGET
-
     def _go_back(self) -> None:
         prev = {
             State.APPROACH_PIECE: State.SEARCH_TARGET,
@@ -398,9 +347,15 @@ class MissionFSM:
         # set_instruction() 이 여기 쌓아 둔다.
         self._queued_instruction_label: Optional[str] = None
         self._queued_instruction_dest_xy: Optional[XY] = None
-        # AWAIT_CONTINUE 에서 '정지'를 선택했다는 표시 — RETURN_HOME 도착
-        # 시 SEARCH_TARGET 대신 IDLE 로 가라는 뜻(on_stop() 참고).
-        self._halt_after_home = False
+
+        # 1회성 이벤트 — run_mission.py 가 매 사이클 읽고 소비한다
+        # (읽었으면 None 으로 되돌려야 한다). "방금 파지/투입에 성공한
+        # 그 개체"만 piece_map.PieceTracker.suppress_at() 으로 숨기려는
+        # 것이다(2026-09-05, 사용자 지시) — 라벨 전체가 아니라 정확히 그
+        # 좌표의 그 트랙 하나만 지도에서 빼야, 같은 라벨의 다른 개체(예:
+        # rook 두 개 중 하나만 잡았을 때)가 계속 후보로 남는다.
+        self.last_grasp_event: Optional[tuple[str, XY]] = None
+        self.last_place_event: Optional[tuple[str, XY]] = None
 
         # LiveMap 이 "지금 어디로 가는 중인지" 그릴 수 있게 마지막 계산을 남겨둔다.
         # goal 은 이번 단계의 최종 목적지(기물 또는 상자), corner 는 축정렬
@@ -421,6 +376,14 @@ class MissionFSM:
         # NUDGE_BOX 가 이번에 갈 (거리 m, 방향). PLACE 가 Pi 의 라이다 판독을
         # 보고 채운다. None 이면 첫 진입이라 기존 BOX_NUDGE_M 만큼만 붙인다.
         self._nudge_plan: Optional[tuple] = None
+        # gate_ok/facing_ok(Host 자체 ArUco 판정)만으로 PLACE 전환을
+        # 확정하기 전에 몇 사이클 연속으로 같은 결과가 나오는지 센다
+        # (2026-09-05, 사용자 지시 — "정지 명령을 보낸 그 순간의 좌표"가
+        # 아니라 "실제로 멈춘 뒤"의 좌표로 최종 판정하려는 것). 라이브
+        # 안전장치(live_too_close/hard_stop/ready_early/Pi 라이다 fix)로
+        # 끝난 경우는 이미 실측이라 debounce가 필요 없다 — 아래 step()
+        # NUDGE_BOX 참고.
+        self._nudge_gate_streak = 0
         # 진전 감시 — 마지막으로 인정한 이동량과 그 시각의 마감.
         self._nudge_best = 0.0
         # Pi 라이다 기준 오차(축에 맞게 forward_m/yaw_rad/lateral_m)로 본
@@ -514,7 +477,16 @@ class MissionFSM:
             robot_xy, pose.yaw_deg, target_xy, obstacles)
         self.nav_corner = corner
         self.nav_path = self._path_planner.last_path
+        escape_count_before = self._drive.escape_count
         nav = self._drive.update(robot_xy, pose.yaw_deg, sub_goal, [])
+        if self._drive.escape_count > escape_count_before:
+            # 2026-09-05: 사용자가 "yaw 진동으로 시간이 지체된다"고 보고해서
+            # 추가한 계측 — DriveSequencer.escape_count 정의부 참고. 값을
+            # 바로 튜닝하지 않고 우선 눈에 보이게만 한다. 이게 자주 뜨면
+            # DRIVE_YAW_TOLERANCE_DEG(현재 12도)를 실기 데이터로 다시 볼 것.
+            print(f"[navigator] yaw 헌팅 감지 — 정렬 무시하고 "
+                  f"{mcfg.ROTATE_OSCILLATION_ESCAPE_CYCLES}사이클 동안 전진합니다 "
+                  f"(이번 실행 누적 {self._drive.escape_count}회)", flush=True)
         nav.blocked_by = blocked_by
         self.last_nav = nav
         self.last_cmd = _send_drive(link, pose, self.state.name, nav, target_label=target_label)
@@ -910,6 +882,8 @@ class MissionFSM:
             poll = link.poll_status() if not self.ready_to_advance else "IDLE"
             if not self.ready_to_advance and poll == "GRASP_DONE":
                 self.ready_to_advance = True
+                if self.target_label is not None and self._target_xy is not None:
+                    self.last_grasp_event = (self.target_label, self._target_xy)
             elif self._forcing_grasp and poll == "FAILED":
                 # 강제 시도가 실제로 실패했다(부하 미달·뎁스캠에서 확인
                 # 안 됨 등, Pi 가 GRASP_FAILED 로 보고). 강제 모드를 풀고
@@ -1166,13 +1140,34 @@ class MissionFSM:
                 self._nudge_yaw_from = pose.yaw_deg
                 self._nudge_best = 0.0
                 self._nudge_best_pi_error = None
+                self._nudge_gate_streak = 0
                 self._nudge_stall_at = time.monotonic() + mcfg.BASKET_NUDGE_STALL_SEC
                 # 이전 진입에서 이미 경고를 찍었어도, 이번 진입은 별개의
                 # 시도다 — 2026-09-03 실기: 이걸 리셋 안 해서 두 번째
                 # 스톨부터는 메시지도 없이 조용히 멈췄다.
                 self._nudge_stall_warned = False
-            # 얼마나 어느 쪽으로 갈지. PLACE 가 Pi 판독을 보고 정해 두면
-            # 그것을 쓰고, 없으면(첫 진입) 기존 5 cm 직진이다.
+                # ⚠️ 2026-09-04 실기로 드러난 문제: LIDAR_INSERT_CHECK_
+                # ENABLED=False로 Pi의 check_insert가 더 이상 "너무 멀다"고
+                # 거절하지 않게 되면서, 예전에 NUDGE_BOX<->PLACE 왕복(Pi가
+                # INSERT_BLOCKED로 보정 계획을 실어 돌려주는 것)으로 거리를
+                # 좁혀 가던 폐루프가 사실상 사라졌다. 그 결과 아래 기본값
+                # (고정 5cm)만 쓰면 실제로는 한참 먼 채로 딱 한 번 5cm만
+                # 밀고 바로 INSERT를 시도해 버린다(실측: 라이다 0.373m/
+                # 0.215m/0.164m — 옛 목표 0.140m와 한참 다름, 매번 정면
+                # 앞에서 헛되이 투하). Pi가 더 이상 교정해 주지 않으니,
+                # 첫 진입에서부터 Host 스스로 basket_target 게이트가 실제로
+                # 만족될 만큼 계획을 세운다 — 5cm보다 짧게는 절대 안 잡는다
+                # (그보다 가까우면 원래 로직대로 5cm 직진).
+                if self._nudge_plan is None and not mcfg.LIDAR_INSERT_CHECK_ENABLED:
+                    dest_box_name = mcfg.PIECE_DEST_BOX.get(self.target_label)
+                    if dest_box_name is not None:
+                        gate = basket_target.check_basket_insert_gate(
+                            robot_xy, pose.yaw_deg, dest_box_name)
+                        self._nudge_plan = (
+                            max(mcfg.BOX_NUDGE_M, gate.distance_m), "forward")
+            # 얼마나 어느 쪽으로 갈지. PLACE 가 Pi 판독을 보고 정해 두거나
+            # 위에서 게이트 거리로 정해 뒀으면 그것을 쓰고, 그마저 없으면
+            # (dest_box_name을 모르는 라벨 등) 기존 5 cm 직진이다.
             want_m, axis = self._nudge_plan or (mcfg.BOX_NUDGE_M, "forward")
             is_rotate = axis in ("rotate_left", "rotate_right")
             heading = math.radians(mcfg.BOX_FACE_YAW_DEG)
@@ -1260,23 +1255,85 @@ class MissionFSM:
                                                 robot_xy[1] - box_y)
                 hard_radius = cfg.BOX_L / 2.0 + mcfg.BASKET_HARD_STOP_MARGIN_M
                 hard_stop = dist_to_box_center <= hard_radius
+            # 사용자 지시(2026-09-04): 정면으로 딱 맞춰 서는 것을 강제하지
+            # 않는다 — 입구 목표 영역(가로 ±3cm, 안쪽 0~3cm)에서 15cm
+            # 이내에 있고 그쪽을 보고만 있어도 충분하다(basket_target.py
+            # 참고, 사선 진입 허용).
+            #
+            # ⚠️ 2026-09-04 밤 실기로 드러난 버그: 이 게이트를 LIDAR_INSERT_
+            # CHECK_ENABLED 값과 무관하게 항상 켜 뒀더니, 라이다를 다시 켜도
+            # 전후/좌우 축까지 이 느슨한 Host 판정만으로 조기 종료돼 Pi의
+            # 실측 라이다 정렬(check_insert가 실제로 요구하는 기준)을
+            # 건너뛰었다 — toy 바구니 투하가 입구 오른쪽 바깥으로 나가는
+            # 사고로 이어졌다(사용자 보고). LIDAR_INSERT_CHECK_ENABLED가
+            # 꺼져 있을 때만(=Pi가 라이다로 거절해 주지 않을 때만) 이
+            # 게이트를 쓴다 — 켜져 있으면 예전처럼 Pi 라이다 판정 하나만
+            # 믿는다.
+            #
+            # ⚠️ 2026-09-05 시도했다가 되돌린 것: "회전 축만은 이 게이트를
+            # 라이다 스위치와 무관하게 항상 쓰자"(사선이면 정면까지 안
+            # 돌아도 되게) — 방향(facing)만 보는 조건을 추가해 봤는데,
+            # NUDGE_BOX 회전 진입 시점엔 이미 로봇이 대략 바구니 쪽을
+            # 보고 있는 게 보통이라(그래서 회전이 필요해진 것) 그 느슨한
+            # ArUco 판정이 거의 매번 즉시 참이 되어 Pi의 정밀 라이다 정렬
+            # (BASKET_YAW_DEADBAND_RAD)을 시작도 하기 전에 끝내 버렸다 —
+            # 정확히 2026-09-03에 고쳤던 사고(test_nudge_box_rotate_fix.py
+            # 참고)와 같은 모양으로 재발했다. gate_ok(Host 전용 ArUco 판정)
+            # 로 회전 축을 우회하는 건 여전히 안 한다 — LIDAR_INSERT_CHECK_
+            # ENABLED가 꺼져 있을 때만 그 경로로 사선이 허용된다.
+            #
+            # 대신(같은 날, 사용자 지시 — "무조건 정면은 좀 위험해") 회전
+            # 축이 "다 됐다"고 볼 기준 자체를 넓혔다. BASKET_YAW_DEADBAND_
+            # RAD(0.04rad≈2.3도)까지 정밀하게 맞추려고 계속 쫓는 대신, **Pi
+            # 라이다 실측값**이 NUDGE_ROTATE_DIAGONAL_TOLERANCE_RAD(20도) 안에
+            # 들어오면 그 자리에서 그만 돈다 — gate_ok와 달리 이건 여전히
+            # Pi의 실측을 보는 것이라 위에서 되돌린 시도와는 다르다. 값 근거는
+            # mission_config.py의 그 정의부 코멘트 참고.
+            gate_ok = False
+            if dest_box_name is not None and not mcfg.LIDAR_INSERT_CHECK_ENABLED:
+                gate_ok = basket_target.check_basket_insert_gate(
+                    robot_xy, pose.yaw_deg, dest_box_name).ok
+            # host_gate_hit — Pi의 실측(라이다 fix/라이브 안전 반경)이 아니라
+            # Host 혼자만의 ArUco 판정(gate_ok)만으로 끝났다고 보려는 것인지
+            # 표시한다. 이 경로로 끝난 경우만 아래에서 debounce한다
+            # (2026-09-05) — "정지 명령을 막 보낸 그 순간의 좌표"가 아니라
+            # "실제로 멈춘 뒤 다시 재본 좌표"로 PLACE 전환을 확정하기
+            # 위해서다. Pi가 실측으로 확인해 준 경우(fix.yaw_rad 데드밴드·
+            # live_too_close·hard_stop·ready_early)는 이미 그 자체로
+            # 재확인이니 debounce가 필요 없다.
             if is_rotate:
                 if fix is not None and fix.yaw_rad is not None:
                     # 회전판은 Pi 라이다가 직접 확인해 줄 때만 "끝났다"로
                     # 본다 — check_insert가 실제로 판정하는 기준과 맞춘다.
-                    done = (abs(fix.yaw_rad) <= mcfg.BASKET_YAW_DEADBAND_RAD
-                            or live_too_close or hard_stop)
+                    # gate_ok를 여기 넣지 않는다 — 위 2026-09-05 코멘트 참고.
+                    done_confirmed = (
+                        abs(fix.yaw_rad) <= mcfg.NUDGE_ROTATE_DIAGONAL_TOLERANCE_RAD
+                        or live_too_close or hard_stop)
                 else:
                     # Pi 값이 아직 없을 때만 쓰는 ArUco 폴백. ready_early는
                     # 절대 안 넣는다 — 위 주석 참고.
-                    done = moved >= want_m or live_too_close or hard_stop
+                    done_confirmed = moved >= want_m or live_too_close or hard_stop
+                host_gate_hit = gate_ok
             elif axis in ("left", "right"):
-                done = moved >= want_m or live_too_close or hard_stop
+                done_confirmed = moved >= want_m or live_too_close or hard_stop
+                host_gate_hit = gate_ok
             elif axis == "back":
-                done = moved >= want_m or ready_early or live_too_close
+                # 후진은 위험 반경에서 빠져나오는 길이다 — 목표 영역
+                # 게이트로 조기 종료시키지 않는다(위 hard_stop 관련 주석과
+                # 같은 이유).
+                done_confirmed = moved >= want_m or ready_early or live_too_close
+                host_gate_hit = False
             else:   # "forward"
-                done = (moved >= want_m or ready_early or live_too_close
-                        or hard_stop)
+                done_confirmed = (moved >= want_m or ready_early or live_too_close
+                                  or hard_stop)
+                host_gate_hit = gate_ok
+            done = done_confirmed or host_gate_hit
+            if host_gate_hit and not done_confirmed:
+                self._nudge_gate_streak += 1
+            else:
+                self._nudge_gate_streak = 0
+            advance_ready = done_confirmed or (
+                host_gate_hit and self._nudge_gate_streak >= mcfg.NUDGE_GATE_CONFIRM_CYCLES)
             # 전후 이동 중에 방위가 틀어지면 다시 맞춘다 — 5 cm 라도 비스듬히
             # 들어가면 상자 정면에 안 선다. 좌우 이동은 방위를 안 건드리므로
             # (메카넘 횡이동) 회전으로 끊지 않는다 — 여기서 돌면 방금 맞춘
@@ -1348,6 +1405,11 @@ class MissionFSM:
                 # 표시하는 편이 낫다.
                 mode, cmd = DriveMode.STOP, "stop"
                 done = True
+                # 이 탈출 경로는 그 자체가 이미 "몇 초를 기다려 봤다"는
+                # 재확인이다 — host_gate_hit debounce를 또 기다리게 하면
+                # 2026-09-03에 고친 "NUDGE_BOX에 영영 눌러앉는" 사고가
+                # 다른 경로로 재발한다.
+                advance_ready = True
                 if not self._nudge_stall_warned:
                     self._nudge_stall_warned = True
                     progress = (f"{math.degrees(moved):.1f}도 밖에 못 돌았습니다"
@@ -1360,7 +1422,7 @@ class MissionFSM:
                           f"다시 확인합니다. 계속 반복되면 바퀴 전원과 걸림을 "
                           f"확인하세요\n", flush=True)
 
-            self.ready_to_advance = done
+            self.ready_to_advance = advance_ready
             nav = DriveCommand(
                 mode=mode, waypoint=goal, target_yaw_deg=mcfg.BOX_FACE_YAW_DEG,
                 yaw_error_deg=yaw_err,
@@ -1369,10 +1431,11 @@ class MissionFSM:
             self.last_nav = nav
             link.send(MissionCommand(cmd, "NUDGE_BOX", pose.x, pose.y, pose.yaw_deg))
             self.last_cmd = cmd
-            if done and self._should_advance():
+            if advance_ready and self._should_advance():
                 self.ready_to_advance = False
                 self._nudge_from = None
                 self._nudge_plan = None
+                self._nudge_gate_streak = 0
                 self.state = State.PLACE
 
         elif self.state == State.PLACE:
@@ -1385,6 +1448,17 @@ class MissionFSM:
             status = link.poll_status() if not self.ready_to_advance else "IDLE"
             if status == "PLACE_DONE":
                 self.ready_to_advance = True
+                # Pi가 명확하게 성공을 확인해 준 경우에만 바구니 위치에서
+                # 이 라벨의 트랙을 숨긴다(2026-09-05, 사용자 지시) — 아래
+                # FAILED 분기는 일부러 이 이벤트를 안 세운다. 그 분기의
+                # 코멘트가 설명하듯 Pi의 FAILED는 오탐일 수 있어서, 실제
+                # 안착 여부는 "다음 SEARCH_TARGET에서 다시 보이는가"로
+                # 판단하게 이미 설계돼 있다 — 여기서 무조건 숨기면 정말
+                # 못 들어가 바닥에 남은 기물까지 다시 못 찾게 된다.
+                dest_box_name = mcfg.PIECE_DEST_BOX.get(self.target_label)
+                if self.target_label is not None and dest_box_name is not None:
+                    box_x, box_y, _box_yaw = box_pose(dest_box_name)
+                    self.last_place_event = (self.target_label, (box_x, box_y))
             elif status == "FAILED":
                 # 2026-09-03 실기(queen): Pi 가 투하 부하 판정으로 FAILED 를
                 # 보고했는데(부하 0.0469 -> 0.0352, RELEASE_LOAD_DROP=0.015
@@ -1474,24 +1548,20 @@ class MissionFSM:
                 # 않는다 — RETURN_HOME 완료 시점에 적용하는 기존 경로(아래)
                 # 하나로 합친다.
                 #
-                # 2026-09-02 추가(사용자 지시): 방금 넣은 기물의 그룹(chess/
-                # toy)에 아직 작업 영역에 남은 게 있으면 지금처럼 곧장
-                # RETURN_HOME(그리고 자동으로 다음 SEARCH_TARGET)으로 간다.
-                # 그 그룹이 이번에 다 떨어졌으면(같은 그룹 다른 개체가
-                # 화면에 하나도 안 남았으면) 대신 AWAIT_CONTINUE 로 가서
-                # "계속할지/멈출지" 사용자에게 먼저 묻는다 — 그룹 하나가
-                # 끝날 때마다 한 번만 묻고, 그 안의 개체마다는 안 묻는다.
-                group = mcfg.PIECE_DEST_BOX.get(self.target_label)
+                # ⚠️ 2026-09-02~09-04 사이 여기서 그룹(chess/toy) 소진 여부로
+                # AWAIT_CONTINUE(사용자에게 "계속할까요?" 묻기)로 갈지 갈랐던
+                # 적이 있다 — 2026-09-04 밤 사용자 지시("AWAIT 다 없애라고.
+                # 원래 RETURN_HOME 있던 버전으로 내놔")로 그 기능 전체를
+                # 없앴다. State.AWAIT_CONTINUE/AWAIT_COMMAND/IDLE과
+                # on_continue()/on_stop()/submit_next_command()도 함께
+                # 지웠다 — 이제 무조건 RETURN_HOME 이다.
                 self.ready_to_advance = False
                 self.target_label = None
                 self._target_xy = None
                 self.dest_xy = None
                 self._path_planner.reset()
                 self._drive.reset()
-                if group is not None and _group_has_remaining(piece_map, group):
-                    self.state = State.RETURN_HOME
-                else:
-                    self.state = State.AWAIT_CONTINUE
+                self.state = State.RETURN_HOME
 
         elif self.state == State.RETURN_HOME:
             # 기물을 포기한 뒤(_skip_target) 실패한 자리에 그대로 남지 않고
@@ -1510,55 +1580,15 @@ class MissionFSM:
                 self.ready_to_advance = False
                 self._path_planner.reset()   # 새 구간 시작
                 self._drive.reset()
-                if self._halt_after_home:
-                    # AWAIT_CONTINUE 에서 '정지'를 선택했다(on_stop()) —
-                    # 기본 위치에 도착했으니 이제 진짜로 멈춘다(2026-09-02).
-                    self._halt_after_home = False
-                    self.state = State.IDLE
-                else:
-                    # PLACE 완료 경로와 같은 이유로 여기서도 큐를 비운다 —
-                    # 포기한 기물을 쫓는 동안 새 지시가 들어왔을 수 있다
-                    # (set_instruction() 이 GRASP/GRASP_ALIGN 도 "손이 안
-                    # 비었다"로 보고 큐에 쌓아 두므로, 2026-09-01).
-                    if self._queued_instruction_label is not None:
-                        self._instructed_label = self._queued_instruction_label
-                        self._instructed_dest_xy = self._queued_instruction_dest_xy
-                        self._queued_instruction_label = None
-                        self._queued_instruction_dest_xy = None
-                    self.state = State.SEARCH_TARGET
-
-        elif self.state == State.AWAIT_CONTINUE:
-            # 그룹(chess/toy) 하나를 다 옮겼다 — 계속/정지는 run_mission.py
-            # 가 on_continue()/on_stop() 으로 알려줄 때까지 여기서 정지한
-            # 채 기다린다(2026-09-02). 차체는 이미 RETURN_HOME 으로 기본
-            # 위치까지 온 상태이므로 그 자리에 서 있기만 하면 된다.
-            self.nav_goal = None
-            self.nav_corner = None
-            self.nav_path = None
-            self.last_nav = None
-            self.last_cmd = "stop"
-            link.send(MissionCommand("stop", "AWAIT_CONTINUE", pose.x, pose.y,
-                                      pose.yaw_deg))
-
-        elif self.state == State.AWAIT_COMMAND:
-            # '계속'을 선택했다 — 다음 지시 문장이 submit_next_command() 로
-            # 들어올 때까지 정지한 채 기다린다(2026-09-02).
-            self.nav_goal = None
-            self.nav_corner = None
-            self.nav_path = None
-            self.last_nav = None
-            self.last_cmd = "stop"
-            link.send(MissionCommand("stop", "AWAIT_COMMAND", pose.x, pose.y,
-                                      pose.yaw_deg))
-
-        elif self.state == State.IDLE:
-            # 영구 정지 — 빠져나가는 경로가 없다(사용자 결정, 2026-09-02).
-            # 다시 돌리려면 run_mission.py 를 재시작해야 한다.
-            self.nav_goal = None
-            self.nav_corner = None
-            self.nav_path = None
-            self.last_nav = None
-            self.last_cmd = "stop"
-            link.send(MissionCommand("stop", "IDLE", pose.x, pose.y, pose.yaw_deg))
+                # PLACE 완료 경로와 같은 이유로 여기서도 큐를 비운다 —
+                # 포기한 기물을 쫓는 동안 새 지시가 들어왔을 수 있다
+                # (set_instruction() 이 GRASP/GRASP_ALIGN 도 "손이 안
+                # 비었다"로 보고 큐에 쌓아 두므로, 2026-09-01).
+                if self._queued_instruction_label is not None:
+                    self._instructed_label = self._queued_instruction_label
+                    self._instructed_dest_xy = self._queued_instruction_dest_xy
+                    self._queued_instruction_label = None
+                    self._queued_instruction_dest_xy = None
+                self.state = State.SEARCH_TARGET
 
         return self.state
