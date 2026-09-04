@@ -131,11 +131,27 @@ def test_다른_상태는_안_낮춘다():
 
 
 def test_회전은_안_낮춘다():
-    """회전은 한 사이클에 1.8도라 이미 허용치(5도)의 3분의 1이다."""
+    """회전의 실제 각속도는 사이클당 2도라 이미 허용치(5도)의 절반 아래다.
+
+    입력에 리터럴을 쓰지 않는 이유가 있다 — 예전에는 0.25 라고 적어 두었는데,
+    합의 속도가 0.6 으로 올라가자 클램프가 안 걸려 이 테스트만 깨졌다.
+    확인하려는 것은 "합의 속도가 그대로 나오는가"이지 특정 숫자가 아니다."""
     decision = resolve_motion(
-        HostCommand(state=MissionState.APPROACH_BOX, angular_z=0.25))
+        HostCommand(state=MissionState.APPROACH_BOX,
+                    angular_z=mo.AGREED_ROTATION_RAD_S))
 
     assert decision.motion.angular_z == pytest.approx(mo.AGREED_ROTATION_RAD_S)
+
+
+def test_회전_상한이_회전_데드밴드_위에_있다():
+    """0.35 아래는 아무리 오래 줘도 제자리다 — 직진 데드밴드와 같은 가드다.
+
+    이걸 못 지키면 차는 회전 명령을 받으면서 버티고, 명령은 set_motor 까지
+    정상으로 내려가며, /odom_raw 는 돌았다고 보고한다. 로그 어디에도 이상이
+    없어서 찾는 데 오래 걸린다(2026-09-05). 실측은 IMU 로 했다 —
+    tools/rotation_threshold_sweep.py 참고.
+    """
+    assert mo.AGREED_ROTATION_RAD_S > 0.35
 
 
 def test_상한이_데드밴드_위에_있다():
