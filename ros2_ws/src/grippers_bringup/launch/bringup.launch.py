@@ -47,6 +47,9 @@ def launch_setup(context):
     checkpoint = LaunchConfiguration("checkpoint")
     device = LaunchConfiguration("device")
     gripper_cam_publish_hz = LaunchConfiguration("gripper_cam_publish_hz")
+    grasp_backend = LaunchConfiguration("grasp_backend")
+    use_depth_gate = LaunchConfiguration("use_depth_gate")
+    default_grasp_label = LaunchConfiguration("default_grasp_label")
 
     # ⚠️ use_vla 를 끄면 그리퍼캠 발행도 **함께** 꺼져야 한다. perception_node 의
     # 기본값이 0.0(끔)이고 "켜기 전에는 이 노드의 동작이 전과 완전히 같다"가
@@ -172,6 +175,14 @@ def launch_setup(context):
                     "use_fake_interpreter": use_fake_interpreter,
                     "use_fake_host": use_fake_host,
                     "host_ip": host_ip,
+                    # ⚠️ 이 셋을 여기 안 넘기면 launch 인자를 줘도 **조용히**
+                    # 기본값으로 돈다. 2026-09-05 실기에서 그랬다 —
+                    # use_depth_gate:=false 를 줬는데 뎁스 관문이 그대로 켜져
+                    # 있어서 GRASP_BLOCKED("물체가 전진 거리 밖이다")로 막혔다.
+                    # ros2 launch 는 모르는 인자를 오류로 알리지 않는다.
+                    "grasp_backend": grasp_backend,
+                    "use_depth_gate": use_depth_gate,
+                    "default_grasp_label": default_grasp_label,
                 }
             ],
         ),
@@ -255,6 +266,23 @@ def generate_launch_description():
             # **노트북의 policy_server 가 떠 있어야** 노드가 기동한다 — 없으면
             # health 에서 일찍 실패한다. 그 편이 파지 도중에 알게 되는 것보다 낫지만,
             # 시연 기본값이 네트워크에 의존해서는 안 된다.
+            DeclareLaunchArgument(
+                "grasp_backend",
+                default_value="classic",
+                description="파지 백엔드 classic|vla. vla 면 정책이 파지를 대신하고 "
+                "실패하면 그 자리에서 classic 으로 한 번 더 시도한다",
+            ),
+            DeclareLaunchArgument(
+                "use_depth_gate",
+                default_value="true",
+                description="false 면 뎁스캠을 안 본다 — 물체 식별·정렬 판정·파지 성공의 "
+                "두 번째 신호가 빠진다. 주행(탑뷰)이 세운 자리에서 곧장 파지한다",
+            ),
+            DeclareLaunchArgument(
+                "default_grasp_label",
+                default_value="queen",
+                description="use_depth_gate=false 일 때 쓸 라벨. 파지 프로파일 선택에만 쓴다",
+            ),
             DeclareLaunchArgument(
                 "use_vla",
                 default_value="false",
