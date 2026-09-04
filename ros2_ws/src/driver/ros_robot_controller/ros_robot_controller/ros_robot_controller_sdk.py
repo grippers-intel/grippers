@@ -80,6 +80,27 @@ class SBusStatus:
         self.signal_loss = True
         self.fail_safe = False
 
+# 2026-09-05, §2-6/§3-1(인수인계서) 후속 — buf_write()가 쓰기 "실패"는
+# 잡지만(504531d), 쓰기가 실패가 아니라 그냥 안 끝나고 계속 블록되면 그
+# 예외 자체가 안 난다. pyserial의 Serial(...)엔 read용 timeout과 별개로
+# write_timeout이 있는데, 이 파일은 그동안 그걸 한 번도 안 넘겨서 기본값
+# None(무기한 블록)이었다 — USB 경합 등으로 write()가 막히면 이 노드
+# (기본 단일 스레드 rclpy.spin())는 그 순간 그 어떤 콜백도(LED·부저·서보,
+# 그리고 뒤이어 오는 정지 명령까지) 못 돌린다. 값 자체는 실측이 아니다 —
+# 실기에서 정상 왕복 지연을 재고 조정할 것.
+DEFAULT_WRITE_TIMEOUT_S = 0.2
+
+# 이 시간 동안 set_motor_speed()가 한 번도 안 불리면(위 write_timeout으로
+# 블록은 끊었어도 그 위(ROS 콜백 자체가 안 오는 경우 등)에서 여전히
+# 멈춰 있을 수 있다) 워치독 스레드가 스스로 0속도를 다시 쏜다. 이 스레드는
+# recv_task와 같은 이유로 **ROS 콜백이 아니라 독립된 threading.Thread**다
+# — 실행기(executor)가 막혀 있어도 이 스레드는 별개로 돈다. Host 쪽 명령
+# 래치 한계(mission.py HOST_COMMAND_TIMEOUT_CYCLES 주석 — 6사이클≈0.4초)
+# 보다 여유 있게 잡아서, 정상 동작 중에는 절대 안 걸리고 진짜 멈췄을
+# 때만 걸리게 한다. 값 자체는 실측이 아니다 — 실기에서 조정할 것.
+DEFAULT_MOTOR_WATCHDOG_TIMEOUT_S = 0.5
+DEFAULT_MOTOR_WATCHDOG_POLL_S = 0.05
+
 class Board:
     buttons_map = {
             'GAMEPAD_BUTTON_MASK_L2':        0x0001,
@@ -96,12 +117,16 @@ class Board:
             'GAMEPAD_BUTTON_MASK_R1':        0x8000
     }
 
-    def __init__(self, device="/dev/rrc", baudrate=1000000, timeout=10):
+    def __init__(self, device="/dev/rrc", baudrate=1000000, timeout=10,
+                write_timeout=DEFAULT_WRITE_TIMEOUT_S,
+                motor_watchdog_timeout=DEFAULT_MOTOR_WATCHDOG_TIMEOUT_S,
+                motor_watchdog_poll=DEFAULT_MOTOR_WATCHDOG_POLL_S):
         self.enable_recv = False
         self.frame = []
         self.recv_count = 0
 
-        self.port = serial.Serial(None, baudrate, timeout=timeout)
+        self.port = serial.Serial(None, baudrate, timeout=timeout,
+                                  write_timeout=write_timeout)
         self.port.rts = False
         self.port.dtr = False
         self.port.setPort(device)
@@ -140,8 +165,17 @@ class Board:
             PacketFunction.PACKET_FUNC_PWM_SERVO: self.packet_report_pwm_servo
         }
 
+        # 모터 워치독(2026-09-05, §2-6/§3-1 후속) — set_motor_speed()가 이
+        # 시간 안에 한 번도 안 불리면 스스로 0속도를 다시 쏜다. recv_task와
+        # 같은 이유로 독립 스레드다(모듈 상단 DEFAULT_MOTOR_WATCHDOG_* 주석
+        # 참고) — rclpy 실행기가 막혀 있어도 이 스레드는 별개로 계속 돈다.
+        self._motor_watchdog_timeout = motor_watchdog_timeout
+        self._motor_watchdog_poll = motor_watchdog_poll
+        self._last_motor_cmd_at = time.monotonic()
+
         time.sleep(0.5)
         threading.Thread(target=self.recv_task, daemon=True).start()
+        threading.Thread(target=self._motor_watchdog_task, daemon=True).start()
 
 
     def packet_report_sys(self, data):
@@ -358,10 +392,33 @@ class Board:
         self.buf_write(PacketFunction.PACKET_FUNC_BUZZER, struct.pack("<HHHH", freq, on_time, off_time, repeat))
 
     def set_motor_speed(self, speeds):
+        # 2026-09-05 — 모터 워치독(__init__의 _motor_watchdog_task 참고)이
+        # "마지막으로 이 메서드가 불린 시각"을 본다. 워치독 자신의 0속도
+        # 재전송도 이 메서드를 그대로 타므로, 정상 명령이든 워치독의 강제
+        # 정지든 여기 한 곳만 갱신하면 된다.
+        self._last_motor_cmd_at = time.monotonic()
         data = [0x01, len(speeds)]
         for i in speeds:
             data.extend(struct.pack("<Bf", int(i[0] - 1), float(i[1])))
         self.buf_write(PacketFunction.PACKET_FUNC_MOTOR, data)
+
+    def _motor_watchdog_task(self):
+        """set_motor_speed()가 _motor_watchdog_timeout 동안 한 번도 안
+        불리면 스스로 0속도를 다시 쏜다(2026-09-05, §2-6/§3-1 후속).
+
+        재전송 자체가 set_motor_speed()를 타므로 _last_motor_cmd_at 이 그
+        즉시 갱신된다 — 그래서 "한 번 걸리면 그 이후로도 계속 조용히
+        멈춰 있다"가 아니라 "_motor_watchdog_timeout 마다 한 번씩 다시
+        확인하고, 여전히 멈춰 있으면 또 0속도를 재전송"하는 모양이 된다.
+        정상 동작 중(위 어딘가가 계속 새 명령을 주는 동안)에는 이 분기에
+        아예 들어오지 않는다."""
+        while True:
+            time.sleep(self._motor_watchdog_poll)
+            idle_s = time.monotonic() - self._last_motor_cmd_at
+            if idle_s > self._motor_watchdog_timeout:
+                print(f"[motor_watchdog] {idle_s:.2f}초 동안 새 모터 명령이 "
+                      f"없습니다 — 0속도를 강제 전송합니다", flush=True)
+                self.set_motor_speed([[1, 0.0], [2, 0.0], [3, 0.0], [4, 0.0]])
     
     '''
     def set_rgb(self, pixels):
