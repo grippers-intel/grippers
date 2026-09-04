@@ -229,11 +229,11 @@ MIN_GRIPPER_CLEARANCE_MM = 140.0
 # 2026-08-20 재실측: raw (2029, 2492, 2513, 1133, 3007)에서 실제 파지
 # 중심 높이 145 mm, 차체 전면 기준 전방 185 mm, 중심선 기준 좌측 20 mm.
 # 최소 140 mm 계약에 측정 여유 5 mm를 둔다.
-HORIZONTAL_SAFE_145_DEG = (-4.13, 38.58, 38.14, -83.41, -1.51)
-HORIZONTAL_SAFE_145_RAW = (2001, 2487, 2482, 1099, 2031)
+HORIZONTAL_SAFE_145_DEG = (-1.67, 39.02, 40.87, -80.42, 84.29)
+HORIZONTAL_SAFE_145_RAW = (2029, 2492, 2513, 1133, 3007)
 # 2026-08-20 빈손 실측: 중심 높이 195 mm, 테두리 위 약 80 mm,
 # 차체 전면 기준 전방 200 mm. SAFE_145와 같은 수평 손가락 방향을 유지한다.
-BASKET_DROP_195_RAW = (2001, 2187, 2570, 1311, 2031)
+BASKET_DROP_195_RAW = (2029, 2192, 2601, 1345, 3007)
 HORIZONTAL_CHESS_MID_40_DEG = (-4.13, 96.13, -12.52, -90.28, -1.5)
 
 # ⚠️ 2026-08-24 폐기. 사용자 보고: "큐브랑 축구공은 파지 높이를 맞추기 위해서
@@ -263,10 +263,10 @@ HORIZONTAL_CHESS_MID_40_DEG = (-4.13, 96.13, -12.52, -90.28, -1.5)
 # 파지 자체는 위태롭지 않다 — 이 자세를 쓰는 물체는 폭 40/45/46mm라 실제
 # 중심이 20.0/22.5/23.0mm이고, 26mm는 그보다 3~6mm 위일 뿐 손가락 판이
 # 물체를 충분히 감싼다. 오히려 star/soccer는 기존 20mm가 중심보다 낮았다.
-HORIZONTAL_GABE_LOW_26_DEG = (-3.85, 95.26, -20.89, -74.04, -1.62)
-HORIZONTAL_CHESS_ROOK_45_DEG = (-4.13, 93.43, -9.05, -91.05, -1.5)
-HORIZONTAL_CHESS_QUEEN_50_DEG = (-4.13, 90.79, -5.77, -91.69, -1.5)
-HORIZONTAL_CHESS_KNIGHT_60_DEG = (-4.13, 85.66, 0.33, -92.66, -1.5)
+HORIZONTAL_GABE_LOW_26_DEG = (-1.39, 95.70, -18.16, -71.05, 84.18)
+HORIZONTAL_CHESS_ROOK_45_DEG = (-1.67, 93.87, -6.32, -88.06, 84.30)
+HORIZONTAL_CHESS_QUEEN_50_DEG = (-1.67, 91.23, -3.04, -88.70, 84.30)
+HORIZONTAL_CHESS_KNIGHT_60_DEG = (-1.67, 86.10, 3.06, -89.67, 84.30)
 
 # 2026-08-20 실측 저부하 빈손 이동 자세. servo 1..5 raw를 그대로 보존한다.
 # torque를 현재 위치에 latch한 뒤 관절 load가 모두 0인 것을 확인했다.
@@ -309,8 +309,8 @@ IDLE_CRADLE_RAW = (2096, 822, 3101, 2949, 3023)
 CARRY_RAW = (2096, 822, 3101, 2712, 3023)
 
 # IDLE_CRADLE과 수평 자세 사이에서 차체 접촉 없이 검증한 중간 waypoint.
-VERTICAL_SAFE_OVERHEAD_DEG = (-2.46, 8.76, 18.07, 52.31, -85.4)
-HORIZONTAL_OVERHEAD_RAW = (2016, 2707, 2349, 966, 2030)
+VERTICAL_SAFE_OVERHEAD_DEG = (0.0, 9.2, 20.8, 55.3, 0.4)
+HORIZONTAL_OVERHEAD_RAW = (2044, 2712, 2380, 1000, 3006)
 
 HORIZONTAL_GRASP_POSES_DEG = {
     "cube": HORIZONTAL_GABE_LOW_26_DEG,
