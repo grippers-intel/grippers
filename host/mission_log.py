@@ -47,6 +47,29 @@ def default_log_path(prefix: str = "mission") -> Path:
     return Path(__file__).resolve().parent / "logs" / f"{prefix}_{stamp}.log"
 
 
+def append_annotation(path: Optional[Path], text: str) -> None:
+    """실행이 끝난 뒤 사람이 남긴 코멘트를 로그 끝에 덧붙인다 (2026-09-04).
+
+    `summary()`는 "GRASP_FAILED 1회 · GRASP_DONE 1회"처럼 사건의 종류와
+    횟수만 남긴다 — 그게 재시도 끝에 성공한 것인지, 첫 시도가 왜 실패했는지는
+    그 자리에 있던 사람만 안다. 그 맥락을 로그 파일에 같이 묻어 두면 사후
+    분석 때(§ `run_mission.py` "실행 후 코멘트") 요약표만으로는 안 보이는
+    사정이 드러난다.
+
+    `MissionLogger.close()` 로 이미 닫힌 파일을 다시 여는 것을 전제로
+    `"a"`(추가) 모드를 쓴다 — 로거 인스턴스를 코멘트 하나 받으려고 계속
+    살려 둘 필요가 없다. `path`가 `None`(`--no-log`)이거나 빈 문자열이면
+    아무것도 하지 않는다 — 남길 파일 자체가 없다."""
+    if path is None or not text.strip():
+        return
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    note = text.strip()
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(f"\n# 사용자 코멘트 ({stamp})\n# {note}\n")
+    with path.with_suffix(".jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"annotation": note, "t": stamp}, ensure_ascii=False) + "\n")
+
+
 @dataclass
 class _StateSpan:
     """한 상태에 머무른 구간."""
