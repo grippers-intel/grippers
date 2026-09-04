@@ -471,9 +471,8 @@ class BaselineGraspState(State):
         if not ports.arm.move_to_floor_pose(gp.profile, "carry"):
             return self._failed(ports, "CARRY 전환 실패")
 
-        # 파지 성공 판정 — 부하와 뎁스(사라짐) 두 신호를 **OR**로 본다
-        # (모든 라벨, 2026-09-04 최종). 이 판정은 벌써 여러 번 방향을
-        # 바꿨다:
+        # 파지 성공 판정 — 부하와 뎁스(사라짐) 두 신호. 이 판정은 벌써 여러
+        # 번 방향을 바꿨다:
         #
         #   AND(2026-08-26~) -> OR(2026-09-01, CARRY 자세에서 팔·기물이
         #   프레임 밖인 게 정상인데 confirm_grasp()가 "그대로 있다"를
@@ -482,28 +481,41 @@ class BaselineGraspState(State):
         #   통과해 버림 — `arm_driver_node._read_load()`가 서보 읽기
         #   실패 시 "안전값" 0.0을 돌려주는 것이 원인 후보였다) -> box만
         #   다시 OR(2026-09-04 저녁, host+Pi 연동 실기에서 box가 부하
-        #   0.0000으로 재차 실패 보고) -> **지금**(같은 날, 곧이어 queen도
+        #   0.0000으로 재차 실패 보고) -> 전부 OR(같은 날, 곧이어 queen도
         #   실제로는 물었는데 부하 0.0391로 AND에 걸려 실패 보고됨 —
-        #   사용자가 "그냥 OR로 다 퉁쳐버려"라고 라벨 구분 없이 지시).
+        #   사용자가 "그냥 OR로 다 퉁쳐버려"라고 라벨 구분 없이 지시) ->
+        #   **AND + 통신실패 구분(2026-09-05, 최종)**.
         #
-        # ⚠️ 2026-09-03에 AND로 되돌아간 이유(부하 0 근처 + vanished=True
-        # 조합에서 실제로는 못 문 상태를 성공으로 오판할 수 있다는 의심)는
-        # 사라지지 않았다. 그런데도 매번 실기에서 반대 라벨(rook은 뎁스가,
-        # box/star/queen은 부하가)이 못 미더운 쪽으로 뒤집혀서, 라벨별로
-        # 다르게 판정하는 세분화 자체를 포기하고 한쪽(OR)으로 통일하기로
-        # 했다. 재발하면 라벨 구분이 아니라 신호 자체(부하 읽기,
-        # confirm_grasp)를 고치는 쪽으로 가야 한다 — box/star는 그리퍼캠+
-        # YOLO로 "그리퍼 안에 실제로 있다"는 세 번째 독립 신호를 검토
-        # 중이다.
+        # 전부 OR로 통일한 뒤에도 문제가 재발했다(box/star, 그리고 INSERT
+        # 쪽 부하-안정성 오판) — 원인은 AND/OR의 선택이 아니라 애초에
+        # "부하 0.0000"이 "진짜 빈손"과 "서보 읽기 실패"를 구분하지 못한
+        # 것이었다(사용자 진단, 2026-09-05). 그래서 읽기 실패를 값 자체가
+        # 아니라 별도 신호(`ports.arm.get_load()`가 -1.0을 돌려준다 —
+        # ros2_arm_driver.LOAD_UNKNOWN / arm_driver_node.
+        # GRIPPER_LOAD_READ_FAILED 참고)로 구분할 수 있게 고친 뒤, 판정을
+        # **AND를 기본으로 되돌리되(2026-08-26 원안 — 09-01 뎁스 오탐
+        # 위험은 재발하면 뎁스 신호 자체를 고친다), 부하를 아예 못 읽은
+        # 경우만 뎁스 신호 단독으로 판단**하도록 나눴다. "부하가 진짜
+        # 0.0000으로 읽혔다"(읽기는 성공, 값이 낮다)는 더 이상 뎁스만으로
+        # 구제되지 않는다 — 그건 AND가 원래부터 잡아야 하는 진짜 실패다.
         carried = ports.arm.get_load()
         vanished = ports.perception.confirm_grasp()
-        load_ok = carried >= bc.LOAD_THRESHOLD
-        if not (load_ok or vanished):
-            return self._failed(
-                ports, f"부하도 낮고 목표도 그대로 보인다 (부하 {carried:.4f})")
+        load_unknown = carried < 0.0
+        load_ok = (not load_unknown) and carried >= bc.LOAD_THRESHOLD
+        success = vanished if load_unknown else (load_ok and vanished)
+        if not success:
+            reason = (
+                f"부하를 못 읽었고 목표도 그대로 보인다 (부하 {carried:.4f})"
+                if load_unknown else
+                f"부하 {carried:.4f} · 뎁스 사라짐 {vanished} — 둘 다 만족해야 한다"
+            )
+            return self._failed(ports, reason)
 
         detail = f"{self.label} 부하 {carried:.4f}"
-        detail += " · 목표 사라짐 확인" if vanished else " · 부하로 확인(뎁스 오탐 무시)"
+        if load_unknown:
+            detail += " · 부하 읽기 실패, 뎁스 사라짐으로만 확인"
+        else:
+            detail += " · 부하+뎁스 사라짐 모두 확인"
         ports.host.report(Report.GRASP_DONE, MissionState.CARRY, detail)
         # 여기 도달했다는 것 자체가 위 OR 판정을 통과했다는 뜻이다 — 그 판정
         # 결과를 CARRY 이후로 그대로 들고 간다(아래 BaselineCarryState.
@@ -672,7 +684,15 @@ class BaselineCarryState(State):
             previous_face, previous_load = self.previous
             if previous_face.ok and face.ok:
                 distance_change = face.distance_m - previous_face.distance_m
-            load_change = load - previous_load
+            # ⚠️ 2026-09-05: 둘 중 하나라도 부하 읽기 실패(-1.0, get_load()
+            # 문서 참고)면 차분을 내지 않는다. 예전엔 그대로 뺐는데, 실패
+            # 신호가 0.0이든 -1.0이든 직전 실측 부하와의 차가 항상 큰
+            # 음수로 나와 진짜 미끄러짐(GRIPPER_SLIP_LOAD_DROP=0.010)처럼
+            # 오판됐다 — 통신 글리치 한 번마다 INSERT가 "미끄러진다"로
+            # 걸렸을 수 있다. 표본 하나가 무효면 이번 사이클은 안정성
+            # 판정을 보류하고(None) 다음 사이클에서 다시 본다.
+            if load >= 0.0 and previous_load >= 0.0:
+                load_change = load - previous_load
 
         insert_inputs = pc.InsertInputs(
             estop_set=ports.estop.is_set(),
@@ -761,14 +781,25 @@ class BaselineInsertState(State):
         before = ports.arm.get_load()
         ports.arm.set_gripper(gp.release_width_mm)
         after = ports.arm.get_load()
-        released = after <= before - self.RELEASE_LOAD_DROP
+        # ⚠️ 2026-09-05: before/after 둘 중 하나라도 부하 읽기 실패(-1.0)면
+        # 차분 비교 자체를 하지 않는다 — before가 -1.0이면 `after - before`가
+        # 항상 거대한 음수가 되어 진짜로는 놓였어도 "부하가 안 줄었다"로
+        # 오판되는 게 아니라(부호가 반대라 이 경우엔 오히려 실제로 안 놓여도
+        # "줄었다"로 오판될 수 있다), 어느 쪽이든 이 비교가 무의미해진다.
+        # 그리퍼를 열라는 명령 자체는 정상적으로 내려갔으니, 읽기가 실패한
+        # 경우는 놓인 것으로 본다(release_width_mm 명령이 실행됐다는 사실을
+        # 신뢰) — 다만 보고 문구에 판독 실패였다는 걸 남긴다.
+        load_read_failed = before < 0.0 or after < 0.0
+        released = True if load_read_failed else after <= before - self.RELEASE_LOAD_DROP
 
         ports.arm.set_gripper(CLOSED_MM)
         folded = ports.arm.move_to_floor_pose(gp.profile, "idle")
 
         if released:
-            ports.host.report(Report.INSERT_DONE, self.name,
-                              f"{self.label} 부하 {before:.4f} -> {after:.4f}")
+            detail = f"{self.label} 부하 {before:.4f} -> {after:.4f}"
+            if load_read_failed:
+                detail += " (부하 판독 실패 — 놓기 명령 실행만으로 판정)"
+            ports.host.report(Report.INSERT_DONE, self.name, detail)
         else:
             # 놓이지 않았는데 IDLE로 접으면 물체를 문 채 라이다를 가린다.
             # 그래도 접기는 한다 — 팔을 전개한 채 두는 편이 더 위험하다.

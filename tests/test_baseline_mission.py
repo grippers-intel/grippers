@@ -10,7 +10,7 @@ import threading
 
 import pytest
 
-from domain.adapters.fake.fake_arm import FakeArm
+from domain.adapters.fake.fake_arm import LOAD_READ_FAILED, FakeArm
 from domain.adapters.fake.fake_base import FakeBase
 from domain.adapters.fake.fake_host_link import FakeHostLink, FakeLidar
 from domain.adapters.fake.scripted_perception import ScriptedPerception
@@ -505,6 +505,25 @@ def test_부하가_낮아도_파지가_확인됐으면_INSERT를_막지_않는�
     assert not any("비어 있다" in detail for detail in details)
 
 
+def test_직전_표본이_읽기_실패였으면_부하_안정성_검사를_건너뛴다():
+    """2026-09-05: 직전 사이클 부하가 -1.0(읽기 실패)이면, 정상적으로
+    지금 읽힌 값과 그대로 빼서는 안 된다 — 거대한 음수가 나와 진짜
+    미끄러짐(GRIPPER_SLIP_LOAD_DROP=0.010)처럼 오판된다. 이번 사이클은
+    안정성 판정을 보류(load_change=None)하고 다른 조건이 맞으면
+    INSERT로 넘어가야 한다."""
+    host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD),
+                   lidar=FakeLidar([_good_face()]))
+
+    nxt = _carry_with_previous(load=LOAD_READ_FAILED).execute(ports)
+
+    details = [detail for report, _state, detail, _fix in host.reports
+               if report == Report.INSERT_BLOCKED]
+    assert not any("미끄러지고 있다" in detail for detail in details)
+    assert Report.INSERT_READY in host.reported_kinds
+    assert isinstance(nxt, BaselineInsertState)
+
+
 def test_투하_후_부하가_줄면_성공으로_보고하고_IDLE로_돌아간다():
     host = FakeHostLink()
     arm = FakeArm(load_ratio=[0.0626, 0.0313])
@@ -525,6 +544,24 @@ def test_부하가_안_줄면_실패로_보고한다():
     BaselineInsertState("queen").execute(ports)
 
     assert Report.INSERT_FAILED in host.reported_kinds
+
+
+def test_놓기_전후_부하_읽기가_실패하면_그래도_성공으로_본다():
+    """2026-09-05: before/after 둘 중 하나라도 부하 읽기 실패(-1.0)면
+    `after <= before - DROP` 비교 자체가 무의미해진다 — 그리퍼를 열라는
+    명령은 정상 실행됐으니 놓인 것으로 본다. 놓기 명령 자체가 실패해
+    실제로 안 놓인 경우까지 가리는 건 아니다(그건 move_to_floor_pose 등
+    다른 경로가 잡는다) — 여기서 보는 건 오직 부하 판독 신뢰성뿐이다."""
+    host = FakeHostLink()
+    arm = FakeArm(load_ratio=[LOAD_READ_FAILED, 0.0313])
+    ports = _ports(host=host, arm=arm)
+
+    BaselineInsertState("queen").execute(ports)
+
+    assert Report.INSERT_DONE in host.reported_kinds
+    assert Report.INSERT_FAILED not in host.reported_kinds
+    detail = [d for k, _s, d, _f in host.reports if k == Report.INSERT_DONE][0]
+    assert "판독 실패" in detail
 
 
 def test_접기_전에_그리퍼를_닫는다():
@@ -696,71 +733,28 @@ def test_GRASP_FORCE도_영역_안이면_그냥_평소대로_내려간다():
     assert isinstance(nxt, BaselineGraspState)
 
 
-# ── 두 신호 파지 판정 (AND -> OR -> AND -> box만 OR -> 전부 OR,
-#    최종 결정 2026-09-04) ─────────────────────────────────────────────
+# ── 두 신호 파지 판정 (AND -> OR -> AND -> box만 OR -> 전부 OR ->
+#    AND + 통신실패 구분, 최종 결정 2026-09-05) ─────────────────────────
 #
-# 2026-08-26 ~ 2026-09-01: 부하와 뎁스(confirm_grasp) 둘 다 있어야 성공
-# (AND)이었다. 2026-09-01 실기에서 CARRY 자세는 카메라 프레임 밖이 맞는데도
-# confirm_grasp() 가 "그대로 있다"를 반환했다(뎁스 오탐) — 정상적으로 문턱을
-# 넘은 부하(0.0547)가 그 오탐 하나 때문에 막혔다. 사용자 지시로 **둘 중
-# 하나만 있어도 성공**으로 바꿨다(OR) — 둘 다 실패를 가리킬 때만 진짜
-# 실패로 봤다.
+# 2026-08-26 ~ 2026-09-01: AND. 2026-09-01 실기에서 CARRY 자세는 카메라
+# 프레임 밖이 맞는데도 confirm_grasp() 가 "그대로 있다"를 반환해서(뎁스
+# 오탐) 정상적으로 문턱을 넘은 부하가 막혔다 -> OR로 바꿈. 2026-09-03
+# star/box 실기: 반대로 부하 0.0000/0.0274 + vanished=True 조합이 OR을
+# 통과해 버림(실은 서보 읽기 실패를 0.0으로 감춘 것) -> AND로 되돌림.
+# 2026-09-04 저녁: AND가 다시 진짜 성공(box, queen)을 실패로 오판 ->
+# 전부 OR로 통일. 그런데도 문제가 반복됐다(box/star, 그리고 INSERT 쪽
+# 부하-안정성 오판).
 #
-# 2026-09-03 star/box 실기: 이번엔 **반대** 방향 오탐이 났다 — 부하가
-# 0.0000/0.0274로 낮은데 뎁스만 "사라짐"이라 OR를 통과해 CARRY_DEST까지
-# 넘어가 버렸다. `arm_driver_node._read_load()`가 서보 읽기 자체가
-# 실패하면(raw is None) "안전값" 0.0을 돌려준다는 것이 드러나(2026-08-19
-# 부터 있던 동작), 부하 0.0000이 "진짜 빈손"과 "읽기 실패"를 구분 못
-# 한다는 뜻임을 확인했다 — OR의 양쪽 신호 모두 근접 상황에서 개별적으로
-# 흔들릴 수 있다는 것이다. 사용자 지시로 **AND로 되돌린다** — 09-01
-# 이전까지 오래 문제없이 썼던 조합이니 그쪽을 신뢰한다. 09-01의 뎁스
-# 오탐 케이스가 다시 나올 수 있다는 걸 알고 하는 결정이다(재발하면
-# 뎁스 신호 자체를 고쳐야 한다).
-#
-# 2026-09-04(같은 날 저녁, host+Pi 연동 실기): AND가 다시 진짜 성공을
-# 실패로 오판했다 — 처음엔 box(부하 0.0000, 두 번 연속)라 box만 OR로
-# 예외를 뒀는데, 곧이어 queen도 실제로는 물었는데 부하 0.0391로 AND에
-# 걸려 실패 보고됐다("퀸 잡았는데 못잡았다고 실패보고"). 사용자가 "그냥
-# OR로 다 퉁쳐버려"라고 라벨 구분 자체를 없애라고 지시해 **전부 OR로
-# 최종 통일**했다. 09-03에 AND로 되돌아간 이유(반대 방향 오탐 가능성)는
-# 사라지지 않았다는 것을 알고 하는 결정이다 — 재발하면 라벨별 세분화가
-# 아니라 신호 자체를 고쳐야 한다(domain.task.baseline_mission의 같은
-# 판정 자리 코멘트 참고).
+# 2026-09-05: 진짜 원인은 AND/OR의 선택이 아니라 "부하 0.0000"이 진짜
+# 빈손과 서보 읽기 실패를 구분 못 한 것이었다(사용자 진단). 읽기 실패를
+# 별도 신호(get_load()가 음수를 돌려준다 — LOAD_READ_FAILED, arm_driver.
+# get_load() 문서 참고)로 분리한 뒤, **AND를 기본으로 되돌리고
+# (2026-08-26 원안), 부하를 아예 못 읽은 경우만 뎁스 신호 단독으로
+# 판단**하도록 나눴다. 09-01의 뎁스 오탐 위험은 재발 가능성을 알고
+# 받아들인다 — 재발하면 뎁스 신호 자체(confirm_grasp)를 고쳐야 한다.
 
 
-def test_부하만_있어도_뎁스가_그대로_보이면_성공이다():
-    """OR(최종, 2026-09-04) — 09-03엔 이 조합을 AND로 막았지만, 그 뒤로도
-    box(같은 날 저녁)·queen(그 직후)이 실제로는 물었는데 부하 판독 하나
-    때문에 AND에 걸려 실패 보고되는 일이 반복됐다. 사용자가 "그냥 OR로
-    다 퉁쳐버려"라고 라벨 구분 없이 지시해 전부 OR로 통일했다(domain.
-    task.baseline_mission의 같은 판정 자리 코멘트가 전체 이력)."""
-    host = FakeHostLink()
-    perception = ScriptedPerception(grasp_confirmed=False)
-    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), perception=perception)
-
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
-
-    assert Report.GRASP_DONE in host.reported_kinds
-    assert isinstance(nxt, BaselineCarryState)
-
-
-def test_뎁스만_사라져도_부하가_낮으면_성공이다():
-    """OR(최종) — 2026-09-03엔 이 조합(부하 0.0000/0.0274 + vanished=True)
-    이 반대 방향 오탐으로 의심돼 AND로 막았었다. 그 위험은 여전히 남아
-    있다는 걸 알면서도(주석 참고), 2026-09-04 실기에서 box/queen 둘 다
-    이 조합에서 실제로는 성공한 파지가 반복 오판된 뒤 OR로 최종
-    통일했다."""
-    host = FakeHostLink()
-    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0),
-                   perception=ScriptedPerception(grasp_confirmed=True))
-
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
-
-    assert Report.GRASP_DONE in host.reported_kinds
-    assert isinstance(nxt, BaselineCarryState)
-
-
-def test_두_신호가_모두_있으면_당연히_성공이다():
+def test_부하와_뎁스가_모두_있으면_성공이다():
     host = FakeHostLink()
     ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD),
                    perception=ScriptedPerception(grasp_confirmed=True))
@@ -768,8 +762,65 @@ def test_두_신호가_모두_있으면_당연히_성공이다():
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
     assert Report.GRASP_DONE in host.reported_kinds
-    assert "목표 사라짐 확인" in host.reports[-1][2]
+    assert "부하+뎁스 사라짐 모두 확인" in host.reports[-1][2]
     assert isinstance(nxt, BaselineCarryState)
+
+
+def test_부하는_있는데_뎁스가_안_사라지면_AND라서_실패한다():
+    """AND(2026-09-05 최종)로 되돌아갔으니, 부하만으로는 더 이상 구제되지
+    않는다 — 2026-09-01의 뎁스 오탐 위험을 알고도 받아들인 결정이다."""
+    host = FakeHostLink()
+    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD),
+                   perception=ScriptedPerception(grasp_confirmed=False))
+
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+
+    assert Report.GRASP_FAILED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
+def test_부하가_진짜_0으로_읽혀도_뎁스만으로_구제되지_않는다():
+    """2026-09-03/09-04에 반복 오판됐던 바로 그 조합(부하 0.0000, 읽기는
+    성공 · vanished=True)이다. 예전엔 이 조합이 OR을 통과해 문제였는데,
+    지금은 부하가 '읽기 실패'가 아니라 '진짜 0으로 읽힌' 것이므로 AND가
+    그대로 적용되어 실패해야 한다 — 뎁스 신호 하나로 구제되는 것은 부하를
+    아예 못 읽은 경우(아래 테스트)뿐이다."""
+    host = FakeHostLink()
+    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0),
+                   perception=ScriptedPerception(grasp_confirmed=True))
+
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+
+    assert Report.GRASP_FAILED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
+def test_부하_읽기_실패면_뎁스_신호_단독으로_성공을_인정한다():
+    """진짜 원인 수정 확인 — 서보 읽기 자체가 실패한 경우(FakeArm.
+    LOAD_READ_FAILED, -1.0)는 부하 문턱과 비교하지 않고 뎁스 사라짐
+    신호만으로 판단한다. 이게 2026-09-04 box/queen 오판정의 진짜 수정."""
+    host = FakeHostLink()
+    ports = _ports(host=host, arm=FakeArm(load_ratio=LOAD_READ_FAILED),
+                   perception=ScriptedPerception(grasp_confirmed=True))
+
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+
+    assert Report.GRASP_DONE in host.reported_kinds
+    assert "부하 읽기 실패, 뎁스 사라짐으로만 확인" in host.reports[-1][2]
+    assert isinstance(nxt, BaselineCarryState)
+
+
+def test_부하_읽기_실패에_뎁스도_그대로면_실패한다():
+    """부하도 못 읽고 뎁스도 여전히 있다고 하면, 믿을 신호가 하나도 없으니
+    실패로 본다(모르면 실패 원칙)."""
+    host = FakeHostLink()
+    ports = _ports(host=host, arm=FakeArm(load_ratio=LOAD_READ_FAILED),
+                   perception=ScriptedPerception(grasp_confirmed=False))
+
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+
+    assert Report.GRASP_FAILED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
 
 
 def test_둘_다_실패면_그래도_실패한다():
@@ -783,10 +834,25 @@ def test_둘_다_실패면_그래도_실패한다():
     assert isinstance(nxt, BaselineApproachState)
 
 
-def test_box도_같은_OR_규칙을_받는다():
-    """라벨 구분을 없앤 것이므로 box도 다른 라벨과 똑같이 판정돼야 한다."""
+def test_box도_다른_라벨과_같은_AND_통신실패_규칙을_받는다():
+    """라벨별 예외는 없다 — box도 다른 라벨과 완전히 같은 규칙을 받는다.
+    부하를 실제로 읽었는데(EMPTY_LOAD, 통신 실패 아님) 낮으면, 뎁스가
+    사라졌다고 해도 AND에 걸려 실패한다. box가 정착 후 능동 토크를 잘
+    안 낸다는 사정(BaselineGraspState 코멘트 참고)은 여기서 구제되지
+    않는다 — 구제되는 것은 오직 '부하를 아예 못 읽은' 경우뿐이다."""
     host = FakeHostLink()
     ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD),
+                   perception=ScriptedPerception(grasp_confirmed=True))
+
+    nxt = BaselineGraspState("box", 0.02).execute(ports)
+
+    assert Report.GRASP_FAILED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
+def test_box도_부하_읽기_실패면_뎁스_단독으로_구제된다():
+    host = FakeHostLink()
+    ports = _ports(host=host, arm=FakeArm(load_ratio=LOAD_READ_FAILED),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
     nxt = BaselineGraspState("box", 0.02).execute(ports)

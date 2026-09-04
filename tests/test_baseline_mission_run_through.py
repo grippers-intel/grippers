@@ -270,23 +270,26 @@ def test_주행_명령이_합의_속도로_바퀴까지_간다(run_through):
         assert duration_s == pytest.approx(bc.GRASP_CREEP_OPEN_LOOP_SEC)
 
 
-def test_파지_성공은_부하나_뎁스_하나만_있어도_된다(run_through):
-    """OR(최종, 2026-09-04) — 부하와 뎁스(confirm_grasp) 중 하나만 있어도
-    성공이다. AND(2026-09-03)에서 box·queen이 실제로는 물었는데 부하
-    판독 하나 때문에 반복 오판되는 것을 보고 사용자가 "그냥 OR로 다
-    퉁쳐버려"라고 지시해 최종 통일했다(domain.task.baseline_mission의
-    판정부 코멘트가 AND<->OR 전체 이력)."""
+def test_파지_성공은_부하와_뎁스가_모두_있어야_한다(run_through):
+    """AND(2026-09-05 최종) — 부하와 뎁스(confirm_grasp) 둘 다 있어야
+    성공이다. 한때 OR(2026-09-04)로 통일했었지만, 그 이유였던 "부하가
+    실제로는 정상인데 오판된다"는 사고는 사실 부하 0.0이 '진짜 빈손'과
+    '서보 읽기 실패'를 구분 못 한 것이 원인이었다(2026-09-05, 사용자
+    진단). 읽기 실패를 -1.0으로 따로 구분한 뒤에는(domain.task.
+    baseline_mission의 판정부 코멘트가 전체 이력) AND를 원안대로
+    되돌렸다 — 부하를 실제로 정상 읽었다면 뎁스도 같이 맞아야 한다."""
     _names, host, ports = run_through()
     assert ports.perception.confirm_grasp_calls >= 1
     assert Report.GRASP_DONE in host.reported_kinds
 
-    # 뎁스가 뒤집혀도(오탐 흉내) 부하가 정상이면 OR에서는 여전히 성공이다.
+    # 부하는 정상(HOLDING, 읽기 실패 아님)인데 뎁스가 뒤집히면(오탐 흉내)
+    # AND에서는 실패한다 — 2026-09-01 뎁스 오탐 위험을 알고 받아들인 것.
     _names, host, _ports = run_through(
         perception=ScriptedPerception(
             script=[TargetObservation(LABEL, JAW_LINE_M + 0.02, 0.0, True)],
             grasp_confirmed=False))
-    assert Report.GRASP_DONE in host.reported_kinds
-    assert Report.GRASP_FAILED not in host.reported_kinds
+    assert Report.GRASP_DONE not in host.reported_kinds
+    assert Report.GRASP_FAILED in host.reported_kinds
 
 
 def test_부하도_뎁스도_없으면_실패다(run_through):

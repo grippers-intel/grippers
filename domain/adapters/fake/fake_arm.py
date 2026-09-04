@@ -10,6 +10,10 @@ from domain.values import Point3
 # 초록불이 나므로, Fake도 실측 분포 안의 값을 쓴다.
 LOAD_EMPTY = 0.03  # 빈 채 / 파지 실패(놓침) 0.027~0.031
 LOAD_HOLDING = 0.14  # 가베(정육면체) 0.137 — 5/5 일관
+# 서보 읽기 자체가 실패했을 때의 신호값(2026-09-05) — LOAD_EMPTY와 다르다.
+# ros2_arm_driver.LOAD_UNKNOWN / arm_driver_node.GRIPPER_LOAD_READ_FAILED와
+# 같은 값이어야 한다(세 곳 다 서로 import하지 않고 독립적으로 정의한다).
+LOAD_READ_FAILED = -1.0
 
 
 class FakeArm(ArmDriver):

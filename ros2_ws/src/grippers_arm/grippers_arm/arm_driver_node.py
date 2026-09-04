@@ -69,6 +69,15 @@ ALL_SERVO_IDS = range(1, 7)
 # 도메인 계층은 0~1 비율만 안다 — 서보 각도 변환과 같은 이유로 원시값 →
 # 비율 변환은 이 노드가 담당한다 (class_diagram.md §2).
 GRIPPER_LOAD_MAX_RAW = 1023.0
+# `_read_load()`가 재시도까지 다 실패했을 때 돌려주는 값(2026-09-05, 사용자
+# 지시로 0.0에서 변경). 0.0은 실제 부하값의 유효 범위(0.0~1.0) 안이라 "빈
+# 채로 읽었다"와 "읽기 자체가 실패했다"를 구분하지 못했다 — 2026-09-04
+# box/queen 오판정과 그 뒤 INSERT 쪽 문제(부하 안정성·놓기 확인 판정이 이
+# 값을 이전 표본과 그대로 빼서 큰 낙차로 오인)의 공통 원인이었다. -1.0은
+# 절대값을 취한 정규화 비율이 절대 나올 수 없는 값이라 실제 부하와 절대
+# 충돌하지 않는다. 호출부(domain.task.baseline_mission)는 이 값을 "모른다"로
+# 다뤄야지 "비었다"로 다루면 안 된다.
+GRIPPER_LOAD_READ_FAILED = -1.0
 # STS3215 위치 레지스터의 정의역. 이 밖의 값은 읽기가 깨진 것이다.
 POSITION_RAW_MAX = 4095
 
@@ -1616,9 +1625,9 @@ class ArmDriverNode(Node):
         나와 방향이 일관되지 않았다. 파지 판정에 필요한 건 '얼마나 버티고
         있나'(크기)이지 어느 쪽으로 밀리나(방향)가 아니므로 크기만 본다.
 
-        읽기에 실패하면(None) 0.0 — 즉 '빈 채'로 본다. 부하를 못 읽는 상태에서
-        파지 성공으로 판정해 물체를 든 줄 알고 이송하는 것보다, 실패로 보고
-        재시도하는 쪽이 안전하다.
+        읽기에 실패하면(None) `GRIPPER_LOAD_READ_FAILED`(-1.0)를 돌려준다
+        (2026-09-05, 사용자 지시로 0.0에서 변경 — 위 상수 정의 코멘트 참고).
+        0.0은 진짜 '빈 채' 값과 구분이 안 됐다.
 
         ⚠️ 2026-09-04 실기: `_read_with_retry`(_read_joint_positions/
         get_arm_state가 쓰는 것과 같은 재시도)를 여기도 적용했다. 그날 GRASP가
@@ -1639,8 +1648,8 @@ class ArmDriverNode(Node):
         if raw is None:
             self.get_logger().warn(
                 f"servo {servo_id} load read 실패 (재시도 {JOINT_READ_ATTEMPTS}회 모두) "
-                "— 안전값 0.0으로 처리")
-            return 0.0
+                f"— {GRIPPER_LOAD_READ_FAILED}(읽기 실패 신호)로 처리")
+            return GRIPPER_LOAD_READ_FAILED
         return abs(raw) / GRIPPER_LOAD_MAX_RAW
 
 

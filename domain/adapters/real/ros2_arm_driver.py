@@ -13,10 +13,16 @@ from domain.adapters.real._ros_call import ESTOP_TIMEOUT_SEC, call_action, call_
 from domain.ports.arm_driver import ArmDriver
 from domain.values import Point3
 
-# 부하를 읽지 못했을 때의 값. 0.0 = '빈 채'이므로 GRASP는 파지 실패로 판정해
-# 재시도한다 — 부하를 모르는 채로 성공 판정을 내려 물체를 든 줄 알고 이송하는
-# 것보다 안전하다 (arm_driver_node._read_load의 None 처리와 같은 논리).
-LOAD_UNKNOWN = 0.0
+# 부하를 읽지 못했거나 서비스 자체가 없을 때의 값. 2026-09-05까지는 0.0
+# ('빈 채')이었는데, 실제 부하값의 유효 범위(0.0~1.0) 안이라 "빈 채로
+# 읽었다"와 "읽기 자체가 실패했다"를 구분하지 못했다 — 2026-09-04 box/queen
+# 파지 오판정, 그리고 그 값이 이전 표본과 그대로 빼져 부하 급락(미끄러짐)으로
+# 오인된 INSERT 쪽 문제의 공통 원인이었다. -1.0은 정규화 비율이 절대 나올 수
+# 없는 값이라 실제 부하와 충돌하지 않는다(arm_driver_node.
+# GRIPPER_LOAD_READ_FAILED와 같은 값 — 두 프로세스가 서로 import하지 않고
+# 독립적으로 정의하지만 값은 맞춰 둬야 한다). 호출부는 이 값을 "모른다"로
+# 다뤄야지 "비었다"로 다루면 안 된다(domain.task.baseline_mission 참고).
+LOAD_UNKNOWN = -1.0
 
 # ── 느린 팔 서비스의 대기 시간 ─────────────────────────────────────────────
 #
@@ -86,7 +92,11 @@ class Ros2ArmDriver(ArmDriver):
 
     def get_load(self) -> float:
         """그리퍼 부하 비율(0~1). 서비스가 없거나 응답이 없으면
-        **`LOAD_UNKNOWN`(0.0)** — 파지 실패로 판정된다."""
+        **`LOAD_UNKNOWN`(-1.0)** — "모른다"를 뜻하는 값이지 "비었다"가
+        아니다. 호출부가 이 값을 문턱(LOAD_THRESHOLD)과 그대로 비교하면
+        항상 미달로 나와 우연히 "실패"와 같은 방향이 되긴 하지만, 이전
+        표본과의 차분(부하 안정성 검사 등)에는 그대로 넣으면 안 된다 —
+        진짜 부하가 뚝 떨어진 것처럼 보인다."""
         res = call_service(self._node, self._load_client, GetLoad.Request(), label="get_load")
         if res is None:
             return LOAD_UNKNOWN
