@@ -62,7 +62,7 @@ import piece_map
 from live_map import LiveMap
 from mission import MissionFSM, State, visible_labels
 from run_localize import draw, open_cams
-from vehicle_link import ConsoleVehicleLink, UdpVehicleLink
+from vehicle_link import ConsoleVehicleLink, MissionCommand, UdpVehicleLink
 
 # 자연어/음성 지시는 **선택 기능**이다. 패키지가 없어도 미션 전체는 그대로
 # 돌아가야 하므로(시연 중에 이것 때문에 못 뜨면 최악이다) import 자체를
@@ -360,6 +360,16 @@ def main() -> int:
                 if (cv2.waitKey(1) & 0xFF) == ord("q"):
                     break
     finally:
+        # ⚠️ 링크를 그냥 닫으면 Pi 워치독(3사이클 = 0.3초)이 설 때까지
+        # 바퀴가 돈다. 명시적으로 정지를 여러 번 보내 즉시 세운다.
+        # UDP 라 한 발이 유실될 수 있으므로 연발한다.
+        try:
+            for _ in range(8):
+                link.send(MissionCommand("stop", "SEARCH_TARGET", 0.0, 0.0, 0.0))
+                time.sleep(0.05)
+            print("[STOP] 정지 명령 8회 송신 완료")
+        except Exception as exc:  # noqa: BLE001 — 정리 중이라 여기서 죽으면 안 된다
+            print(f"[STOP] 정지 명령 실패: {exc} — Pi 워치독이 0.3초 안에 세웁니다")
         for worker in workers:
             worker.stop()
         for cap in caps:
