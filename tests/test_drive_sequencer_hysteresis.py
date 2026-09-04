@@ -37,6 +37,10 @@ def _load_navigator():
     spec = importlib.util.spec_from_file_location(
         "host_navigator", HOST / "navigator.py")
     module = importlib.util.module_from_spec(spec)
+    # ⚠️ exec 전에 sys.modules 에 넣어야 한다. @dataclass 가 클래스를 만들면서
+    # sys.modules[cls.__module__] 를 보는데, 없으면 None 을 받고
+    # "'NoneType' object has no attribute '__dict__'" 로 죽는다.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
