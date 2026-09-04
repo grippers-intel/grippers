@@ -148,6 +148,28 @@ class BaselinePorts:
     # VLA 백엔드가 쓰는 포트. classic 에서는 None 이어도 된다.
     vla: object = None
 
+    # ── 뎁스 관문 ──────────────────────────────────────────────────────────
+    #
+    # 기본은 켜짐이다. 끄면 **뎁스 카메라를 한 번도 안 본다** — 물체 식별,
+    # 좌우·전후 정렬 판정, 파지 성공의 두 번째 신호가 전부 빠진다.
+    #
+    # 왜 끄는 선택지가 있는가: 주행이 탑뷰 ArUco 로 물체 앞에 세워 주고
+    # 파지를 VLA 가 하는 구성에서는 Pi 의 뎁스캠이 경로에 없다. 그런데 이
+    # FSM 은 뎁스 관측이 없으면 GRASP 로 넘어가지 못한다(metric_ok 가
+    # 아니면 UNKNOWN 판정).
+    #
+    # ⚠️ 끄면 잃는 것이 분명하다. 성공 판정이 **서보 부하 하나**로 줄어서,
+    # 물체 모서리를 살짝 물었거나 턱끼리 문 경우도 성공으로 통과한다.
+    # 원래 두 신호를 요구한 이유가 그것이다(_verify_and_carry 주석). 사람이
+    # 눈으로 지켜보는 시연에서나 감수할 만한 거래다.
+    use_depth_gate: bool = True
+    # 뎁스 관문을 껐을 때 쓸 라벨. Host 명령에는 라벨이 없고(HostCommand 는
+    # 상태와 속도뿐), 뎁스캠이 하던 식별이 빠지므로 어딘가에서 와야 한다.
+    #
+    # ACT 는 이 문자열을 정책 입력으로 받지 않는다. 쓰이는 곳은 파지 프로파일
+    # 하나다 — plan_for_label 로 IDLE/CARRY/DROP 자세와 그리퍼 폭을 고른다.
+    default_grasp_label: str = "queen"
+
 
 # ── 공통 동작 ──────────────────────────────────────────────────────────────
 
@@ -290,6 +312,20 @@ class BaselineApproachState(State):
         약 1.7초 동안 보고가 끊긴다** — Host 워치독을 그보다 넉넉히 잡아야
         한다."""
         ports.base.stop()
+        if not ports.use_depth_gate:
+            # 뎁스캠을 안 본다. 식별도 정렬 판정도 건너뛰고 바로 GRASP 다 —
+            # "물체가 팔 앞에 있다"는 판단을 탑뷰를 보는 Host 가 이미 했고,
+            # 그 판단으로 GRASP 명령을 보낸 것이기 때문이다.
+            #
+            # creep 거리는 0 이다. VLA 경로는 차체를 밀지 않고 정책이 스스로
+            # 뻗는다(_grasp_vla 주석). classic 백엔드로 이 모드를 쓰면 미세
+            # 전진 없이 교시 자세로만 집게 되므로 성공률이 떨어진다.
+            label = ports.default_grasp_label
+            ports.host.report(
+                Report.GRASP_READY, self.name,
+                f"{label} 뎁스 관문 꺼짐 — 정렬 판정 없이 진행")
+            return BaselineGraspState(label, 0.0, self.retries)
+
         observation = ports.perception.identify_target()
         label = observation.label if observation is not None else None
         inputs = pc.GraspInputs(
@@ -386,7 +422,11 @@ class BaselineGraspState(State):
 
         # 정면을 볼 수 있는 마지막 순간이다 — grasp 자세로 내려가면 팔이
         # 뎁스 카메라를 가린다(tools/demo_rook_run.py 2단계와 같은 이유).
-        ports.perception.remember_target(self.label)
+        #
+        # 이 기억은 뒤에서 `confirm_grasp` 가 "그 자리에 아직 있나"를 비교할
+        # 기준이다. 뎁스 관문을 끄면 그 비교를 안 하므로 기억할 이유도 없다.
+        if ports.use_depth_gate:
+            ports.perception.remember_target(self.label)
 
         if ports.grasp_backend == "vla":
             if self._grasp_vla(ports, gp):
@@ -481,6 +521,16 @@ class BaselineGraspState(State):
         # 밀어낸** 경우도 "사라짐"으로 읽힌다. 둘 다 요구하면 각자의 오검출이
         # 서로를 막는다.
         carried = ports.arm.get_load()
+        if not ports.use_depth_gate:
+            # ⚠️ 신호가 하나로 줄었다. 부하만 보면 물체 모서리를 살짝 물었거나
+            # 턱끼리 문 경우도 통과한다 — 아래 두 신호 주석이 말하는 그 오검출이
+            # 그대로 살아난다. 사람이 지켜보는 시연에서만 쓸 것.
+            if carried < bc.LOAD_THRESHOLD:
+                return self._failed(ports, f"CARRY에서 빈손 (부하 {carried:.4f})")
+            ports.host.report(Report.GRASP_DONE, MissionState.CARRY,
+                              f"{self.label} 부하 {carried:.4f} · 뎁스 확인 없음")
+            return BaselineCarryState(self.label)
+
         vanished = ports.perception.confirm_grasp()
         if carried < bc.LOAD_THRESHOLD and not vanished:
             return self._failed(ports, f"부하도 낮고 물체도 그대로다 (부하 {carried:.4f})")

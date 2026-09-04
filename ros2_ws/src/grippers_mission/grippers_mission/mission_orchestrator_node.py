@@ -75,12 +75,23 @@ class MissionOrchestratorNode(Node):
         # "vla" 로 켜면 정책이 파지를 대신하고, 실패하면 그 자리에서 classic
         # 으로 한 번 더 시도한다(BaselineGraspState 참고).
         self.declare_parameter("grasp_backend", "classic")
+        # 뎁스 관문. 끄면 뎁스캠을 한 번도 안 본다 — 물체 식별·정렬 판정·
+        # 파지 성공의 두 번째 신호가 빠지고, 주행(탑뷰)이 세운 자리에서
+        # 곧장 파지한다. 잃는 것은 BaselinePorts.use_depth_gate 주석 참고.
+        self.declare_parameter("use_depth_gate", True)
+        self.declare_parameter("default_grasp_label", "queen")
 
         use_fake_base = self.get_parameter("use_fake_base").value
         use_fake_arm = self.get_parameter("use_fake_arm").value
         use_fake_perception = self.get_parameter("use_fake_perception").value
         use_fake_host = self.get_parameter("use_fake_host").value
         grasp_backend = str(self.get_parameter("grasp_backend").value or "classic")
+        use_depth_gate = bool(self.get_parameter("use_depth_gate").value)
+        default_grasp_label = str(self.get_parameter("default_grasp_label").value or "queen")
+        if not use_depth_gate:
+            self.get_logger().warn(
+                "use_depth_gate=false — 뎁스캠을 안 봅니다. 파지 성공 판정이 "
+                f"서보 부하 하나로 줄고, 파지 대상은 '{default_grasp_label}' 로 고정됩니다")
         if grasp_backend not in ("classic", "vla"):
             raise ValueError(f"grasp_backend 는 classic 또는 vla 여야 합니다: {grasp_backend}")
         self.get_logger().info(f"파지 백엔드: {grasp_backend}")
@@ -111,6 +122,8 @@ class MissionOrchestratorNode(Node):
             lidar=(FakeLidar() if use_fake_perception else Ros2Lidar(self)),
             estop=self._estop,
             grasp_backend=grasp_backend,
+            use_depth_gate=use_depth_gate,
+            default_grasp_label=default_grasp_label,
             # VLA 포트는 백엔드를 켤 때만 만든다. classic 만 쓸 때 정책
             # 노드를 기다리거나 토치를 부르지 않게 하려는 것이다.
             vla=(LoggedPort("vla", Ros2VlaGrasp(self), self.get_logger())
