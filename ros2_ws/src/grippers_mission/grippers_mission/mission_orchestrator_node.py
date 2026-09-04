@@ -40,6 +40,7 @@ from domain.adapters.real.ros2_arm_driver import Ros2ArmDriver
 from domain.adapters.real.ros2_lidar import Ros2Lidar
 from domain.adapters.real.ros2_mecanum_base import Ros2MecanumBase
 from domain.adapters.real.ros2_perception import Ros2Perception
+from domain.adapters.real.ros2_vla_grasp import Ros2VlaGrasp
 from domain.adapters.real.udp_host_link import UdpHostLink
 from domain.task.baseline_mission import BaselineMission, BaselinePorts
 
@@ -70,11 +71,19 @@ class MissionOrchestratorNode(Node):
         self.declare_parameter("use_fake_perception", False)
         self.declare_parameter("use_fake_host", False)
         self.declare_parameter("host_ip", "192.168.0.10")
+        # 파지 백엔드. 기본은 "classic" — 여러 번 실기 검증된 경로다.
+        # "vla" 로 켜면 정책이 파지를 대신하고, 실패하면 그 자리에서 classic
+        # 으로 한 번 더 시도한다(BaselineGraspState 참고).
+        self.declare_parameter("grasp_backend", "classic")
 
         use_fake_base = self.get_parameter("use_fake_base").value
         use_fake_arm = self.get_parameter("use_fake_arm").value
         use_fake_perception = self.get_parameter("use_fake_perception").value
         use_fake_host = self.get_parameter("use_fake_host").value
+        grasp_backend = str(self.get_parameter("grasp_backend").value or "classic")
+        if grasp_backend not in ("classic", "vla"):
+            raise ValueError(f"grasp_backend 는 classic 또는 vla 여야 합니다: {grasp_backend}")
+        self.get_logger().info(f"파지 백엔드: {grasp_backend}")
 
         self._estop = threading.Event()
         self._host = (FakeHostLink() if use_fake_host
@@ -101,6 +110,11 @@ class MissionOrchestratorNode(Node):
             host=self._host,
             lidar=(FakeLidar() if use_fake_perception else Ros2Lidar(self)),
             estop=self._estop,
+            grasp_backend=grasp_backend,
+            # VLA 포트는 백엔드를 켤 때만 만든다. classic 만 쓸 때 정책
+            # 노드를 기다리거나 토치를 부르지 않게 하려는 것이다.
+            vla=(LoggedPort("vla", Ros2VlaGrasp(self), self.get_logger())
+                 if grasp_backend == "vla" else None),
         )
 
         self._started = 0.0

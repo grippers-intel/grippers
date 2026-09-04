@@ -135,6 +135,19 @@ class BaselinePorts:
     # 상태 객체는 전이마다 새로 만들어지므로 상태를 들고 있을 수 없다.
     base_liveness: LivenessLatch = field(default_factory=LivenessLatch)
 
+    # ── 파지 백엔드 ────────────────────────────────────────────────────────
+    #
+    # "classic" 이 기본이다. 여러 번 실기 검증된 경로이고, VLA 는 통합 시험이
+    # 아직 없다. 시연에서 켤 때만 파라미터로 "vla" 를 준다.
+    #
+    # VLA 가 대체하는 것은 **파지 동작뿐**이다 — 정렬 판정(APPROACH), 들어
+    # 올린 뒤 CARRY 전환, 성공 판정(부하 + 뎁스)은 양쪽이 똑같이 쓴다. 특히
+    # 성공 판정을 공유하는 것이 중요하다: VLA 가 헛손질해도 이미 실기로
+    # 검증된 두 신호 검사가 잡아낸다.
+    grasp_backend: str = "classic"
+    # VLA 백엔드가 쓰는 포트. classic 에서는 None 이어도 된다.
+    vla: object = None
+
 
 # ── 공통 동작 ──────────────────────────────────────────────────────────────
 
@@ -306,7 +319,14 @@ class BaselineApproachState(State):
         저장소의 접근 제어가 전부 "관측 -> 소이동 -> 재관측" 폐루프다.
         한 번 계산한 값으로 열린 루프를 돌면 오차가 쌓인다는 것이 이미
         실기로 확인됐다."""
-        verdict = ga.judge(observation, object_width_mm(label))
+        # VLA 백엔드는 좌우 한계가 **턱 폭이 아니라 학습 분포**다. classic 은
+        # 벌어진 턱이 물체를 쓸어 담지만(자기정렬), 정책은 본 적 없는 좌우
+        # 위치에서 그냥 실패한다 — 좌우 이미지 응답이 액션 std 의 0.62%뿐이라
+        # 물체를 눈으로 좇지 못하기 때문이다(2026-09-04 홀드아웃 측정).
+        # 룩(40mm) 기준으로 턱 폭 한계 ±64mm 가 ±41mm 로 좁아진다.
+        max_lateral = ga.vla_half_width_m() if ports.grasp_backend == "vla" else None
+        verdict = ga.judge(observation, object_width_mm(label),
+                           max_lateral_m=max_lateral)
 
         if verdict.action == ga.READY:
             creep_m = ga.creep_distance_m(observation)
@@ -368,6 +388,16 @@ class BaselineGraspState(State):
         # 뎁스 카메라를 가린다(tools/demo_rook_run.py 2단계와 같은 이유).
         ports.perception.remember_target(self.label)
 
+        if ports.grasp_backend == "vla":
+            if self._grasp_vla(ports, gp):
+                return self._verify_and_carry(ports, gp)
+            # VLA 가 실패하면 **그 자리에서 classic 으로 한 번 더** 해 본다
+            # (사용자 결정 2026-09-04). 성공 판정이 공유라 실패를 확실히
+            # 알 수 있고, 시연 중 정책이 헛발질해도 물체를 집는다.
+            # 팔은 정책이 어디에 두고 갔든 아래에서 safe 로 다시 세운다.
+            ports.host.report(Report.STATE, self.name,
+                              "VLA 파지 실패 — classic 으로 재시도")
+
         if not ports.arm.move_to_floor_pose(gp.profile, "safe"):
             return self._failed(ports, "safe 자세 실패")
         # 내려가기 전에 연다 — 닫힌 손가락이 물체가 있는 공간을 통과해
@@ -404,6 +434,41 @@ class BaselineGraspState(State):
         if not cleared:
             return self._failed(ports, f"들어 올리지 못함 (부하 {load:.4f})")
 
+        return self._verify_and_carry(ports, gp)
+
+    def _grasp_vla(self, ports, gp) -> bool:
+        """정책이 파지를 대신한다. 성공했다고 **주장**하면 True.
+
+        진짜 성공 판정은 여기서 하지 않는다 — `_verify_and_carry` 의 부하 +
+        뎁스 두 신호가 classic 과 똑같이 판정한다. 이 함수는 "정책 루프가
+        끝까지 돌았는가"만 본다.
+
+        ⚠️ classic 과 달리 `creep_forward` 를 하지 않는다. 학습 때 차체는
+        **정지해 있었고** 정책이 스스로 뻗어서 물체를 집었다. 여기서 차체를
+        밀면 정책이 본 적 없는 조건이 된다.
+
+        ⚠️ 시작 자세를 IDLE 로 맞춘다. 학습 회차 118개의 첫 관측이 전부
+        IDLE 크래들이었다(2026-09-04 측정: pan -4.75, lift -103.21,
+        elbow 95.93, wrist 73.33 / 교시 IDLE 과 2도 이내). 다른 자세에서
+        시작하면 분포 밖이다.
+        """
+        if ports.vla is None:
+            ports.host.report(Report.GRASP_BLOCKED, self.name,
+                              "grasp_backend=vla 인데 VLA 포트가 없다")
+            return False
+        if not ports.arm.move_to_floor_pose(gp.profile, "idle"):
+            ports.host.report(Report.GRASP_BLOCKED, self.name, "VLA 시작 자세(IDLE) 실패")
+            return False
+        return bool(ports.vla.run_grasp(self.label))
+
+    def _verify_and_carry(self, ports, gp):
+        """CARRY 로 접고 성공을 판정한다. classic·VLA 공통 꼬리.
+
+        ⚠️ CARRY 전환은 VLA 쪽에서 특히 중요하다. 정책은 물체를 문 채
+        **IDLE 크래들로** 돌아오는데(학습 회차 마지막 액션 평균이 교시 IDLE 과
+        2도 이내), 물체를 문 채 IDLE 에 있으면 그리퍼가 라이다 정면을 79%
+        가려 바구니를 못 본다(2026-08-26 실측, CARRY_RAW 주석). CARRY 는
+        IDLE 에서 손목만 올린 자세라 전환 자체는 가볍다."""
         if not ports.arm.move_to_floor_pose(gp.profile, "carry"):
             return self._failed(ports, "CARRY 전환 실패")
 

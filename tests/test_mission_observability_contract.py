@@ -86,8 +86,10 @@ def test_hardware_ports_are_wrapped_for_boundary_logging():
     이미 기록이 남는다."""
     source = ORCHESTRATOR.read_text(encoding="utf-8")
 
-    assert source.count("LoggedPort(") == 3
-    for port in ("Ros2MecanumBase", "Ros2ArmDriver", "Ros2Perception"):
+    # VLA 포트는 grasp_backend="vla" 일 때만 만들어지지만, 감싸는 것은 같다 —
+    # 정책 파지가 무엇을 돌려줬는지도 실기에서 봐야 한다(2026-09-04 추가).
+    assert source.count("LoggedPort(") == 4
+    for port in ("Ros2MecanumBase", "Ros2ArmDriver", "Ros2Perception", "Ros2VlaGrasp"):
         assert port in source
 
 
@@ -106,7 +108,7 @@ def test_logged_port_calls_pass_the_name_first():
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Name) and call.func.id == "LoggedPort"
     ]
-    assert len(calls) == 3
+    assert len(calls) == 4
     for call in calls:
         first_arg = call.args[0]
         assert isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str), (

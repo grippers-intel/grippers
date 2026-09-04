@@ -53,6 +53,7 @@ def test_adapter_files_are_all_covered():
         "ros2_lidar.py",
         "ros2_mecanum_base.py",
         "ros2_perception.py",
+        "ros2_vla_grasp.py",
     }
     assert CALL_HELPER.exists()
 

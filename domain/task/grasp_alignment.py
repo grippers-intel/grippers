@@ -71,6 +71,32 @@ def capture_half_width_m(object_width_mm: float, open_width_mm=None) -> float:
     return max(0.0, usable / 2.0) / 1000.0
 
 
+#: VLA 백엔드의 좌우 한계각(도). 학습 분포의 1.5σ다.
+#
+# classic 은 벌어진 턱이 물체를 쓸어 담으므로 한계가 **턱 폭**이지만, VLA 는
+# 정책이 **본 적 있는 자세**만 재현할 수 있어서 한계가 **학습 분포**다.
+#
+# 근거(2026-09-04, v5_all 118회차): 파지 시점 shoulder_pan 이 평균 -2.34도,
+# std 5.34도, 범위 -15.4~+16.9도였다. 1.5σ = 8.0도를 한계로 잡는다.
+# 이 축은 학습 데이터에서 다른 관절의 1/13밖에 안 움직였고(std 5.58 vs
+# lift 75.67), 정책의 좌우 **이미지** 응답은 액션 std 의 0.62%뿐이다 —
+# 즉 좌우는 사실상 배우지 못한 축이라 분포 밖으로 나가면 그냥 실패한다.
+VLA_PAN_LIMIT_DEG = 8.0
+
+
+def vla_half_width_m(reach_mm=None) -> float:
+    """VLA 백엔드에서 물체 중심이 벗어나도 되는 좌우 한계(m).
+
+    각도 한계를 팔 길이로 환산한다 — 좌우 오차를 지우는 것이 servo 1 회전이고
+    (`servo1_offset_for`), 그 회전각이 정책의 학습 분포 안에 있어야 한다.
+    294mm 기준으로 약 ±41mm 다."""
+    if reach_mm is None:
+        reach_mm = bc.SERVO1_AXIS_TO_JAW_MM
+    if reach_mm is None or reach_mm <= 0.0:
+        return 0.0
+    return (reach_mm / 1000.0) * math.tan(math.radians(VLA_PAN_LIMIT_DEG))
+
+
 def jaw_line_m(label):
     """그 클래스의 턱 선(뎁스 판독값 기준). 아직 안 쟀으면 **None**.
 
@@ -133,12 +159,16 @@ def creep_distance_m(observation, max_creep_mm: float = bc.GRASP_CREEP_FORWARD_M
 
 
 def judge(observation, object_width_mm: float,
-          centering_tolerance_m=None) -> AlignmentVerdict:
+          centering_tolerance_m=None, max_lateral_m=None) -> AlignmentVerdict:
     """GRASP로 내려가도 되는지 판정한다.
 
     `observation`은 Pi 뎁스 카메라의 `TargetObservation`이다. `metric_ok`가
     아니면 **판정하지 않는다** — 물체가 어디 있는지 모르는 채로 팔을 바닥에
-    내리는 것이 이 단계에서 가장 비싼 실수다."""
+    내리는 것이 이 단계에서 가장 비싼 실수다.
+
+    `max_lateral_m`을 주면 좌우 한계를 그 값과 턱 폭 중 **좁은 쪽**으로 잡는다.
+    VLA 백엔드가 `vla_half_width_m()`을 넘겨 쓴다 — 턱 폭 안이어도 정책이 본
+    적 없는 좌우 위치면 못 집기 때문이다. 안 주면 예전과 똑같이 턱 폭만 본다."""
     if centering_tolerance_m is None:
         centering_tolerance_m = bc.GRASP_CENTERING_TOLERANCE_M
     if observation is None or not observation.metric_ok:
@@ -165,6 +195,8 @@ def judge(observation, object_width_mm: float,
     forward = observation.forward_m
     near_m, far_m = depth_range
     half_width = capture_half_width_m(object_width_mm)
+    if max_lateral_m is not None:
+        half_width = min(half_width, max_lateral_m)
 
     if forward < near_m:
         return AlignmentVerdict(
