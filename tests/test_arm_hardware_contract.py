@@ -230,11 +230,19 @@ def test_hold_position_does_not_use_lossy_bulk_torque_helper():
 
 
 def test_load_read_failure_is_logged():
+    """2026-09-04부터 _read_load는 get_load를 직접 부르지 않고 _read_with_retry에
+    reader로 넘긴다(실기에서 GRASP 두 번이 실제로는 통신 순간 실패였는데 빈손
+    처리된 사고 이후) — 그래도 get_load를 읽는다는 계약과 실패 시 warn을 남긴다는
+    계약은 그대로라, 어떤 경로로 불리는지까지 확인한다."""
     fn = _function("_read_load")
     names = [_called_name(call) for call in _calls(fn)]
 
-    assert "get_load" in names
+    assert "_read_with_retry" in names
     assert "warn" in names
+
+    retry_call = next(call for call in _calls(fn) if _called_name(call) == "_read_with_retry")
+    reader_arg = retry_call.args[0]
+    assert isinstance(reader_arg, ast.Attribute) and reader_arg.attr == "get_load"
 
 
 def test_startup_logs_idle_offset_but_never_moves_a_servo():

@@ -1601,11 +1601,28 @@ class ArmDriverNode(Node):
 
         읽기에 실패하면(None) 0.0 — 즉 '빈 채'로 본다. 부하를 못 읽는 상태에서
         파지 성공으로 판정해 물체를 든 줄 알고 이송하는 것보다, 실패로 보고
-        재시도하는 쪽이 안전하다."""
+        재시도하는 쪽이 안전하다.
+
+        ⚠️ 2026-09-04 실기: `_read_with_retry`(_read_joint_positions/
+        get_arm_state가 쓰는 것과 같은 재시도)를 여기도 적용했다. 그날 GRASP가
+        두 번 실패했는데("부하가 낮다 (부하 0.0000)"), bringup 로그에 그 정확한
+        순간마다 이 함수의 옛 단일-읽기 경고("load read 실패 — 안전값 0.0으로
+        처리")가 찍혀 있었다 — 실제로 비어 있었던 게 아니라 서보 6 읽기 자체가
+        실패한 것이었다(빈손 실측 기준선은 0.043 안팎이라 정확한 0.0000은 읽기
+        실패의 특징적 신호다). 판정 로직(AND, LOAD_THRESHOLD 등)은 그대로 두고
+        가장 아래 단의 읽기 신뢰성만 올린다 — 재시도도 전부 실패하면 이전과
+        동일하게 0.0을 반환하므로 진짜 실패 케이스의 동작은 안 바뀐다.
+
+        `_read_with_retry`의 자기 경고(2026-08-25)도 여전히 유효하다: 재시도는
+        일시적 패킷 유실용이지, 여러 arm_driver가 시리얼을 동시에 잡아 쓰는
+        근본 원인을 가리면 안 된다. 재시도가 잦아지면 `_claim_serial_port`의
+        배타 잠금이 실제로 걸려 있는지부터 의심할 것."""
         backend = soarm._backend(real=True)
-        raw = backend.drv.get_load(servo_id)
+        raw = self._read_with_retry(backend.drv.get_load, servo_id)
         if raw is None:
-            self.get_logger().warn(f"servo {servo_id} load read 실패 — 안전값 0.0으로 처리")
+            self.get_logger().warn(
+                f"servo {servo_id} load read 실패 (재시도 {JOINT_READ_ATTEMPTS}회 모두) "
+                "— 안전값 0.0으로 처리")
             return 0.0
         return abs(raw) / GRIPPER_LOAD_MAX_RAW
 
