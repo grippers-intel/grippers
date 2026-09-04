@@ -87,12 +87,17 @@ def test_organize_기본값이면_기존_라벨별_상자로_간다():
     assert expected == _box_front_xy(dest_box)
 
 
-def test_toy_목적지는_왼쪽으로_7cm_옮겨지고_chess는_그대로다():
+def test_toy_목적지_x_보정은_2026_09_05_사용자_지시로_0이다():
     """2026-09-03 실기: box를 toy 바구니에 넣을 때마다 차량이 정중앙보다
     오른쪽에 섰다(Pi 라이다 좌우 판독이 매번 "+70~80mm" = 바구니가 차량
-    중심선보다 왼쪽) — 사용자 지시로 toy 목적지만 왼쪽(-x)으로 7cm 옮긴다."""
+    중심선보다 왼쪽) — 그래서 toy 목적지만 왼쪽(-x)으로 7cm 옮겼었다.
+    2026-09-05, 사용자 지시로 이 좌측 편향 자체를 되돌렸다(mission_config.
+    TOY_DEST_X_SHIFT_LEFT_M 주석 참고) — toy도 chess처럼 상자 실측 중심을
+    그대로 목적지로 쓴다."""
     from localizer import box_pose
     from mission import _box_front_xy
+
+    assert mcfg.TOY_DEST_X_SHIFT_LEFT_M == 0.0
 
     toy_bx, toy_by, _ = box_pose("toy")
     chess_bx, chess_by, _ = box_pose("chess")
@@ -100,8 +105,8 @@ def test_toy_목적지는_왼쪽으로_7cm_옮겨지고_chess는_그대로다():
     toy_x, toy_y = _box_front_xy("toy")
     chess_x, chess_y = _box_front_xy("chess")
 
-    assert toy_x == pytest.approx(toy_bx - mcfg.TOY_DEST_X_SHIFT_LEFT_M)
-    assert chess_x == pytest.approx(chess_bx)   # chess는 이 보정 대상이 아니다
+    assert toy_x == pytest.approx(toy_bx)       # 이제 시프트 없이 실측 중심 그대로
+    assert chess_x == pytest.approx(chess_bx)   # chess는 애초에 보정 대상이 아니었다
     # y(전후 여유)는 이 보정과 무관하게 그대로여야 한다.
     assert toy_y == pytest.approx(toy_by - (cfg_box_l_half_plus_margin()))
     assert chess_y == pytest.approx(chess_by - (cfg_box_l_half_plus_margin()))

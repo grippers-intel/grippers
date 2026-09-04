@@ -84,16 +84,20 @@ def test_가까워도_다른_방향을_보면_실패():
     assert "안 보고" in result.reason
 
 
-def test_toy_바구니는_x_시프트가_반영된_목표영역을_쓴다():
+def test_toy_바구니_x_시프트는_2026_09_05_사용자_지시로_0이다():
+    """2026-09-03 실기로 검증됐던 좌측 7cm 보정을 2026-09-05 사용자 지시로
+    되돌렸다(mission_config.TOY_DEST_X_SHIFT_LEFT_M 주석 참고) — toy도
+    이제 chess와 같은 방식(시프트 없음)으로 목표영역을 잡아야 한다."""
+    assert mcfg.TOY_DEST_X_SHIFT_LEFT_M == 0.0
+
     bx, by, _ = box_pose("toy")
-    shifted_x = bx - mcfg.TOY_DEST_X_SHIFT_LEFT_M
     edge_y = by - cfg.BOX_L / 2.0
-    robot_xy = (shifted_x, edge_y - 0.10)
+    robot_xy = (bx, edge_y - 0.10)
     result = bt.check_basket_insert_gate(robot_xy, robot_yaw_deg=90.0, box_name="toy")
     assert result.ok, result.reason
-    # 시프트가 실제로 반영됐다는 것을 대조로 확인 — 원래(시프트 안 된)
-    # 중심 기준으로는 이 x가 목표 영역 절반폭(5cm) 밖으로 밀려난다.
-    assert abs(shifted_x - bx) > bt.TARGET_HALF_WIDTH_M
+    # 시프트가 없으니 상자 "실측 중심" x 그대로가 목표영역 중심이어야 한다.
+    x_lo, x_hi, _y_lo, _y_hi = bt.target_rect("toy")
+    assert (x_lo + x_hi) / 2.0 == pytest.approx(bx)
 
 
 def test_목표영역_안에_있으면_지향_상관없이_통과():
