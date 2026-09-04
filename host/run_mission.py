@@ -119,6 +119,12 @@ def main() -> int:
     ap.add_argument("--carrying", type=str, default=None,
                     help="차량이 이미 이 기물을 들고 있다고 보고 운반부터 시작한다 "
                          "(중단된 실행 이어가기. 예: --carrying rook)")
+    ap.add_argument("--category", type=str, default=None,
+                    choices=sorted(set(mcfg.PIECE_DEST_BOX.values())),
+                    help="이 카테고리(예: chess, toy) 기물만 정리한다 — 실행 내내 "
+                         "유지되는 필터다. 다른 카테고리 기물은 화면에 보여도 "
+                         "무시한다. 터미널에 직접 친 지시(예: '공 가져와')는 "
+                         "이 필터와 무관하게 그대로 동작한다.")
     ap.add_argument("--vehicle-ip", type=str, default=None,
                      help="차량(Pi) IP — 주면 실제 UDP로 전송(UdpVehicleLink), "
                           "안 주면 콘솔에만 찍는다(ConsoleVehicleLink)")
@@ -231,7 +237,7 @@ def _run_mission(args) -> int:
 
     loc = RobotLocalizer()
     tracker = piece_map.PieceTracker()
-    fsm = MissionFSM(manual_mode=args.step or args.manual)
+    fsm = MissionFSM(manual_mode=args.step or args.manual, category=args.category)
     pmap: PieceMap = {}   # 지시 입력 스레드가 루프 시작 전에 참조할 수 있어 미리 초기화
 
     resolver = None

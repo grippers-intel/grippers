@@ -72,7 +72,8 @@ def _other_pieces(piece_map: PieceMap, exclude_xy: Optional[XY] = None,
 
 
 def _nearest_piece(piece_map: PieceMap, robot_xy: XY,
-                   skip: Optional[list[XY]] = None) -> Optional[tuple[str, XY]]:
+                   skip: Optional[list[XY]] = None,
+                   category: Optional[str] = None) -> Optional[tuple[str, XY]]:
     """작업 영역(WORKSPACE_X x WORKSPACE_Y) 안에 있는 기물 중 로봇과 가장
     가까운 (라벨, 좌표).
 
@@ -86,13 +87,19 @@ def _nearest_piece(piece_map: PieceMap, robot_xy: XY,
     라벨이 아니라 좌표로 빼는 이유는 _other_pieces 와 같다(같은 라벨의
     다른 개체는 살려둔다).
 
+    category(2026-09-05, `--category` CLI 옵션 — mission_config.PIECE_DEST_BOX
+    가 "chess"/"toy"로 정하는 그 값)를 주면, 목적지 상자가 그 카테고리인
+    라벨만 후보로 본다 — 다른 카테고리 기물은 화면에 있어도 통째로
+    무시한다("체스말만 정리해줘"). None(기본값)이면 예전처럼 라벨 무관.
+
     ⚠️ 다만 **그것 말고 후보가 하나도 없을 때만** skip 을 무시하고 다시
     찾는다(사용자 지시, 2026-09-01) — 다른 기물이 남아 있는 동안은 실패
     직후 같은 기물을 또 들이미는 낭비를 막고, 그것만 남았을 때는 영원히
     손 놓지 않고 다시 시도한다. 두 번째 시도도 실패하면 skip 에 다시
     쌓이므로(_skip_target), 다음 라운드도 "다른 후보가 없을 때만" 조건을
     똑같이 거쳐 재시도된다 — 여러 기물이 있는 정상 상황에서는 계속
-    미뤄지고, 그것 하나만 남은 상황에서만 반복 시도가 벌어진다.
+    미뤄지고, 그것 하나만 남은 상황에서만 반복 시도가 벌어진다. category
+    는 이 두 단계 모두에 똑같이 걸린다 — 다른 카테고리로는 아예 안 넘어간다.
     """
     def _search(use_skip: bool) -> Optional[tuple[str, XY]]:
         wx0, wx1 = cfg.WORKSPACE_X
@@ -100,6 +107,8 @@ def _nearest_piece(piece_map: PieceMap, robot_xy: XY,
         best: Optional[tuple[str, XY]] = None
         best_d = math.inf
         for label, pts in piece_map.items():
+            if category is not None and mcfg.PIECE_DEST_BOX.get(label) != category:
+                continue
             for p in pts:
                 if not (wx0 <= p[0] <= wx1 and wy0 <= p[1] <= wy1):
                     continue
@@ -213,12 +222,22 @@ def _send_drive(link: VehicleLink, pose: Pose, status: str, nav: DriveCommand,
 
 
 class MissionFSM:
-    def __init__(self, manual_mode: bool = False) -> None:
+    def __init__(self, manual_mode: bool = False,
+                category: Optional[str] = None) -> None:
         """manual_mode=True 면 조건이 충족돼도 상태를 자동으로 안 넘기고,
         request_advance() 가 불릴 때까지 기다린다 — LiveMap 의 Next 버튼용.
         조건 충족 여부는 매 사이클 self.ready_to_advance 에 반영된다(수동
-        모드가 아니어도 참고용으로 계속 갱신됨)."""
+        모드가 아니어도 참고용으로 계속 갱신됨).
+
+        category(2026-09-05, run_mission.py의 `--category chess`/`--category
+        toy`)를 주면, SEARCH_TARGET의 기본 "가장 가까운 것" 규칙이 그
+        카테고리(mission_config.PIECE_DEST_BOX 값) 기물만 후보로 본다 — 실행
+        내내 유지되는 필터다(자연어 지시 한 번짜리 override와 다르다).
+        사용자가 터미널에 직접 친 지시(set_instruction)는 이 필터를
+        무시하고 원하는 라벨로 바로 간다 — 명시적으로 지목한 것까지 막을
+        이유는 없어서다."""
         self.manual_mode = manual_mode
+        self.category = category
         self.ready_to_advance = False
         self._advance_requested = False
         self._back_requested = False
@@ -783,7 +802,8 @@ class MissionFSM:
                 found = _find_label(piece_map, self._instructed_label, robot_xy,
                                     self.skipped)
             else:
-                found = _nearest_piece(piece_map, robot_xy, self.skipped)
+                found = _nearest_piece(piece_map, robot_xy, self.skipped,
+                                       category=self.category)
             self.ready_to_advance = found is not None
             if found is not None and self._should_advance():
                 label, xy = found
