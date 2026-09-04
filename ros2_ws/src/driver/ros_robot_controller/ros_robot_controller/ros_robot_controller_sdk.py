@@ -373,11 +373,17 @@ class Board:
         # 어디에도 안 남았다. cmd_vel 자체가 fire-and-forget 계약이라
         # (domain/ports/base_driver.py 참고) 여기서 복구할 방법은 없지만,
         # 적어도 죽지 않고 로그는 남긴다.
+        #
+        # 2026-09-05: flush=True를 더한다 — bringup_now.sh가 이 노드를
+        # `ros2 launch ... > /tmp/bringup.log 2>&1`로 띄운다(파일 리다이렉트,
+        # TTY 아님). 파이썬 stdout은 TTY가 아니면 기본이 완전 버퍼링이라,
+        # flush 없이는 이 줄이 버퍼에 갇혀 있다가 프로세스가 비정상 종료되면
+        # (정확히 이 print가 알리려는 그 상황) 로그에 영영 안 남을 수 있다.
         try:
             with self._port_lock:
                 self.port.write(buf)
         except Exception as e:
-            print(f"[buf_write] 시리얼 쓰기 실패({e}) — 이 명령은 유실됨")
+            print(f"[buf_write] 시리얼 쓰기 실패({e}) — 이 명령은 유실됨", flush=True)
         #print(buf)
 
 
@@ -580,7 +586,9 @@ class Board:
                     # 자체가 실패해도(장치가 진짜 없어졌다면) 이 루프는 살아
                     # 있으니 다음 바퀴에서 다시 시도한다 — 예전처럼 한 번의
                     # 실패로 텔레메트리가 영구히 죽는 일은 없다.
-                    print(f"[recv_task] 시리얼 읽기 실패({e}) — 포트 재연결 시도")
+                    # flush=True(2026-09-05) — buf_write와 같은 이유, 모듈
+                    # 위쪽 주석 참고.
+                    print(f"[recv_task] 시리얼 읽기 실패({e}) — 포트 재연결 시도", flush=True)
                     self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
                     self.frame = []
                     self.recv_count = 0
@@ -597,7 +605,8 @@ class Board:
                         try:
                             self.port.open()
                         except Exception as reopen_err:
-                            print(f"[recv_task] 포트 재연결 실패({reopen_err}) — 0.5s 뒤 다시 시도")
+                            print(f"[recv_task] 포트 재연결 실패({reopen_err}) — 0.5s 뒤 다시 시도",
+                                  flush=True)
                     continue
                 if recv_data:
                     for dat in recv_data:
