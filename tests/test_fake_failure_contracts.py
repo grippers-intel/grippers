@@ -205,29 +205,12 @@ def test_every_port_method_with_a_failure_value_is_covered():
 # 별개다. 아래는 그 두 번째 절반이다.
 
 
-def test_라이다_관측_실패는_INSERT를_막는다():
-    """`ok=False`를 돌려줘도 거리 필드를 읽고 진행하면 계약이 무의미해진다."""
-    import threading
-
-    from domain.adapters.fake.fake_host_link import FakeHostLink as _Host
-    from domain.ports.baseline_ports import HostCommand, MissionState, Report
-    from domain.task.baseline_mission import (
-        BaselineCarryState,
-        BaselinePorts,
-        LinkWatchdog,
-    )
-
-    host = _Host([HostCommand(MissionState.INSERT, stop=True)])
-    ports = BaselinePorts(
-        base=FakeBase(), arm=FakeArm(load_ratio=0.14),
-        perception=ScriptedPerception(), host=host, lidar=FakeLidar(),
-        estop=threading.Event(), watchdog=LinkWatchdog(),
-    )
-
-    nxt = BaselineCarryState("queen").execute(ports)
-
-    assert Report.INSERT_BLOCKED in host.reported_kinds
-    assert isinstance(nxt, BaselineCarryState)
+# ⚠️ 2026-09-04: `test_라이다_관측_실패는_INSERT를_막는다`를 사용자 지시로
+# 제거했다 — `Lidar` 포트(위 표 §라이다 행)는 여전히 계약을 갖고 있지만,
+# `BaselineCarryState`가 더 이상 INSERT 판정에서 그것을 부르지 않는다.
+# 즉 라이다 관측 실패가 FSM에 "흡수"될 자리 자체가 없어졌다 — 이 파일의
+# 취지(값만 맞고 FSM이 안 들으면 무의미하다)상, 지금은 라이다에 대해선
+# 이 두 번째 절반이 성립하지 않는 것이 의도된 상태다.
 
 
 def test_목표_식별_실패는_GRASP를_막는다():

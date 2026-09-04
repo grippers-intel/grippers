@@ -7,10 +7,12 @@
 
 특히 이 저장소가 실제로 겪은 두 가지를 여기서 잡는다.
 
-  - **CARRY 표본의 이어달리기.** INSERT 판정의 "판독이 흔들리지 않는가"와
-    "부하가 안 떨어지는가"는 직전 사이클 표본과 비교해서 나온다. 그 표본은
-    `BaselineCarryState`가 자기 다음 인스턴스에 손으로 넘겨주는 값이라,
-    전환이 한 번이라도 끊기면 조용히 None이 되어 판정이 미뤄진다.
+  - **CARRY 표본의 이어달리기.** INSERT 판정의 "부하가 안 떨어지는가"(미끄러짐)
+    는 직전 사이클 부하와 비교해서 나온다. 그 표본은 `BaselineCarryState`가
+    자기 다음 인스턴스에 손으로 넘겨주는 값이라, 전환이 한 번이라도 끊기면
+    조용히 None이 되어 판정이 미뤄진다. (2026-09-04까지는 라이다 판독
+    안정성도 같은 표본에 실려 있었지만, 사용자 지시로 INSERT의 위치 판정
+    자체가 빠지면서 부하만 남았다.)
   - **GRASP가 IDLE이 아니라 CARRY로 접는 것.** 물체를 문 채 IDLE로 접으면
     그리퍼가 라이다 정면을 79% 가려 바구니를 못 본다. 통주행이 아니면
     "접기는 성공했다"까지만 보이고 그 다음이 안 보인다.
@@ -28,9 +30,7 @@ from domain.adapters.fake.fake_arm import FakeArm
 from domain.adapters.fake.fake_base import FakeBase
 from domain.adapters.fake.fake_host_link import FakeHostLink, FakeLidar
 from domain.adapters.fake.scripted_perception import ScriptedPerception
-from domain.ports.baseline_ports import (
-    BasketFace, HostCommand, MissionState, Report,
-)
+from domain.ports.baseline_ports import HostCommand, MissionState, Report
 from domain.task import baseline_constants as bc
 from domain.task.motion import AGREED_LINEAR_MPS, AGREED_ROTATION_RAD_S
 from domain.values import TargetObservation
@@ -56,24 +56,6 @@ def _measured_geometry(monkeypatch):
     monkeypatch.setattr(bc, "DEPTH_LATERAL_TO_JAW_CENTER_M",
                         {**bc.DEPTH_LATERAL_TO_JAW_CENTER_M, LABEL: 0.0})
     monkeypatch.setattr(bc, "SERVO1_AXIS_TO_JAW_MM", SERVO1_REACH_MM)
-
-
-def _good_face():
-    """INSERT 조건을 전부 만족하는 바구니 정면 관측.
-
-    거리는 검증 창 [0.130, 0.150]의 목표값을 쓴다. 좌우는 `lateral_known=False`
-    인데, 이것이 **정상**이다 — 잘 정렬돼 있을수록 방위각 창 안에 바구니
-    양쪽 가장자리가 안 걸려서 구조적으로 못 잰다(오프셋 23mm 미만).
-    """
-    return BasketFace(
-        ok=True,
-        distance_m=bc.BASKET_STOP_LIDAR_M,
-        yaw_error_rad=0.01,
-        reason="",
-        point_count=97,          # 2026-08-26 검증 지점 실측
-        lateral_offset_m=0.0,
-        lateral_known=False,
-    )
 
 
 def _host_script():
@@ -144,7 +126,7 @@ def run_through(make_ports, run_to_completion):
             perception=overrides.get("perception") or ScriptedPerception(
                 script=[TargetObservation(LABEL, JAW_LINE_M + 0.02, 0.0, True)]),
             host=host,
-            lidar=overrides.get("lidar") or FakeLidar(script=[_good_face()]),
+            lidar=overrides.get("lidar") or FakeLidar(),
             estop=threading.Event(),
         )
         states = run_to_completion(ports)
@@ -240,13 +222,15 @@ def test_투하_후에는_IDLE로_접는다(run_through):
     assert stages[-1] == "idle", stages
 
 
-def test_INSERT_판정이_직전_사이클_표본을_쓴다(run_through):
-    """표본 이어달리기가 끊기면 판정이 미뤄지고, 그러면 INSERT_READY 대신
-    한 사이클 더 도는 흔적이 남는다.
+def test_통주행에서_INSERT가_한_번에_READY로_간다(run_through):
+    """happy path에서는 막힘 없이 한 번에 판정이 끝나야 한다.
 
-    표본이 살아 있었다는 증거는 "INSERT_BLOCKED 없이 한 번에 READY가 났다"
-    이다 — 표본이 None이면 안정성 두 항목을 못 봐서 막힌다.
-    """
+    ⚠️ 2026-09-04 이전에는 이 테스트가 "CARRY 표본 이어달리기"(라이다 판독
+    연속성)를 검증했다 — 표본이 끊기면(previous가 None) 라이다 안정성
+    판정이 "직전 판독이 없다"로 막혔다. 사용자 지시로 INSERT의 위치 판정
+    자체를 뺀 뒤로는 표본이 없어도(load_change=None) 막히지 않는다 — 남은
+    부하 안정성(미끄러짐) 판정은 표본이 없으면 그냥 건너뛴다. 그래서 지금
+    이 테스트가 보는 것은 표본 연속성이 아니라 그냥 happy path 자체다."""
     _names, host, _ports = run_through()
     kinds = host.reported_kinds
     assert Report.INSERT_BLOCKED not in kinds
@@ -315,13 +299,8 @@ def test_파지_실패_보고에_시도_횟수가_실린다(run_through):
     assert "1번째 시도 실패" in failures[0], failures[0]
 
 
-def test_라이다가_바구니를_못_보면_INSERT로_안_넘어간다(run_through):
-    """"모르면 실패"가 이 포트의 계약이다 — 관측이 없는데 팔을 펴면 안 된다."""
-    blind = BasketFace(ok=False, distance_m=float("inf"),
-                       yaw_error_rad=float("inf"), reason="정면 미검출")
-    _names, host, _ports = run_through(lidar=FakeLidar(script=[blind]))
 
-    kinds = host.reported_kinds
-    assert Report.INSERT_BLOCKED in kinds
-    assert Report.INSERT_READY not in kinds
-    assert Report.INSERT_DONE not in kinds
+# ⚠️ 2026-09-04: `test_라이다가_바구니를_못_보면_INSERT로_안_넘어간다`를
+# 사용자 지시로 제거했다 — INSERT가 더 이상 라이다 관측을 보지 않으므로
+# "라이다가 못 보면 막는다"는 계약 자체가 없어졌다. 위치가 틀렸을 때의
+# 안전판은 이제 Host 쪽 ArUco 하드스톱뿐이다.

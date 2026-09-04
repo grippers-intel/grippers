@@ -119,7 +119,12 @@ sequenceDiagram
 
 ## 3. CARRY — INSERT 조건 판정
 
-CARRY는 매 사이클 라이다와 부하를 떠 둔다 — INSERT 판정이 "직전 사이클 대비 안정적인가"를
+> **2026-09-04 사용자 지시로 라이다 판정을 뺐다.** Host가 INSERT를 보내면 Pi는 자기
+> 상태(정지·파지 확인·부하 안정성)만 보고 그대로 따른다 — "바구니가 정말 거기 있는가"는
+> 더 이상 Pi가 걸러내지 않는다. `Lidar` 포트 자체는 남아 있지만 이 판정에서 더는 안 쓰인다.
+> 라이다 기반 옛 시퀀스는 이 문서의 git 이력 참고.
+
+CARRY는 매 사이클 부하를 떠 둔다 — INSERT 판정이 "직전 사이클 대비 미끄러지지 않는가"를
 보려면 비교할 표본이 이미 있어야 왕복이 한 번 줄기 때문이다.
 
 ```mermaid
@@ -127,47 +132,39 @@ sequenceDiagram
     autonumber
     participant H as Host
     participant M as BaselineCarryState
-    participant L as Lidar
     participant A as ArmDriver
     participant B as BaseDriver
 
     H->>M: HostCommand(state=CARRY|APPROACH_BOX|INSERT)
-    M->>L: basket_face()
-    L-->>M: BasketFace
     M->>A: get_load()
     A-->>M: load
-    Note right of M: (face, load)를 이번 사이클 표본으로 보관
+    Note right of M: 이번 사이클 부하 표본으로 보관(직전 값과 비교용)
 
-    alt state == APPROACH_BOX
-        Note over M: 접근 중에도 매 사이클 확인(09-02 사고 이후)
-        alt 라이다 거리 < BASKET_MIN_LIDAR_M
-            M->>B: stop()
-            M->>H: report(INSERT_BLOCKED, "너무 가깝다", fix)
-        else 목표창 안(BASKET_STOP_TOLERANCE_M 이내)
-            M->>B: stop()
-            M->>H: report(APPROACH_BOX_READY, "그만 밀어도 된다")
-        else 아직 창 밖
-            M->>B: apply_velocity(Host 속도)
-        end
-    else state == INSERT
+    alt state == INSERT
         M->>B: stop()
         Note over M: check_insert — 아래 조건 전부 AND
-        Note right of M: E-STOP 안 걸림 · 정지 상태 ·<br/>grasp_confirmed(=GRASP에서 이미 확정, 재판정 안 함) ·<br/>라이다 정면 확보(점수·거리·yaw·좌우 허용치) ·<br/>직전 사이클 대비 거리·부하 변화가 허용치 안
+        Note right of M: E-STOP 안 걸림 · 정지 상태 ·<br/>grasp_confirmed(=GRASP에서 이미 확정, 재판정 안 함) ·<br/>무엇을 들고 있는지 앎(profile) ·<br/>직전 사이클 대비 부하 하락이 허용치 안(미끄러짐)
         alt 전부 충족
             M->>H: report(INSERT_READY, detail)
             Note right of M: BaselineInsertState로 전이 (§4)
         else 하나라도 미충족
-            M->>H: report(INSERT_BLOCKED, detail, fix)
-            Note right of M: 표본 없으면 판정 보류,<br/>한 사이클 더 본다
+            M->>H: report(INSERT_BLOCKED, detail)
+            Note right of M: Host가 위치를 옮겨서 고칠 수 있는<br/>이유가 아니라 fix는 안 실어 보낸다
         end
-    else state == CARRY
+    else state == CARRY or APPROACH_BOX
         M->>B: apply_velocity(Host 속도)
+        Note right of M: 둘 다 완전히 같은 경로 —<br/>Pi는 거리를 재서 끼어들지 않는다
     end
 ```
 
 **`grasp_confirmed`를 여기서 raw 부하로 다시 재지 않는다.** GRASP가 CARRY 진입 시점에
 이미 내린 판정(§2)을 그대로 믿는다 — box처럼 부하가 계속 낮게 읽히는 물체에서 재판정이
 영원히 막히는 사고가 2026-09-03에 있었다(`baseline_mission.py` 주석).
+
+**위치가 틀렸을 때의 안전판은 이제 Host 쪽뿐이다** — ArUco 하드스톱
+(`mission_config.BASKET_HARD_STOP_MARGIN_M`)이 근접 충돌을 막는 유일한 장치다. 2026-09-02
+사고(ArUco 데드레커닝 오차로 계획을 그대로 다 밀어 바구니에 닿음) 재발 방지용으로 Pi가
+매 사이클 라이다를 봐서 끼어들던 로직은 2026-09-04에 제거됐다.
 
 ---
 

@@ -564,13 +564,20 @@ class BaselineCarryState(State):
     name = MissionState.CARRY
 
     def __init__(self, label, reported_as: str = MissionState.CARRY,
-                 previous=None, grasp_confirmed: bool = True):
+                 previous_load=None, grasp_confirmed: bool = True):
         self.label = label
         self.reported_as = reported_as
-        # 직전 사이클의 (라이다 거리, 그리퍼 부하). INSERT 판정의 "흔들리지
-        # 않는가"·"미끄러지지 않는가"가 이 표본과 비교해서 나온다.
-        self.previous = previous
-        self.sample = None
+        # 직전 사이클의 그리퍼 부하. INSERT 판정의 "미끄러지지 않는가"가
+        # 이 표본과 비교해서 나온다.
+        #
+        # ⚠️ 2026-09-04까지는 여기 라이다 판독도 같이 들고 다녔다(판독
+        # 안정성 판정용). 사용자 지시로 INSERT의 위치 판정 자체를 Pi에서
+        # 뺐다 — Host가 좌표·경로·정지 위치를 전부 소유한다는 원칙을
+        # 끝까지 적용해, "정말 도착했는가"를 Pi가 라이다로 재확인하던
+        # 이중 판정을 없앴다. 위치가 틀렸을 때의 안전판은 이제 Host 쪽
+        # ArUco 하드스톱(mission_config.BASKET_HARD_STOP_MARGIN_M)뿐이다.
+        self.previous_load = previous_load
+        self.sample_load = None
         # BaselineGraspState가 CARRY 도달 시점에 이미 끝낸 "정말 물었는가"
         # 판정(부하 OR 뎁스 "사라짐", 2026-09-03). CARRY에 들어왔다는 것
         # 자체가 그 판정을 통과했다는 뜻이라 기본값이 True다 — check_insert가
@@ -594,48 +601,24 @@ class BaselineCarryState(State):
         if command is None:
             return self
 
-        # 라이다와 부하를 **매 사이클** 떠 둔다. INSERT 명령이 왔을 때
-        # 비교할 직전 표본이 이미 있어야 왕복이 한 번 줄고, 주행 중에 뜬
-        # 표본은 자연히 현재와 어긋나므로 "아직 안 멈췄다"가 그대로 드러난다.
-        face = ports.lidar.basket_face()
-        self.sample = (face, ports.arm.get_load())
+        # 부하를 **매 사이클** 떠 둔다. INSERT 명령이 왔을 때 비교할 직전
+        # 표본이 이미 있어야 왕복이 한 번 줄고, 미끄러짐 판정(부하 안정성)이
+        # 즉시 된다.
+        self.sample_load = ports.arm.get_load()
 
         if command.state == MissionState.INSERT:
-            return self._judge_insert(ports, command, face)
+            return self._judge_insert(ports, command)
 
-        if command.state == MissionState.APPROACH_BOX and face.ok:
-            # 09-02 실기(2건): NUDGE_BOX가 Host 계획 거리(want_m)를 다 밀
-            # 때까지 라이다를 안 보다가, PLACE에 들어가서야 확인해서는 늦었다
-            # — ArUco 데드레커닝이 틀리면 그사이 이미 바구니에 닿는다. 접근
-            # 중에도 매 사이클 확인해서, 이미 너무 가까우면 Host 계획을
-            # 무시하고 더 밀지 않는다(바퀴를 실제로 돌리는 쪽이 최종
-            # 안전판이라는 이 파일의 기존 원칙 그대로 — encode()/motion.py의
-            # 속도 클램프와 같은 계층).
-            too_close = corrections.retreat_if_too_close(face.distance_m)
-            if too_close is not None:
-                ports.base.stop()
-                ports.host.report(
-                    Report.INSERT_BLOCKED, self.reported_as,
-                    f"라이다 판독이 하한보다 가깝다 ({face.distance_m:.3f}m < "
-                    f"{bc.BASKET_MIN_LIDAR_M:.3f}m) — 접근 중 감지, 더 밀지 않는다",
-                    too_close)
-                return BaselineCarryState(self.label, self.reported_as, self.sample,
-                                          self.grasp_confirmed)
-            if corrections.within_stop_window(face.distance_m):
-                # 이미 알맞은 거리다 — 계획한 거리를 마저 채우면 창을 넘겨
-                # 버린다. 요·좌우·안정성·부하는 아직 안 본다 — PLACE에서
-                # check_insert가 평소대로 마저 본다.
-                ports.base.stop()
-                ports.host.report(
-                    Report.APPROACH_BOX_READY, self.reported_as,
-                    f"라이다 {face.distance_m:.3f}m — 목표창 안, 그만 밀어도 된다")
-                return BaselineCarryState(self.label, self.reported_as, self.sample,
-                                          self.grasp_confirmed)
+        # ⚠️ 2026-09-04 이전에는 APPROACH_BOX 접근 중에도 매 사이클 라이다를
+        # 봐서(09-02 실기 대응) 너무 가까우면 물러나고, 목표창 안이면
+        # 먼저 멈췄다. 그 실시간 라이다 점검을 뺐다 — Host가 이 접근
+        # 자체를 전적으로 책임진다. 이제 APPROACH_BOX는 CARRY와 완전히
+        # 같은 경로(_drive)를 탄다.
 
         if not _drive(ports, command, self.reported_as):
             return self
         if command.state in (MissionState.CARRY, MissionState.APPROACH_BOX):
-            return BaselineCarryState(self.label, self.reported_as, self.sample,
+            return BaselineCarryState(self.label, self.reported_as, self.sample_load,
                                       self.grasp_confirmed)
         if command.state == MissionState.DONE:
             return BaselineDoneState()
@@ -654,54 +637,38 @@ class BaselineCarryState(State):
             return BaselineIdleState()
         return self
 
-    def _judge_insert(self, ports, command, face):
+    def _judge_insert(self, ports, command):
         """임무 4번 앞단 — 조건 판정 후 보고. 충족이면 INSERT로, 아니면 제자리.
 
-        직전 사이클 표본과 비교하는 항목이 둘 있다(판독 안정성·부하 안정성).
-        표본이 없으면 판정하지 않고 한 사이클 더 본다 — Host는 INSERT를
-        계속 보내므로 다음 사이클에 자연히 채워진다."""
+        ⚠️ 2026-09-04 사용자 지시로 라이다 기반 위치 판정을 뺐다 — Host가
+        INSERT를 보내면 Pi 자기 상태(정지·파지 확인·부하 안정성)만 보고
+        그대로 따른다. "바구니가 정말 거기 있는가"는 더 이상 여기서
+        걸러내지 않는다(`preconditions.check_insert` 참고)."""
         ports.base.stop()
         gp = plan_for_label(self.label)
-        load = self.sample[1]
+        load = self.sample_load
 
-        distance_change = load_change = None
-        if self.previous is not None:
-            previous_face, previous_load = self.previous
-            if previous_face.ok and face.ok:
-                distance_change = face.distance_m - previous_face.distance_m
-            load_change = load - previous_load
+        load_change = None
+        if self.previous_load is not None:
+            load_change = load - self.previous_load
 
         insert_inputs = pc.InsertInputs(
             estop_set=ports.estop.is_set(),
             base_stopped=_base_stopped(ports, command),
             gripper_load=load,
             grasp_confirmed=self.grasp_confirmed,
-            face_ok=face.ok,
-            face_distance_m=face.distance_m,
-            face_yaw_error_rad=face.yaw_error_rad,
-            face_reason=face.reason,
             profile=gp.profile if gp else None,
-            face_point_count=face.point_count,
-            face_lateral_offset_m=face.lateral_offset_m,
-            face_lateral_known=face.lateral_known,
-            distance_change_m=distance_change,
             load_change=load_change,
         )
         report = pc.check_insert(insert_inputs)
         if not report.ok:
-            # 보정 요구를 같이 실어 보낸다. 남은 미충족이 Host가 고칠 수 있는
-            # 것이 아니면(점 개수·안정성·부하) from_insert가 None을 준다 —
-            # 지어낸 보정을 주면 Host가 엉뚱하게 움직인다.
-            ports.host.report(Report.INSERT_BLOCKED, self.reported_as, report.detail,
-                              corrections.from_insert(insert_inputs))
-            return BaselineCarryState(self.label, self.reported_as, self.sample,
+            # 남은 미충족(E-STOP·미정지·빈손·부하 미끄러짐)은 Host가 위치를
+            # 움직여서 고칠 수 있는 것이 아니다 — fix 없이 detail만 보낸다.
+            ports.host.report(Report.INSERT_BLOCKED, self.reported_as, report.detail)
+            return BaselineCarryState(self.label, self.reported_as, self.sample_load,
                                       self.grasp_confirmed)
-        ports.host.report(
-            Report.INSERT_READY, self.reported_as,
-            f"라이다 {face.distance_m:.3f}m yaw {face.yaw_error_rad:+.3f}rad "
-            f"점 {face.point_count} 좌우 "
-            + (f"{face.lateral_offset_m * 1000:+.0f}mm"
-               if face.lateral_known else "창 안(중앙)"))
+        ports.host.report(Report.INSERT_READY, self.reported_as,
+                          f"{self.label} 부하 {load:.4f} — Host 지시대로 투하 진행")
         return BaselineInsertState(self.label, self.grasp_confirmed)
 
 

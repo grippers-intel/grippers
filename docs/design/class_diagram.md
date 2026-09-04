@@ -240,11 +240,14 @@ Pi 자기 뎁스 카메라로 확인만 한다 — `identify_target()`은 라벨
 보내는 `HostCommand`를 받고 `Report` 상수로 응답하는 양방향 링크다. 좌표·목표 선정이
 전부 Host로 넘어간 것과 짝을 이루는 변화다.
 
-### `Lidar`도 신규 포트다
+### `Lidar` — 포트는 남아 있지만 2026-09-04부터 INSERT 판정에 안 쓰인다
 
-바구니 정면 판정(INSERT 전환 조건) 전용이다. 바닥 물체 회피에는 못 쓴다 — 라이다 평면이
-바닥 위 140mm에서 11.3도 아래로 기울어 체스말 위를 지나간다(`lidar.py` 주석,
-`grippers-sensor-tilt` 메모리와 일치).
+원래 바구니 정면 판정(INSERT 전환 조건) 전용이었다. 바닥 물체 회피에는 못 쓴다 — 라이다
+평면이 바닥 위 140mm에서 11.3도 아래로 기울어 체스말 위를 지나간다(`lidar.py` 주석,
+`grippers-sensor-tilt` 메모리와 일치). ⚠️ 사용자 지시로 INSERT 위치 판정 자체를 Host에
+넘기면서, `BaselineCarryState`가 더 이상 `basket_face()`를 부르지 않는다 — 포트·
+`Ros2Lidar`·`FakeLidar`·`BaselinePorts.lidar` 필드는 최소 변경 원칙으로 그대로 남겼지만
+(§4 ROS2 노드 계층에서도 여전히 조립됨), 이제 실질적으로 죽은 경로다.
 
 ---
 
