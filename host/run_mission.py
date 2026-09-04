@@ -57,6 +57,7 @@ from localizer import Camera, RobotLocalizer, detect, make_detector
 import inspect
 
 import geti_detector
+import mission_config as mcfg
 import piece_map
 from live_map import LiveMap
 from mission import MissionFSM, State, visible_labels
@@ -296,10 +297,18 @@ def main() -> int:
                     if result.error:
                         _feedback(f"API 오류: {result.error}", ok=False)
                     elif result.matched and result.target_label:
-                        now = fsm.set_instruction(result.target_label)
+                        # intent="fetch"("퀸 가져와")면 사람 앞 고정 좌표로,
+                        # 그 외("정리해" 류나 라벨만 말한 애매한 지시)면
+                        # dest_xy 를 안 줘서 기존대로 라벨별 상자로 간다.
+                        fetch = result.intent == "fetch"
+                        now = fsm.set_instruction(
+                            result.target_label,
+                            dest_xy=mcfg.DELIVER_HERE_XY if fetch else None)
+                        where = "저한테" if fetch else "정해진 상자로"
                         note = ("지금 바로 이동" if now
                                 else "옮기던 기물 내려놓은 뒤 이동")
-                        _feedback(f"이해: 대상={result.target_label} ({note})")
+                        _feedback(f"이해: 대상={result.target_label} "
+                                  f"({where}, {note})")
                     else:
                         _feedback(f"어떤 기물인지 확실하지 않아요: "
                                   f"{result.reasoning}", ok=False)

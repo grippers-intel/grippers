@@ -10,6 +10,12 @@ Claude 가 체스 규칙/사물 생김새 같은 상식으로 추론해서, 지�
 보이는 라벨(visible_labels) 중 하나를 고르게 한다 — 안 보이는 라벨을
 후보로 주면 화면에 없는 걸 골라버릴 수 있어서, 매 요청마다 그 순간
 보이는 라벨 목록을 같이 넘긴다.
+
+라벨뿐 아니라 "의도"(intent)도 같이 판단한다 — "퀸 가져와" 처럼 사용자에게
+직접 가져다달라는 뜻이면 "fetch", "정리해"/"치워" 처럼 원래 정해진 상자에
+넣으라는 뜻(또는 딱히 구분이 안 되는 기본 지시)이면 "organize" 다. 이 값에
+따라 run_mission.py/mission.py 가 목적지를 mission_config.DELIVER_HERE_XY
+(사용자 앞 고정 좌표)로 할지, 기존 라벨별 상자로 할지 정한다.
 """
 
 from __future__ import annotations
@@ -29,7 +35,14 @@ _SYSTEM = (
     "'동그랗게 생긴 거' -> 축구공). 체스 기물 이동 규칙이나 사물의 생김새 같은 "
     "일반 상식으로 추론해서, 이번 요청에 같이 주어지는 '지금 보이는 라벨' 목록 "
     "중에서만 하나를 정확히 골라라. 그 목록에 없는 것을 지시하거나, 여러 개가 "
-    "똑같이 그럴듯해서 확신할 수 없으면 matched=false 로 답하고 이유를 적어라."
+    "똑같이 그럴듯해서 확신할 수 없으면 matched=false 로 답하고 이유를 적어라.\n\n"
+    "라벨과 별개로 intent(의도)도 판단해라:\n"
+    "- \"fetch\": 사용자에게 직접 가져다달라는 뜻. 예: '가져와', '가져다줘', "
+    "'가지고 와', '나한테 줘', '이리 줘'\n"
+    "- \"organize\": 원래 정해진 상자(체스말->체스 상자, 나머지->장난감 상자)에 "
+    "넣으라는 뜻. 예: '정리해', '치워', '상자에 넣어줘'. **어느 쪽인지 애매하거나 "
+    "그냥 라벨만 말했으면(예: '퀸') 기본값으로 organize 를 선택해라** — 안전한 "
+    "쪽(원래 정해진 상자)이 기본이어야 한다."
 )
 
 _NO_MATCH = "_no_match"   # target_label enum 에 null 대신 쓰는 값(엄격한 스키마 검증 통과용)
@@ -40,6 +53,7 @@ class InstructionResult:
     matched: bool
     target_label: Optional[str]
     reasoning: str
+    intent: str = "organize"   # "fetch"(사용자에게) | "organize"(기존 상자로, 기본값)
     error: Optional[str] = None
 
 
@@ -105,8 +119,13 @@ class InstructionResolver:
                         "type": "string",
                         "description": "왜 이렇게 판단했는지 한국어 한 문장",
                     },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["fetch", "organize"],
+                        "description": "fetch=사용자에게 가져다줌, organize=기존 상자로(기본값)",
+                    },
                 },
-                "required": ["matched", "target_label", "reasoning"],
+                "required": ["matched", "target_label", "reasoning", "intent"],
                 "additionalProperties": False,
             },
             "strict": True,
@@ -134,6 +153,7 @@ class InstructionResolver:
                     matched=matched,
                     target_label=label if matched else None,
                     reasoning=data.get("reasoning", ""),
+                    intent=data.get("intent", "organize"),
                 )
         return InstructionResult(False, None, "모델이 예상한 형식으로 답하지 않음")
 

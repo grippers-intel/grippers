@@ -408,6 +408,15 @@ class LiveMap:
             self.ax.text(bx, by, name, ha="center", va="center",
                          fontsize=9, color="white", weight="bold")
 
+        # "가져와" 전달점 (mission_config.DELIVER_HERE_XY).
+        # 상자와 달리 물건이 아니라 좌표 하나뿐이라 사각형 대신 표적으로 그린다.
+        # 로봇은 여기까지 들어오지 않는다 — PLACE_TRIGGER_DIST_M 앞에서 멈춘다.
+        dhx, dhy = mcfg.DELIVER_HERE_XY
+        self.ax.plot(dhx, dhy, marker="X", markersize=10, color="#c2185b",
+                     markeredgecolor="white", markeredgewidth=0.8, zorder=3)
+        self.ax.text(dhx, dhy + 0.05, "전달", ha="center", va="bottom",
+                     fontsize=8, color="#c2185b", weight="bold")
+
     # ------------------------------------------------------------------
     # 지도 아래 UI(상태정보 / 범례 / 조작 / 지시) 배치
     # ------------------------------------------------------------------

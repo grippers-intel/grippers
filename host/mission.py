@@ -48,7 +48,7 @@ class State(Enum):
     GRASP = auto()             # 차량이 SmolVLA 로 집는 동안 대기
     GRASP_ALIGN = auto()       # Pi 가 "영역 밖이다, 다시 세워 달라"(GRASP_BLOCKED) 해서 재정렬 중
     CARRY_TO_DEST = auto()     # 목적지까지 이동(회피 포함)
-    FACE_BOX = auto()          # 상자 앞 도착 후 정해진 방향(BOX_FACE_YAW_DEG)으로 제자리 회전
+    FACE_BOX = auto()          # 목적지 앞 도착 후 정해진 방향(dest_face_yaw_deg)으로 제자리 회전
     NUDGE_BOX = auto()         # 그 방향으로 BOX_NUDGE_M 만큼만 더 전진하고 정지
     PLACE = auto()             # 차량이 SmolVLA 로 내려놓는 동안 대기
     INSERT_ALIGN = auto()      # Pi 가 "투하 조건이 안 맞는다"(INSERT_BLOCKED) 해서 재정렬 중
@@ -243,8 +243,15 @@ class MissionFSM:
         순간 바로 다음 상태로 넘어간다."""
         self._advance_requested = True
 
-    def set_instruction(self, target_label: str) -> bool:
+    def set_instruction(self, target_label: str,
+                        dest_xy: Optional[XY] = None) -> bool:
         """자연어 지시로 정해진 라벨을 처리 대상으로 삼는다.
+
+        `dest_xy` 를 주면 그 좌표로 나른다 — 지시가 "fetch" 의도("퀸 가져와")
+        일 때 run_mission.py 가 mission_config.DELIVER_HERE_XY 를 넘겨준다.
+        안 주면(기본값 — "정리해" 류이거나 라벨만 말한 애매한 지시) 기존처럼
+        PIECE_DEST_BOX 가 정하는 상자로 간다. **애매하면 상자**가 안전한 쪽이라
+        기본값을 그렇게 뒀다(instruction_resolver.py 의 intent 판단 참고).
 
         **손이 비어 있으면**(SEARCH_TARGET / APPROACH_PIECE) 지금 쫓던 걸 버리고
         즉시 이 라벨로 전환한다. **이미 들고 옮기는 중이면**(GRASP 이후) 끼어들지
@@ -260,6 +267,7 @@ class MissionFSM:
         않은 대상으로 갑자기 움직이게 된다."""
         if not self.halted and self.state in (State.SEARCH_TARGET, State.APPROACH_PIECE):
             self._instructed_label = target_label
+            self._instructed_dest_xy = dest_xy
             if self.state == State.APPROACH_PIECE:
                 # 쫓던 기물을 버리고 즉시 재탐색.
                 self.state = State.SEARCH_TARGET
@@ -271,6 +279,7 @@ class MissionFSM:
                 self._drive.reset()
             return True
         self._queued_instruction_label = target_label
+        self._queued_instruction_dest_xy = dest_xy
         return False
 
     def request_halt(self) -> None:
@@ -313,6 +322,8 @@ class MissionFSM:
             self.dest_xy = None
             # 뒤로가기는 사람의 수동 개입이다 — 원래 지시를 계속 쫓지 않는다.
             self._instructed_label = None
+            self._instructed_dest_xy = None
+            self.dest_face_yaw_deg = mcfg.BOX_FACE_YAW_DEG
         self._path_planner.reset()
         self._drive.reset()
         self.nav_goal = None
@@ -351,6 +362,9 @@ class MissionFSM:
         self.target_label: Optional[str] = None
         self._target_xy: Optional[XY] = None
         self.dest_xy: Optional[XY] = None
+        # 목적지에 설 때 볼 방위. 상자는 뒤쪽 벽에 있어 +y 지만 "가져와"
+        # 전달점은 앞쪽이라 반대다 — dest_xy 를 정하는 자리에서 같이 정한다.
+        self.dest_face_yaw_deg: float = mcfg.BOX_FACE_YAW_DEG
         self.ready_to_advance = False
         self._advance_requested = False
         self._back_requested = False
@@ -393,7 +407,9 @@ class MissionFSM:
         # _instructed_label 은 지금 쫓을 라벨, _queued_ 는 지금 든 것을
         # 내려놓은 뒤에 적용할 라벨이다.
         self._instructed_label: Optional[str] = None
+        self._instructed_dest_xy: Optional[XY] = None
         self._queued_instruction_label: Optional[str] = None
+        self._queued_instruction_dest_xy: Optional[XY] = None
 
         # HALTED 로 멈춘 이유. 화면과 콘솔에 그대로 보여준다.
         self.halt_reason: Optional[str] = None
@@ -446,6 +462,7 @@ class MissionFSM:
         self.target_label = None
         self._target_xy = None
         self.dest_xy = None
+        self.dest_face_yaw_deg = mcfg.BOX_FACE_YAW_DEG
         self.ready_to_advance = False
         self.last_cmd = None
         self._path_planner.reset()
@@ -513,24 +530,36 @@ class MissionFSM:
                     print(f"[mission] 지시 취소: {self._instructed_label} 은(는) "
                           f"보류된 기물뿐이다")
                     self._instructed_label = None
+                    # 목적지 오버라이드도 같이 놓는다 — 안 놓으면 지시와
+                    # 무관하게 고른 다음 기물까지 사람 앞으로 날아온다.
+                    self._instructed_dest_xy = None
                     found = _nearest_piece(piece_map, robot_xy, self.skipped)
             else:
                 found = _nearest_piece(piece_map, robot_xy, self.skipped)
             self.ready_to_advance = found is not None
             if found is not None and self._should_advance():
                 label, xy = found
-                dest_box = mcfg.PIECE_DEST_BOX.get(label)
-                if dest_box is None:
+                # "가져와" 지시면 라벨별 상자를 무시하고 사람 앞으로 나른다.
+                if self._instructed_dest_xy is not None:
+                    dest_xy = self._instructed_dest_xy
+                    face_yaw = mcfg.DELIVER_HERE_YAW_DEG
+                else:
+                    dest_box = mcfg.PIECE_DEST_BOX.get(label)
+                    dest_xy = _box_front_xy(dest_box) if dest_box else None
+                    face_yaw = mcfg.BOX_FACE_YAW_DEG
+                if dest_xy is None:
                     # 목적지 매핑이 없는 라벨 — 건드리지 않고 다음 후보를 기다린다.
                     self.ready_to_advance = False
                 else:
                     self.target_label, self._target_xy = label, xy
-                    self.dest_xy = _box_front_xy(dest_box)
+                    self.dest_xy = dest_xy
+                    self.dest_face_yaw_deg = face_yaw
                     # 재정렬 예산은 **대상 1개** 스코프다. 미션 누적으로 두면
                     # 첫 기물이 예산을 다 쓴 뒤 나머지가 전부 첫 시도에서
                     # 보류된다. 되돌리는 자리는 대상이 바뀌는 여기 하나뿐이다.
                     self._align_tries = 0
                     self._instructed_label = None   # 소비했다
+                    self._instructed_dest_xy = None
                     self._path_planner.reset()   # 새 구간 시작
                     self._drive.reset()
                     self.ready_to_advance = False
@@ -665,18 +694,22 @@ class MissionFSM:
         elif self.state == State.FACE_BOX:
             # 상자 앞엔 도착했지만 아직 방향이 안 맞을 수 있다(어느 축으로
             # 마지막에 들어왔는지에 따라 다름) — PLACE 로 넘어가기 전에
-            # 항상 정해진 방향(BOX_FACE_YAW_DEG, map 기준 "12시"=+y)을 보고
-            # 서게 만든다. next_waypoint 를 또 쓸 필요 없이(목적지에 이미
+            # 항상 정해진 방향(dest_face_yaw_deg)을 보고 서게 만든다.
+            #
+            # 상자는 전부 뒤쪽 벽에 있어 BOX_FACE_YAW_DEG(90도, map 기준
+            # "12시"=+y)면 되지만, "가져와" 전달점은 **앞쪽**이라 같은 값을
+            # 쓰면 사람에게 등을 돌린다 — 그래서 상수가 아니라 목적지를
+            # 정할 때 같이 정하는 필드다(DELIVER_HERE_YAW_DEG=270). next_waypoint 를 또 쓸 필요 없이(목적지에 이미
             # 도착했으므로 이동은 없고 회전만 필요) 방위각 오차만 직접 계산한다.
             self.nav_goal = None
             self.nav_corner = None
             self.nav_path = None
-            yaw_err = (mcfg.BOX_FACE_YAW_DEG - pose.yaw_deg + 180.0) % 360.0 - 180.0
+            yaw_err = (self.dest_face_yaw_deg - pose.yaw_deg + 180.0) % 360.0 - 180.0
             aligned = abs(yaw_err) <= mcfg.DRIVE_YAW_TOLERANCE_DEG
             self.ready_to_advance = aligned
             nav = DriveCommand(
                 mode=DriveMode.STOP if aligned else DriveMode.ROTATE,
-                waypoint=robot_xy, target_yaw_deg=mcfg.BOX_FACE_YAW_DEG,
+                waypoint=robot_xy, target_yaw_deg=self.dest_face_yaw_deg,
                 yaw_error_deg=yaw_err, dist_to_target=0.0, blocked_by=None,
             )
             self.last_nav = nav
@@ -690,6 +723,8 @@ class MissionFSM:
             # 도착 판정은 목적지에서 PLACE_TRIGGER_DIST_M 떨어진 자리에서
             # 걸린다 — 거기서 바로 내려놓으면 상자와 멀다. 방향을 맞춘 뒤
             # (FACE_BOX) 그 방향으로 BOX_NUDGE_M 만큼만 붙여 준다.
+            # 방향은 FACE_BOX 와 같은 dest_face_yaw_deg 를 쓴다 — 상수로
+            # 두면 "가져와" 전달점에서 5 cm 를 **멀어지는** 쪽으로 간다.
             #
             # 계획기를 안 쓴다. 5 cm 직진이라 경로랄 게 없고, 이 구간은
             # 목적지가 이미 기물 회피구역과 겹칠 수 있어서(상자 앞에 기물이
@@ -699,12 +734,12 @@ class MissionFSM:
             self.nav_path = None
             if self._nudge_from is None:
                 self._nudge_from = robot_xy
-            heading = math.radians(mcfg.BOX_FACE_YAW_DEG)
+            heading = math.radians(self.dest_face_yaw_deg)
             goal = (self._nudge_from[0] + mcfg.BOX_NUDGE_M * math.cos(heading),
                     self._nudge_from[1] + mcfg.BOX_NUDGE_M * math.sin(heading))
             moved = math.hypot(robot_xy[0] - self._nudge_from[0],
                                robot_xy[1] - self._nudge_from[1])
-            yaw_err = (mcfg.BOX_FACE_YAW_DEG - pose.yaw_deg + 180.0) % 360.0 - 180.0
+            yaw_err = (self.dest_face_yaw_deg - pose.yaw_deg + 180.0) % 360.0 - 180.0
             aligned = abs(yaw_err) <= mcfg.DRIVE_YAW_TOLERANCE_DEG
             done = moved >= mcfg.BOX_NUDGE_M
             # 전진 중에 방위가 틀어지면 다시 맞춘다 — 5 cm 라도 비스듬히
@@ -717,7 +752,7 @@ class MissionFSM:
                 mode = DriveMode.FORWARD
             self.ready_to_advance = done
             nav = DriveCommand(
-                mode=mode, waypoint=goal, target_yaw_deg=mcfg.BOX_FACE_YAW_DEG,
+                mode=mode, waypoint=goal, target_yaw_deg=self.dest_face_yaw_deg,
                 yaw_error_deg=yaw_err,
                 dist_to_target=max(mcfg.BOX_NUDGE_M - moved, 0.0), blocked_by=None,
             )
@@ -791,7 +826,9 @@ class MissionFSM:
                 if self._queued_instruction_label is not None:
                     # 내려놓는 동안 쌓아 둔 지시를 이제 적용한다.
                     self._instructed_label = self._queued_instruction_label
+                    self._instructed_dest_xy = self._queued_instruction_dest_xy
                     self._queued_instruction_label = None
+                    self._queued_instruction_dest_xy = None
                 self.state = State.SEARCH_TARGET
 
         elif self.state == State.INSERT_ALIGN:
