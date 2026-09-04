@@ -51,6 +51,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 
 from grippers_vla.policy_runner import PolicyRunner
+from grippers_vla.remote_policy import RemotePolicyRunner
 
 #: 완료 판정 임계값(도, LeRobot 단위의 shoulder_lift).
 #: 학습 데이터에서 lift 는 -104 에서 시작해 뻗을 때 +99 까지 간다.
@@ -93,23 +94,49 @@ class VlaInferenceNode(Node):
         # 잘려 같은 청크를 무한 반복했고 팔이 25초 동안 안 움직였다.
         # 0 이면 체크포인트 값(100)을 그대로 쓴다.
         self.declare_parameter("n_action_steps", 0)
+        # "local" 이면 이 노드가 정책을 들고 돈다. "remote" 면 다른 기계의
+        # policy_server 에 프레임과 관절값을 보내고 청크를 받아온다.
+        #
+        # 기본은 local 이다 — 시연 중 네트워크에 의존하지 않는 쪽이 안전하다.
+        # remote 의 실익은 속도가 아니라(Pi 로컬 175ms, 듀티 5.3%) **Pi CPU 를
+        # 비우는 것**과 **체크포인트를 200MB 씩 옮기지 않는 것**이다.
+        self.declare_parameter("policy_source", "local")
+        self.declare_parameter("policy_url", "http://192.168.0.2:8770")
 
-        ckpt = str(self.get_parameter("checkpoint").value or "").strip()
-        if not ckpt:
-            raise RuntimeError("checkpoint 파라미터가 필요합니다")
+        source = str(self.get_parameter("policy_source").value or "local")
+        if source not in ("local", "remote"):
+            raise RuntimeError(f"policy_source 는 local 또는 remote 여야 합니다: {source}")
         n_steps = int(self.get_parameter("n_action_steps").value or 0)
-
-        self.get_logger().info(f"정책 적재 중: {ckpt}")
         t0 = time.monotonic()
-        self._runner = PolicyRunner(
-            ckpt, device=str(self.get_parameter("device").value),
-            n_action_steps=n_steps if n_steps > 0 else None,
-        )
-        self.get_logger().info(
-            f"정책 준비 {time.monotonic() - t0:.1f}s — "
-            f"입력 {self._runner.policy_hw}, chunk {self._runner.chunk_size}, "
-            f"n_action_steps {self._runner.n_action_steps}"
-        )
+
+        if source == "remote":
+            url = str(self.get_parameter("policy_url").value)
+            self.get_logger().info(f"원격 추론 서버에 연결: {url}")
+            # None 이면 서버가 들고 있는 값을 따른다(health 에서 받아온다).
+            # 0 이 아닌 값을 줬으면 그 값이 서버 값을 이긴다 — local 과 같은 규칙.
+            self._runner = RemotePolicyRunner(
+                url, n_action_steps=n_steps if n_steps > 0 else None)
+            # ⚠️ 여기서 한 번 부딪혀 **일찍 실패한다.** 파지를 시작한 뒤에
+            # 서버가 없는 것을 알면 팔이 어중간한 자세에 남는다.
+            info = self._runner.health()
+            self.get_logger().info(
+                f"서버 준비 {time.monotonic() - t0:.1f}s — {info.get('ckpt')} "
+                f"입력 {self._runner.policy_hw}, n_action_steps {self._runner.n_action_steps}"
+            )
+        else:
+            ckpt = str(self.get_parameter("checkpoint").value or "").strip()
+            if not ckpt:
+                raise RuntimeError("policy_source=local 이면 checkpoint 파라미터가 필요합니다")
+            self.get_logger().info(f"정책 적재 중: {ckpt}")
+            self._runner = PolicyRunner(
+                ckpt, device=str(self.get_parameter("device").value),
+                n_action_steps=n_steps if n_steps > 0 else None,
+            )
+            self.get_logger().info(
+                f"정책 준비 {time.monotonic() - t0:.1f}s — "
+                f"입력 {self._runner.policy_hw}, chunk {self._runner.chunk_size}, "
+                f"n_action_steps {self._runner.n_action_steps}"
+            )
 
         self._frame = None          # (stamp_sec, bgr)
         self._frame_lock = threading.Lock()
