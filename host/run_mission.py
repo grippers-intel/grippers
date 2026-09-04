@@ -327,7 +327,14 @@ def main() -> int:
                         _feedback(f'음성 인식: "{heard.text}" (확인 후 전송)')
 
             if fsm.state == State.SEARCH_TARGET and frames_seen % 10 == 0:
-                print(f"\r[SEARCH_TARGET] 작업 영역에 남은 기물 없음 — {pose}   ",
+                # 수동 모드에서는 기물을 **찾고도** SEARCH_TARGET 에 머무른다
+                # (Next 를 기다린다). 그때까지 "남은 기물 없음"이라고 찍으면
+                # 그건 거짓말이고, 사람은 멀쩡한 검출부를 의심하게 된다.
+                if fsm.ready_to_advance:
+                    why = f"{fsm.target_label or '기물'} 대기 — Next 를 누르십시오"
+                else:
+                    why = fsm.search_reason or "작업 영역에 남은 기물 없음"
+                print(f"\r[SEARCH_TARGET] {why} — {pose}   ",
                       end="", flush=True)
 
             if live_map is not None:

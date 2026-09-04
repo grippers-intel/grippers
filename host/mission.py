@@ -415,7 +415,13 @@ class MissionFSM:
         self.halt_reason: Optional[str] = None
 
         # 재정렬을 다 쓰고도 못 집은 기물 좌표. SEARCH_TARGET 후보에서 뺀다.
+        # ⚠️ 여기(reset)에서만 비워진다. 한 번 보류된 기물은 그 세션 내내
+        # 후보에서 빠지므로, 사람이 물체를 옮겨 줘도 되살아나지 않는다.
+        # 되살리려면 LiveMap 의 Mode 버튼을 두 번 눌러 reset 을 거쳐야 한다.
         self.skipped: list[XY] = []
+
+        # SEARCH_TARGET 에서 후보를 못 고른 이유. 화면과 콘솔이 그대로 쓴다.
+        self.search_reason: Optional[str] = None
 
         self._path_planner.reset()
         self._drive.reset()
@@ -537,6 +543,20 @@ class MissionFSM:
             else:
                 found = _nearest_piece(piece_map, robot_xy, self.skipped)
             self.ready_to_advance = found is not None
+            # 왜 후보가 없는지 남긴다. "없음"에는 세 가지 다른 뜻이 있고,
+            # 사람이 할 일이 각각 다르다 — 기물을 놓아야 하는지, 보류를
+            # 풀어야 하는지, Next 를 눌러야 하는지. 이걸 구분해 주지 않아서
+            # 2026-09-05 실기에서 검출이 멀쩡한데도 한참 헤맸다.
+            if found is not None:
+                self.search_reason = None
+            elif not piece_map:
+                self.search_reason = "지도에 기물이 하나도 없음"
+            elif any(_in_workspace(p) for pts in piece_map.values() for p in pts):
+                self.search_reason = (
+                    f"보이는 기물이 모두 보류됨({len(self.skipped)}개) — "
+                    f"Mode 를 두 번 눌러 초기화하십시오")
+            else:
+                self.search_reason = "기물은 보이나 작업 영역 밖"
             if found is not None and self._should_advance():
                 label, xy = found
                 # "가져와" 지시면 라벨별 상자를 무시하고 사람 앞으로 나른다.
