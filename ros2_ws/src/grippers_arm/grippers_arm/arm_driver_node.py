@@ -77,26 +77,16 @@ POSITION_RAW_MAX = 4095
 # 않고, 0.77s 에 거의 안정, 1.03s 이후로는 10초까지 한 틱도 변하지 않았다.
 # 1.0s 안정 + 여유로 1.5s. 정착 타이밍은 서보 물리 지식이므로 도메인이 아니라
 # 여기 둔다 — GraspState 에 sleep 을 넣지 않는다.
+#
+# ⚠️ 2026-09-04 밤 한동안 개방(놓기) 명령에만 RELEASE_SETTLE_EXTRA_SEC(처음
+# 1.5s, 이어서 3.0s)를 더 얹었었다 — INSERT 직후 접기 전 CLOSED_MM으로
+# 바로 오므려 물체가 다 벗어나기 전에 다시 닫히는 것처럼 보인다는 사용자
+# 관찰 때문이었다. 그런데 그 뒤 실기에서 GRASP 확인이 부하 0으로 계속
+# 실패하던 진짜 원인(box 파지 자체가 안 되고 있었던 것)이 따로 드러났고,
+# 그 원인이 해소되자 사용자가 "그리퍼 여는 시간 충분히 주라고 했던 건
+# 빼도 될 것 같아"라고 정정해 되돌렸다 — 애초에 이 시간 자체가 문제가
+# 아니었다는 뜻이다.
 GRASP_SETTLE_SEC = 1.5
-# 개방(놓기) 명령 뒤에 얹는 추가 여유. GRASP_SETTLE_SEC 은 "닫힘 부하가
-# 안정되는" 시간으로 실측된 값이라 서보 자체의 물리다 — 물체가 손끝
-# 사이에서 실제로 벗어나 떨어지는 것은 전혀 다른 물리 현상이라 같은 값을
-# 못 쓴다. 2026-09-04 실기: INSERT 에서 놓기 직후 접기 전 CLOSED_MM(9mm)
-# 으로 바로 오므리는데, 사용자 관찰로는 물체가 다 벗어나기 전에 손끝이
-# 다시 닫히는 것처럼 보였다("그리퍼가 안 열리고 바로 IDLE로 복귀했다") —
-# 개방 명령에만 이 여유를 더해 준다(사용자 지시: "그리퍼가 움직일 충분한
-# 시간을 줘"). 1.5s로 처음 넣었는데도 같은 날 밤 다음 실기에서 사용자가
-# 또 "그리퍼 다 안 열렸는데 왜 PLACE가 끝나? 여유 주라고 했지"라고
-# 지적해 3.0s로 두 배 늘린다. 정확한 하한은 여전히 미실측이라 넉넉하게
-# 잡았다 — 이번에도 부족하면 시간이 아니라(이미 충분히 크다) 다른 원인을
-# 의심할 것.
-RELEASE_SETTLE_EXTRA_SEC = 3.0
-# 이 폭(mm) 이상을 요청하면 "쥐기"가 아니라 "놓기"로 본다. 파지 폭은
-# GRIPPER_GRASP_MIN_MM(0mm)까지 강제로 좁혀지고(baseline_mission의
-# _CLOSE_WIDTH_OVERRIDE_MM), 접기 전 예비폭(CLOSED_MM)은 9mm, 놓기 폭은
-# 항상 최대(168mm, 2026-09-04 사용자 지시 "그리퍼 최대로 열어")라 이
-# 문턱과 겹칠 일이 없다.
-RELEASE_WIDTH_THRESHOLD_MM = 100.0
 # 그리퍼 개폐 "이동이 끝났는가" 판정 — 시간이 아니라 위치 정지로 본다
 # (_wait_gripper_motion_settled 참고, 2026-08-24 실기로 필요성 확인).
 GRIPPER_MOTION_POLL_SEC = 0.1
@@ -108,7 +98,14 @@ GRIPPER_MOTION_TIMEOUT_SEC = 4.0  # 최대 행정(168mm↔9mm, 약 850raw)보다
 GRIPPER_SPEED_RAW = 600
 GRIPPER_ACCEL_RAW = 30
 FLOOR_POSE_STEPS = 30
-FLOOR_POSE_STEP_SEC = 0.10
+# 2026-09-04 밤 사용자 지시("safe->파지, 파지->midpoint 기다리는 시간
+# 조금 줄여도 될 것 같아")로 0.10 -> 0.07초로 줄였다 — 모든 floor-pose
+# 구간(safe/grasp/midpoint/drop/idle 전부)에 똑같이 적용되는 전역 값이라
+# 이 하나만으로 그 구간들이 다 조금씩 빨라진다. 안전 여유는 아래
+# FLOOR_POSE_SPEED_RAW 주석의 계산을 참고 — 가장 긴 이동(servo 2,
+# 1663 raw)도 30*0.07=2.1s 안에 792 raw/s로 끝나면 되고, 그래도 상한
+# 1200raw/s에 여유가 남는다. 더 줄이면 이 여유부터 다시 계산할 것.
+FLOOR_POSE_STEP_SEC = 0.07
 # 서보 goal_speed / acceleration — _glide_to_raw_positions가 매 이동마다 다시
 # 쓴다(왜 상속하면 안 되는지는 그 함수의 주석 참고).
 #
@@ -116,8 +113,9 @@ FLOOR_POSE_STEP_SEC = 0.10
 # 153 raw/s). 이 값이 정하는 것은 **궤적의 모양이 아니라 상한**이다 — 실제
 # 움직임은 여전히 FLOOR_POSE_STEPS개의 waypoint를 FLOOR_POSE_STEP_SEC 간격으로
 # 찍는 보간이 만든다. 즉 이 상한은 보간이 요구하는 속도를 막지만 않으면 된다.
-# 가장 긴 이동은 IDLE->safe의 servo 2(1663 raw)로 3.0s 안에 끝내려면 554 raw/s가
-# 필요하다 — 2배 여유를 두고 잡는다. 팔이 검증된 것보다 빨라지는 게 아니라,
+# 가장 긴 이동은 IDLE->safe의 servo 2(1663 raw)로, FLOOR_POSE_STEPS*
+# FLOOR_POSE_STEP_SEC(2026-09-04 기준 30*0.07=2.1s) 안에 끝내려면 792 raw/s가
+# 필요하다 — 여유를 두고 잡는다. 팔이 검증된 것보다 빨라지는 게 아니라,
 # 원래 의도된 보간 궤적을 따라가지 못하게 막던 병목을 치우는 것이다.
 FLOOR_POSE_SPEED_RAW = 1200
 FLOOR_POSE_ACCEL_RAW = 30
@@ -1390,10 +1388,7 @@ class ArmDriverNode(Node):
             # 행정 길이는 요청 폭에 따라 달라지므로 상수를 다시 튜닝하는 대신
             # **위치가 멈출 때까지 기다린 뒤** 부하 정착을 기다린다.
             self._wait_gripper_motion_settled(backend)
-            settle_sec = GRASP_SETTLE_SEC
-            if width_mm >= RELEASE_WIDTH_THRESHOLD_MM:
-                settle_sec += RELEASE_SETTLE_EXTRA_SEC
-            time.sleep(settle_sec)
+            time.sleep(GRASP_SETTLE_SEC)
             response.ok = True
             response.load_ratio = self._read_load()
         except Exception as e:
