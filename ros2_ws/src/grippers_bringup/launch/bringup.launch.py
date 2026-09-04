@@ -44,6 +44,8 @@ def launch_setup(context):
     policy_source = LaunchConfiguration("policy_source")
     policy_url = LaunchConfiguration("policy_url")
     policy_calibration_file = LaunchConfiguration("policy_calibration_file")
+    checkpoint = LaunchConfiguration("checkpoint")
+    device = LaunchConfiguration("device")
     gripper_cam_publish_hz = LaunchConfiguration("gripper_cam_publish_hz")
 
     # ⚠️ use_vla 를 끄면 그리퍼캠 발행도 **함께** 꺼져야 한다. perception_node 의
@@ -146,6 +148,9 @@ def launch_setup(context):
             {
                 "policy_source": policy_source,
                 "policy_url": policy_url,
+                # local 일 때만 쓰인다. remote 면 노드가 이 값을 아예 안 읽는다.
+                "checkpoint": checkpoint,
+                "device": device,
             }
         ],
     )
@@ -256,16 +261,49 @@ def generate_launch_description():
                 description="true면 vla_inference_node를 띄우고 그리퍼캠 발행을 켠다 "
                 "(policy_source 기본 remote — 노트북 policy_server가 필요하다)",
             ),
+            # ⚠️ 기본이 local 인 이유는 **ACT 가 이 하드웨어에서 실시간이 되기
+            # 때문**이다. 2026-09-05 실측(act_v5_all 120k, 180x320):
+            #
+            #   Pi 로컬  397~465ms (듀티 14%)  — perception·arm_driver·
+            #                                   vla_inference 가 같이 도는 조건
+            #   원격     117ms     (듀티 3.5%) — 리사이즈·전송·추론·회신 왕복 전부
+            #
+            # 원격이 3.5배 빠르지만 둘 다 청크 3.33초 안에 여유롭게 들어간다.
+            # 여유가 있는데 시연 경로에 노트북과 네트워크 의존을 하나 더 만들
+            # 이유가 없다. remote 가 필요한 자리는 따로 있다 — SmolVLA 처럼
+            # Pi 에서 실시간이 안 되는 정책(tools/arm/smolvla_check.py)과,
+            # 체크포인트를 자주 갈아끼워 200MB 전송이 부담일 때다.
             DeclareLaunchArgument(
                 "policy_source",
-                default_value="remote",
-                description="local이면 Pi가 체크포인트를 들고 추론하고, remote면 "
-                "policy_url의 policy_server에 맡긴다",
+                default_value="local",
+                description="local이면 Pi가 체크포인트를 들고 직접 추론하고, "
+                "remote면 policy_url의 policy_server에 맡긴다",
             ),
             DeclareLaunchArgument(
                 "policy_url",
                 default_value="http://192.168.0.2:8770",
                 description="policy_source=remote일 때 추론 서버 주소",
+            ),
+            # ⚠️ **저장소 밖**(/shared)에 둔다. 저장소 안에 두면 git stash -u 에
+            # 통째로 휩쓸린다 — 2026-09-05 에 ckpt_v5_all 이 그렇게 딸려 들어가
+            # 전송 시각(mtime)까지 지워졌다. act_v5/act_queen_v3 도 같은 자리에
+            # 있었다.
+            #
+            # ⚠️ 새 체크포인트를 넣을 때 config.json 의 "pretrained_revision" 을
+            # 빼야 한다. 지금 lerobot 의 ACTConfig 가 그 필드를 거부해서
+            # DecodingError 로 죽는다(2026-09-05, 60k·120k 둘 다 겪었다).
+            # 원본은 config.json.orig 로 남겨 두는 것이 이 저장소의 관례다.
+            DeclareLaunchArgument(
+                "checkpoint",
+                default_value="/shared/act_v5_all_180_120k_120000",
+                description="policy_source=local일 때 쓸 pretrained_model 디렉터리 "
+                "(act_v5_all 120k steps, 학습 리사이즈 180x320)",
+            ),
+            DeclareLaunchArgument(
+                "device",
+                default_value="cpu",
+                description="policy_source=local일 때 추론 장치. Pi 에는 가속기가 "
+                "없으므로 cpu 다",
             ),
             # ⚠️ 저장소 안의 이 파일이 기준이다 — 노트북의 lerobot 캘리브레이션
             # 캐시(~/.cache/huggingface/lerobot/.../grippers_arm.json)와 같은

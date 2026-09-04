@@ -97,9 +97,11 @@ class VlaInferenceNode(Node):
         # "local" 이면 이 노드가 정책을 들고 돈다. "remote" 면 다른 기계의
         # policy_server 에 프레임과 관절값을 보내고 청크를 받아온다.
         #
-        # 기본은 local 이다 — 시연 중 네트워크에 의존하지 않는 쪽이 안전하다.
-        # remote 의 실익은 속도가 아니라(Pi 로컬 175ms, 듀티 5.3%) **Pi CPU 를
-        # 비우는 것**과 **체크포인트를 200MB 씩 옮기지 않는 것**이다.
+        # 기본은 local 이다 — ACT 는 이 하드웨어에서 실시간이 된다.
+        # 2026-09-05 실측(act_v5_all 120k): Pi 로컬 397~465ms(듀티 14%),
+        # 원격 왕복 117ms(3.5%). 원격이 3.5배 빠르지만 둘 다 청크 3.33초 안에
+        # 여유롭게 들어가므로, 시연 경로에 네트워크를 끼울 이유가 없다.
+        # remote 가 필요한 자리는 Pi 에서 실시간이 안 되는 정책(SmolVLA)이다.
         self.declare_parameter("policy_source", "local")
         self.declare_parameter("policy_url", "http://192.168.0.2:8770")
 

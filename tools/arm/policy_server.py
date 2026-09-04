@@ -3,22 +3,34 @@
 Pi 의 `vla_inference_node` 가 `policy_source:=remote` 로 뜨면 이쪽을 부른다.
 정책은 여기 한 곳에만 있으면 되고, Pi 는 아무것도 안 깔아도 된다.
 
-## 왜 이걸 쓰는가
+## ⚠️ 기본 경로가 아니다 — ACT 는 Pi 에서 직접 돈다
 
-Pi 로컬 추론이 175ms(듀티 5.3%)라 **속도 때문은 아니다.** 실익은 둘이다.
+2026-09-05 실측(act_v5_all 120k steps, 180x320):
 
-1. **Pi CPU 를 비운다.** 175ms 는 ROS2 스택이 안 떠 있을 때 잰 값이다. 시연
-   중에는 perception(카메라 + yolov5)·arm_driver(시리얼)·미션 FSM 이 같은
-   4코어를 나눠 쓴다.
-2. **모델을 갈아끼우기 쉽다.** 체크포인트를 Pi 로 200MB 씩 scp 하지 않아도 된다.
+    Pi 로컬  397~465ms (듀티 14%)  — perception·arm_driver·vla_inference 가
+                                    같이 도는 조건에서 잰 값이다
+    원격     117ms     (듀티 3.5%) — 리사이즈·전송·추론·회신 왕복 전부 포함
+
+원격이 3.5배 빠르지만 **둘 다 청크 3.33초 안에 여유롭게 들어간다.** 여유가
+있는데 시연 경로에 노트북과 네트워크 의존을 하나 더 만들 이유가 없어서
+`policy_source` 기본값은 `local` 이다.
+
+그래도 이 경로를 남겨 두는 이유는 둘이다.
+
+1. **Pi 에서 실시간이 안 되는 정책.** SmolVLA 가 그렇다
+   (`tools/arm/smolvla_check.py`). 그런 정책은 원격 말고 길이 없다.
+2. **체크포인트를 자주 갈아끼울 때.** 200MB 를 Pi 로 옮기지 않아도 된다.
+
+이 서버는 그 예외를 위해 있다.
 
 ## 사용법
 
-    python grippers\\tools\\arm\\policy_server.py --ckpt ckpt_v5_all\\pretrained_model
+    python grippers\\tools\\arm\\policy_server.py \\
+      --ckpt grippers\\host\\act_v5_all_180_120k_120000
 
-    Pi 쪽:
-    ros2 run grippers_vla vla_inference_node --ros-args \\
-      -p policy_source:=remote -p policy_url:=http://192.168.0.2:8770
+    Pi 쪽 — 기본이 local 이므로 remote 를 **명시해야** 부른다:
+    ros2 launch grippers_bringup bringup.launch.py use_vla:=true \\
+      policy_source:=remote policy_url:=http://192.168.0.2:8770
 
 ## ⚠️ 표준 라이브러리만 쓴다
 
