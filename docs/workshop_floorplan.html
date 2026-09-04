@@ -1,0 +1,587 @@
+<title>그리퍼스 작업장 도면</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#eef1f3;
+  --surface:#ffffff;
+  --surface-2:#e3e8eb;
+  --ink:#1c2530;
+  --ink-dim:#5b6b78;
+  --line:rgba(28,37,48,.14);
+  --grid:rgba(28,37,48,.07);
+  --accent:#136f8f;
+  --accent-soft:#cfe6ee;
+  --good:#3f8f5f;
+  --good-soft:#dcefe1;
+  --warn:#a56a1d;
+  --warn-soft:#f2e2c6;
+  --mono-fill:#e7eaec;
+  --nudge:#c81e1e;
+  --shadow:0 1px 2px rgba(28,37,48,.06), 0 8px 24px -12px rgba(28,37,48,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10151b; --surface:#182029; --surface-2:#212b35;
+    --ink:#eef2f5; --ink-dim:#93a3af;
+    --line:rgba(238,242,245,.14); --grid:rgba(238,242,245,.08);
+    --accent:#5fc4e6; --accent-soft:rgba(95,196,230,.16);
+    --good:#74d19d; --good-soft:rgba(116,209,157,.14);
+    --warn:#e2ab55; --warn-soft:rgba(226,171,85,.14);
+    --mono-fill:#232e39;
+    --nudge:#ff6b5e;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 28px -14px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10151b; --surface:#182029; --surface-2:#212b35;
+  --ink:#eef2f5; --ink-dim:#93a3af;
+  --line:rgba(238,242,245,.14); --grid:rgba(238,242,245,.08);
+  --accent:#5fc4e6; --accent-soft:rgba(95,196,230,.16);
+  --good:#74d19d; --good-soft:rgba(116,209,157,.14);
+  --warn:#e2ab55; --warn-soft:rgba(226,171,85,.14);
+  --mono-fill:#232e39;
+  --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 28px -14px rgba(0,0,0,.6);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg);color:var(--ink);font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased;}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace;}
+.tnum{font-variant-numeric:tabular-nums;}
+.page{max-width:1280px;margin:0 auto;padding:28px 24px 56px;display:flex;flex-direction:column;gap:18px;}
+
+header.top{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:10px 20px;border-bottom:1px solid var(--line);padding-bottom:16px;}
+header.top h1{font-size:22px;font-weight:700;letter-spacing:-.01em;margin:0;text-wrap:balance;}
+header.top .sub{color:var(--ink-dim);font-size:13.5px;margin-top:4px;max-width:66ch;line-height:1.5;}
+.meta-pills{display:flex;flex-wrap:wrap;gap:8px;align-self:flex-start;}
+.pill{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.02em;padding:4px 9px;border-radius:99px;background:var(--surface-2);color:var(--ink-dim);border:1px solid var(--line);white-space:nowrap;}
+.pill.accent{background:var(--accent-soft);color:var(--accent);border-color:transparent;font-weight:600;}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 20px 14px;display:flex;flex-direction:column;gap:10px;}
+.panel h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-dim);font-weight:600;margin:0;}
+.panel figure{margin:0;display:flex;flex-direction:column;gap:8px;}
+.panel svg{width:100%;height:auto;display:block;}
+figcaption{font-size:12.5px;color:var(--ink-dim);line-height:1.6;}
+
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:11.5px;color:var(--ink-dim);border-top:1px solid var(--line);padding-top:8px;}
+.legend .item{display:flex;align-items:center;gap:6px;white-space:nowrap;}
+.swatch{width:14px;height:14px;border-radius:3px;flex:none;}
+.swatch.line{width:18px;height:0;border-top:2.5px solid;border-radius:0;background:none !important;}
+
+/* plan drawing styles */
+#plan-svg .wall{fill:none;stroke:var(--ink);stroke-width:4;}
+#plan-svg .workspace{fill:none;stroke:var(--ink-dim);stroke-width:1.6;stroke-dasharray:2 5;}
+#plan-svg .drivearea{fill:none;stroke:var(--accent);stroke-width:1.6;stroke-dasharray:8 5;}
+#plan-svg .box-rect{fill:var(--mono-fill);stroke:var(--ink-dim);stroke-width:1.6;}
+#plan-svg .floor-marker{fill:var(--good-soft);stroke:var(--good);stroke-width:1.6;}
+#plan-svg .cam-wedge{fill:var(--accent);fill-opacity:.07;stroke:var(--accent);stroke-opacity:.35;stroke-width:1;stroke-dasharray:4 3;}
+#plan-svg .cam-icon{fill:var(--ink);}
+#plan-svg .home-dot{fill:var(--good);}
+#plan-svg .grid-line{stroke:var(--grid);stroke-width:1;}
+#plan-svg .dim-line{stroke:var(--ink-dim);stroke-width:1;}
+#plan-svg .dim-tick{stroke:var(--ink-dim);stroke-width:1;}
+#plan-svg .dim-text{font-family:'IBM Plex Mono',monospace;font-size:11px;fill:var(--ink-dim);text-anchor:middle;}
+#plan-svg .lbl{font-family:'IBM Plex Sans',sans-serif;font-size:11px;fill:var(--ink);}
+#plan-svg .lbl-mono{font-family:'IBM Plex Mono',monospace;font-size:10.5px;fill:var(--ink-dim);}
+#plan-svg .lbl-strong{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:11.5px;fill:var(--ink);}
+#plan-svg .entrance-arrow{stroke:var(--accent);stroke-width:2;fill:none;}
+#plan-svg .entrance-head{fill:var(--accent);}
+#plan-svg .origin-mark{stroke:var(--ink);stroke-width:2;}
+#plan-svg .insert-zone{fill:var(--warn);fill-opacity:.08;stroke:var(--warn);stroke-opacity:.45;stroke-width:1.4;stroke-dasharray:3 4;}
+#plan-svg .insert-target{fill:var(--warn-soft);stroke:var(--warn);stroke-width:1.8;}
+#plan-svg .dest-marker{fill:var(--nudge);stroke:var(--surface);stroke-width:1.6;filter:drop-shadow(0 0 4px var(--nudge));}
+#plan-svg .lbl-warn{font-family:'IBM Plex Mono',monospace;font-size:10.5px;fill:var(--warn);font-weight:600;}
+#plan-svg .lbl-nudge{font-family:'IBM Plex Mono',monospace;font-size:11.5px;fill:var(--nudge);font-weight:700;}
+#plan-svg .sector-divider{stroke:var(--ink-dim);stroke-width:1;stroke-dasharray:2 3;opacity:.55;}
+#plan-svg .sector-arc{fill:none;stroke:var(--nudge);stroke-width:3;filter:drop-shadow(0 0 3px var(--nudge));}
+#plan-svg .sector-sample{fill:var(--nudge);stroke:var(--surface);stroke-width:1;}
+#plan-svg .sector-arrow{stroke:var(--nudge);stroke-width:1.3;stroke-dasharray:3 3;opacity:.8;fill:none;}
+#plan-svg .sector-arrowhead{fill:var(--nudge);opacity:.8;}
+#plan-svg .lbl-proposed{font-family:'IBM Plex Sans',sans-serif;font-size:10px;fill:var(--nudge);font-weight:600;}
+
+#elev-svg .floor{stroke:var(--ink);stroke-width:3;}
+#elev-svg .wallstub{stroke:var(--ink-dim);stroke-width:2;fill:none;}
+#elev-svg .h-line{stroke:var(--ink-dim);stroke-width:1.3;stroke-dasharray:5 4;}
+#elev-svg .cam-cone{fill:var(--accent);fill-opacity:.12;stroke:var(--accent);stroke-width:1;stroke-opacity:.4;}
+#elev-svg .box-block{fill:var(--mono-fill);stroke:var(--ink-dim);stroke-width:1.4;}
+#elev-svg .lbl{font-family:'IBM Plex Mono',monospace;font-size:10.5px;fill:var(--ink-dim);}
+#elev-svg .lbl-strong{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:11px;fill:var(--ink);}
+
+/* reference table */
+table.ref{border-collapse:collapse;width:100%;font-size:12.5px;}
+table.ref th{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-dim);text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);font-weight:600;}
+table.ref td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
+table.ref td.val{font-family:'IBM Plex Mono',monospace;font-weight:600;white-space:nowrap;}
+table.ref td.src{font-family:'IBM Plex Mono',monospace;color:var(--ink-dim);font-size:11.5px;white-space:nowrap;}
+table.ref tr:last-child td{border-bottom:none;}
+.tbl-wrap{overflow-x:auto;}
+.grp-row td{background:var(--surface-2);font-weight:600;color:var(--ink-dim);font-size:11px;text-transform:uppercase;letter-spacing:.05em;}
+
+footer{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;color:var(--ink-dim);font-size:12px;padding-top:6px;}
+</style>
+
+<div class="page">
+  <header class="top">
+    <div>
+      <h1>그리퍼스 작업장 도면</h1>
+      <div class="sub">가벽 1.8×1.8m 작업장의 실측 배치도입니다 — 카메라·바닥 기준마커·목적지 상자·주행구역 전부 <span class="mono">host/aruco/config.py</span>와 <span class="mono">host/mission_config.py</span>에 박힌 실측 상수 그대로이고, 축척대로 그렸습니다.</div>
+    </div>
+    <div class="meta-pills">
+      <span class="pill accent">축척 1:1 비율(SVG)</span>
+      <span class="pill mono">origin: 앞쪽 왼쪽 바닥 모서리</span>
+      <span class="pill mono">단위: m</span>
+    </div>
+  </header>
+
+  <section class="panel">
+    <h2>평면도 — 위에서 본 작업장</h2>
+    <figure>
+      <svg id="plan-svg" viewBox="0 0 1040 1040" role="img" aria-label="가벽 1.8x1.8미터 작업장의 위에서 본 평면도. 카메라 2대, 바닥 기준 마커 4개, toy/chess 목적지 상자, 주행 허용구역, HOME 지점을 실측 좌표대로 그렸다."></svg>
+      <figcaption>
+        점선 회색 테두리는 로봇 마커(공중 0.27m)가 두 카메라 모두에게 보이는 <b>작업구역(WORKSPACE)</b>이고,
+        점선 청록 테두리는 벽 여유(로봇 반경 0.20m)를 뺀 뒤 미션 플래너가 실제로 주행을 허용하는
+        <b>주행구역(DRIVE_AREA)</b>입니다 — 둘은 같은 사각형이 아니라 후자가 앞뒤로 더 좁습니다.
+        옅은 청록 부채꼴은 카메라 수평화각(70.4°, 캘리브레이션 파일이 없을 때의 근사치 — 실제로는
+        <span class="mono">host/calib/*.npz</span> 캘리브레이션을 쓴다) 커버리지입니다.
+        호박색 작은 사각형은 <span class="mono">host/basket_target.py</span>가 정의하는
+        <b>INSERT 목표영역</b>(입구 중심 기준 가로 ±3cm × 안쪽 3cm)이고, 그걸 감싼 옅은 호박색
+        둥근 영역은 그 목표영역에서 15cm 이내면 Host가 "시도해 볼 만하다"고 1차 승인하는 반경입니다
+        (방향 오차 ±50° 이내 조건은 로봇이 지금 어디를 보고 있는지에 달려 있어 이 도면엔 못 그렸습니다).
+        빨간 다이아몬드는 CARRY_TO_DEST가 실제로 조준하는 좌표(<span class="mono">_box_front_xy()</span>)
+        — INSERT 목표영역의 중심이 아니라 상자 앞에서 한 번 멈추는 지점입니다. 다른 요소와 달리
+        빨강을 쓴 건, 이 좌표만큼은 도면에서 절대 놓치면 안 된다는 요청에 따른 의도적 예외입니다
+        (그리퍼스의 다른 곳 — 실기 카메라 오버레이 — 에서는 여전히 빨강을 피합니다).
+        <b style="color:var(--nudge)">⚠ 코드 반영됨(2026-09-05, 실기 미검증)</b>: 점(dest_xy) 판정 대신
+        INSERT 목표영역 <b>중심</b>을 기준으로 반경 0.15m 원을 120°씩 3등분하고, 접근 방향(남쪽·6시)
+        부채꼴의 바깥 호를 NUDGE 판정 경계선으로 씁니다(<span class="mono">basket_target.
+        check_approach_sector()</span>) — 그 호 위 어디로 들어오든 "예비 INSERT 후보"이고, 그 자리에서
+        <b>목표중심을 향한 방위각</b>으로 제자리 정렬합니다(고정 90°가 아니라 진입 지점마다 30°~150°로
+        달라짐 — 정중앙 진입일 때만 지금의 고정 90°와 같아집니다). 점선 경계는 나머지 두 부채꼴의
+        경계선(참고용)입니다. 로직은 커밋됐지만, ArUco 마커와 로봇 앞부분(그리퍼) 사이의 물리적
+        오프셋을 이 저장소가 실측하지 못해 사선 접근에서 과도하게 밀고 들어갈 가능성이 시뮬레이션으로
+        확인됐습니다 — 다음 실기(하드웨어 접근은 2026-09-08까지)에서 직접 확인하기로 하고 우선
+        커밋했습니다.
+      </figcaption>
+    </figure>
+    <div class="legend">
+      <span class="item"><span class="swatch" style="border:2px solid var(--ink);background:none"></span>가벽 경계</span>
+      <span class="item"><span class="swatch line" style="border-color:var(--ink-dim);border-style:dashed"></span>작업구역(WORKSPACE)</span>
+      <span class="item"><span class="swatch line" style="border-color:var(--accent);border-style:dashed"></span>주행구역(DRIVE_AREA)</span>
+      <span class="item"><span class="swatch" style="background:var(--good-soft);border:1.6px solid var(--good)"></span>바닥 기준마커(M1–M4)</span>
+      <span class="item"><span class="swatch" style="background:var(--mono-fill);border:1.6px solid var(--ink-dim)"></span>목적지 상자(toy/chess, 둘 다 yaw180°=작업구역 쪽 개방)</span>
+      <span class="item"><span class="swatch" style="background:var(--warn-soft);border:1.6px solid var(--warn)"></span>INSERT 목표영역</span>
+      <span class="item"><span class="swatch" style="background:var(--warn);opacity:.15;border:1.4px dashed var(--warn)"></span>Host 1차 승인 반경(0.15m)</span>
+      <span class="item"><span class="swatch" style="background:var(--nudge);border-radius:50%;transform:rotate(45deg)"></span>NUDGE 목적지(CARRY_TO_DEST가 조준하는 dest_xy) — 현재 코드</span>
+      <span class="item"><span class="swatch line" style="border-color:var(--nudge);border-width:3px"></span>NUDGE 판정 경계호(120° 부채꼴) — 코드 반영, 실기 미검증</span>
+      <span class="item">● HOME / DELIVER_HERE</span>
+      <span class="item">◆ 카메라(A·B)</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>단면도 — 앞(y=0) → 뒤(y=1.8) 높이 관계</h2>
+    <figure>
+      <svg id="elev-svg" viewBox="0 0 1040 420" role="img" aria-label="작업장을 y축을 따라 자른 단면도. 카메라 높이 1.3미터와 하향 각도 35~59도, 로봇 마커 높이 0.27미터, 상자 높이 0.22미터를 보여준다."></svg>
+      <figcaption>
+        가벽 자체의 높이는 코드에 상수로 박혀 있지 않아 위쪽을 끊어 표시했습니다(실측 안 됨).
+        앞뒤 400mm 여유는 상자 자리(길이 350mm+여유 50mm)가 기준이고, 로봇 마커가 뜬 높이(0.27m) 때문에
+        생기는 카메라 사각지대(약 150mm, 주석상 근사치)도 이 여유 안에 자동으로 들어갑니다.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section class="panel">
+    <h2>실측값 전체 목록</h2>
+    <div class="tbl-wrap">
+      <table class="ref" id="ref-table"></table>
+    </div>
+  </section>
+
+  <footer>
+    <span>출처: grippers-host-mac/host/aruco/config.py, host/mission_config.py — 팀원이 동기화하는 파일이라 여기서는 값을 읽기만 했습니다.</span>
+    <span class="mono">2026-09-05 로컬 작업 중 생성</span>
+  </footer>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs, parent){
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+
+  // ================= constants (all real, from source files) =================
+  const ROOM = [0.0, 1.8];              // WALL_X and the 1.8x1.8 walled room (both axes)
+  const WORKSPACE_X = [0.0, 1.8];
+  const WORKSPACE_Y = [0.4, 1.4];
+  const DRIVE_AREA_X = [0.2, 1.6];
+  const DRIVE_AREA_Y = [0.3, 1.3];
+  const FLOOR_MARKERS = {
+    1: [0.100, 0.400, "앞쪽 왼편"],
+    2: [1.700, 0.400, "앞쪽 오른편"],
+    3: [0.100, 1.400, "뒤쪽 왼편"],
+    4: [1.700, 1.400, "뒤쪽 오른편"],
+  };
+  const FLOOR_MARKER_SIZE = 0.120;
+  const ROBOT_MARKER_SIZE = 0.080;
+  const ROBOT_MARKER_HEIGHT = 0.270;
+  const BOX_W = 0.210, BOX_L = 0.350, BOX_H = 0.220;
+  const BOXES = {
+    toy:   [0.450, 1.625, 180],
+    chess: [1.350, 1.625, 180],
+  };
+  const HOME_XY = [0.900, 0.320];
+  const CAM_X = 0.900, CAM_H = 1.300, HFOV_DEG = 70.4;
+  const CAM_TILT_RANGE = [35, 59];
+
+  // INSERT 판정 게이트 (host/basket_target.py) + 이동 목적지 (mission.py _box_front_xy)
+  const TARGET_HALF_WIDTH_M = 0.03;        // basket_target.TARGET_HALF_WIDTH_M
+  const TARGET_INSET_DEPTH_M = 0.03;       // basket_target.TARGET_INSET_DEPTH_M
+  const MAX_APPROACH_DIST_M = 0.15;        // basket_target.MAX_APPROACH_DIST_M
+  const BOX_APPROACH_MARGIN_M = 0.15;      // mission_config.BOX_APPROACH_MARGIN_M
+  const TOY_DEST_X_SHIFT_LEFT_M = 0.0;     // mission_config.TOY_DEST_X_SHIFT_LEFT_M — 2026-09-05 사용자 지시로 0.07→0 되돌림
+  const CHESS_APPROACH_EXTRA_DEPTH_M = 0.0;// mission_config.CHESS_APPROACH_EXTRA_DEPTH_M
+
+  // ================= 1) top-down plan =================
+  (function(){
+    const svg = document.getElementById('plan-svg');
+    const SCALE = 400; // px per meter
+    const OX = 230, OY = 140; // origin offset (room top-left corner in px) — leaves room for 3 stacked left-side + 2 stacked top-side dimension lines
+    const M = (x,y) => [OX + x*SCALE, OY + (ROOM[1]-y)*SCALE];
+
+    const defs = el('defs',{},svg);
+    // grid
+    const g = el('g',{},svg);
+    for (let v=0; v<=1.8+1e-6; v+=0.2){
+      const [x1,y1]=M(v,ROOM[0]), [x2,y2]=M(v,ROOM[1]);
+      el('line',{class:'grid-line',x1,y1,x2,y2},g);
+      const [x3,y3]=M(ROOM[0],v), [x4,y4]=M(ROOM[1],v);
+      el('line',{class:'grid-line',x1:x3,y1:y3,x2:x4,y2:y4},g);
+    }
+
+    // camera FOV wedges (drawn under everything else structural)
+    const half = HFOV_DEG/2 * Math.PI/180;
+    const wedgeLen = 1.8*SCALE;
+    function camWedge(camY, dir){ // dir=+1 looking toward +y(up), -1 toward -y(down)
+      const [cx,cy] = M(CAM_X, camY);
+      const ang0 = -Math.PI/2*dir - half, ang1 = -Math.PI/2*dir + half;
+      const x1 = cx + wedgeLen*Math.cos(ang0), y1 = cy + wedgeLen*Math.sin(ang0);
+      const x2 = cx + wedgeLen*Math.cos(ang1), y2 = cy + wedgeLen*Math.sin(ang1);
+      el('path',{class:'cam-wedge', d:`M${cx},${cy} L${x1},${y1} L${x2},${y2} Z`}, g);
+    }
+    camWedge(0.0, +1);
+    camWedge(1.8, -1);
+
+    // room wall
+    {
+      const [x1,y1]=M(ROOM[0],ROOM[1]), [x2,y2]=M(ROOM[1],ROOM[0]);
+      el('rect',{class:'wall', x:x1, y:y1, width:x2-x1, height:y2-y1, rx:2}, g);
+    }
+    // workspace
+    {
+      const [x1,y1]=M(WORKSPACE_X[0],WORKSPACE_Y[1]), [x2,y2]=M(WORKSPACE_X[1],WORKSPACE_Y[0]);
+      el('rect',{class:'workspace', x:x1, y:y1, width:x2-x1, height:y2-y1}, g);
+    }
+    // drive area
+    {
+      const [x1,y1]=M(DRIVE_AREA_X[0],DRIVE_AREA_Y[1]), [x2,y2]=M(DRIVE_AREA_X[1],DRIVE_AREA_Y[0]);
+      el('rect',{class:'drivearea', x:x1, y:y1, width:x2-x1, height:y2-y1}, g);
+    }
+
+    // origin mark
+    {
+      const [ox,oy] = M(0,0);
+      el('line',{class:'origin-mark', x1:ox-14,y1:oy,x2:ox+14,y2:oy},g);
+      el('line',{class:'origin-mark', x1:ox,y1:oy-14,x2:ox,y2:oy+14},g);
+      el('text',{class:'lbl-mono', x:ox+8, y:oy+22},g).textContent = '(0, 0)';
+    }
+
+    // floor markers
+    Object.entries(FLOOR_MARKERS).forEach(([id,[mx,my,name]])=>{
+      const [cx,cy] = M(mx,my);
+      const hs = FLOOR_MARKER_SIZE/2*SCALE;
+      el('rect',{class:'floor-marker', x:cx-hs, y:cy-hs, width:hs*2, height:hs*2, rx:2}, g);
+      el('text',{class:'lbl-strong', x:cx, y:cy-hs-8, 'text-anchor':'middle'}, g).textContent = 'M'+id;
+      el('text',{class:'lbl-mono', x:cx, y:cy+hs+16, 'text-anchor':'middle'}, g).textContent = `(${mx.toFixed(3)}, ${my.toFixed(3)})`;
+    });
+
+    // boxes
+    Object.entries(BOXES).forEach(([name,[bx,by,yaw]])=>{
+      const [x1,y1] = M(bx-BOX_W/2, by+BOX_L/2);
+      const [x2,y2] = M(bx+BOX_W/2, by-BOX_L/2);
+      el('rect',{class:'box-rect', x:x1, y:y1, width:x2-x1, height:y2-y1}, g);
+      el('text',{class:'lbl-strong', x:(x1+x2)/2, y:y1-10, 'text-anchor':'middle'}, g).textContent = name.toUpperCase();
+      // 상세 수치는 상자 안쪽(위쪽 여유 공간)에 둔다 — 아래쪽은 INSERT 목표영역/목적지
+      // 라벨과 겹치는 좁은 구간이라 피한다. 정확한 값은 표에도 있다.
+      el('text',{class:'lbl-mono', x:(x1+x2)/2, y:y1+22, 'text-anchor':'middle'}, g).textContent =
+        `(${bx.toFixed(3)}, ${by.toFixed(3)}) · ${(BOX_W*1000)|0}×${(BOX_L*1000)|0}mm`;
+      // INSERT 목표영역 상세 좌표도 여기(상자 안쪽 여유 공간)에 함께 적는다 — 목표영역
+      // 자체는 3cm짜리라 그 옆에 긴 글자를 못 붙인다.
+      const insBx = name==='toy' ? bx - TOY_DEST_X_SHIFT_LEFT_M : bx;
+      const insEdgeY = (by - BOX_L/2) + (name==='chess' ? CHESS_APPROACH_EXTRA_DEPTH_M : 0);
+      el('text',{class:'lbl-warn', x:(x1+x2)/2, y:y1+40, 'text-anchor':'middle'}, g).textContent =
+        `INSERT: x[${(insBx-TARGET_HALF_WIDTH_M).toFixed(3)},${(insBx+TARGET_HALF_WIDTH_M).toFixed(3)}] y[${insEdgeY.toFixed(3)},${(insEdgeY+TARGET_INSET_DEPTH_M).toFixed(3)}]`;
+      // 상자 입구 방향(yaw180 = 작업구역 쪽으로 개방)은 화살표 대신 바로 아래 그리는
+      // INSERT 목표영역 자체가 그 자리(상자 앞면)에 그려져 이미 보여준다 — 화살표를
+      // 따로 그리면 그 좁은 틈에서 라벨끼리 겹친다. 방향 사실은 범례 문구로만 남긴다.
+    });
+
+    // INSERT target region + Host approval radius + CARRY_TO_DEST destination
+    // (host/basket_target.py target_rect()/check_basket_insert_gate(), mission.py _box_front_xy())
+    Object.entries(BOXES).forEach(([name,[bx0,by0]])=>{
+      let bx = bx0, by = by0;
+      if (name === 'toy') bx -= TOY_DEST_X_SHIFT_LEFT_M;
+      let edgeY = by - BOX_L/2;
+      if (name === 'chess') edgeY += CHESS_APPROACH_EXTRA_DEPTH_M;
+      const xlo = bx - TARGET_HALF_WIDTH_M, xhi = bx + TARGET_HALF_WIDTH_M;
+      const ylo = edgeY, yhi = edgeY + TARGET_INSET_DEPTH_M;
+
+      // Host 1차 승인 반경 — target_rect를 MAX_APPROACH_DIST_M만큼 사방으로 부풀린
+      // 둥근 사각형(반경 R로 부풀린 사각형의 민코프스키 합과 같은 모양)
+      const R = MAX_APPROACH_DIST_M;
+      const [ex1,ey1] = M(xlo-R, yhi+R);
+      const [ex2,ey2] = M(xhi+R, ylo-R);
+      el('rect',{class:'insert-zone', x:ex1, y:ey1, width:ex2-ex1, height:ey2-ey1, rx:R*SCALE, ry:R*SCALE}, g);
+
+      // INSERT 목표영역 (실제 판정 사각형, 3cm 짜리라 여기엔 글자를 못 붙인다 —
+      // 정확한 범위는 위에서 상자 안쪽에 이미 적었다)
+      const [tx1,ty1] = M(xlo, yhi), [tx2,ty2] = M(xhi, ylo);
+      el('rect',{class:'insert-target', x:tx1, y:ty1, width:tx2-tx1, height:ty2-ty1}, g);
+
+      // CARRY_TO_DEST / FACE_BOX / NUDGE_BOX 진입 전까지 실제로 조준하는 좌표
+      const destOffset = BOX_L/2 + BOX_APPROACH_MARGIN_M;
+      const dx = bx, dy = by0 - destOffset; // by0: 상자 원래 중심 y(치우침 보정 전) 기준 오프셋
+      const [px,py] = M(dx, dy);
+      el('path',{class:'dest-marker', d:`M${px-13},${py} L${px},${py-13} L${px+13},${py} L${px},${py+13} Z`}, g);
+      el('text',{class:'lbl-nudge', x:px+18, y:py-6}, g).textContent = 'NUDGE→'+name.toUpperCase()+' 목적지(dest_xy)';
+      el('text',{class:'lbl-mono', x:px+18, y:py+10}, g).textContent = `(${dx.toFixed(3)}, ${dy.toFixed(3)})`;
+
+      // ---- 코드 반영됨(2026-09-05, 실기 미검증): 점(dest_xy) 대신 목표영역
+      // 중심을 기준으로 반경 0.15m 원을 120°씩 3등분 — 남쪽(6시, 접근 방향)
+      // 부채꼴의 바깥 호를 NUDGE 판정 경계선으로 쓰고, 그 호 위 어디서
+      // 진입하든 "목표중심을 향한 방위각"으로 제자리 정렬한다(고정 90°가
+      // 아니라 진입 지점마다 다른 각도). 각도 규약은 basket_target.py의
+      // atan2(dy,dx)와 동일(0°=+x, 90°=+y=12시, CCW).
+      const cx = (xlo + xhi) / 2, cy = (ylo + yhi) / 2;   // target_center()
+      const SOUTH_CENTER_DEG = -90, SECTOR_HALF_DEG = 60;  // 120°/2
+      const a0 = SOUTH_CENTER_DEG - SECTOR_HALF_DEG;        // -150°
+      const a1 = SOUTH_CENTER_DEG + SECTOR_HALF_DEG;        // -30°
+      const toXY = (deg) => {
+        const rad = deg * Math.PI / 180;
+        return M(cx + R * Math.cos(rad), cy + R * Math.sin(rad));
+      };
+
+      // 3등분 경계선(중심→반경, 참고용— -150°/-30°/90° 세 곳이 세 부채꼴의 경계다)
+      [a0, a1, SOUTH_CENTER_DEG + SECTOR_HALF_DEG + 120].forEach(deg=>{
+        const [cxpx,cypx] = M(cx, cy), [ex,ey] = toXY(deg);
+        el('line',{class:'sector-divider', x1:cxpx, y1:cypx, x2:ex, y2:ey}, g);
+      });
+
+      // 남쪽 120° 부채꼴의 바깥 호 — NUDGE 판정 경계선(빨강, 요청대로)
+      const arcPts = [];
+      const STEPS = 24;
+      for (let i = 0; i <= STEPS; i++){
+        const deg = a0 + (a1 - a0) * (i / STEPS);
+        arcPts.push(toXY(deg));
+      }
+      el('path',{class:'sector-arc',
+        d: 'M' + arcPts.map(p=>p.join(',')).join(' L')}, g);
+      // 제목+정렬각 요약은 부채꼴 "안쪽"(중심~호 사이) 딱 한 곳에 몰아서 적는다 —
+      // 호 위 세 점에 각각 라벨을 달면 바로 아래(6cm 차이) dest_xy 라벨과 겹친다.
+      const [midLx, midLy] = M(cx, cy - R * 0.55);
+      el('text',{class:'lbl-proposed', x:midLx, y:midLy, 'text-anchor':'middle'}, g)
+        .textContent = 'NUDGE 판정 경계선(호) — 실기 미검증';
+      el('text',{class:'lbl-proposed', x:midLx, y:midLy + 13, 'text-anchor':'middle'}, g)
+        .textContent = '정렬각(진입점마다 다름): 좌30°·중앙90°·우150°';
+
+      // 호 위 세 지점(양끝·중앙)에 점 + 목표중심으로 향하는 화살표만 그린다
+      // (숫자는 위 요약 라벨에 이미 있다 — 여기 또 적으면 겹친다).
+      [a0, SOUTH_CENTER_DEG, a1].forEach(deg=>{
+        const [sx,sy] = toXY(deg);
+        const [tcx,tcy] = M(cx, cy);
+        el('line',{class:'sector-arrow', x1:sx, y1:sy, x2:tcx, y2:tcy}, g);
+        el('circle',{class:'sector-sample', cx:sx, cy:sy, r:4}, g);
+      });
+    });
+
+    // home
+    {
+      const [hx,hy] = M(HOME_XY[0], HOME_XY[1]);
+      el('circle',{class:'home-dot', cx:hx, cy:hy, r:7}, g);
+      el('text',{class:'lbl-strong', x:hx+12, y:hy-8}, g).textContent = 'HOME / DELIVER_HERE';
+      el('text',{class:'lbl-mono', x:hx+12, y:hy+8}, g).textContent = `(${HOME_XY[0].toFixed(3)}, ${HOME_XY[1].toFixed(3)})`;
+    }
+
+    // cameras
+    [[0.0,'A','+y'],[1.8,'B','-y']].forEach(([cy0,label,dir])=>{
+      const [cx,cy] = M(CAM_X, cy0);
+      el('path',{class:'cam-icon', d:`M${cx-9},${cy} L${cx+9},${cy} L${cx},${cy + (cy0<0.9?-16:16)} Z`}, g);
+      el('text',{class:'lbl-strong', x:cx+16, y:cy+(cy0<0.9?-4:4)}, g).textContent = `CAM ${label}`;
+      el('text',{class:'lbl-mono', x:cx+16, y:cy+(cy0<0.9?12:20)}, g).textContent = `(${CAM_X.toFixed(3)}, ${cy0.toFixed(3)}) h=${CAM_H.toFixed(2)}m`;
+    });
+
+    // ---- dimension lines (blueprint-style: extension lines + a ticked dimension line) ----
+    function dimH(x0, x1, offsetIdx, text){
+      const gap = 34 * offsetIdx;
+      const yy = OY - 20 - gap;
+      const ax1 = M(x0,0)[0], ax2 = M(x1,0)[0];
+      const d = el('g',{},g);
+      el('line',{class:'dim-tick', x1:ax1, y1:OY, x2:ax1, y2:yy}, d);
+      el('line',{class:'dim-tick', x1:ax2, y1:OY, x2:ax2, y2:yy}, d);
+      el('line',{class:'dim-line', x1:ax1, y1:yy, x2:ax2, y2:yy}, d);
+      el('line',{class:'dim-tick', x1:ax1, y1:yy-5, x2:ax1, y2:yy+5}, d);
+      el('line',{class:'dim-tick', x1:ax2, y1:yy-5, x2:ax2, y2:yy+5}, d);
+      const w = 8*text.length*0.62+10;
+      el('rect',{x:(ax1+ax2)/2-w/2, y:yy-16, width:w, height:16, fill:'var(--surface)'}, d);
+      el('text',{class:'dim-text', x:(ax1+ax2)/2, y:yy-4}, d).textContent = text;
+    }
+    function dimV(y0, y1, offsetIdx, text){
+      const gap = 34 * offsetIdx;
+      const xx = OX - 20 - gap;
+      const ay1 = M(0,y0)[1], ay2 = M(0,y1)[1];
+      const d = el('g',{},g);
+      el('line',{class:'dim-tick', x1:OX, y1:ay1, x2:xx, y2:ay1}, d);
+      el('line',{class:'dim-tick', x1:OX, y1:ay2, x2:xx, y2:ay2}, d);
+      el('line',{class:'dim-line', x1:xx, y1:ay1, x2:xx, y2:ay2}, d);
+      el('line',{class:'dim-tick', x1:xx-5, y1:ay1, x2:xx+5, y2:ay1}, d);
+      el('line',{class:'dim-tick', x1:xx-5, y1:ay2, x2:xx+5, y2:ay2}, d);
+      const w = 8*text.length*0.62+10;
+      el('rect',{x:xx-w/2, y:(ay1+ay2)/2-8, width:w, height:16, fill:'var(--surface)'}, d);
+      el('text',{class:'dim-text', x:xx, y:(ay1+ay2)/2+4, transform:`rotate(-90 ${xx} ${(ay1+ay2)/2})`}, d).textContent = text;
+    }
+
+    dimH(0, 1.8, 1, '1800mm (가벽 전체 폭)');
+    dimV(1.8, 0, 1, '1800mm (가벽 전체 높이)');
+    dimV(WORKSPACE_Y[1], WORKSPACE_Y[0], 2, '1000mm (WORKSPACE_Y)');
+    dimV(DRIVE_AREA_Y[1], DRIVE_AREA_Y[0], 3, '1000mm (DRIVE_AREA_Y 0.30–1.30)');
+    dimH(DRIVE_AREA_X[0], DRIVE_AREA_X[1], 2, '1400mm (DRIVE_AREA_X 0.20–1.60)');
+
+    svg.setAttribute('viewBox', `0 0 ${OX+1.8*SCALE+100} ${OY+1.8*SCALE+50}`);
+  })();
+
+  // ================= 2) elevation / cross-section =================
+  (function(){
+    const svg = document.getElementById('elev-svg');
+    const SX = 460, SZ = 220; // px per meter, horizontal(y-axis of room) / vertical(height)
+    const OX = 90, floorY = 330;
+    const M = (yRoom, z) => [OX + yRoom*SX, floorY - z*SZ];
+    const g = el('g',{},svg);
+
+    // grid (height ticks)
+    for (let z=0; z<=1.4; z+=0.2){
+      const [x1,y1] = M(0,z), [x2,y2] = M(1.8,z);
+      el('line',{class:'h-line', x1,y1,x2,y2, opacity:0.4},g);
+      el('text',{class:'lbl', x:x1-8, y:y1+4, 'text-anchor':'end'},g).textContent = z.toFixed(1)+'m';
+    }
+    // floor
+    {
+      const [x1,y1]=M(0,0), [x2,y2]=M(1.8,0);
+      el('line',{class:'floor', x1,y1,x2,y2},g);
+      el('text',{class:'lbl', x:x1, y:y1+18},g).textContent = 'y=0 (앞, CAM A 쪽)';
+      el('text',{class:'lbl', x:x2, y:y2+18, 'text-anchor':'end'},g).textContent = 'y=1.8 (뒤, CAM B·상자 쪽)';
+    }
+    // wall stubs, cut off (height unspecified)
+    [0, 1.8].forEach(y=>{
+      const [x,y0] = M(y,0), [,y1] = M(y,1.35);
+      el('line',{class:'wallstub', x1:x, y1:y0, x2:x, y2:y1+18}, g);
+      el('path',{class:'wallstub', d:`M${x-8},${y1+18} L${x+8},${y1+6} M${x-8},${y1+8} L${x+8},${y1-4}`}, g);
+    });
+    // box block (footprint along y: 1.45-1.8, height 0-0.22)
+    {
+      const [x1,y1] = M(1.625-0.35/2, BOX_H);
+      const [x2,y2] = M(1.625+0.35/2, 0);
+      el('rect',{class:'box-block', x:x1, y:y1, width:x2-x1, height:y2-y1}, g);
+      el('text',{class:'lbl-strong', x:(x1+x2)/2, y:y1-8, 'text-anchor':'middle'}, g).textContent = `상자 높이 ${BOX_H.toFixed(2)}m`;
+    }
+    // robot marker height line
+    {
+      const [x1,y1] = M(0, ROBOT_MARKER_HEIGHT), [x2,y2] = M(1.8, ROBOT_MARKER_HEIGHT);
+      el('line',{class:'h-line', x1,y1,x2,y2, stroke:'var(--accent)', 'stroke-opacity':0.8}, g);
+      el('text',{class:'lbl-strong', x:x1+6, y:y1-6}, g).textContent = `로봇 마커 중심고도 ${ROBOT_MARKER_HEIGHT.toFixed(3)}m`;
+    }
+    // cameras + tilt cones
+    [[0,'A',+1],[1.8,'B',-1]].forEach(([y0,label,dir])=>{
+      const [cx,cy] = M(y0, CAM_H);
+      el('circle',{cx,cy,r:6, fill:'var(--ink)'}, g);
+      el('text',{class:'lbl-strong', x:cx+(dir>0?10:-10), y:cy-8, 'text-anchor':(dir>0?'start':'end')}, g).textContent = `CAM ${label} h=${CAM_H.toFixed(2)}m`;
+      const a0 = CAM_TILT_RANGE[0]*Math.PI/180, a1 = CAM_TILT_RANGE[1]*Math.PI/180;
+      const len = 1.3*SZ;
+      function pt(a){ return [cx + dir*len*Math.sin(a), cy + len*Math.cos(a)]; }
+      const [p0x,p0y] = pt(a0), [p1x,p1y] = pt(a1);
+      el('path',{class:'cam-cone', d:`M${cx},${cy} L${p0x},${p0y} A${len},${len} 0 0 ${dir>0?1:0} ${p1x},${p1y} Z`}, g);
+      el('text',{class:'lbl', x:cx+(dir>0?14:-14), y:cy+70, 'text-anchor':(dir>0?'start':'end')}, g).textContent = `틸트 ${CAM_TILT_RANGE[0]}–${CAM_TILT_RANGE[1]}° (안전범위, 실측 각도 아님)`;
+    });
+
+    svg.setAttribute('viewBox', `0 0 ${OX+1.8*SX+120} 400`);
+  })();
+
+  // ================= 3) reference table =================
+  const rows = [
+    ['group','작업장 전체'],
+    ['가벽 크기 (WALL / WORKSPACE_X)', '0.000 – 1.800 m (폭 1800mm)', 'aruco/config.py WORKSPACE_X'],
+    ['작업구역 세로 (WORKSPACE_Y)', '0.400 – 1.400 m (1000mm)', 'aruco/config.py WORKSPACE_Y'],
+    ['주행구역 가로 (DRIVE_AREA_X)', '0.200 – 1.600 m (1400mm)', 'mission_config.py DRIVE_AREA_X'],
+    ['주행구역 세로 (DRIVE_AREA_Y)', '0.300 – 1.300 m (1000mm)', 'mission_config.py DRIVE_AREA_Y'],
+    ['벽 여유(로봇 반경, 팔 포함)', '0.20 m', 'mission_config.py ROBOT_RADIUS_WALL_M'],
+    ['기물 회피 반경', '0.08 m', 'mission_config.py ROBOT_RADIUS_PIECE_M'],
+
+    ['group','바닥 기준마커 (ArUco DICT_4X4_50)'],
+    ['M1 — 앞쪽 왼편', '(0.100, 0.400)', 'aruco/config.py FLOOR_MARKER_WORLD[1]'],
+    ['M2 — 앞쪽 오른편', '(1.700, 0.400)', 'FLOOR_MARKER_WORLD[2]'],
+    ['M3 — 뒤쪽 왼편', '(0.100, 1.400)', 'FLOOR_MARKER_WORLD[3]'],
+    ['M4 — 뒤쪽 오른편', '(1.700, 1.400)', 'FLOOR_MARKER_WORLD[4]'],
+    ['바닥마커 크기', '0.120 m (검은 사각형 바깥변)', 'FLOOR_MARKER_SIZE'],
+    ['로봇 상판마커 크기 / 고도', '0.080 m / 0.270 m', 'ROBOT_MARKER_SIZE / ROBOT_MARKER_HEIGHT'],
+
+    ['group','목적지 상자'],
+    ['상자 크기 (폭×길이×높이)', '0.210 × 0.350 × 0.220 m', 'aruco/config.py BOX_W, BOX_L, BOX_H'],
+    ['toy 상자 중심 / yaw', '(0.450, 1.625) / 180°', 'BOXES["toy"]'],
+    ['chess 상자 중심 / yaw', '(1.350, 1.625) / 180° (2026-09-05 정정: 1.45→1.35)', 'BOXES["chess"]'],
+    ['상자 입구 방향', '−y 쪽(작업구역 방향)으로 개방', 'yaw=180 주석'],
+
+    ['group','기준점 / 카메라'],
+    ['HOME / DELIVER_HERE', '(0.900, 0.320)', 'mission_config.py DEFAULT_HOME_XY, DELIVER_HERE_XY'],
+    ['카메라 좌우 위치 (양쪽 공통)', 'x = 0.900 m', 'aruco/config.py §7 주석'],
+    ['카메라 높이', '1.300 m, 후퇴 0m(가벽 바로 앞)', '§7 주석'],
+    ['카메라 하향 각도 안전범위', '35° – 59° (실측 각도 아님, selftest.py 시뮬레이션 기준)', '§7 주석'],
+    ['수평 화각(HFOV, 캘리브레이션 없을 때 근사)', '70.4°', 'HFOV_DEG'],
+
+    ['group','미션 판정 거리(참고 — 알고리즘 상수)'],
+    ['GRASP 진입 거리', '≤ 0.40 m', 'GRASP_TRIGGER_DIST_M'],
+    ['PLACE 진입 거리', '≤ 0.35 m', 'PLACE_TRIGGER_DIST_M'],
+    ['HOME 도착 판정', '≤ 0.10 m', 'HOME_ARRIVE_TOL_M'],
+    ['FACE_BOX 정렬 각도', '90° (map 기준 +y = 12시)', 'BOX_FACE_YAW_DEG'],
+
+    ['group','INSERT 목표영역 · NUDGE 목적지 (2026-09-04~05 신설)'],
+    ['목표영역 가로 절반폭', '± 0.03 m (입구 중심 기준)', 'basket_target.py TARGET_HALF_WIDTH_M'],
+    ['목표영역 안쪽 깊이', '0.03 m', 'basket_target.py TARGET_INSET_DEPTH_M'],
+    ['Host 1차 승인 반경', '0.15 m (목표영역에서 이 거리 이내)', 'basket_target.py MAX_APPROACH_DIST_M'],
+    ['승인 조건(방향)', '지향 오차 ≤ ±50° — 이 도면엔 못 그림(로봇 헤딩에 의존)', 'basket_target.py MAX_FACING_ERROR_DEG'],
+    ['toy 목표영역 (x,y 범위)', 'x:[0.420, 0.480] y:[1.450, 1.480]', 'target_rect("toy")'],
+    ['chess 목표영역 (x,y 범위)', 'x:[1.320, 1.380] y:[1.450, 1.480]', 'target_rect("chess")'],
+    ['상자 접근 여유(중심→목적지 오프셋)', '0.325 m (BOX_L/2 0.175 + 0.15)', 'mission.py _box_front_xy(), BOX_APPROACH_MARGIN_M'],
+    ['toy 목적지 좌측 보정', '0.00 m (2026-09-03 실기로 7cm 도입 → 2026-09-05 사용자 지시로 되돌림)', 'TOY_DEST_X_SHIFT_LEFT_M'],
+    ['chess 목적지 안쪽 보정', '+0.00 m (현재 미적용)', 'CHESS_APPROACH_EXTRA_DEPTH_M'],
+    ['toy CARRY_TO_DEST 목적지(dest_xy)', '(0.450, 1.300)', '_box_front_xy("toy")'],
+    ['chess CARRY_TO_DEST 목적지(dest_xy)', '(1.350, 1.300)', '_box_front_xy("chess")'],
+  ];
+  const table = document.getElementById('ref-table');
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr><th>항목</th><th>값</th><th>소스</th></tr>';
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  rows.forEach(r=>{
+    const tr = document.createElement('tr');
+    if (r[0]==='group'){
+      tr.className='grp-row';
+      tr.innerHTML = `<td colspan="3">${r[1]}</td>`;
+    } else {
+      tr.innerHTML = `<td>${r[0]}</td><td class="val mono tnum">${r[1]}</td><td class="src mono">${r[2]}</td>`;
+    }
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+})();
+</script>

@@ -11,6 +11,9 @@
 [`docs/design/state_machine.md`](https://github.com/kica927/grippers/blob/kica927/baseline_mission/docs/design/state_machine.md).
 이 저장소는 Host(관제 콘솔)의 macOS 포팅 세부사항만 다루고 중복 설명하지 않는다.
 
+작업장 실측 도면(치수·마커·INSERT 목표영역·NUDGE 판정 경계 등)은
+[`docs/workshop_floorplan.html`](docs/workshop_floorplan.html) 참고.
+
 ---
 
 ## 결론부터
