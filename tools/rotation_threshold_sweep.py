@@ -8,9 +8,16 @@
 흔들리고 "조금 움찔했다"를 뭐라고 부를지가 사람마다 다르다.
 
 `/ros_robot_controller/imu_raw` 는 그 문제가 없다. MCU 가 직접 재는 각속도라
-명령과 독립이고, 2026-09-05 실기에서 "명령은 모터까지 가는데 IMU 는 0.002
-rad/s" 로 정지마찰 문제를 잡아낸 것도 이 신호다. 사람 대신 이걸 증인으로
-쓰면 판정이 재현 가능해지고, 덤으로 **손실률**(실제/명령)까지 나온다.
+명령과 독립이다. 사람 대신 이걸 증인으로 쓰면 판정이 재현 가능해지고, 덤으로
+**손실률**(실제/명령)까지 나온다.
+
+2026-09-05 에 이 신호가 실제로 한 일은 정지마찰 판정이 아니라 **전원 진단**
+이었다. 명령이 set_motor 까지 멀쩡히 가는데 IMU 가 0.002 rad/s 였고, rps 1.0
+을 직접 넣어도 같았다. 배터리 전압 강하가 0(정상 구동시 106mV)이어서 모터가
+전류를 아예 안 먹는 것으로 좁혀졌고, 베이스 전원 스위치가 꺼져 있었다.
+컨트롤러 보드는 Pi 와 USB 로 이어져 있어 **스위치가 꺼져도 로직이 살아
+통신은 된다** — 텔레메트리만 보고 "보드가 살아 있으니 전원은 괜찮다"고
+넘기면 몇 시간을 날린다.
 
 ## 왜 다시 재나
 
@@ -51,12 +58,20 @@ MOVED_RAD_S = 0.05
 # 평균에 넣으면 손실률이 실제보다 나쁘게 나온다.
 RAMP_SKIP_S = 0.35
 
-TICK_HZ = 20.0
+# 명령 발행 주기. 기본을 60Hz 로 크게 잡은 이유가 있다 — mission_orchestrator
+# 는 Host 미션이 내려가 있어도 워치독 정지로 /cmd_vel 에 0 을 ~10Hz 로 계속
+# 쏘고, odom_publisher 가 /cmd_vel 과 /controller/cmd_vel 을 **둘 다** 구독해
+# 각각 set_motor 를 낸다. 즉 어느 토픽으로 보내든 0 이 사이사이 끼어든다.
+# 20Hz 로 보내면 세 번에 한 번이 0 이라 모터가 끊겨 문턱이 실제보다 높게
+# 나온다(2026-09-05 첫 스윕이 그렇게 오염됐다). 60Hz 면 0 의 비율이 1/7 로
+# 떨어지고 빈 구간도 17ms 이하라 정지마찰 판정을 왜곡하지 않는다.
+DEFAULT_TICK_HZ = 60.0
 
 
 class Sweep(Node):
-    def __init__(self, topic: str) -> None:
+    def __init__(self, topic: str, tick_hz: float = DEFAULT_TICK_HZ) -> None:
         super().__init__("rotation_threshold_sweep")
+        self.tick_hz = tick_hz
         self.pub = self.create_publisher(Twist, topic, 10)
         self.create_subscription(Imu, "/ros_robot_controller/imu_raw",
                                  self._on_imu, 20)
@@ -76,7 +91,7 @@ class Sweep(Node):
         end = time.monotonic() + settle_s
         while time.monotonic() < end:
             self._publish(0.0)
-            rclpy.spin_once(self, timeout_sec=1.0 / TICK_HZ)
+            rclpy.spin_once(self, timeout_sec=1.0 / self.tick_hz)
 
     def burst(self, wz: float, burst_s: float) -> list[float]:
         """wz 로 burst_s 동안 돌리고, 램프 구간을 뺀 IMU 각속도들을 돌려준다."""
@@ -85,7 +100,7 @@ class Sweep(Node):
         end = t0 + burst_s
         while time.monotonic() < end:
             self._publish(wz)
-            rclpy.spin_once(self, timeout_sec=1.0 / TICK_HZ)
+            rclpy.spin_once(self, timeout_sec=1.0 / self.tick_hz)
         return [w for (t, w) in self._samples if t - t0 >= RAMP_SKIP_S]
 
 
@@ -95,6 +110,8 @@ def main() -> int:
                     default=[0.25, 0.35, 0.45, 0.55, 0.7, 0.85, 1.0])
     ap.add_argument("--burst", type=float, default=1.2, help="구간당 회전 시간(초)")
     ap.add_argument("--topic", default="cmd_vel")
+    ap.add_argument("--rate", type=float, default=DEFAULT_TICK_HZ,
+                    help="명령 발행 주기(Hz). 경쟁 발행자가 없으면 20 으로 낮춰도 된다")
     ap.add_argument("--out", default="/grippers/runs/rotation_sweep.jsonl")
     args = ap.parse_args()
 
@@ -103,7 +120,7 @@ def main() -> int:
         return 1
 
     rclpy.init()
-    node = Sweep(args.topic)
+    node = Sweep(args.topic, args.rate)
 
     print("IMU 를 기다리는 중 ...", flush=True)
     deadline = time.monotonic() + 10.0
