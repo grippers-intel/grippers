@@ -762,6 +762,63 @@ def test_두_신호가_모두_있으면_당연히_성공이다():
     assert isinstance(nxt, BaselineCarryState)
 
 
+# ── box만은 OR (사용자 지시, 2026-09-04) ────────────────────────────────
+#
+# 위 09-03 결정(AND로 되돌림) 이후에도 box는 실기에서 부하 0.0000으로
+# 계속 파지 실패 보고를 냈다(host+Pi 연동 실기, 2026-09-04) — 그리퍼가
+# 정착하면 실제로 물고 있어도 능동 토크를 안 내는 그 문제(위 섹션 코멘트,
+# _CLOSE_WIDTH_OVERRIDE_MM 주석 참고)가 재발한 것으로 보인다. 사용자
+# 지시로 box 라벨만 OR로 예외를 둔다 — 09-03에 AND로 돌아간 이유(반대
+# 방향 오탐 가능성)가 없어진 것은 아니라는 점은 domain.task.baseline_
+# mission._GRASP_CONFIRM_OR_LABELS 주석에 그대로 남겨 뒀다.
+
+
+def test_box는_부하가_낮아도_뎁스만_사라지면_성공한다():
+    host = FakeHostLink()
+    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD),
+                   perception=ScriptedPerception(grasp_confirmed=True))
+
+    nxt = BaselineGraspState("box", 0.02).execute(ports)
+
+    assert Report.GRASP_DONE in host.reported_kinds
+    assert isinstance(nxt, BaselineCarryState)
+
+
+def test_box는_뎁스가_그대로_보여도_부하만_있으면_성공한다():
+    host = FakeHostLink()
+    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD),
+                   perception=ScriptedPerception(grasp_confirmed=False))
+
+    nxt = BaselineGraspState("box", 0.02).execute(ports)
+
+    assert Report.GRASP_DONE in host.reported_kinds
+    assert isinstance(nxt, BaselineCarryState)
+
+
+def test_box도_둘_다_실패면_그래도_실패한다():
+    host = FakeHostLink()
+    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD),
+                   perception=ScriptedPerception(grasp_confirmed=False))
+
+    nxt = BaselineGraspState("box", 0.02).execute(ports)
+
+    assert Report.GRASP_FAILED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
+def test_queen은_여전히_AND다_box_예외가_다른_라벨에_안_샌다():
+    """box만 OR로 바뀐 것이지, 다른 라벨까지 같이 완화되면 안 된다 —
+    09-01 rook 뎁스 오탐을 막으려고 다시 AND로 돌아간 라벨들이다."""
+    host = FakeHostLink()
+    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD),
+                   perception=ScriptedPerception(grasp_confirmed=True))
+
+    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+
+    assert Report.GRASP_FAILED in host.reported_kinds
+    assert isinstance(nxt, BaselineApproachState)
+
+
 # ── 미세 전진 시점 (2026-08-29) ────────────────────────────────────────────
 #
 # 이 전진의 목적은 "물체 가까이 가는 것"이 아니라 **물체를 벌어진 턱 사이로

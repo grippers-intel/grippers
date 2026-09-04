@@ -103,6 +103,24 @@ _OBJECT_WIDTH_MM = {
 # 아니다).
 _CLOSE_WIDTH_OVERRIDE_MM = {"box": 7.0, "star": 7.0}
 
+# 파지 성공 판정에서 부하와 뎁스(사라짐) 신호를 AND가 아니라 OR로 보는
+# 라벨. 이 판정은 이미 한 번 방향을 바꿨다 — 아래 판정부의 긴 코멘트가
+# 그 이력이다: AND(기존) -> OR(2026-09-01, rook 뎁스 오탐 완화) ->
+# AND(2026-09-03, box/star에서 반대 방향 오탐) -> 지금(2026-09-04, 사용자
+# 지시로 "Box는 OR로") box만 다시 OR로.
+#
+# box(그리고 같은 부류인 star)는 그리퍼가 정착하면 실제로 물고 있어도
+# 능동 토크를 안 내 부하가 0에 가깝게 읽히는 경우가 반복 확인됐다
+# (`_CLOSE_WIDTH_OVERRIDE_MM` 주석 참고) — 그래서 이 라벨에서는 부하
+# 하나만으로 "비었다"를 단정하면 실제로 성공한 파지를 실패로 오판한다
+# (2026-09-04 실기: 부하 0.0000으로 두 번 연속 실패 보고).
+#
+# ⚠️ 이게 안전하지 않은 이유도 그대로 남아 있다 — 2026-09-03에는 정확히
+# 이 조합(부하 0.0000~0.0274 + vanished=True)에서 OR이 실제로는 못 문
+# 상태를 성공으로 잘못 통과시켰다는 의심이 있었다. star는 이번에 실측
+# 재발이 없어 아직 AND에 남겨 둔다 — 재발하면 같이 옮길 것.
+_GRASP_CONFIRM_OR_LABELS = {"box"}
+
 _PROFILE_BY_LABEL = {
     label: HorizontalGraspPlan(
         profile, GRIPPER_MAX_SAFE_OPEN_MM,
@@ -492,14 +510,28 @@ class BaselineGraspState(State):
         # 채로 하는 결정이다 — 재발하면 이번엔 뎁스 신호 자체(confirm_
         # grasp)를 고치는 쪽으로 가야 한다. box/star는 그리퍼캠+YOLO로
         # "그리퍼 안에 실제로 있다"는 세 번째 독립 신호를 검토 중이다.
+        #
+        # 2026-09-04 사용자 지시: box는 위 AND에서 예외다 —
+        # `_GRASP_CONFIRM_OR_LABELS` 주석 참고. 그 라벨만 부하/뎁스 중
+        # 하나만 있어도 통과시킨다.
         carried = ports.arm.get_load()
         vanished = ports.perception.confirm_grasp()
-        if carried < bc.LOAD_THRESHOLD:
-            return self._failed(ports, f"부하가 낮다 (부하 {carried:.4f})")
-        if not vanished:
-            return self._failed(ports, f"목표가 그대로 보인다 (부하 {carried:.4f})")
+        load_ok = carried >= bc.LOAD_THRESHOLD
+        if self.label in _GRASP_CONFIRM_OR_LABELS:
+            if not (load_ok or vanished):
+                return self._failed(
+                    ports, f"부하도 낮고 목표도 그대로 보인다 (부하 {carried:.4f})")
+        else:
+            if not load_ok:
+                return self._failed(ports, f"부하가 낮다 (부하 {carried:.4f})")
+            if not vanished:
+                return self._failed(ports, f"목표가 그대로 보인다 (부하 {carried:.4f})")
 
         detail = f"{self.label} 부하 {carried:.4f}"
+        # vanished 우선 — AND 라벨은 여기 도달했다는 것 자체가 vanished=True
+        # 라는 뜻이라 늘 앞 분기다. box(OR)에서 vanished=False로 여기 온
+        # 경우만 뒤 분기로 빠지고, 그 문구가 정확히 그 상황을 말한다(부하만
+        # 보고 뎁스의 "그대로 있다"는 오탐으로 무시했다).
         detail += " · 목표 사라짐 확인" if vanished else " · 부하로 확인(뎁스 오탐 무시)"
         ports.host.report(Report.GRASP_DONE, MissionState.CARRY, detail)
         # 여기 도달했다는 것 자체가 위 OR 판정을 통과했다는 뜻이다 — 그 판정
