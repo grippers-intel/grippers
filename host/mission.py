@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import sys
+import time
 from enum import Enum, auto
 from pathlib import Path
 from typing import Optional
@@ -418,7 +419,10 @@ class MissionFSM:
         # ⚠️ 여기(reset)에서만 비워진다. 한 번 보류된 기물은 그 세션 내내
         # 후보에서 빠지므로, 사람이 물체를 옮겨 줘도 되살아나지 않는다.
         # 되살리려면 LiveMap 의 Mode 버튼을 두 번 눌러 reset 을 거쳐야 한다.
-        self.skipped: list[XY] = []
+        # (좌표, 보류한 시각). mcfg.SKIP_EXPIRY_S 가 지나면 저절로 풀린다 —
+        # 시효가 없으면 일시적인 고장까지 영구 보류가 되고, 푸는 방법이
+        # Mode 버튼 두 번(= reset)뿐이라 아는 사람만 풀 수 있다.
+        self.skipped: list[tuple[XY, float]] = []
 
         # SEARCH_TARGET 에서 후보를 못 고른 이유. 화면과 콘솔이 그대로 쓴다.
         self.search_reason: Optional[str] = None
@@ -450,13 +454,20 @@ class MissionFSM:
         self.last_cmd = _send_drive(link, pose, self.state.name, nav, target_label=target_label)
         return math.hypot(target_xy[0] - robot_xy[0], target_xy[1] - robot_xy[1])
 
+    def _active_skips(self) -> list[XY]:
+        """아직 시효가 안 지난 보류 좌표들. 지난 것은 목록에서도 지운다."""
+        now = time.monotonic()
+        self.skipped = [(xy, t) for (xy, t) in self.skipped
+                        if now - t < mcfg.SKIP_EXPIRY_S]
+        return [xy for (xy, _t) in self.skipped]
+
     def _skip_target(self, why: str) -> None:
         """지금 대상을 보류하고 SEARCH_TARGET 으로 돌아간다.
 
         좌표를 `skipped` 에 남기는 것이 핵심이다 — 안 남기면 SEARCH_TARGET 이
         같은 기물을 또 "가장 가까운 것"으로 골라 무한 반복한다."""
         if self._target_xy is not None:
-            self.skipped.append(self._target_xy)
+            self.skipped.append((self._target_xy, time.monotonic()))
         print(f"[mission] {self.target_label} 보류: {why}")
         self._align = None
         self._align_from = None
@@ -521,6 +532,7 @@ class MissionFSM:
         robot_xy = (pose.x, pose.y)
 
         if self.state == State.SEARCH_TARGET:
+            skips = self._active_skips()
             self.nav_goal = None
             self.nav_corner = None
             self.nav_path = None
@@ -528,7 +540,7 @@ class MissionFSM:
             self.last_cmd = None
             if self._instructed_label is not None:
                 found = _find_label(piece_map, self._instructed_label,
-                                    robot_xy, self.skipped)
+                                    robot_xy, skips)
                 if found is None and self._instructed_label in piece_map:
                     # 라벨은 보이는데 고를 게 없다 = 그 기물이 전부 보류됐다는
                     # 뜻이다(재정렬을 다 썼다). 지시를 붙들고 있으면 영원히
@@ -539,9 +551,9 @@ class MissionFSM:
                     # 목적지 오버라이드도 같이 놓는다 — 안 놓으면 지시와
                     # 무관하게 고른 다음 기물까지 사람 앞으로 날아온다.
                     self._instructed_dest_xy = None
-                    found = _nearest_piece(piece_map, robot_xy, self.skipped)
+                    found = _nearest_piece(piece_map, robot_xy, skips)
             else:
-                found = _nearest_piece(piece_map, robot_xy, self.skipped)
+                found = _nearest_piece(piece_map, robot_xy, skips)
             self.ready_to_advance = found is not None
             # 왜 후보가 없는지 남긴다. "없음"에는 세 가지 다른 뜻이 있고,
             # 사람이 할 일이 각각 다르다 — 기물을 놓아야 하는지, 보류를
@@ -550,13 +562,13 @@ class MissionFSM:
             if found is not None:
                 self.search_reason = None
             elif not piece_map:
-                self.search_reason = "지도에 기물이 하나도 없음"
+                self.search_reason = "지도에 기물 없음"
             elif any(_in_workspace(p) for pts in piece_map.values() for p in pts):
                 self.search_reason = (
-                    f"보이는 기물이 모두 보류됨({len(self.skipped)}개) — "
-                    f"Mode 를 두 번 눌러 초기화하십시오")
+                    f"보류됨 {len(skips)}개 — "
+                    f"{mcfg.SKIP_EXPIRY_S:.0f}초 뒤 재시도")
             else:
-                self.search_reason = "기물은 보이나 작업 영역 밖"
+                self.search_reason = "기물이 작업 영역 밖"
             if found is not None and self._should_advance():
                 label, xy = found
                 # "가져와" 지시면 라벨별 상자를 무시하고 사람 앞으로 나른다.

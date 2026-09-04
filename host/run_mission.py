@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import signal
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -331,11 +332,17 @@ def main() -> int:
                 # (Next 를 기다린다). 그때까지 "남은 기물 없음"이라고 찍으면
                 # 그건 거짓말이고, 사람은 멀쩡한 검출부를 의심하게 된다.
                 if fsm.ready_to_advance:
-                    why = f"{fsm.target_label or '기물'} 대기 — Next 를 누르십시오"
+                    why = f"{fsm.target_label or '기물'} 대기 · Next"
                 else:
-                    why = fsm.search_reason or "작업 영역에 남은 기물 없음"
-                print(f"\r[SEARCH_TARGET] {why} — {pose}   ",
-                      end="", flush=True)
+                    why = fsm.search_reason or "남은 기물 없음"
+                # ⚠️ 한 줄에 담기지 않으면 터미널이 줄을 접고, 그러면 \r 가
+                # 시작이 아니라 접힌 줄 머리로 돌아가 이전 내용이 안 지워진다
+                # — 같은 문구가 두 번 찍힌 것처럼 보인다(2026-09-05).
+                # 폭을 재서 넘치면 자르고, 뒤에 여백을 채워 이전의 더 긴
+                # 줄이 남지 않게 한다.
+                line = f"[SEARCH_TARGET] {why} — {pose}"
+                width = shutil.get_terminal_size((100, 24)).columns - 1
+                print("\r" + line[:width].ljust(width), end="", flush=True)
 
             if live_map is not None:
                 live_map.update(pose, pmap, goal=fsm.nav_goal, nav=fsm.last_nav,
