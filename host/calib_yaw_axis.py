@@ -85,21 +85,37 @@ def _pose(loc, cams, caps, detector, tries: int = 30):
 
 
 def _drive(link, loc, cams, caps, detector, cmd: str, seconds: float):
-    """cmd 를 seconds 동안 보내면서 pose 를 계속 갱신한다."""
+    """cmd 를 seconds 동안 보내면서 pose 를 계속 갱신한다.
+
+    ⚠️ **pose 를 얻었는지와 무관하게 매 사이클 보낸다.** 처음에는 pose 가 있는
+    사이클에만 보냈는데, 그러면 마커를 놓칠 때마다 명령이 끊기고 Pi 워치독이
+    0.3초 만에 세운다 — 2026-09-05 첫 실행에서 4회 중 3회가 0.5cm 도 못
+    움직였다. 좌표는 화면 표시용 참고 필드라(VEHICLE_LINK_PROTOCOL) 조금
+    낡아도 되고, 정지하지 않는 것이 훨씬 중요하다.
+
+    (관측 사이클 수, pose 를 얻은 사이클 수) 를 돌려준다 — 이 비율이 낮으면
+    측정을 믿을 수 없고, 그 자체가 진단이다.
+    """
     end = time.monotonic() + seconds
     last = None
+    cycles = hits = 0
     while time.monotonic() < end:
+        cycles += 1
         pose = _pose(loc, cams, caps, detector, tries=1)
         if pose is not None:
-            last = pose
-            link.send(MissionCommand(cmd, "APPROACH", pose.x, pose.y, pose.yaw_deg))
-        time.sleep(0.05)
-    for _ in range(6):
+            last, hits = pose, hits + 1
+        link.send(MissionCommand(cmd, "APPROACH",
+                                 last.x if last else 0.0,
+                                 last.y if last else 0.0,
+                                 last.yaw_deg if last else 0.0))
+        time.sleep(0.02)
+    for _ in range(8):
         link.send(MissionCommand("stop", "APPROACH",
                                  last.x if last else 0.0,
                                  last.y if last else 0.0,
                                  last.yaw_deg if last else 0.0))
         time.sleep(0.05)
+    return cycles, hits
 
 
 def _circular_mean(degs: list[float]) -> float:
@@ -137,7 +153,7 @@ def main() -> int:
             if before is None:
                 print(f"[{run+1}] 로봇을 못 봅니다 — 건너뜁니다")
                 continue
-            _drive(link, loc, cams, caps, detector, "go", seconds)
+            cycles, hits = _drive(link, loc, cams, caps, detector, "go", seconds)
             time.sleep(0.6)           # 관성으로 미끄러지는 동안 기다린다
             after = _pose(loc, cams, caps, detector)
             if after is None:
@@ -146,9 +162,16 @@ def main() -> int:
 
             dx, dy = after.x - before.x, after.y - before.y
             travel = math.hypot(dx, dy)
+            rate = hits / cycles if cycles else 0.0
             if travel < MIN_TRAVEL_M:
-                print(f"[{run+1}] {travel*100:.1f}cm 밖에 안 움직였습니다 — 버립니다"
-                      "  (바퀴가 안 돌았거나 명령이 안 갔습니다)")
+                print(f"[{run+1}] {travel*100:.1f}cm 밖에 안 움직였습니다 — 버립니다 "
+                      f"(주행 중 pose 획득률 {rate*100:.0f}%)")
+                continue
+            # 명령한 것보다 훨씬 많이 움직였으면 측위가 튄 것이다. 그 값으로
+            # 방향을 내면 엉뚱한 보정값이 나온다.
+            if travel > args.distance * 2.5:
+                print(f"[{run+1}] {travel*100:.1f}cm — 명령({args.distance*100:.0f}cm)보다 "
+                      f"너무 멉니다. 측위가 튀었을 수 있어 버립니다")
                 continue
             moved_deg = math.degrees(math.atan2(dy, dx))
             # 보고된 yaw 는 이동 전후가 같아야 정상이다(직진이므로).
@@ -156,7 +179,8 @@ def main() -> int:
             delta = (moved_deg - reported + 180.0) % 360.0 - 180.0
             deltas.append(delta)
             print(f"[{run+1}] 이동 {travel*100:5.1f}cm  실제방향 {moved_deg:+7.1f}도  "
-                  f"보고 yaw {reported:+7.1f}도  차이 {delta:+6.1f}도")
+                  f"보고 yaw {reported:+7.1f}도  차이 {delta:+6.1f}도  "
+                  f"pose {rate*100:.0f}%")
 
             if run < args.runs - 1:
                 _drive(link, loc, cams, caps, detector, "yaw+", TURN_BETWEEN_RUNS_S)
