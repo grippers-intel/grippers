@@ -65,6 +65,21 @@ MAX_CHUNKS = 10
 #: 프레임이 이보다 오래되면 안 쓴다. 청크가 3.3초이므로 1초면 충분히 신선하다.
 MAX_FRAME_AGE_S = 1.0
 
+#: 두 청크의 그림이 이보다 덜 다르면 카메라가 멈춘 것으로 본다(픽셀 0~255의
+#: 평균 절대차). 나이 검사만으로는 이 경우를 못 잡는다 — 드라이버가 멈춘
+#: 그림을 새 타임스탬프로 계속 내보내면 "신선한 프레임"으로 통과한다.
+#:
+#: 2026-09-05 실기에서 USB 가 20초마다 끊겼다. 정책의 입력은 그리퍼캠 영상과
+#: 관절값 둘뿐이라, 그림이 안 바뀌면 물체가 어디 있는지 알 방법이 없고 학습
+#: 데이터의 평균 동작만 반복한다 — 팔이 허공을 짚는다. 그건 조준 실패처럼
+#: 보이지만 원인이 전혀 달라서, 구분하지 못하면 정책이나 정지 정밀도를
+#: 엉뚱하게 의심하게 된다.
+#:
+#: 값의 근거: 청크 사이는 3.3초이고 그 동안 팔이 크게 움직이므로 정상이면
+#: 그림이 많이 바뀐다. 0.5는 손떨림 수준의 변화도 살아 있다고 볼 만큼 낮게
+#: 잡은 값이다 — 멈춘 카메라(정확히 0.0)만 걸러내는 것이 목적이다.
+MIN_FRAME_CHANGE = 0.5
+
 
 def _bgr_from_image_msg(msg):
     """Image(bgr8) -> numpy BGR. cv_bridge 를 쓰지 않는다.
@@ -243,6 +258,7 @@ class VlaInferenceNode(Node):
         started = time.monotonic()
         chunks = 0
         extended = False
+        prev_frame = None      # 멈춘 카메라 판정용 — 직전 청크의 그림
         try:
             while chunks < MAX_CHUNKS:
                 if goal_handle.is_cancel_requested:
@@ -265,6 +281,23 @@ class VlaInferenceNode(Node):
                     self.get_logger().error(result.message)
                     goal_handle.abort()
                     return result
+                # 멈춘 카메라를 잡는다. 첫 청크는 비교 대상이 없어 건너뛴다.
+                if prev_frame is not None:
+                    change = float(np.mean(np.abs(
+                        frame.astype(np.int16) - prev_frame.astype(np.int16))))
+                    if change < MIN_FRAME_CHANGE:
+                        result.ok, result.chunks = False, chunks
+                        result.message = (
+                            f"그리퍼캠이 멈췄습니다 — 청크 사이 그림 변화 {change:.3f} "
+                            f"(기준 {MIN_FRAME_CHANGE}). 팔이 안 보고 움직이게 두지 "
+                            "않고 멈춥니다. USB 연결을 보십시오")
+                        self.get_logger().error(result.message)
+                        goal_handle.abort()
+                        return result
+                    self.get_logger().info(
+                        f"청크 {chunks + 1} — 그림 변화 {change:.1f}",
+                        throttle_duration_sec=10.0)
+                prev_frame = frame
                 state = self._read_policy_state()
                 if state is None:
                     result.ok, result.chunks = False, chunks
