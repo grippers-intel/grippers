@@ -270,23 +270,23 @@ def test_주행_명령이_합의_속도로_바퀴까지_간다(run_through):
         assert duration_s == pytest.approx(bc.GRASP_CREEP_OPEN_LOOP_SEC)
 
 
-def test_파지_성공은_부하와_뎁스_둘_다_있어야_한다(run_through):
-    """AND(2026-09-03 재적용) — 부하와 뎁스(confirm_grasp) 둘 다 있어야
-    성공이다. 2026-09-01엔 이 중 하나만 있어도 성공(OR)으로 완화했지만,
-    같은 2026-09-03 실기에서 star/box가 반대 방향 오탐(부하만 낮게
-    읽힘)을 내면서 다시 AND로 되돌렸다(domain.task.baseline_mission의
-    판정부 코멘트 참고)."""
+def test_파지_성공은_부하나_뎁스_하나만_있어도_된다(run_through):
+    """OR(최종, 2026-09-04) — 부하와 뎁스(confirm_grasp) 중 하나만 있어도
+    성공이다. AND(2026-09-03)에서 box·queen이 실제로는 물었는데 부하
+    판독 하나 때문에 반복 오판되는 것을 보고 사용자가 "그냥 OR로 다
+    퉁쳐버려"라고 지시해 최종 통일했다(domain.task.baseline_mission의
+    판정부 코멘트가 AND<->OR 전체 이력)."""
     _names, host, ports = run_through()
     assert ports.perception.confirm_grasp_calls >= 1
     assert Report.GRASP_DONE in host.reported_kinds
 
-    # 뎁스가 뒤집히면(오탐 흉내) 부하가 정상이어도 AND에서는 실패다.
+    # 뎁스가 뒤집혀도(오탐 흉내) 부하가 정상이면 OR에서는 여전히 성공이다.
     _names, host, _ports = run_through(
         perception=ScriptedPerception(
             script=[TargetObservation(LABEL, JAW_LINE_M + 0.02, 0.0, True)],
             grasp_confirmed=False))
-    assert Report.GRASP_DONE not in host.reported_kinds
-    assert Report.GRASP_FAILED in host.reported_kinds
+    assert Report.GRASP_DONE in host.reported_kinds
+    assert Report.GRASP_FAILED not in host.reported_kinds
 
 
 def test_부하도_뎁스도_없으면_실패다(run_through):

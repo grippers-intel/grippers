@@ -696,8 +696,8 @@ def test_GRASP_FORCE도_영역_안이면_그냥_평소대로_내려간다():
     assert isinstance(nxt, BaselineGraspState)
 
 
-# ── 두 신호 파지 판정 (사용자 지시 2026-08-26, 2026-09-01 AND -> OR,
-#    2026-09-03 다시 AND) ────────────────────────────────────────────
+# ── 두 신호 파지 판정 (AND -> OR -> AND -> box만 OR -> 전부 OR,
+#    최종 결정 2026-09-04) ─────────────────────────────────────────────
 #
 # 2026-08-26 ~ 2026-09-01: 부하와 뎁스(confirm_grasp) 둘 다 있어야 성공
 # (AND)이었다. 2026-09-01 실기에서 CARRY 자세는 카메라 프레임 밖이 맞는데도
@@ -716,38 +716,48 @@ def test_GRASP_FORCE도_영역_안이면_그냥_평소대로_내려간다():
 # 이전까지 오래 문제없이 썼던 조합이니 그쪽을 신뢰한다. 09-01의 뎁스
 # 오탐 케이스가 다시 나올 수 있다는 걸 알고 하는 결정이다(재발하면
 # 뎁스 신호 자체를 고쳐야 한다).
+#
+# 2026-09-04(같은 날 저녁, host+Pi 연동 실기): AND가 다시 진짜 성공을
+# 실패로 오판했다 — 처음엔 box(부하 0.0000, 두 번 연속)라 box만 OR로
+# 예외를 뒀는데, 곧이어 queen도 실제로는 물었는데 부하 0.0391로 AND에
+# 걸려 실패 보고됐다("퀸 잡았는데 못잡았다고 실패보고"). 사용자가 "그냥
+# OR로 다 퉁쳐버려"라고 라벨 구분 자체를 없애라고 지시해 **전부 OR로
+# 최종 통일**했다. 09-03에 AND로 되돌아간 이유(반대 방향 오탐 가능성)는
+# 사라지지 않았다는 것을 알고 하는 결정이다 — 재발하면 라벨별 세분화가
+# 아니라 신호 자체를 고쳐야 한다(domain.task.baseline_mission의 같은
+# 판정 자리 코멘트 참고).
 
 
-def test_부하만_높고_뎁스는_그대로_보이면_실패다():
-    """AND — 부하가 충분해도 뎁스가 "그대로 있다"고 하면 실패다. 09-01
-    실기 땐 이 경우를 성공(OR)으로 봤지만, 09-03 star/box에서 반대
-    방향 오탐(부하만 낮음)이 나면서 다시 AND로 되돌렸다(위 섹션 코멘트,
-    domain.task.baseline_mission의 같은 판정 자리 코멘트 참고)."""
+def test_부하만_있어도_뎁스가_그대로_보이면_성공이다():
+    """OR(최종, 2026-09-04) — 09-03엔 이 조합을 AND로 막았지만, 그 뒤로도
+    box(같은 날 저녁)·queen(그 직후)이 실제로는 물었는데 부하 판독 하나
+    때문에 AND에 걸려 실패 보고되는 일이 반복됐다. 사용자가 "그냥 OR로
+    다 퉁쳐버려"라고 라벨 구분 없이 지시해 전부 OR로 통일했다(domain.
+    task.baseline_mission의 같은 판정 자리 코멘트가 전체 이력)."""
     host = FakeHostLink()
     perception = ScriptedPerception(grasp_confirmed=False)
     ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), perception=perception)
 
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
-    assert Report.GRASP_FAILED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
+    assert Report.GRASP_DONE in host.reported_kinds
+    assert isinstance(nxt, BaselineCarryState)
 
 
-def test_뎁스만_사라지고_부하는_낮으면_실패다():
-    """AND — 2026-09-03 star/box 실기 재현(회귀 방지). 부하가 정확히
-    0.0000/0.0274로 낮은데 뎁스만 "사라짐"이라 그때는 OR를 통과해
-    CARRY_DEST까지 넘어갔었다(3번째 star, 사용자가 직접 지적한 사고).
-    부하 0.0000이 "진짜 빈손"인지 "서보 읽기 실패로 인한 안전값"인지
-    구분할 수 없는 채로 성공 처리하면 안 된다 — AND에서는 이 조합이
-    실패로 잡혀야 한다."""
+def test_뎁스만_사라져도_부하가_낮으면_성공이다():
+    """OR(최종) — 2026-09-03엔 이 조합(부하 0.0000/0.0274 + vanished=True)
+    이 반대 방향 오탐으로 의심돼 AND로 막았었다. 그 위험은 여전히 남아
+    있다는 걸 알면서도(주석 참고), 2026-09-04 실기에서 box/queen 둘 다
+    이 조합에서 실제로는 성공한 파지가 반복 오판된 뒤 OR로 최종
+    통일했다."""
     host = FakeHostLink()
     ports = _ports(host=host, arm=FakeArm(load_ratio=0.0),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
-    assert Report.GRASP_FAILED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
+    assert Report.GRASP_DONE in host.reported_kinds
+    assert isinstance(nxt, BaselineCarryState)
 
 
 def test_두_신호가_모두_있으면_당연히_성공이다():
@@ -762,61 +772,27 @@ def test_두_신호가_모두_있으면_당연히_성공이다():
     assert isinstance(nxt, BaselineCarryState)
 
 
-# ── box만은 OR (사용자 지시, 2026-09-04) ────────────────────────────────
-#
-# 위 09-03 결정(AND로 되돌림) 이후에도 box는 실기에서 부하 0.0000으로
-# 계속 파지 실패 보고를 냈다(host+Pi 연동 실기, 2026-09-04) — 그리퍼가
-# 정착하면 실제로 물고 있어도 능동 토크를 안 내는 그 문제(위 섹션 코멘트,
-# _CLOSE_WIDTH_OVERRIDE_MM 주석 참고)가 재발한 것으로 보인다. 사용자
-# 지시로 box 라벨만 OR로 예외를 둔다 — 09-03에 AND로 돌아간 이유(반대
-# 방향 오탐 가능성)가 없어진 것은 아니라는 점은 domain.task.baseline_
-# mission._GRASP_CONFIRM_OR_LABELS 주석에 그대로 남겨 뒀다.
-
-
-def test_box는_부하가_낮아도_뎁스만_사라지면_성공한다():
-    host = FakeHostLink()
-    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD),
-                   perception=ScriptedPerception(grasp_confirmed=True))
-
-    nxt = BaselineGraspState("box", 0.02).execute(ports)
-
-    assert Report.GRASP_DONE in host.reported_kinds
-    assert isinstance(nxt, BaselineCarryState)
-
-
-def test_box는_뎁스가_그대로_보여도_부하만_있으면_성공한다():
-    host = FakeHostLink()
-    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD),
-                   perception=ScriptedPerception(grasp_confirmed=False))
-
-    nxt = BaselineGraspState("box", 0.02).execute(ports)
-
-    assert Report.GRASP_DONE in host.reported_kinds
-    assert isinstance(nxt, BaselineCarryState)
-
-
-def test_box도_둘_다_실패면_그래도_실패한다():
+def test_둘_다_실패면_그래도_실패한다():
     host = FakeHostLink()
     ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD),
                    perception=ScriptedPerception(grasp_confirmed=False))
-
-    nxt = BaselineGraspState("box", 0.02).execute(ports)
-
-    assert Report.GRASP_FAILED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
-
-
-def test_queen은_여전히_AND다_box_예외가_다른_라벨에_안_샌다():
-    """box만 OR로 바뀐 것이지, 다른 라벨까지 같이 완화되면 안 된다 —
-    09-01 rook 뎁스 오탐을 막으려고 다시 AND로 돌아간 라벨들이다."""
-    host = FakeHostLink()
-    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD),
-                   perception=ScriptedPerception(grasp_confirmed=True))
 
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
     assert Report.GRASP_FAILED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
+
+
+def test_box도_같은_OR_규칙을_받는다():
+    """라벨 구분을 없앤 것이므로 box도 다른 라벨과 똑같이 판정돼야 한다."""
+    host = FakeHostLink()
+    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD),
+                   perception=ScriptedPerception(grasp_confirmed=True))
+
+    nxt = BaselineGraspState("box", 0.02).execute(ports)
+
+    assert Report.GRASP_DONE in host.reported_kinds
+    assert isinstance(nxt, BaselineCarryState)
 
 
 # ── 미세 전진 시점 (2026-08-29) ────────────────────────────────────────────
