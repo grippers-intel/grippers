@@ -32,13 +32,14 @@ Pi 쪽에서만 울릴 수 있고, 여기서 원격으로 트리거할 방법이
 신호는 터미널 배너 + 벨 문자(`\\a`)뿐이다. 스피커/헤드폰 볼륨을 켜 두면
 벨 소리가 들린다.
 
-⚠️ **Enter 는 INSERT 명령을 보내지 않는다.** Pi 의 실제 INSERT 시퀀스가
-정확히 어떤 전제(CARRY 에서의 정상 전이 등)를 요구하는지 이 저장소만
-봐서는 확신할 수 없어서, 여기서 자동으로 트리거하는 위험을 피했다 —
-Enter 는 그저 "확인 끝났으니 계속 운전하겠다"는 뜻이고, 실제 투하는
-사람이 손으로/기존 방법으로 한다. 이 판단을 바꾸고 싶으면(=Enter 로 진짜
-INSERT 를 보내고 싶으면) 먼저 알려줄 것 — Pi 쪽 INSERT 핸들러를 같이
-확인한 뒤에 넣는 게 안전하다.
+**Enter 는 실제 INSERT 명령을 보낸다** (사용자 확인, 2026-09-05 — Pi 의
+`arm_driver`가 이미 알고 있는 `drop`(300mm, 옛 195mm) 자세다). mission.py
+의 PLACE 상태와 정확히 같은 방식으로 `MissionCommand("stop", "PLACE", ...)`
+를 계속 보낸다(`status="PLACE"` → `vehicle_link._STATE_TO_PI`가
+`MissionState.INSERT`로 옮긴다) — Pi 가 팔을 drop(300mm)으로 옮겨 그리퍼를
+열고, 성공/실패를 판정한 뒤 IDLE 로 복귀할 때까지 기다린다. 그동안 새 WASD
+입력은 받지 않는다(팔이 움직이는 도중에 차를 몰면 안 된다) — 결과가 오면
+화면에 찍고 다시 평소 운전으로 돌아간다.
 
 ## 조작
 
@@ -47,8 +48,8 @@ INSERT 를 보내고 싶으면) 먼저 알려줄 것 — Pi 쪽 INSERT 핸들러
     a        제자리 좌회전(yaw+, CCW)
     d        제자리 우회전(yaw-, CW)
     space/x  즉시 정지
-    Enter    (NUDGE_LINE 에 멈춰 대기 중일 때만) 확인 끝, 계속 운전
-    q        정지하고 종료
+    Enter    (NUDGE_LINE 에 멈춰 대기 중일 때만) INSERT 실행 — drop(300mm) → IDLE
+    q        정지하고 종료(팔이 INSERT 도중이면 물리적으로는 안 멈출 수 있음)
 
 **키를 놓으면(0.5초 안에 다시 안 누르면) 자동으로 멈춘다** — 눌러야
 움직이는 방식이지 토글이 아니다. 터미널의 키 반복(길게 누르면 계속
@@ -63,6 +64,11 @@ INSERT 를 보내고 싶으면) 먼저 알려줄 것 — Pi 쪽 INSERT 핸들러
 
 포즈를 잃으면(ArUco 마커를 카메라가 놓치면) 매 사이클 "stop" 을 보낸다
 (mission.py `step()` 의 pose.ok 분기와 같은 원칙).
+
+Enter 로 INSERT 가 시작되면 실제로 팔이 움직이고 그리퍼가 열린다 — 이
+시험의 목적이 "이 자세에서 실제로 투하하면 어떻게 되는가"이니 당연하지만,
+Enter 를 누르기 전에 그리퍼 아래·주변에 손이나 다른 물체가 없는지 다시
+한번 볼 것.
 
 ## 쓰는 법
 
@@ -192,7 +198,12 @@ def main() -> int:
 
     current_cmd = "stop"
     last_key_at = 0.0
-    paused = False
+    # "drive"   — 평소 WASD 운전.
+    # "confirm" — NUDGE_LINE 에 서서 사람 확인을 기다리는 중(정지 유지).
+    # "insert"  — Enter 를 눌러 INSERT(drop 300mm → IDLE)를 보내고 결과를 기다리는 중.
+    mode = "drive"
+    insert_started_at = 0.0
+    insert_last_warn_at = 0.0
     prev_gate_ok = False
     prev_x: Optional[float] = None
     quit_requested = False
@@ -215,15 +226,18 @@ def main() -> int:
                     if key == "q":
                         quit_requested = True
                         break
-                    if paused and key in ("\r", "\n"):
-                        paused = False
-                        print("\n[재개] 계속 운전합니다.\n", flush=True)
-                        _log("RESUME")
-                    elif not paused and key in _KEY_TO_CMD:
+                    if mode == "confirm" and key in ("\r", "\n"):
+                        mode = "insert"
+                        insert_started_at = now
+                        insert_last_warn_at = now
+                        print("\n[INSERT 시작] drop(300mm) → IDLE 대기 중 — "
+                              "끝날 때까지 새 주행 입력은 안 받습니다.\n", flush=True)
+                        _log("INSERT_START")
+                    elif mode == "drive" and key in _KEY_TO_CMD:
                         current_cmd = _KEY_TO_CMD[key]
                         last_key_at = now
 
-                if not paused and current_cmd != "stop" and now - last_key_at > AUTO_STOP_IDLE_SEC:
+                if mode == "drive" and current_cmd != "stop" and now - last_key_at > AUTO_STOP_IDLE_SEC:
                     current_cmd = "stop"
 
                 grabbed = []
@@ -234,9 +248,11 @@ def main() -> int:
                     dets.append({} if not ok else
                                 detect(detector, cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
                 pose = loc.update(cams, dets)
-                link.poll_status()   # 소켓 비우기 + BASE_UNRESPONSIVE 경보 출력
+                # 한 사이클에 한 번만 부른다 — 두 번째 호출은 큐가 이미 비어
+                # IDLE만 돌려준다(poll_status() 자체 docstring 참고).
+                report_status = link.poll_status()
 
-                if not pose.ok:
+                if not pose.ok and mode != "insert":
                     _send("stop", "NUDGE_BOX", None)
                     if not pose_lost_warned:
                         pose_lost_warned = True
@@ -250,12 +266,36 @@ def main() -> int:
                     print("\n[복구] ArUco 포즈를 다시 찾았습니다.\n", flush=True)
                     _log("POSE_RECOVERED")
 
+                if mode == "insert":
+                    # mission.py PLACE 상태와 정확히 같은 명령을 계속 보낸다.
+                    _send("stop", "PLACE", pose)
+                    if report_status in ("PLACE_DONE", "FAILED"):
+                        elapsed = now - insert_started_at
+                        mark = "✅ PLACE_DONE" if report_status == "PLACE_DONE" else "❌ FAILED"
+                        print(f"\n{mark} — {elapsed:.1f}초 걸림. IDLE로 돌아갔습니다. "
+                              f"평소 운전으로 복귀합니다.\n", flush=True)
+                        _log(f"INSERT_RESULT {report_status} elapsed_s={elapsed:.1f}")
+                        mode = "drive"
+                        current_cmd = "stop"
+                        last_key_at = now
+                    else:
+                        if now - insert_last_warn_at > 3.0:
+                            insert_last_warn_at = now
+                            _log(f"INSERT_WAITING status={report_status} "
+                                 f"elapsed_s={now - insert_started_at:.1f}")
+                        sys.stdout.write(
+                            f"\r[insert 대기] 상태={report_status:6s} 경과 "
+                            f"{now - insert_started_at:5.1f}s          ")
+                        sys.stdout.flush()
+                    time.sleep(max(0.0, LOOP_PERIOD_S - (time.perf_counter() - tick_start)))
+                    continue
+
                 robot_xy = (pose.x, pose.y)
                 gate = basket_target.check_basket_insert_gate(robot_xy, pose.yaw_deg, args.box)
 
-                if not prev_gate_ok and gate.ok and not paused:
+                if not prev_gate_ok and gate.ok and mode == "drive":
                     current_cmd = "stop"
-                    paused = True
+                    mode = "confirm"
                     _bell(5)
                     print("\n" + "=" * 70)
                     print("🔔 NUDGE_LINE 진입 — Host 판정: 여기서부터 INSERT 시도해 볼 만함")
@@ -264,7 +304,7 @@ def main() -> int:
                           f"지향오차 {gate.facing_error_deg:+.1f}°")
                     print("   차를 정지시켰습니다. 지금 자세에서 그리퍼의 기물을 "
                           "확인하세요.")
-                    print("   Enter 를 치면 계속 운전합니다.")
+                    print("   Enter 를 치면 INSERT(drop 300mm → IDLE) 를 실행합니다.")
                     print("=" * 70 + "\n", flush=True)
                     _log(f"NUDGE_LINE_ENTER pose=({pose.x:.3f},{pose.y:.3f},"
                          f"{pose.yaw_deg:.1f}) dist_mm={gate.distance_m*1000:.0f} "
@@ -278,7 +318,7 @@ def main() -> int:
                     _log(f"CENTERLINE_CROSS x={pose.x:.3f} center_x={center_x:.3f}")
                 prev_x = pose.x
 
-                send_cmd = "stop" if paused else current_cmd
+                send_cmd = "stop" if mode == "confirm" else current_cmd
                 _send(send_cmd, "NUDGE_BOX", pose)
 
                 sys.stdout.write(
@@ -286,7 +326,7 @@ def main() -> int:
                     f"{pose.yaw_deg:6.1f}°) 목표까지 {gate.distance_m*1000:5.0f}mm "
                     f"지향 {gate.facing_error_deg:+5.1f}° "
                     f"{'GATE_OK' if gate.ok else '       '}"
-                    f"{'  [일시정지 — Enter로 재개]' if paused else '           '}   ")
+                    f"{'  [NUDGE_LINE — Enter로 INSERT]' if mode == 'confirm' else '           '}   ")
                 sys.stdout.flush()
 
                 time.sleep(max(0.0, LOOP_PERIOD_S - (time.perf_counter() - tick_start)))
