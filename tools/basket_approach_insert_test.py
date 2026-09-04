@@ -93,6 +93,7 @@ from grippers_arm.floor_grasp_profiles import FLOOR_GRASP_PROFILES
 # (좌우 오프셋 포함)을 순수 계산으로 갖고 있다. 이 도구는 사람이 화면을
 # 보고 Enter/q로 판단하는 구조였는데, 좌우 오프셋만은 계산은 하면서
 # 판정에는 안 썼다 — 그 구멍을 이걸로 메운다.
+from domain.task import baseline_constants as bc  # noqa: E402
 from domain.task.preconditions import InsertInputs, check_insert  # noqa: E402
 
 # basket_lidar_align은 아직 Pi의 ros2_ws에 빌드돼 있지 않다(브랜치 작업물).
@@ -103,6 +104,13 @@ import basket_lidar_align as align  # noqa: E402
 
 
 # --- 실측에서 온 상수 ------------------------------------------------------
+
+# 2026-09-04: 이 도구는 원래 정면(bearing 0) 접근만 실기 검증됐다 —
+# expected_bearing_rad=0.0이 하드코딩돼 있었다. `basket_lidar_align.
+# fit_basket_face`는 원래 임의의 기대 방위각을 받게 돼 있었으므로(Host가
+# 어느 방향에 바구니가 있는지 안다는 전제), 이 도구도 --bearing-deg로 열어
+# 사선 접근을 실기로 재현할 수 있게 한다. main()이 argparse 뒤 다시 쓴다.
+EXPECTED_BEARING_RAD = 0.0
 
 # 2026-08-26엔 퀸 전용으로 하드코딩돼 있었다. 2026-08-27에 --profile로
 # 바꿀 수 있게 열었다 — main()이 argparse 뒤 이 전역을 다시 쓴다.
@@ -190,6 +198,22 @@ MIN_BURST_S = 0.25      # 이보다 짧으면 정지마찰을 못 이길 수 있
 # 판정의 실효 분해능이 곧 이 값이다.
 MIN_BURST_TRAVEL_M = MIN_BURST_S * BURST_SPEED_MPS
 NUDGE_S = 0.20          # 파지 전 수동 미세 전진 한 번
+
+# 2026-09-04: 이 도구는 원래 yaw_error_rad를 화면에 찍기만 하고 고치지는
+# 않았다 — 정면(bearing 0)으로 이미 잘 맞춰 놓고 시작한다는 전제였다.
+# 드롭 자세가 195mm에서 300mm로 바뀌면서 거리·각도를 다시 실측해야 하는데,
+# 사선으로 접근시켜 보려면 회전 보정이 있어야 발산하지 않는다.
+#
+# 회전 속도는 이 프로젝트의 전용 계측 도구(inplace_rotation_test.py)가 이미
+# 잰 값을 그대로 쓴다 — raw cmd_vel(이 도구가 쓰는 것과 같은 토픽)에서
+# 정지마찰 돌파 최소가 0.355rad/s, **안정적으로 돌려면 1.0~1.2rad/s**였다.
+# 0.355 근처를 쓰면 오늘 밤 반복됐던 "명령은 나가는데 안 움직인다"를 여기서
+# 또 만들 위험이 있어, 안정권인 1.0을 그대로 쓴다.
+YAW_RATE_RAD_S = 1.0
+# 회전 버스트 하나의 상한 — 아무리 오차가 커도 한 사이클에 이보다 많이는
+# 안 돈다(계측 사이의 안전판, 위 선형 버스트의 BURST_S와 같은 역할).
+MAX_YAW_BURST_S = 0.6
+MIN_YAW_BURST_S = 0.15   # 이보다 짧으면 정지마찰을 못 이길 수 있다(위와 같은 이유)
 
 SETTLE_S = 0.35         # 정지 후 스캔이 안정될 때까지
 CYCLE_S = 1.0           # 사용자 지시: 1초마다 모니터링
@@ -326,7 +350,7 @@ class ApproachNode(Node):
         points = align.scan_to_front_points(
             msg.ranges, msg.angle_min, msg.angle_increment,
             range_min=max(msg.range_min, 0.02), range_max=min(msg.range_max, 3.0))
-        fit = align.fit_basket_face(points, expected_bearing_rad=0.0)
+        fit = align.fit_basket_face(points, expected_bearing_rad=EXPECTED_BEARING_RAD)
         ahead = [math.hypot(x, y) for x, y in points
                  if x > 0.0 and abs(math.atan2(y, x)) <= math.radians(15.0)]
         return fit, (min(ahead) if ahead else None)
@@ -358,6 +382,18 @@ class ApproachNode(Node):
     def drive(self, seconds, speed=BURST_SPEED_MPS):
         twist = Twist()
         twist.linear.x = speed
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            self.cmd_pub.publish(twist)
+            self.pump(0.05)
+        self.stop()
+
+    def rotate(self, seconds, rate=YAW_RATE_RAD_S):
+        """제자리 회전 버스트. `rate` 부호가 방향이다(+가 CCW,
+        `basket_lidar_align.fit_basket_face`의 yaw_error_rad 부호 관례와
+        같다 — 그 값만큼 +방향으로 돌리면 0으로 수렴한다)."""
+        twist = Twist()
+        twist.angular.z = rate
         deadline = time.time() + seconds
         while time.time() < deadline:
             self.cmd_pub.publish(twist)
@@ -559,6 +595,14 @@ def phase_approach(node, keys):
     travelled = 0.0
     started = time.time()
     prev_distance = None   # 절벽 감시용 — 직전 사이클 판독 거리
+    # 2026-09-04 사용자 지시: check_insert가 실제로 받아 줄 라이다 거리창에
+    # 들어오고 나가는 순간을 소리+로그로 알려준다 — 이 도구의 "도착"
+    # (ARRIVE_TOLERANCE_M 기준, 아래)과는 별개다. 그건 이 도구가 "이제
+    # 그만 전진해도 된다"고 판단하는 기준이고, 이건 check_insert가 실제로
+    # 통과시켜 줄 창(BASKET_MIN_LIDAR_M ~ BASKET_STOP_LIDAR_M+TOLERANCE)
+    # 이다 — 300mm 드롭으로 바뀐 뒤 이 창이 그대로 유효한지 눈과 귀로
+    # 직접 확인하려는 목적. 창 진입/이탈마다 한 번만 알린다(엣지 트리거).
+    insert_window_entered = False
 
     for cycle in range(1, MAX_CYCLES + 1):
         node.pump(SETTLE_S)
@@ -581,6 +625,26 @@ def phase_approach(node, keys):
               f"{fit.residual_m * 1000:4.1f}mm  {fit.face_width_m * 1000:3.0f}  "
               f"{fit.point_count:3d}  {_lateral_str(fit)}  {depth_str}  {source}"
               + ("" if fit.ok else f"  [{fit.reason}]"))
+
+        # check_insert가 실제로 받아 줄 거리창 — bc.BASKET_STOP_LIDAR_M ±
+        # bc.BASKET_STOP_TOLERANCE_M인데, 그 하한이 "테두리를 넘겨봄" 하한
+        # (bc.BASKET_MIN_LIDAR_M)보다 더 아래로 내려가므로 실질 하한은
+        # 후자다(check_insert 두 조건을 같이 만족해야 함).
+        insert_window_lo = bc.BASKET_MIN_LIDAR_M
+        insert_window_hi = bc.BASKET_STOP_LIDAR_M + bc.BASKET_STOP_TOLERANCE_M
+        in_insert_window = fit.ok and insert_window_lo <= distance <= insert_window_hi
+        if in_insert_window and not insert_window_entered:
+            insert_window_entered = True
+            node.beep(repeat=1)
+            print()
+            print(f"  🔔 INSERT 허용 거리 진입 — 라이다 {distance:.4f}m "
+                  f"(창 {insert_window_lo:.3f}~{insert_window_hi:.3f}m)   "
+                  f"yaw {math.degrees(fit.yaw_error_rad):+.1f}deg   "
+                  f"좌우 {_lateral_str(fit).strip()}")
+        elif insert_window_entered and not in_insert_window:
+            insert_window_entered = False
+            print(f"  🔕 INSERT 허용 거리 이탈 — 라이다 {distance:.4f}m "
+                  f"(창 {insert_window_lo:.3f}~{insert_window_hi:.3f}m)")
 
         # 근거리 절벽 방어 — EMERGENCY_MIN_M 검사보다 먼저 본다. "작아지면
         # 멈춘다"는 그 규칙이 못 잡는 실패 모드라서, 여기서 직접 잡는다.
@@ -643,6 +707,23 @@ def phase_approach(node, keys):
             print(f"  ⛔ 사용자 중단(키 '{key!r}')")
             return None
 
+        # 2026-09-04: yaw가 틀어져 있으면 전진보다 먼저 고친다 — 틀어진 채
+        # 전진하면 그리퍼 투하점이 바구니 중심에서 벗어난 곳으로 간다(사선
+        # 접근 시나리오, 위 2026-08-26 사용자 지시 참고). check_insert가
+        # 실제로 요구하는 허용치(BASKET_YAW_TOLERANCE_RAD)와 같은 기준으로
+        # 판단한다 — 여기서 맞춰 두면 도착 시점엔 이미 통과해 있다.
+        if fit.ok and abs(fit.yaw_error_rad) > bc.BASKET_YAW_TOLERANCE_RAD:
+            yaw_burst = min(MAX_YAW_BURST_S,
+                            max(MIN_YAW_BURST_S, abs(fit.yaw_error_rad) / YAW_RATE_RAD_S))
+            direction = "CCW(+)" if fit.yaw_error_rad > 0 else "CW(-)"
+            print(f"       ↻ yaw 보정 {math.degrees(fit.yaw_error_rad):+.1f}deg "
+                  f"— {direction}로 {yaw_burst:.2f}s 회전")
+            node.rotate(yaw_burst, rate=math.copysign(YAW_RATE_RAD_S, fit.yaw_error_rad))
+            elapsed = SETTLE_S + yaw_burst
+            if elapsed < CYCLE_S:
+                node.pump(CYCLE_S - elapsed)
+            continue
+
         # 목표를 지나치지 않도록 남은 거리에 맞춰 버스트를 줄인다.
         burst = min(BURST_S, max(MIN_BURST_S, remaining * 0.8 / BURST_SPEED_MPS))
         node.drive(burst)
@@ -663,7 +744,28 @@ def phase_insert(node, keys, fit):
     print("3단계 · INSERT")
     print(BANNER)
 
+    # check_insert의 ②판독 안정성/④부하 안정성 조건은 "직전 사이클 대비
+    # 변화량"을 요구한다(baseline_mission.py의 _judge_insert 참고) — 실제
+    # 미션은 Host가 INSERT를 계속 재요청해 사이클마다 자연히 이전 표본이
+    # 쌓이지만, 이 도구는 phase_approach의 도착 판정을 한 번만 한다.
+    # 그래서 그 도착 표본을 "직전"으로 두고 여기서 한 사이클 더 재서
+    # "현재"를 만든다 — 안 그러면 distance_change_m/load_change가 항상
+    # None이라 매번 "직전 판독이 없다"로 막힌다(2026-09-04 실기에서
+    # 실제로 이렇게 막혀 INSERT를 못 했다).
+    previous_fit = fit
+    previous_load = node.get_load()
+    node.pump(SETTLE_S)
+    fit, _nearest = node.lidar_face()
     load = node.get_load()
+    if fit is None:
+        print("  ⛔ 재판독 실패(스캔 없음) — 처음부터 다시 실행하세요.")
+        return None
+
+    distance_change = None
+    if previous_fit.ok and fit.ok:
+        distance_change = fit.distance_m - previous_fit.distance_m
+    load_change = load - previous_load
+
     inputs = InsertInputs(
         # 이 도구엔 E-STOP 토픽을 안 걸어 뒀다 — 사람이 옆에서 보며 Enter/q로
         # 직접 중단할 수 있으니 False로 고정한다. 실제 미션(mission_orchestrator)
@@ -671,6 +773,12 @@ def phase_insert(node, keys, fit):
         estop_set=False,
         base_stopped=True,  # phase_approach가 도착 시 node.stop()을 이미 불렀다
         gripper_load=load,
+        # 2026-09-03에 InsertInputs에 추가된 필드 — 이 도구는 phase_grasp에서
+        # 사람이 직접 파지를 확인(Enter)한 뒤에만 여기 도달하므로 항상 True다
+        # (실제 미션의 grasp_confirmed와 같은 전제: "CARRY에 들어왔다는 것
+        # 자체가 파지 판정을 통과했다는 뜻"). 이 필드가 추가된 뒤로 이
+        # 도구가 InsertInputs를 갱신 안 해서 TypeError로 죽어 있었다.
+        grasp_confirmed=True,
         face_ok=fit.ok,
         face_distance_m=fit.distance_m,
         face_yaw_error_rad=fit.yaw_error_rad,
@@ -679,6 +787,8 @@ def phase_insert(node, keys, fit):
         face_point_count=fit.point_count,
         face_lateral_offset_m=fit.lateral_offset_m,
         face_lateral_known=fit.lateral_known,
+        distance_change_m=distance_change,
+        load_change=load_change,
     )
     report = check_insert(inputs)
     if not report.ok:
@@ -748,7 +858,7 @@ def _fit_str(fit):
 
 
 def main():
-    global TARGET_LIDAR_M, PROFILE
+    global TARGET_LIDAR_M, PROFILE, EXPECTED_BEARING_RAD
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--target", type=float, default=TARGET_LIDAR_M,
@@ -757,6 +867,12 @@ def main():
                         choices=sorted(FLOOR_GRASP_PROFILES.keys()),
                         help=f"파지 프로파일 (기본 {PROFILE}) — 2026-08-27에 여섯 "
                              "프로파일 전부 이 도구로 실기 검증됨")
+    parser.add_argument("--bearing-deg", type=float, default=0.0,
+                        help="바구니가 있을 것으로 기대하는 방위각(도, CCW+, "
+                             "기본 0=정면). 사선 접근을 재현하려면 로봇을 "
+                             "그 방향으로 비스듬히 놓고 이 값을 실측 각도로 "
+                             "준다 — fit_basket_face가 그 방향 창(±35도) "
+                             "안에서만 바구니를 찾는다(2026-09-04)")
     parser.add_argument("--skip-grasp", action="store_true",
                         help="이미 물체를 물고 CARRY에 있을 때 2단계부터 시작")
     parser.add_argument("--monitor-only", action="store_true",
@@ -764,6 +880,7 @@ def main():
     args = parser.parse_args()
     TARGET_LIDAR_M = args.target
     PROFILE = args.profile
+    EXPECTED_BEARING_RAD = math.radians(args.bearing_deg)
 
     if os.environ.get("ROS_DOMAIN_ID") != "21":
         print("⚠️ ROS_DOMAIN_ID가 21이 아닙니다 — 노드가 서로 안 보입니다.", file=sys.stderr)

@@ -5,6 +5,8 @@ Pi가 판단하는 것은 자기 센서로만 알 수 있는 것뿐이다. 좌�
 
 import math
 
+import pytest
+
 from domain.task import baseline_constants as bc
 from domain.task.preconditions import (
     GraspInputs,
@@ -254,3 +256,44 @@ def test_실측_두_띠는_겹치지_않는다():
     """겹치면 임계를 어디 두든 못 가른다 — 그때는 부하 조건을 판정에서 빼고
     뎁스 카메라에만 기대야 한다. 그 경계를 눈에 보이게 못박아 둔다."""
     assert EMPTY_LOAD_BAND[1] < GRIPPED_LOAD_BAND[0]
+
+
+# ── LIDAR_INSERT_CHECK_ENABLED 스위치 (사용자 지시, 2026-09-04) ────────────
+#
+# "Host의 목표영역 게이트를 1차 관문으로 쓰고, LiDAR가 필요 없다 싶으면
+# 뺄 수 있게" — 이 스위치 하나로 라이다 조건 전체를 껐다 켰다 할 수 있어야
+# 한다는 요구를 그대로 고정한다.
+
+
+def test_기본값은_켜져_있다():
+    """되돌리기 전 기존 동작을 그대로 유지한다 — 스위치 도입 자체가 라이다
+    검증을 약화시키면 안 된다."""
+    assert bc.LIDAR_INSERT_CHECK_ENABLED is True
+
+
+def test_꺼두면_정면을_못_잡아도_통과한다(monkeypatch):
+    monkeypatch.setattr(bc, "LIDAR_INSERT_CHECK_ENABLED", False)
+    report = check_insert(_insert(face_ok=False, face_reason="아무 이유"))
+    assert report.ok, report.reasons
+
+
+def test_꺼두면_판독_불안정도_안_막는다(monkeypatch):
+    monkeypatch.setattr(bc, "LIDAR_INSERT_CHECK_ENABLED", False)
+    report = check_insert(_insert(distance_change_m=None))
+    assert report.ok, report.reasons
+
+
+def test_꺼도_라이다와_무관한_조건은_그대로_막는다(monkeypatch):
+    """estop·차체정지·파지확인·프로파일은 라이다 조건이 아니다 — 스위치와
+    무관하게 계속 막아야 한다."""
+    monkeypatch.setattr(bc, "LIDAR_INSERT_CHECK_ENABLED", False)
+    assert not check_insert(_insert(estop_set=True)).ok
+    assert not check_insert(_insert(base_stopped=False)).ok
+    assert not check_insert(_insert(grasp_confirmed=False)).ok
+    assert not check_insert(_insert(profile=None)).ok
+
+
+def test_켜져_있으면_기존대로_막는다(monkeypatch):
+    monkeypatch.setattr(bc, "LIDAR_INSERT_CHECK_ENABLED", True)
+    report = check_insert(_insert(face_ok=False, face_reason="아무 이유"))
+    assert not report.ok

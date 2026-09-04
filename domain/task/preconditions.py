@@ -148,6 +148,15 @@ def check_insert(inputs: InsertInputs) -> PreconditionReport:
     if inputs.profile is None:
         reasons.append("무엇을 들고 있는지 모른다 — 놓기 폭을 정할 수 없다")
 
+    # 2026-09-04 사용자 지시: Host의 목표영역 게이트(host/basket_target.py)
+    # 를 1차 관문으로 두면서, 아래 라이다 조건들은 그 위에 얹는 떼도 되는
+    # 2차 확인이 됐다. LIDAR_INSERT_CHECK_ENABLED로 통째로 끌 수 있다 —
+    # "LiDAR가 필요 없다 싶으면 뺄 수 있도록"이라는 지시를 반영한 스위치.
+    # 위 estop·차체정지·파지확인·프로파일 조건은 라이다와 무관하므로 이
+    # 스위치의 영향을 받지 않는다.
+    if not bc.LIDAR_INSERT_CHECK_ENABLED:
+        return PreconditionReport(not reasons, tuple(reasons))
+
     if not inputs.face_ok:
         # 라이다가 바구니 정면을 못 잡았다. 거리 숫자는 의미가 없다.
         reasons.append(f"바구니 정면을 잡지 못했다 ({inputs.face_reason})")
