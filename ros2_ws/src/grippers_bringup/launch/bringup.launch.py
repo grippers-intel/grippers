@@ -40,6 +40,7 @@ def launch_setup(context):
     record_bag = LaunchConfiguration("record_bag")
     bag_output = LaunchConfiguration("bag_output")
     arm_port = LaunchConfiguration("arm_port")
+    auto_align_on_first_move = LaunchConfiguration("auto_align_on_first_move")
     use_vla = LaunchConfiguration("use_vla")
     policy_source = LaunchConfiguration("policy_source")
     policy_url = LaunchConfiguration("policy_url")
@@ -134,6 +135,12 @@ def launch_setup(context):
                 # ExecuteJointChunk(VLA 재생)만 거부된다 — classic 경로는 그대로다.
                 # 그래서 use_vla 와 무관하게 항상 넘겨도 안전하다.
                 "policy_calibration_file": policy_calibration_file,
+                # ⚠️ 이 인자가 없어서 실기에서 껐다고 생각하고 켠 채로 돌렸다
+                # (2026-09-05). ros2 launch 는 모르는 인자를 오류로 알리지
+                # 않으므로 auto_align_on_first_move:=false 가 조용히 사라졌다.
+                # use_depth_gate 때와 같은 사고이고 원인도 같다 — 노드에만
+                # 파라미터를 두고 런치에 배선하지 않았다.
+                "auto_align_on_first_move": auto_align_on_first_move,
             }
         ],
     )
@@ -282,6 +289,13 @@ def generate_launch_description():
                 "default_grasp_label",
                 default_value="queen",
                 description="use_depth_gate=false 일 때 쓸 라벨. 파지 프로파일 선택에만 쓴다",
+            ),
+            DeclareLaunchArgument(
+                "auto_align_on_first_move",
+                default_value="true",
+                description="false면 첫 이동 때 IDLE 자동 정렬을 하지 않는다. "
+                "IDLE_CRADLE_RAW 가 실제 교시 자세와 어긋나 있을 때 끈다 — "
+                "정렬이 잠긴 관절을 밀어 버린다(2026-09-05 wrist_roll 909틱)",
             ),
             DeclareLaunchArgument(
                 "use_vla",
