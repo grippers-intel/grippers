@@ -51,7 +51,7 @@ class State(Enum):
     GRASP_ALIGN = auto()       # Pi 가 "영역 밖이다, 다시 세워 달라"(GRASP_BLOCKED) 해서 재정렬 중
     GRASP_REPLAN = auto()      # GRASP_ALIGN이 반복되면 오버헤드 카메라로 크게 다시 세운다 (2026-09-02)
     CARRY_TO_DEST = auto()     # 목적지까지 이동(회피 포함)
-    FACE_BOX = auto()          # 상자 앞 도착 후 정해진 방향(BOX_FACE_YAW_DEG)으로 제자리 회전
+    FACE_BOX = auto()          # 상자 접근 부채꼴 진입 후 목표중심 방향(동적, 2026-09-05)으로 제자리 회전
     NUDGE_BOX = auto()         # 그 방향으로 BOX_NUDGE_M 만큼만 더 전진하고 정지
     PLACE = auto()             # 차량이 SmolVLA 로 내려놓는 동안 대기
     RETURN_HOME = auto()       # 기물을 포기했거나 하나를 다 옮긴 뒤 mcfg.DEFAULT_HOME_XY 로 복귀 중
@@ -263,6 +263,8 @@ class MissionFSM:
                 self.target_label = None
                 self._target_xy = None
                 self.dest_xy = None
+                self.dest_box_name = None
+                self._face_target_yaw_deg = None
                 self.ready_to_advance = False
                 self._path_planner.reset()
                 self._drive.reset()
@@ -296,6 +298,8 @@ class MissionFSM:
             self.target_label = None
             self._target_xy = None
             self.dest_xy = None
+            self.dest_box_name = None
+            self._face_target_yaw_deg = None
             self._instructed_label = None   # 뒤로가기는 사용자 개입이라 지시도 같이 취소
             self._instructed_dest_xy = None
         self._path_planner.reset()
@@ -336,6 +340,18 @@ class MissionFSM:
         self.target_label: Optional[str] = None
         self._target_xy: Optional[XY] = None
         self.dest_xy: Optional[XY] = None
+        # 지금 dest_xy가 어느 상자를 향한 것인지(config.BOXES의 키) — 상자가
+        # 아니라 사용자에게 직접 가져다주는 경우("가져와")는 None이다.
+        # CARRY_TO_DEST가 이 값의 유무로 부채꼴 게이트(basket_target.
+        # check_approach_sector)를 쓸지, 기존 고정 지점 도착 판정을 쓸지
+        # 가른다(2026-09-05, 사용자 지시).
+        self.dest_box_name: Optional[str] = None
+        # FACE_BOX/NUDGE_BOX가 정렬할 목표 방위각 — 상자를 향할 때는
+        # CARRY_TO_DEST가 check_approach_sector()로 진입 지점마다 다르게
+        # 계산해 넣는다(고정 mcfg.BOX_FACE_YAW_DEG가 아니다). None이면
+        # 두 상태 모두 mcfg.BOX_FACE_YAW_DEG로 대체한다("가져와" 등 상자가
+        # 없는 경우).
+        self._face_target_yaw_deg: Optional[float] = None
         self.ready_to_advance = False
         self._advance_requested = False
         self._back_requested = False
@@ -550,6 +566,8 @@ class MissionFSM:
         self.target_label = None
         self._target_xy = None
         self.dest_xy = None
+        self.dest_box_name = None
+        self._face_target_yaw_deg = None
         self.ready_to_advance = False
         self.last_cmd = None
         self._path_planner.reset()
@@ -572,6 +590,8 @@ class MissionFSM:
         self.target_label = label
         self._target_xy = None
         self.dest_xy = _box_front_xy(dest_box)
+        self.dest_box_name = dest_box
+        self._face_target_yaw_deg = None
         self._align_tries = 0
         self._reaim_tries = 0
         self._nudge_from = None
@@ -771,6 +791,7 @@ class MissionFSM:
                 # 고정 좌표로, 아니면(기본값) 기존 라벨별 상자로.
                 if self._instructed_dest_xy is not None:
                     dest_xy = self._instructed_dest_xy
+                    dest_box = None   # 사용자에게 직접 가져다주는 경우 — 상자 아님
                 else:
                     dest_box = mcfg.PIECE_DEST_BOX.get(label)
                     dest_xy = _box_front_xy(dest_box) if dest_box is not None else None
@@ -780,6 +801,8 @@ class MissionFSM:
                 else:
                     self.target_label, self._target_xy = label, xy
                     self.dest_xy = dest_xy
+                    self.dest_box_name = dest_box
+                    self._face_target_yaw_deg = None
                     self._instructed_label = None   # 소비했으니 초기화
                     self._instructed_dest_xy = None
                     # 재정렬 예산은 **대상 1개** 스코프다. 미션 누적으로 두면
@@ -1094,27 +1117,63 @@ class MissionFSM:
         elif self.state == State.CARRY_TO_DEST:
             assert self.dest_xy is not None
             obstacles = _other_pieces(piece_map)
-            dist = self._approach(pose, robot_xy, self.dest_xy, obstacles, None, link)
-            self.ready_to_advance = dist <= mcfg.PLACE_TRIGGER_DIST_M
-            if self.ready_to_advance and self._should_advance():
-                self.ready_to_advance = False
-                self.state = State.FACE_BOX
+            # 2026-09-05, 사용자 지시: 상자로 향할 때는 dest_xy(_box_front_xy,
+            # 상자 중심에서 0.325m 물러난 점)가 아니라 INSERT 목표영역
+            # "중심"을 향해 몬다 — dest_xy는 목표중심에서 0.165m 떨어져 있어
+            # (기존 PLACE_TRIGGER_DIST_M=0.35m 도착 판정 기준이었다), 그
+            # 자리에 서면 새 부채꼴 반경(0.15m) 밖이라 아래 게이트가 영원히
+            # 안 열린다 — 실제로 처음 구현했을 때 이 자리에 갇히는 회귀가
+            # 났었다. self.dest_xy 필드 자체는 그대로 둔다(다른 코드/테스트가
+            # _box_front_xy 값을 그대로 기대한다) — 이번 사이클의 주행
+            # 목표만 바꾼다.
+            nav_target = (basket_target.target_center(self.dest_box_name)
+                          if self.dest_box_name is not None else self.dest_xy)
+            dist = self._approach(pose, robot_xy, nav_target, obstacles, None, link)
+            if self.dest_box_name is not None:
+                # 점(dest_xy) 도착이 아니라 목표영역 중심을 기준으로 한
+                # 접근(남쪽) 부채꼴 진입으로 판정한다 —
+                # basket_target.check_approach_sector() 참고. 부채꼴 호 위
+                # 어디로 들어오든 유효하고, 그 지점마다 다른 정렬각
+                # (align_yaw_deg)을 FACE_BOX/NUDGE_BOX에 넘긴다(고정
+                # BOX_FACE_YAW_DEG가 아니다 — 정중앙 진입일 때만 우연히 같다).
+                sector = basket_target.check_approach_sector(robot_xy, self.dest_box_name)
+                self.ready_to_advance = sector.ok
+                if self.ready_to_advance and self._should_advance():
+                    self._face_target_yaw_deg = sector.align_yaw_deg
+                    self.ready_to_advance = False
+                    self.state = State.FACE_BOX
+            else:
+                # 상자가 아니라 사용자에게 직접 가져다주는 경우("가져와") —
+                # 고정 지점(dest_xy) 도착 판정을 그대로 쓴다. 정렬 목표는
+                # None으로 둬서 FACE_BOX가 mcfg.BOX_FACE_YAW_DEG로 대체하게 한다.
+                self.ready_to_advance = dist <= mcfg.PLACE_TRIGGER_DIST_M
+                if self.ready_to_advance and self._should_advance():
+                    self._face_target_yaw_deg = None
+                    self.ready_to_advance = False
+                    self.state = State.FACE_BOX
 
         elif self.state == State.FACE_BOX:
             # 상자 앞엔 도착했지만 아직 방향이 안 맞을 수 있다(어느 축으로
             # 마지막에 들어왔는지에 따라 다름) — PLACE 로 넘어가기 전에
-            # 항상 정해진 방향(BOX_FACE_YAW_DEG, map 기준 "12시"=+y)을 보고
-            # 서게 만든다. next_waypoint 를 또 쓸 필요 없이(목적지에 이미
-            # 도착했으므로 이동은 없고 회전만 필요) 방위각 오차만 직접 계산한다.
+            # 방향을 맞춰 세운다. 2026-09-05부터 이 목표각은 고정
+            # BOX_FACE_YAW_DEG("12시"=+y)가 아니라, CARRY_TO_DEST가 부채꼴
+            # 진입 지점에서 계산해 넘긴 self._face_target_yaw_deg다(상자가
+            # 아니라 사람에게 가져다주는 경우처럼 그 값이 없으면 기존
+            # BOX_FACE_YAW_DEG로 대체). next_waypoint 를 또 쓸 필요 없이
+            # (목적지에 이미 도착했으므로 이동은 없고 회전만 필요) 방위각
+            # 오차만 직접 계산한다.
             self.nav_goal = None
             self.nav_corner = None
             self.nav_path = None
-            yaw_err = (mcfg.BOX_FACE_YAW_DEG - pose.yaw_deg + 180.0) % 360.0 - 180.0
+            target_yaw = (self._face_target_yaw_deg
+                          if self._face_target_yaw_deg is not None
+                          else mcfg.BOX_FACE_YAW_DEG)
+            yaw_err = (target_yaw - pose.yaw_deg + 180.0) % 360.0 - 180.0
             aligned = abs(yaw_err) <= mcfg.DRIVE_YAW_TOLERANCE_DEG
             self.ready_to_advance = aligned
             nav = DriveCommand(
                 mode=DriveMode.STOP if aligned else DriveMode.ROTATE,
-                waypoint=robot_xy, target_yaw_deg=mcfg.BOX_FACE_YAW_DEG,
+                waypoint=robot_xy, target_yaw_deg=target_yaw,
                 yaw_error_deg=yaw_err, dist_to_target=0.0, blocked_by=None,
             )
             self.last_nav = nav
@@ -1158,7 +1217,26 @@ class MissionFSM:
                 # 첫 진입에서부터 Host 스스로 basket_target 게이트가 실제로
                 # 만족될 만큼 계획을 세운다 — 5cm보다 짧게는 절대 안 잡는다
                 # (그보다 가까우면 원래 로직대로 5cm 직진).
-                if self._nudge_plan is None and not mcfg.LIDAR_INSERT_CHECK_ENABLED:
+                #
+                # 2026-09-05, 사용자 지시("라이다 뺀 상황으로 전제하고 다시
+                # 수정해")로 이 계산을 LIDAR_INSERT_CHECK_ENABLED 값과
+                # 무관하게 항상 한다 — 원래는 True(Pi가 라이다로 거절·보정)
+                # 일 때만 아래 고정 5cm를 썼는데, 그 5cm는 CARRY_TO_DEST가
+                # dest_xy(상자 중심에서 0.325m)에 도착했다고 보던 옛
+                # 판정에서 "그 정도만 더 가면 충분하다"고 잡은 값이었다.
+                # 지금은 CARRY_TO_DEST가 훨씬 더 가까운 접근 부채꼴
+                # (basket_target.SOUTH_APPROACH_SECTOR_RADIUS_M=0.15, 목표
+                # 중심 기준)에서 바로 넘어오므로, 그 옛 5cm 전제가 더 이상
+                # 안 맞는다 — 실측(시뮬레이션) 확인 결과 True일 때 옛 고정
+                # 5cm 경로를 그대로 쓰면 라이다가 이미 바구니 앞면을 지나친
+                # 채(-2.5cm) 멈췄다. Pi 라이다(있다면)는 이제 순수 보너스
+                # 보정으로만 쓴다 — 얼마나 가야 하는지의 1차 판단은
+                # 항상 Host 자신의 ArUco 기하(check_basket_insert_gate)가
+                # 낸다. LIDAR_INSERT_CHECK_ENABLED는 여전히 "Pi가 거부하면
+                # 그 보정 계획(_plan_basket_fix)을 믿을지"만 가른다(아래
+                # gate_ok/host_gate_hit 분기 참고) — 첫 계획 자체는 더는
+                # 그 플래그를 안 본다.
+                if self._nudge_plan is None:
                     dest_box_name = mcfg.PIECE_DEST_BOX.get(self.target_label)
                     if dest_box_name is not None:
                         gate = basket_target.check_basket_insert_gate(
@@ -1170,7 +1248,15 @@ class MissionFSM:
             # (dest_box_name을 모르는 라벨 등) 기존 5 cm 직진이다.
             want_m, axis = self._nudge_plan or (mcfg.BOX_NUDGE_M, "forward")
             is_rotate = axis in ("rotate_left", "rotate_right")
-            heading = math.radians(mcfg.BOX_FACE_YAW_DEG)
+            # FACE_BOX가 맞춘 방향 그대로 밀어야 한다 — 2026-09-05부터 이게
+            # 고정 BOX_FACE_YAW_DEG가 아니라 진입 지점마다 다른 동적 정렬각
+            # (self._face_target_yaw_deg)일 수 있다(basket_target.
+            # check_approach_sector 참고). 값이 없으면(상자가 아닌 경우)
+            # 기존처럼 BOX_FACE_YAW_DEG로 대체한다.
+            nudge_target_yaw = (self._face_target_yaw_deg
+                                 if self._face_target_yaw_deg is not None
+                                 else mcfg.BOX_FACE_YAW_DEG)
+            heading = math.radians(nudge_target_yaw)
             goal = (robot_xy if is_rotate else
                     (self._nudge_from[0] + want_m * math.cos(heading),
                      self._nudge_from[1] + want_m * math.sin(heading)))
@@ -1185,7 +1271,7 @@ class MissionFSM:
             else:
                 moved = math.hypot(robot_xy[0] - self._nudge_from[0],
                                    robot_xy[1] - self._nudge_from[1])
-            yaw_err = (mcfg.BOX_FACE_YAW_DEG - pose.yaw_deg + 180.0) % 360.0 - 180.0
+            yaw_err = (nudge_target_yaw - pose.yaw_deg + 180.0) % 360.0 - 180.0
             aligned = abs(yaw_err) <= mcfg.DRIVE_YAW_TOLERANCE_DEG
             # 2026-09-02 실기(2건): 여기서 계획 거리(want_m)를 다 채울 때까지
             # Pi 보고를 하나도 안 읽고 있다가, PLACE 에 들어가서야 처음
@@ -1424,7 +1510,7 @@ class MissionFSM:
 
             self.ready_to_advance = advance_ready
             nav = DriveCommand(
-                mode=mode, waypoint=goal, target_yaw_deg=mcfg.BOX_FACE_YAW_DEG,
+                mode=mode, waypoint=goal, target_yaw_deg=nudge_target_yaw,
                 yaw_error_deg=yaw_err,
                 dist_to_target=max(want_m - moved, 0.0), blocked_by=None,
             )

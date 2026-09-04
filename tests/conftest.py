@@ -93,16 +93,36 @@ class PiSim(VehicleLink):
 
     @property
     def lidar_m(self) -> float:
-        """라이다가 읽는 바구니 앞면까지의 거리."""
-        return (self._face_y - self.y) - LIDAR_AHEAD_M
+        """라이다가 읽는 바구니 앞면까지의 거리(앞면은 세계좌표 수평선
+        y=_face_y).
+
+        2026-09-05까지는 로봇이 항상 정확히 90도(+y)를 본다고 가정하고
+        `(_face_y - self.y) - LIDAR_AHEAD_M`로 뒀다 — CARRY_TO_DEST가
+        접근 부채꼴(± 60도)로 사선 진입하는 기능이 생기면서 이 가정이
+        깨졌다. 수평선까지의 수직거리는 방향과 무관하게 항상 y차이뿐이지만
+        (점과 수평선 사이 거리는 x와 무관), LIDAR_AHEAD_M(로봇 기준점에서
+        라이다까지의 전진축 오프셋)는 로봇이 실제로 보고 있는 방향으로
+        투영해야 한다 — 그래서 sin(yaw)를 곱한다. yaw=90도(sin=1)면 기존
+        식과 정확히 같아진다(회귀 확인용)."""
+        heading = math.radians(self.yaw_deg)
+        sensor_y = self.y + LIDAR_AHEAD_M * math.sin(heading)
+        return self._face_y - sensor_y
 
     @property
     def lateral_m(self) -> float:
-        """바구니 중심이 로봇 기준 어디 있는가(+가 왼쪽).
+        """바구니 중심이 로봇 기준 어디 있는가(+가 로봇 왼쪽).
 
-        로봇이 +y(BOX_FACE_YAW_DEG=90도)를 보고 있을 때 로봇의 왼쪽은
-        월드 -x 다. 그래서 부호가 뒤집힌다."""
-        return self.x - cfg.BOXES[self.box][0]
+        2026-09-05까지는 로봇이 항상 정확히 90도(+y)를 본다고 가정하고
+        `self.x - box_x`(세계좌표 x차이를 그대로 좌우로 썼다 — 그 경우
+        로봇의 왼쪽이 마침 세계 -x와 같은 방향이라 우연히 맞았다).
+        사선 진입에서는 로봇의 실제 왼쪽 방향(전진축에서 반시계 90도)으로
+        투영해야 한다. yaw=90도에서는 아래 식이 정확히 기존 식과 같아진다
+        (회귀 확인용)."""
+        heading = math.radians(self.yaw_deg)
+        left_x, left_y = -math.sin(heading), math.cos(heading)
+        box_x, box_y, _yaw = cfg.BOXES[self.box]
+        dx, dy = box_x - self.x, box_y - self.y
+        return dx * left_x + dy * left_y
 
     def pose(self) -> Pose:
         return Pose(x=self.x, y=self.y, yaw_deg=self.yaw_deg,

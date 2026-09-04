@@ -149,3 +149,100 @@ def check_basket_insert_gate(
     ok = not reasons
     reason = "목표 영역 도달 + 지향 확인" if ok else "; ".join(reasons)
     return InsertGateResult(ok, distance, facing_error, (tx, ty), reason)
+
+
+# ---------------------------------------------------------------------------
+# 접근 부채꼴 게이트 (사용자 지시, 2026-09-05)
+#
+# 위 check_basket_insert_gate()는 "지금 로봇이 그쪽을 보고 있는가"(지향)까지
+# 같이 본다 — NUDGE_BOX 안에서 이미 정렬된 뒤에 "여전히 유효한가"를 되묻는
+# 용도라 그게 맞다. 여기 새로 두는 건 그보다 앞 단계, CARRY_TO_DEST가
+# "이제 멈추고 방향을 잡아도 되는가"를 정하는 게이트라 로봇이 지금 어디를
+# 보고 있는지는 상관없다 — 위치만 본다.
+#
+# 목표영역 "중심"(target_center)을 기준으로 반경 원을 120도씩 3등분해서,
+# 접근 방향(남쪽 = 작업구역 쪽 = -y = 6시) 부채꼴 안에 로봇이 있으면
+# "예비 INSERT 후보"로 본다. 이 부채꼴의 바깥 호(원주의 1/3)가 그 판정
+# 경계선이다 — 호 위 어디로 들어오든 유효하고, 그 순간 그 자리에서
+# 목표중심을 향한 방위각(align_yaw_deg)으로 제자리 정렬하면 된다.
+# 정중앙(정남쪽)으로 들어오면 이 각도가 정확히 기존
+# mission_config.BOX_FACE_YAW_DEG(90도)와 같아진다 — 그 값이 이 일반식의
+# 특수 케이스였다는 뜻이다.
+#
+# ⚠️ 반경 = MAX_APPROACH_DIST_M(0.15), check_basket_insert_gate()와 같은 값.
+#
+# 2026-09-05 낮에는 이 값을 0.30으로 따로 더 크게 뒀었다 — 로봇의 ArUco
+# 기준점과 실제 라이다/그리퍼가 물리적으로 앞으로 튀어나온 만큼(tests/
+# conftest.py의 LIDAR_AHEAD_M, 2026-08-28 실측에서 역산한 약 0.099m, 이
+# 저장소 실제 코드엔 이 오프셋을 아는 상수가 없다) 감안 못 한 채 0.15를
+# 그대로 쓰면, 부채꼴 진입 판정 순간 Pi 라이다가 이미 바구니 앞면을 지나쳐
+# 있다는 걸(시뮬레이션 회귀: -0.03~-0.05m) 발견했기 때문이다.
+#
+# 그런데 그 값을 정하려면 실측 못한 그 오프셋을 계속 추정해야 했다 —
+# 사용자 지시(2026-09-05 저녁): "라이다 뺀 상황으로 전제하고 다시 수정해".
+# 그리퍼-prefer-no-lidar-for-insert 메모리와 같은 방향이다 — INSERT 최종
+# 확인을 Pi 라이다 실측(그리고 그 실측이 어디서 나는지도 모르는 물리
+# 오프셋)에 기대지 않고, Host가 아는 ArUco 기하만으로 완결되게 설계한다.
+# 그러면 "라이다가 앞면을 지나쳤는가"라는 질문 자체가 무의미해진다 — 이
+# 게이트가 보는 것도, NUDGE_BOX의 무라이다 경로(LIDAR_INSERT_CHECK_ENABLED
+# =False일 때 check_basket_insert_gate로 전진량을 스스로 계산하는 쪽, 아래
+# mission.py NUDGE_BOX 주석 참고)가 완주를 확인하는 것도 전부 같은
+# check_basket_insert_gate()의 목표영역-거리·지향 판정이라, 이 부채꼴이
+# 그 판정 반경(0.15)보다 넓을 이유가 없다 — 오히려 같은 반경을 써야 부채꼴
+# 진입 = "그 뒤 무라이다 창이 곧바로 열린다"가 보장된다. 물리적 안전은
+# 이 반경과 무관하게 hard_stop(상자 중심 기준 순수 ArUco 반경, 아래
+# NUDGE_BOX 참고)이 항상 별도로 지킨다.
+SOUTH_APPROACH_SECTOR_RADIUS_M = MAX_APPROACH_DIST_M
+SOUTH_APPROACH_SECTOR_DEG = 120.0   # 3등분 중 접근(남쪽) 부채꼴의 폭
+_SOUTH_BEARING_DEG = -90.0          # 목표중심 기준 "정남쪽"(atan2 규약, -y)
+
+
+class ApproachSectorResult(NamedTuple):
+    ok: bool
+    distance_m: float
+    bearing_from_center_deg: float   # 목표중심 -> 로봇 방향(atan2 규약)
+    align_yaw_deg: float             # 그 자리에서 목표중심을 향할 정렬 방위각
+    center_xy: tuple[float, float]
+    reason: str
+
+
+def _normalize_deg(deg: float) -> float:
+    return (deg + 180.0) % 360.0 - 180.0
+
+
+def check_approach_sector(
+    robot_xy: tuple[float, float],
+    box_name: str,
+    radius_m: float = SOUTH_APPROACH_SECTOR_RADIUS_M,
+    sector_deg: float = SOUTH_APPROACH_SECTOR_DEG,
+) -> ApproachSectorResult:
+    """`box_name` 목표영역 중심을 기준으로, 로봇이 접근(남쪽) 부채꼴의
+    반경 `radius_m` 안에 있는지를 위치만으로 판정한다. ok면
+    `align_yaw_deg`가 그 자리에서 목표중심을 향하는 제자리 정렬 목표각이다
+    — CARRY_TO_DEST가 이 결과로 FACE_BOX 진입 여부와 정렬각을 함께 정한다."""
+    cx, cy = target_center(box_name)
+    rx, ry = robot_xy
+    dx, dy = rx - cx, ry - cy
+    distance = math.hypot(dx, dy)
+    if distance < 1e-6:
+        # 로봇이 목표중심과 정확히 겹친다(사실상 안 생기는 경우) — atan2(0,0)
+        # 미정의를 피하려고 정남쪽을 가정한다(check_basket_insert_gate의
+        # distance<1e-6 처리와 같은 이유).
+        bearing = _SOUTH_BEARING_DEG
+    else:
+        bearing = math.degrees(math.atan2(dy, dx))
+    align_yaw = _normalize_deg(bearing + 180.0)
+
+    half = sector_deg / 2.0
+    rel = _normalize_deg(bearing - _SOUTH_BEARING_DEG)
+    in_sector = abs(rel) <= half
+    ok = distance <= radius_m and in_sector
+
+    if ok:
+        reason = "접근 부채꼴 진입 — 예비 INSERT 후보"
+    elif distance > radius_m:
+        reason = f"목표중심까지 {distance * 1000:.0f}mm > {radius_m * 1000:.0f}mm"
+    else:
+        reason = f"접근 부채꼴 밖 (중심 기준 {bearing:+.1f}deg, 남쪽 ±{half:.0f}deg만 유효)"
+
+    return ApproachSectorResult(ok, distance, bearing, align_yaw, (cx, cy), reason)

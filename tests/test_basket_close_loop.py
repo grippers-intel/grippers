@@ -109,6 +109,32 @@ def test_실기_출발조건이_그날_관측과_같다():
     assert round(sim.lateral_m * 1000) == -79
 
 
+# 2026-09-05, 사용자 지시("라이다 뺀 상황으로 전제하고 다시 수정해")로
+# CARRY_TO_DEST가 부채꼴(사선) 진입 + 동적 정렬로 바뀐 뒤 아래 3개가 깨졌다.
+# 원인은 반경 숫자가 아니라 이 저장소가 아예 모르는 값이다 — ArUco 마커와
+# 로봇의 실제 물리적 앞부분(그리퍼/라이다)이 얼마나 떨어져 있는지
+# (tests/conftest.py의 LIDAR_AHEAD_M≈0.099m, 2026-08-28 사고 한 건에서
+# 역산한 값, 실제 코드엔 이 오프셋을 아는 상수가 없다). 사선으로 더 가까운
+# 부채꼴(반경 0.15m, ArUco 기준)에서 진입하다 보니, 시뮬레이션상 그 오프셋
+# 만큼 로봇의 "실제" 앞부분이 이미 목표를 지나쳐 있는 경우가 나온다
+# (아래 test_그날_막힌_자리에서_INSERT까지_간다: 라이다 -0.05m, 물리적으로
+# 벽을 지나친 값).
+#
+# hard_stop(BASKET_HARD_STOP_MARGIN_M=0.05, mission.py NUDGE_BOX)의 여유를
+# 늘려서 덮는 방법도 검토했지만, 그 상수는 "너무 크면 정상 INSERT까지
+# 막는다"는 경고가 이미 코드에 있는 값이고(2026-09-03), 실측 못한 오프셋을
+# 또 다른 실측 못한 숫자로 덮는 것이라 사용자가 거부했다 — 지금 상태
+# 그대로 두고 **다음 실기(2026-09-08 전)에서 직접 확인**하기로 했다.
+#
+# 그래서 이 3개는 지운 게 아니라 skip으로 남긴다 — 지금 코드가 이 역사적
+# 시나리오(2026-08-28)를 여전히 안전하게 재현하는지는 실기 전까지 모른다는
+# 뜻을, 조용히 통과하는 초록불 대신 눈에 보이게 남겨 두는 것이다.
+_SECTOR_APPROACH_OVERSHOOT_SKIP = (
+    "2026-09-05 사선 부채꼴 접근 도입 후 ArUco-그리퍼 오프셋 미검증으로 "
+    "실패 — 위 모듈 주석 참고. 다음 실기에서 직접 확인하기로 함(사용자 지시).")
+
+
+@pytest.mark.skip(reason=_SECTOR_APPROACH_OVERSHOOT_SKIP)
 def test_그날_막힌_자리에서_INSERT까지_간다():
     sim = PiSim()
     fsm, steps = _run_to_place_done(sim)
@@ -127,6 +153,7 @@ def test_그날_막힌_자리에서_INSERT까지_간다():
     assert steps < MAX_STEPS
 
 
+@pytest.mark.skip(reason=_SECTOR_APPROACH_OVERSHOOT_SKIP)
 def test_횡이동_명령을_실제로_쓴다():
     """좌우 79mm 를 회전으로 고치려 들면 거리와 yaw 가 같이 틀어진다."""
     sim = PiSim()
@@ -136,6 +163,7 @@ def test_횡이동_명령을_실제로_쓴다():
     assert cmds & {"left", "right"}, f"횡이동을 안 썼다 — 보낸 명령 {cmds}"
 
 
+@pytest.mark.skip(reason=_SECTOR_APPROACH_OVERSHOOT_SKIP)
 def test_거리를_먼저_맞추고_좌우를_나중에_본다():
     """Pi 의 좌우 추정은 가까이 붙어야 정확하다(basket_lidar_align 주석)."""
     sim = PiSim()

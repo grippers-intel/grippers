@@ -74,8 +74,18 @@ def test_라이다_게이트가_꺼져있으면_목표거리로_계획을_세운
         "5cm만 움직였는데 벌써 PLACE로 넘어갔다 — 옛 고정 5cm 넛지로 되돌아간 것으로 보인다")
 
 
-def test_라이다_게이트가_켜져있으면_기존대로_5cm_기본값이다(monkeypatch):
-    """대조군 — 플래그가 True(기존 전제)면 이 새 로직이 끼어들면 안 된다."""
+def test_라이다_게이트가_켜져있어도_스스로_계획을_세운다(monkeypatch):
+    """2026-09-05, 사용자 지시("라이다 뺀 상황으로 전제하고 다시 수정해")로
+    바뀐 대조군 — 예전에는 플래그가 True(Pi가 라이다로 거절·보정)면 이
+    자체 계획 로직이 끼어들지 않고 고정 5cm만 썼다. 그 5cm는 CARRY_TO_DEST가
+    dest_xy(상자 중심에서 0.325m)에서 출발한다고 보던 옛 판정 기준이었다.
+    지금은 CARRY_TO_DEST가 그보다 훨씬 가까운 접근 부채꼴(basket_target.
+    SOUTH_APPROACH_SECTOR_RADIUS_M=0.15, 목표중심 기준)에서 바로 NUDGE_BOX로
+    넘어오므로, 옛 5cm 전제가 더는 안 맞는다(그대로 두면 실측상 라이다가
+    이미 바구니 앞면을 지나친 채 멈춘다) — 그래서 이 플래그 값과 무관하게
+    항상 Host 스스로 목표영역까지 남은 거리로 계획을 세우도록 고쳤다. Pi
+    라이다는 이제 그 위에 얹히는 보너스 보정일 뿐이다(mission.py NUDGE_BOX
+    첫 진입 블록의 같은 날짜 주석 참고)."""
     monkeypatch.setattr(mcfg, "LIDAR_INSERT_CHECK_ENABLED", True)
 
     dest_xy = _box_front_xy("chess")
@@ -87,4 +97,9 @@ def test_라이다_게이트가_켜져있으면_기존대로_5cm_기본값이다
 
     fsm.step(link.pose(), {}, link)
 
-    assert fsm._nudge_plan is None
+    assert fsm._nudge_plan is not None
+    want_m, axis = fsm._nudge_plan
+    assert axis == "forward"
+    expected = basket_target.check_basket_insert_gate(
+        dest_xy, mcfg.BOX_FACE_YAW_DEG, "chess").distance_m
+    assert want_m == max(mcfg.BOX_NUDGE_M, expected)
