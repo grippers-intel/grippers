@@ -148,8 +148,12 @@ class DriveSequencer:
     """FORWARD/STOP/ROTATE 상태를 들고 있다가 매 사이클 하나씩 낸다."""
 
     def __init__(self, yaw_tolerance_deg: float = mcfg.DRIVE_YAW_TOLERANCE_DEG,
-                 min_heading_dist_m: float = mcfg.MIN_HEADING_DIST_M) -> None:
+                 min_heading_dist_m: float = mcfg.MIN_HEADING_DIST_M,
+                 yaw_enter_deg: float = mcfg.DRIVE_YAW_ENTER_DEG) -> None:
         self.yaw_tolerance_deg = yaw_tolerance_deg
+        # 직진 중에 회전으로 되돌아가는 문턱. 나올 때(yaw_tolerance_deg)보다
+        # 넓다 — 근거는 mission_config.DRIVE_YAW_ENTER_DEG 주석.
+        self.yaw_enter_deg = max(yaw_enter_deg, yaw_tolerance_deg)
         self.min_heading_dist_m = min_heading_dist_m
         self._mode: Optional[DriveMode] = None   # None = 이번이 구간의 첫 update()
         self._next_after_stop = DriveMode.FORWARD
@@ -188,6 +192,8 @@ class DriveSequencer:
             target_yaw = float(np.degrees(np.arctan2(dy, dx)))
         yaw_err = (target_yaw - robot_yaw_deg + 180.0) % 360.0 - 180.0
         aligned = abs(yaw_err) <= self.yaw_tolerance_deg
+        # 직진을 그만둘 만큼 틀어졌는가. 회전을 끝내는 기준(aligned)보다 넓다.
+        drifted = abs(yaw_err) > self.yaw_enter_deg
 
         if self._mode is None:
             # 구간의 첫 사이클 — STOP 전이 신호 없이 바로 알맞은 모드로 시작.
@@ -195,7 +201,7 @@ class DriveSequencer:
 
         out_mode = self._mode   # 이번 사이클에 내보낼 모드(전이 전 값)
 
-        if self._mode == DriveMode.FORWARD and not aligned:
+        if self._mode == DriveMode.FORWARD and drifted:
             self._mode, self._next_after_stop = DriveMode.STOP, DriveMode.ROTATE
         elif self._mode == DriveMode.ROTATE and aligned:
             self._mode, self._next_after_stop = DriveMode.STOP, DriveMode.FORWARD
