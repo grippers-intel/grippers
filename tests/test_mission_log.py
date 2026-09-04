@@ -204,6 +204,43 @@ def test_실행마다_다른_파일에_쓴다():
     assert first.suffix == ".log"
 
 
+# ── 실행 후 코멘트 ────────────────────────────────────────────────────────
+#
+# run_mission.py 종료 직후 사람이 남기는 한 줄 — "재시도 끝에 성공" 같은
+# 요약표엔 안 남는 맥락을 로그 파일 끝에 덧붙인다.
+
+
+def test_코멘트를_텍스트와_jsonl_양쪽에_남긴다(tmp_path):
+    log_path = tmp_path / "run.log"
+    log_path.write_text("# 기존 로그\n", encoding="utf-8")
+    jsonl_path = log_path.with_suffix(".jsonl")
+    jsonl_path.write_text('{"t": 0}\n', encoding="utf-8")
+
+    mission_log.append_annotation(log_path, "knight를 떨어뜨렸지만 재시도 후 성공")
+
+    text = log_path.read_text(encoding="utf-8")
+    assert "# 기존 로그" in text, "기존 내용을 지우면 안 된다 — 추가만 한다"
+    assert "knight를 떨어뜨렸지만 재시도 후 성공" in text
+
+    rows = [json.loads(line) for line in jsonl_path.read_text(encoding="utf-8").splitlines()]
+    assert rows[0] == {"t": 0}, "기존 사이클 기록은 그대로여야 한다"
+    assert rows[-1]["annotation"] == "knight를 떨어뜨렸지만 재시도 후 성공"
+
+
+def test_빈_코멘트는_아무것도_안_남긴다(tmp_path):
+    log_path = tmp_path / "run.log"
+    log_path.write_text("# 기존 로그\n", encoding="utf-8")
+
+    mission_log.append_annotation(log_path, "   ")
+
+    assert log_path.read_text(encoding="utf-8") == "# 기존 로그\n"
+    assert not log_path.with_suffix(".jsonl").exists()
+
+
+def test_기록_경로가_없으면_코멘트도_조용히_무시한다():
+    mission_log.append_annotation(None, "이 실행은 --no-log 였다")  # 예외가 안 나면 통과
+
+
 # ── 두 도구 ────────────────────────────────────────────────────────────────
 #
 # 이 셋이 확인하는 것은 **argv 배선**이다 — 도구가 기본값을 제대로 켜고
