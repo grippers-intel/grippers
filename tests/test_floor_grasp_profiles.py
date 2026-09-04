@@ -38,7 +38,16 @@ def test_floor_grasp_profiles_match_measured_object_geometry():
     assert profiles["chess_rook"].close_width_mm == 9.5
     # 2026-08-25: 파지 전용 하한을 9.0 -> 7.0으로 실측해 내렸다.
     assert profiles["chess_knight"].close_width_mm == 7.0
-    assert all(profile.preopen_width_mm == 168.0 for profile in profiles.values())
+    # 2026-08-30: 사전개방을 168 -> 65mm 로 내렸다. 168 로 열면 턱이 손목캠
+    # 프레임 밖으로 나가는데(40mm 또렷 / 65mm 잘 보임 / 120·168mm 안 보임),
+    # 손목캠의 존재 이유가 턱과 물체의 mm 관계를 담는 것이라 턱이 프레임
+    # 밖이면 사람도 VLA 정책도 조준을 못 한다. 65 는 투하 폭 최대값
+    # (soccer 61mm)을 덮는 가장 좁은 값이다.
+    #
+    # 숫자를 다시 적지 않고 상수에서 가져온다 — 리터럴로 두면 상수가 바뀔
+    # 때 이 테스트만 깨진다(같은 실수를 test_motion 에서 이미 했다).
+    assert all(profile.preopen_width_mm == module.GRIPPER_PREOPEN_MM
+               for profile in profiles.values())
 
 
 def test_every_profile_squeezes_by_the_same_margin_unless_the_jaw_bottoms_out():
