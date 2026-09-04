@@ -76,10 +76,17 @@ class Capture(Node):
         r = future.result()
         if r is None:
             return None
+        # ⚠️ ROS 메시지의 고정 길이 배열은 numpy 배열이고, list() 로 감싸도
+        # **원소가 numpy 스칼라로 남는다.** 그대로 두면 json.dumps 가
+        # `Object of type int32 is not JSON serializable` 로 죽는다.
+        # (같은 함정이 pose_verify_cycle.ArmSnapshot 주석에 2026-08-25 기록으로
+        #  남아 있다. 읽고도 밟았다 — 원소까지 파이썬 기본형으로 바꿀 것.)
         return {
             "ok": bool(r.ok),
-            "position_raw": list(r.position_raw),
-            "policy_state": list(r.policy_state) if getattr(r, "policy_state_valid", False) else None,
+            "online": [bool(v) for v in r.online],
+            "position_raw": [int(v) for v in r.position_raw],
+            "policy_state": ([float(v) for v in r.policy_state]
+                             if getattr(r, "policy_state_valid", False) else None),
         }
 
 
@@ -135,8 +142,14 @@ def main():
             "frame_stamp": node.stamp,
             "arm": node.arm_state(),
         }
-        with open(out / "log.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        # ⚠️ 로그 실패로 촬영을 끊지 않는다. 측정 중에 스크립트가 죽으면 그
+        # 회차를 다시 찍어야 하고, 차량을 다시 세우는 비용이 로그 한 줄보다
+        # 훨씬 크다. 프레임은 이미 저장돼 있으므로 로그가 없어도 잴 수 있다.
+        try:
+            with open(out / "log.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as e:  # noqa: BLE001 — 촬영을 계속하는 것이 우선
+            print(f"  (로그 기록 실패, 프레임은 저장됨: {type(e).__name__}: {e})")
         arm = record["arm"]
         pan = (arm or {}).get("policy_state")
         print(f"  저장 {png.name}" + (f"   pan {pan[0]:+.2f}도" if pan else "   (관절값 없음)"))
