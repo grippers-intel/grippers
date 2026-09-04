@@ -25,8 +25,8 @@ servo 6 잔차는 **실패가 아니라 측정값**이다. servo 6에는 토크 
 
 사전 준비:
   - depth_camera · depth_cam_rotate_node · perception_node · arm_driver
-  - 팔 아래에 바구니나 완충재를 둘 것 — 투하 단계에서 물체가 195mm 높이에서
-    떨어진다.
+  - 팔 아래에 바구니나 완충재를 둘 것 — 투하 단계에서 물체가 300mm 높이에서
+    떨어진다(2026-09-04부터, 옛 195mm에서 상향).
   - odom_publisher는 필요 없다(주행하지 않는다).
 
 사용:

@@ -10,7 +10,7 @@ ROS도 하드웨어도 참조하지 않는다 — 그래서 개발 머신에서 
 """
 
 from grippers_arm.floor_grasp_profiles import (
-    BASKET_DROP_195_RAW,
+    BASKET_DROP_300_RAW,
     FLOOR_GRASP_PROFILES,
     HORIZONTAL_GRASP_POSES_DEG,
     HORIZONTAL_SAFE_145_RAW,
@@ -39,7 +39,7 @@ def expected_poses(profile: str, frozen_servo1: int):
     등록 절대값으로 되돌리지 않으려는 것. idle/drop은 등록 절대값을 쓴다.
     """
     idle = tuple(IDLE_CRADLE_RAW)
-    drop = tuple(BASKET_DROP_195_RAW)
+    drop = tuple(BASKET_DROP_300_RAW)
     safe = (frozen_servo1,) + tuple(HORIZONTAL_SAFE_145_RAW[1:])
     grasp = (frozen_servo1,) + tuple(
         deg_to_raw(deg) for deg in HORIZONTAL_GRASP_POSES_DEG[profile][1:]

@@ -49,7 +49,7 @@ from .gripper_calibration import (
     width_from_position,
 )
 from .floor_grasp_profiles import (
-    BASKET_DROP_195_RAW,
+    BASKET_DROP_300_RAW,
     CARRY_RAW,
     HORIZONTAL_GRASP_POSES_DEG,
     HORIZONTAL_SAFE_145_RAW,
@@ -944,7 +944,7 @@ class ArmDriverNode(Node):
 
         idle = self._tuple_goals(IDLE_CRADLE_RAW)
         carry = self._tuple_goals(CARRY_RAW)
-        drop = self._tuple_goals(BASKET_DROP_195_RAW)
+        drop = self._tuple_goals(BASKET_DROP_300_RAW)
         safe = _freeze_servo1(self._tuple_goals(HORIZONTAL_SAFE_145_RAW))
         grasp = _freeze_servo1(self._raw_goals(backend, HORIZONTAL_GRASP_POSES_DEG[profile]))
         midpoint = {
@@ -1122,7 +1122,7 @@ class ArmDriverNode(Node):
         요청에 profile이 들어 있어 하나만 보면 되지만, 정렬은 아무 정보
         없이 불려 온다."""
         safe = {**self._tuple_goals(HORIZONTAL_SAFE_145_RAW), 1: frozen_servo1}
-        named = {"safe": safe, "drop": self._tuple_goals(BASKET_DROP_195_RAW)}
+        named = {"safe": safe, "drop": self._tuple_goals(BASKET_DROP_300_RAW)}
         for profile, angles in HORIZONTAL_GRASP_POSES_DEG.items():
             grasp = {**self._raw_goals(backend, angles), 1: frozen_servo1}
             named[f"grasp:{profile}"] = grasp

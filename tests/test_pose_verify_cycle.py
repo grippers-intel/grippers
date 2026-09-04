@@ -67,7 +67,7 @@ def test_safe_grasp_and_midpoint_use_the_frozen_servo1_but_idle_and_drop_do_not(
     """arm_driver_node._move_floor_stage와 같은 계약 — servo1은 safe/grasp/
     midpoint 동안 얼려 두고, idle/drop만 등록 절대값을 쓴다. 도구가 이걸
     틀리면 좌우 정렬이 어긋난 회차에서 멀쩡한 자세를 실패로 보고한다."""
-    from grippers_arm.floor_grasp_profiles import BASKET_DROP_195_RAW, IDLE_CRADLE_RAW
+    from grippers_arm.floor_grasp_profiles import BASKET_DROP_300_RAW, IDLE_CRADLE_RAW
 
     poses = pv.expected_poses("chess_rook", frozen_servo1=1900)
 
@@ -75,7 +75,7 @@ def test_safe_grasp_and_midpoint_use_the_frozen_servo1_but_idle_and_drop_do_not(
     assert poses["grasp"][0] == 1900
     assert poses["midpoint"][0] == 1900
     assert poses["idle"] == tuple(IDLE_CRADLE_RAW)
-    assert poses["drop"] == tuple(BASKET_DROP_195_RAW)
+    assert poses["drop"] == tuple(BASKET_DROP_300_RAW)
 
 
 def test_midpoint_is_the_per_joint_average_of_grasp_and_safe():

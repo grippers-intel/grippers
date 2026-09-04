@@ -162,7 +162,7 @@ def test_floor_stage_freezes_servo1_for_safe_and_grasp_but_not_idle_or_drop():
     assert "_freeze_servo1(self._tuple_goals(HORIZONTAL_SAFE_145_RAW))" in source
     assert "_freeze_servo1(self._raw_goals(backend, HORIZONTAL_GRASP_POSES_DEG[profile]))" in source
     assert "idle = self._tuple_goals(IDLE_CRADLE_RAW)" in source
-    assert "drop = self._tuple_goals(BASKET_DROP_195_RAW)" in source
+    assert "drop = self._tuple_goals(BASKET_DROP_300_RAW)" in source
 
 
 def test_fold_to_cradle_checks_servos_before_and_after_motion():
@@ -968,7 +968,7 @@ def test_carry_는_교시_절대값이라_servo1이_정면으로_돌아온다():
     assert "carry = _freeze_servo1(" not in source
     # idle·drop 도 같은 이유로 절대값이다.
     assert "idle = self._tuple_goals(IDLE_CRADLE_RAW)" in source
-    assert "drop = self._tuple_goals(BASKET_DROP_195_RAW)" in source
+    assert "drop = self._tuple_goals(BASKET_DROP_300_RAW)" in source
 
 
 def test_팔_길이_주석이_실측값과_어긋나지_않는다():

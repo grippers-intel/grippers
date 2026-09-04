@@ -1,45 +1,48 @@
 #!/usr/bin/env python3
-"""Operator-gated empty-hand validation for the direct basket drop path.
+"""Operator-gated empty-hand validation for the production (300mm) basket
+drop pose — BASKET_DROP_300_RAW in floor_grasp_profiles.py.
 
-This does not release an object.  It validates IDLE -> DROP_195 -> IDLE
+This does not release an object.  It validates IDLE -> DROP_300 -> IDLE
 without the SAFE_145 waypoints.  Keep the base stationary.
 
-⚠️ 2026-09-04: 이 195mm 값은 production에서 더 이상 쓰이지 않는다 —
-floor_grasp_profiles.BASKET_DROP_300_RAW(300mm)로 대체됐다("그리퍼 사이의
-물체가 바구니에 안 닿을 것 같다"는 사용자 우려로 상향). 이 스크립트는
-그 교체 전 195mm 자세를 검증한 기록으로 남겨 두는 것이라, floor_grasp_
-profiles에서 지워진 값을 여기 그대로 인라인해 깨지지 않게 했다. 지금
-쓰는 자세를 검증하려면 tools/basket_drop_pose_300_hardware_test.py를 쓸 것.
+BASKET_DROP_300_RAW replaced the originally-taught BASKET_DROP_195_RAW on
+2026-09-04 ("그리퍼 사이의 물체가 바구니에 안 닿을 것 같다"는 사용자 우려).
+It is not a measured/taught pose — it is the FK-computed solution from
+tools/drop_pose_height_test.py (--height-mm 300 --lock-servo1-to-idle),
+which keeps the same forward reach (차체 전면 기준 약 200mm) and the same
+horizontal finger orientation as the old 195mm pose, re-solving only
+servo2/3/4 for the new height. servo1 is also intentionally different from
+the old taught value: the old value (2029) was -37raw(-3.25°) off from
+IDLE(2066), which made the base rotate slightly on every DROP entry/return
+(실기 관찰, 2026-09-04) — 사용자 지시("웬만하면 그냥 고정해줘")로 IDLE의
+servo1을 그대로 물려써 그 회전을 없앴다. This script — and the earlier
+230/250/270mm intermediate steps that led to it — confirmed the computed
+pose interference-free before it was promoted into floor_grasp_profiles.py
+and rebuilt into the grippers_arm ROS package (2026-09-04).
 """
 
 import time
 
 # soarm_lab을 먼저 import해야 한다 — soarm_lab/__init__.py가 자기 디렉터리를
 # sys.path에 얹어 둬서 driver_sdk를 flat import할 수 있게 만든다
-# (arm_driver_node.py / tools/align_to_idle.py와 동일한 규칙). 실기
-# (2026-08-21)에서 이 줄 없이 바로 driver_sdk를 import해
-# ModuleNotFoundError로 확인됨.
+# (arm_driver_node.py / tools/align_to_idle.py와 동일한 규칙).
 import soarm_lab  # noqa: F401
 from driver_sdk import STS3215Driver
-from grippers_arm.floor_grasp_profiles import IDLE_CRADLE_RAW
+from grippers_arm.floor_grasp_profiles import (
+    BASKET_DROP_300_RAW,
+    IDLE_CRADLE_RAW,
+    TAUGHT_POSITION_LIMITS,
+)
 from grippers_arm.gripper_calibration import GRIPPER_CLOSED_MM, position_from_width
 
-# floor_grasp_profiles.py에서는 지워졌다 — 위 docstring 참고. 대체된 값의
-# 원본 그대로다: (2029, 2192, 2601, 1345, 3007).
-BASKET_DROP_195_RAW = (2029, 2192, 2601, 1345, 3007)
+DROP_300_RAW = BASKET_DROP_300_RAW
 
 SERVO_IDS = range(1, 6)
 START_TOLERANCE_RAW = 120
 MAX_START_SERVO2_TEMP_C = 50
 
-# CLOSED는 하드코딩하지 않는다 — align_to_idle.py와 동일하게 gripper_calibration의
-# 실측 보정표에서 그대로 끌어온다.
 GRIPPER_CLOSED_RAW = position_from_width(GRIPPER_CLOSED_MM)
 
-# glide_raw는 고정 스텝 수(30)×delay(0.1s)로만 보간을 커밋하고 present가 실제로
-# goal에 닿았는지는 보지 않는다. 큰 폭 이동(IDLE 접기)은 그 창 안에 안 끝날 수
-# 있다 — horizontal_grasp_hardware_test.py에서 실기(2026-08-21)로 확인된 문제와
-# 동일. 마지막 IDLE 복귀에는 반드시 이 확인을 거친다.
 SETTLE_TOLERANCE_RAW = 120
 SETTLE_TIMEOUT_SEC = 15.0
 SETTLE_POLL_SEC = 0.3
@@ -92,14 +95,6 @@ def wait_until_converged(
     timeout=SETTLE_TIMEOUT_SEC,
     poll=SETTLE_POLL_SEC,
 ):
-    """glide_raw가 끝난 뒤에도 present가 goal에 닿지 않았을 수 있다 (모듈 상단
-    SETTLE_TOLERANCE_RAW 주석 참고). targets에 있는 서보(팔 1~5뿐 아니라
-    그리퍼 6도 가능)가 전부 tolerance 안에 들어올 때까지 poll 간격으로 최대
-    timeout초 present를 다시 읽는다. 끝까지 못 들어오면 무엇이 얼마나
-    남았는지 담아 RuntimeError를 낸다.
-
-    ⚠️ 물체를 잡느라 목표에 못 미치는 게 정상인 호출에는 쓰지 않는다 — 여기는
-    "주변이 비었다고 확신하는" 자유 이동에만 쓴다."""
     deadline = time.monotonic() + timeout
     present = {sid: driver.get_position(sid) for sid in targets}
     while True:
@@ -124,6 +119,15 @@ def report(driver, label):
 
 
 def main():
+    for servo_id, raw in zip(range(1, 6), DROP_300_RAW):
+        lo, hi = TAUGHT_POSITION_LIMITS[servo_id]
+        if not (lo <= raw <= hi):
+            raise RuntimeError(
+                f"DROP_300_RAW servo{servo_id}={raw}가 TAUGHT_POSITION_LIMITS "
+                f"[{lo},{hi}] 밖입니다 — 계산이 이 팔의 현재 캘리브레이션과 "
+                "안 맞습니다. 실기로 옮기지 마세요."
+            )
+
     driver = STS3215Driver("/dev/soarm")
     driver.connect()
 
@@ -144,17 +148,16 @@ def main():
         raise RuntimeError("servo 6 position write failed")
     time.sleep(1.5)
 
-    confirm("차체·바구니·케이블 간섭을 지켜보며 IDLE에서 실측 DROP_195로 직접 이동")
-    glide_raw(driver, "drop-195", BASKET_DROP_195_RAW)
-    report(driver, "drop-195")
+    print(f"\n목표 DROP_300_RAW(production)={DROP_300_RAW}")
+    confirm("차체·바구니·케이블 간섭을 지켜보며 IDLE에서 DROP_300(계산값)으로 직접 이동")
+    glide_raw(driver, "drop-300", DROP_300_RAW)
+    report(driver, "drop-300")
 
-    confirm("직접 전개 경로의 무간섭을 확인했습니다. DROP_195에서 IDLE로 직접 복귀")
+    confirm("직접 전개 경로의 무간섭을 확인했습니다. DROP_300에서 IDLE로 직접 복귀")
     glide_raw(driver, "return-idle", IDLE_CRADLE_RAW)
     idle_raw = {servo_id: IDLE_CRADLE_RAW[servo_id - 1] for servo_id in SERVO_IDS}
     wait_until_converged(driver, "return-idle", idle_raw)
 
-    # IDLE 관례는 그리퍼 CLOSED다 (align_to_idle.py의 idle_targets() 참고).
-    # 시험 시작에 80mm로 열어뒀으니 여기서 닫아 정식 IDLE로 맞춘다.
     confirm("그리퍼 주변이 비어 있습니다. 정식 IDLE로 그리퍼 닫기")
     if not driver.set_position(6, position_from_width(GRIPPER_CLOSED_MM)):
         raise RuntimeError("servo 6 position write failed")
@@ -162,7 +165,7 @@ def main():
     wait_until_converged(driver, "gripper-idle-close", {6: GRIPPER_CLOSED_RAW})
 
     report(driver, "complete")
-    print("\n빈손 IDLE ↔ DROP_195 직접 왕복 완료")
+    print("\n빈손 IDLE ↔ DROP_300 직접 왕복 완료")
 
 
 if __name__ == "__main__":
