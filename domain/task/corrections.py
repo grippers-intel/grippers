@@ -116,10 +116,67 @@ def from_grasp_precondition(inputs) -> Correction | None:
     return None
 
 
+def retreat_if_too_close(distance_m: float) -> Correction | None:
+    """라이다 판독이 이미 안전 최소거리보다 가까우면 물러나라는 보정.
 
-# ⚠️ 2026-09-04: `retreat_if_too_close`·`within_stop_window`·`from_insert`
-# (라이다 거리 기반 INSERT/APPROACH_BOX 보정)를 사용자 지시로 제거했다 —
-# Host가 INSERT 위치까지 전적으로 책임지기로 하면서, Pi가 라이다로 "더
-# 가라/물러나라"를 계산해 되돌려주는 경로 자체가 없어졌다. 근거는
-# `preconditions.check_insert`·`baseline_mission.BaselineCarryState` 주석,
-# 이전 구현은 git 이력 참고.
+    `from_insert`(도착해서 INSERT를 판정할 때)와 APPROACH_BOX 접근 중
+    실시간 점검(baseline_mission.BaselineCarryState, 2026-09-02) 양쪽에서
+    **같은 계산**을 쓴다 — 절벽 아래는 "더 가라"가 아니라 "물러나라"다.
+    그 아래로는 판독이 커지는 방향으로 틀리므로 더 붙이면 상황이 나빠지기만
+    한다. 두 자리에서 따로 계산하면 어느 한쪽만 고쳐질 때 조용히 갈라진다."""
+    from domain.task import baseline_constants as bc
+
+    if distance_m < bc.BASKET_MIN_LIDAR_M:
+        return Correction(RETREAT,
+                          forward_m=distance_m - bc.BASKET_STOP_LIDAR_M)
+    return None
+
+
+def within_stop_window(distance_m: float) -> bool:
+    """라이다 판독이 이미 INSERT 정지 거리 창 안인가 (2026-09-02).
+
+    APPROACH_BOX 접근 중 이 창 안에 들어오면 더 밀 필요가 없다 — Host가
+    계획한 거리(want_m)를 마저 채우려다 창을 넘겨 버리는 사고
+    (09-02 실기)를 막는다. 요·좌우·안정성·부하는 여기서 안 본다 —
+    `from_insert`/`check_insert`가 PLACE에서 그대로 마저 본다."""
+    from domain.task import baseline_constants as bc
+
+    return abs(distance_m - bc.BASKET_STOP_LIDAR_M) <= bc.BASKET_STOP_TOLERANCE_M
+
+
+def from_insert(inputs) -> Correction | None:
+    """INSERT 조건 판정 -> 보정 요구.
+
+    ⚠️ 거리는 **라이다 판독 기준**이다. 차체 기준으로 환산해서 주지 않는다 —
+    바구니는 높이마다 앞뒤가 달라 "차체에서 바구니까지"라는 단일 거리가
+    정의되지 않기 때문이다(판으로 잰 값과 바구니로 잰 값이 2.6cm 어긋난
+    실측이 근거다). Host는 이 값을 그대로 쓰지 말고 **줄어드는 방향으로
+    조금씩 움직이며 다시 물어야** 한다."""
+    from domain.task import baseline_constants as bc
+
+    if not inputs.face_ok:
+        return Correction(REACQUIRE)
+
+    distance = inputs.face_distance_m
+    if distance is None:
+        return Correction(REACQUIRE)
+
+    too_close = retreat_if_too_close(distance)
+    if too_close is not None:
+        return too_close
+
+    error = distance - bc.BASKET_STOP_LIDAR_M
+    if abs(error) > bc.BASKET_STOP_TOLERANCE_M:
+        return Correction(ADVANCE if error > 0 else RETREAT, forward_m=error)
+
+    if abs(inputs.face_yaw_error_rad) > bc.BASKET_YAW_TOLERANCE_RAD:
+        return Correction(ROTATE, yaw_rad=inputs.face_yaw_error_rad)
+
+    if (inputs.face_lateral_known
+            and abs(inputs.face_lateral_offset_m) > bc.BASKET_LATERAL_TOLERANCE_M):
+        return Correction(ROTATE, lateral_m=inputs.face_lateral_offset_m)
+
+    # 남은 미충족(점 개수·안정성·부하)은 Host가 고칠 수 있는 것이 아니다.
+    # 서 있는 자리 문제가 아니라 관측이나 파지 상태 문제이므로 None을 준다 —
+    # 지어낸 보정을 주면 Host가 엉뚱하게 움직인다.
+    return None

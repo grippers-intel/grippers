@@ -7,8 +7,23 @@
 
 import pytest
 
+from domain.task import baseline_constants as bc
 from domain.task import corrections as cx
 from domain.task import grasp_alignment as ga
+from domain.task.preconditions import InsertInputs
+
+
+def _insert(**overrides):
+    base = dict(
+        estop_set=False, base_stopped=True, gripper_load=0.07,
+        grasp_confirmed=True,
+        face_ok=True, face_distance_m=bc.BASKET_STOP_LIDAR_M,
+        face_yaw_error_rad=0.0, profile="chess_queen",
+        face_point_count=90, face_lateral_offset_m=0.0, face_lateral_known=True,
+        distance_change_m=0.001, load_change=0.0,
+    )
+    base.update(overrides)
+    return InsertInputs(**base)
 
 
 # ── 형식 ───────────────────────────────────────────────────────────────────
@@ -80,11 +95,57 @@ def test_판정_불가면_다시_보이게_해달라고_한다():
 
 
 # ── INSERT ─────────────────────────────────────────────────────────────────
-#
-# 2026-09-04 사용자 지시로 `from_insert`(라이다 거리·yaw·좌우 기반 보정)를
-# 제거했다 — INSERT 위치는 전적으로 Host 책임이 됐고, Pi가 남길 수 있는
-# 조건 미충족(E-STOP·미정지·빈손·부하 미끄러짐)은 전부 "서 있는 자리
-# 문제"가 아니라서 애초에 보정을 줄 수 없었다. 이전 테스트는 git 이력 참고.
+
+def test_조건이_다_맞으면_보정이_없다():
+    assert cx.from_insert(_insert()) is None
+
+
+def test_바구니가_멀면_전진량을_준다():
+    far = bc.BASKET_STOP_LIDAR_M + 0.30
+    fix = cx.from_insert(_insert(face_distance_m=far))
+
+    assert fix.action == cx.ADVANCE
+    assert fix.forward_m == pytest.approx(0.30)
+
+
+def test_절벽_아래는_전진이_아니라_후진이다():
+    """약 0.125m에서 빔이 테두리를 넘어 바구니를 놓친다. 그 아래로는 판독이
+    **커지는 방향으로** 틀리므로, 더 붙이면 상황이 나빠지기만 한다."""
+    fix = cx.from_insert(_insert(face_distance_m=bc.BASKET_MIN_LIDAR_M - 0.005))
+
+    assert fix.action == cx.RETREAT
+    assert fix.forward_m < 0
+
+
+def test_정면을_못_잡으면_다시_세워달라고_한다():
+    fix = cx.from_insert(_insert(face_ok=False))
+
+    assert fix.action == cx.REACQUIRE
+
+
+def test_거리가_맞고_yaw만_틀어지면_회전을_요구한다():
+    fix = cx.from_insert(_insert(face_yaw_error_rad=0.20))
+
+    assert fix.action == cx.ROTATE
+    assert fix.yaw_rad == pytest.approx(0.20)
+
+
+def test_좌우로_밀렸으면_회전을_요구한다():
+    """사선 진입이면 거리와 yaw가 멀쩡해도 팔이 바구니 끝을 벗어난 곳을
+    겨눌 수 있다(사용자 지시 2026-08-26)."""
+    offset = bc.BASKET_LATERAL_TOLERANCE_M + 0.02
+    fix = cx.from_insert(_insert(face_lateral_offset_m=offset))
+
+    assert fix.action == cx.ROTATE
+    assert fix.lateral_m == pytest.approx(offset)
+
+
+def test_Host가_못_고치는_미충족에는_보정을_안_준다():
+    """점 개수·판독 안정성·부하는 서 있는 자리 문제가 아니다. 지어낸 보정을
+    주면 Host가 엉뚱하게 움직인다."""
+    assert cx.from_insert(_insert(face_point_count=3)) is None
+    assert cx.from_insert(_insert(distance_change_m=-0.02)) is None
+    assert cx.from_insert(_insert(load_change=-0.05)) is None
 
 
 # ── GRASP 기본 전제 (2026-08-28) ────────────────────────────────────────────

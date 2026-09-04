@@ -14,7 +14,7 @@ from domain.adapters.fake.fake_arm import FakeArm
 from domain.adapters.fake.fake_base import FakeBase
 from domain.adapters.fake.fake_host_link import FakeHostLink, FakeLidar
 from domain.adapters.fake.scripted_perception import ScriptedPerception
-from domain.ports.baseline_ports import HostCommand, MissionState, Report
+from domain.ports.baseline_ports import BasketFace, HostCommand, MissionState, Report
 from domain.task import baseline_constants as bc
 from domain.task.baseline_mission import (
     BaselineApproachState,
@@ -72,14 +72,21 @@ def _ports(host=None, base=None, arm=None, perception=None, lidar=None, estop=No
     )
 
 
-def _carry_with_previous(label="queen", previous_load=HOLDING_LOAD,
-                          grasp_confirmed=True):
-    """직전 사이클 부하 표본을 이미 들고 있는 CARRY 상태.
+def _good_face(distance_m=None):
+    """2026-08-26 검증 지점 수준의 정상 관측."""
+    return BasketFace(True, distance_m or bc.BASKET_STOP_LIDAR_M, 0.01,
+                      "정면 확보", point_count=97,
+                      lateral_offset_m=0.0, lateral_known=False)
 
-    부하 안정성(미끄러짐) 검사가 표본 비교라, 이걸 써야 "직전 판독이
-    없다"에 걸리지 않고 곧장 판정된다."""
+
+def _carry_with_previous(label="queen", face=None, load=HOLDING_LOAD,
+                          grasp_confirmed=True):
+    """직전 사이클 표본을 이미 들고 있는 CARRY 상태.
+
+    안정성 검사가 표본 비교라, 한 사이클만 돌리는 테스트는 이걸 써야
+    "직전 판독이 없다"에 걸리지 않는다."""
     return BaselineCarryState(label, MissionState.CARRY,
-                              previous_load, grasp_confirmed)
+                              (face or _good_face(), load), grasp_confirmed)
 
 
 # ── 명령 실행 ──────────────────────────────────────────────────────────────
@@ -181,25 +188,79 @@ def test_CARRY_중에도_IDLE_명령을_받으면_IdleState로_돌아간다():
     assert isinstance(nxt, BaselineIdleState)
 
 
-# ── APPROACH_BOX 접근 — Host가 전적으로 책임진다 (2026-09-04) ─────────────
+# ── APPROACH_BOX 접근 중 실시간 라이다 점검 (2026-09-02) ───────────────────
 #
-# 2026-09-02~09-04까지는 여기서 매 사이클 라이다를 봐서 너무 가까우면
-# 물러나고 목표창 안이면 먼저 멈췄다. 사용자 지시로 그 실시간 라이다
-# 점검을 뺐다 — Host가 이 접근 자체를 전적으로 책임진다. 이제 APPROACH_BOX
-# 는 CARRY와 완전히 같은 경로(_drive)를 탄다 — Host가 보낸 속도를 그대로
-# 낼 뿐, Pi는 거리를 재서 끼어들지 않는다.
+# NUDGE_BOX가 Host 계획 거리(want_m)를 다 밀 때까지 라이다를 안 보고 있다가
+# PLACE에서야 확인해서 늦었던 사고(09-02 실기 2건)의 재발 방지. 접근 중에도
+# 매 사이클 확인해서 너무 가까우면 더 밀지 않고, 이미 알맞으면 그만 민다.
 
 
-def test_APPROACH_BOX는_라이다_확인_없이_Host_속도를_그대로_낸다():
+def test_접근_중_라이다가_하한보다_가까우면_더_밀지_않는다():
+    """Host가 계속 go를 보내도, 이미 너무 가까우면 Pi가 그 명령을 무시하고
+    정지한다 — 바퀴를 실제로 돌리는 쪽이 최종 안전판이다."""
+    too_close_face = _good_face(bc.BASKET_MIN_LIDAR_M - 0.01)
     base = FakeBase()
     host = FakeHostLink([HostCommand(MissionState.APPROACH_BOX, linear_x=0.1)])
-    ports = _ports(host=host, base=base)
+    ports = _ports(host=host, base=base, lidar=FakeLidar([too_close_face]))
 
     BaselineCarryState("queen", MissionState.APPROACH_BOX).execute(ports)
 
-    assert base.velocity_calls, "Host가 전진을 보냈는데 Pi가 끼어들어 멈췄다"
+    assert base.velocity_calls == [], "이미 너무 가까운데 계속 밀었다"
+    assert base.stop_calls >= 1
+    assert Report.INSERT_BLOCKED in host.reported_kinds
+
+
+def test_접근_중_너무_가까우면_물러나는_보정을_같이_보낸다():
+    too_close_face = _good_face(bc.BASKET_MIN_LIDAR_M - 0.01)
+    host = FakeHostLink([HostCommand(MissionState.APPROACH_BOX, linear_x=0.1)])
+    ports = _ports(host=host, lidar=FakeLidar([too_close_face]))
+
+    BaselineCarryState("queen", MissionState.APPROACH_BOX).execute(ports)
+
+    fixes = host.reported_fixes
+    assert fixes, "보정 없이 막기만 하면 Host가 고칠 방법을 모른다"
+    report, fix = fixes[0]
+    assert report == Report.INSERT_BLOCKED
+    assert fix.action == "retreat"
+
+
+def test_접근_중_이미_목표창_안이면_그만_밀고_알린다():
+    good_face = _good_face(bc.BASKET_STOP_LIDAR_M)
+    base = FakeBase()
+    host = FakeHostLink([HostCommand(MissionState.APPROACH_BOX, linear_x=0.1)])
+    ports = _ports(host=host, base=base, lidar=FakeLidar([good_face]))
+
+    BaselineCarryState("queen", MissionState.APPROACH_BOX).execute(ports)
+
+    assert base.velocity_calls == [], "이미 목표창 안인데 계획한 거리를 마저 밀었다"
+    assert base.stop_calls >= 1
+    assert Report.APPROACH_BOX_READY in host.reported_kinds
+
+
+def test_접근_중_창_밖이면_평소대로_계속_민다():
+    far_face = _good_face(bc.BASKET_STOP_LIDAR_M + bc.BASKET_STOP_TOLERANCE_M + 0.1)
+    base = FakeBase()
+    host = FakeHostLink([HostCommand(MissionState.APPROACH_BOX, linear_x=0.1)])
+    ports = _ports(host=host, base=base, lidar=FakeLidar([far_face]))
+
+    BaselineCarryState("queen", MissionState.APPROACH_BOX).execute(ports)
+
+    assert base.velocity_calls, "창 밖인데 안 밀었다"
     assert Report.APPROACH_BOX_READY not in host.reported_kinds
     assert Report.INSERT_BLOCKED not in host.reported_kinds
+
+
+def test_접근_중_라이다_관측_실패면_평소대로_계속_민다():
+    """모르면 실패 원칙 — 못 잰다고 멈추면 오히려 INSERT까지 영영 못 간다.
+    관측 실패는 PLACE의 check_insert가 REACQUIRE로 다루는 것과 같은 이유로
+    여기서는 그냥 넘어가고 평소 주행을 유지한다."""
+    base = FakeBase()
+    host = FakeHostLink([HostCommand(MissionState.APPROACH_BOX, linear_x=0.1)])
+    ports = _ports(host=host, base=base)  # 기본 FakeLidar = 관측 실패
+
+    BaselineCarryState("queen", MissionState.APPROACH_BOX).execute(ports)
+
+    assert base.velocity_calls, "관측 실패인데 안 밀었다"
 
 
 # ── 링크 워치독 ────────────────────────────────────────────────────────────
@@ -372,16 +433,13 @@ def test_부피가_큰_box_star는_완전히_짓누르지_않는다():
     assert plan_for_label("star").close_width_mm == 7.0
 
 
-# ── 임무 4번: INSERT 조건 판정과 수행 (2026-09-04 라이다 제거) ─────────────
-#
-# 사용자 지시로 위치 판정(라이다 거리·yaw·좌우·안정성)을 전부 뺐다 — Host가
-# INSERT를 보내면 Pi는 자기 상태(정지·파지 확인·부하 안정성)만 보고 그대로
-# 따른다. 아래는 그 남은 상태들만 검증한다.
+# ── 임무 4번: INSERT 조건 판정과 수행 ──────────────────────────────────────
 
 
-def test_Host가_INSERT를_보내면_라이다_없이_곧장_INSERT로_간다():
+def test_라이다가_정면을_잡고_거리가_맞으면_INSERT로_간다():
     host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
-    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD))
+    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD),
+                   lidar=FakeLidar([_good_face()]))
 
     nxt = _carry_with_previous().execute(ports)
 
@@ -389,11 +447,10 @@ def test_Host가_INSERT를_보내면_라이다_없이_곧장_INSERT로_간다():
     assert isinstance(nxt, BaselineInsertState)
 
 
-def test_E_STOP이_걸려_있으면_INSERT를_막는다():
-    estop = threading.Event()
-    estop.set()
+def test_라이다가_정면을_못_잡으면_INSERT를_막는다():
+    """모르면 실패 — 팔을 크게 전개하는 동작이라 막는 쪽이 싸다."""
     host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
-    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), estop=estop)
+    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), lidar=FakeLidar())
 
     nxt = _carry_with_previous().execute(ports)
 
@@ -401,11 +458,13 @@ def test_E_STOP이_걸려_있으면_INSERT를_막는다():
     assert isinstance(nxt, BaselineCarryState)
 
 
-def test_차체가_안_멈췄으면_INSERT를_막는다():
-    host = FakeHostLink([HostCommand(MissionState.INSERT, linear_x=0.05)])
-    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD))
+def test_바구니가_절벽보다_가까우면_INSERT를_막는다():
+    """판독이 하한 아래면 테두리를 넘겨보고 있을 수 있다."""
+    host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
+    close = _good_face(bc.BASKET_MIN_LIDAR_M - 0.005)
+    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), lidar=FakeLidar([close]))
 
-    nxt = _carry_with_previous().execute(ports)
+    nxt = _carry_with_previous(face=close).execute(ports)
 
     assert Report.INSERT_BLOCKED in host.reported_kinds
     assert isinstance(nxt, BaselineCarryState)
@@ -417,9 +476,9 @@ def test_빈손이면_INSERT를_막는다():
     읽히는 물체가 있어, 여기서 낮은 load만으로는 더 이상 "비었다"를
     판정할 수 없다(preconditions.InsertInputs.grasp_confirmed 주석 참고)."""
     host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
-    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0))
+    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0), lidar=FakeLidar([_good_face()]))
 
-    nxt = _carry_with_previous(previous_load=0.0, grasp_confirmed=False).execute(ports)
+    nxt = _carry_with_previous(load=0.0, grasp_confirmed=False).execute(ports)
 
     assert Report.INSERT_BLOCKED in host.reported_kinds
 
@@ -428,27 +487,13 @@ def test_부하가_낮아도_파지가_확인됐으면_INSERT를_막지_않는�
     """box 회귀 테스트 — grasp_confirmed=True면 부하 0이어도 이 게이트는
     통과한다(다른 조건은 별개로 여전히 본다)."""
     host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
-    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0))
+    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0), lidar=FakeLidar([_good_face()]))
 
-    _carry_with_previous(previous_load=0.0, grasp_confirmed=True).execute(ports)
+    nxt = _carry_with_previous(load=0.0, grasp_confirmed=True).execute(ports)
 
     details = [detail for report, _state, detail, _fix in host.reports
                if report == Report.INSERT_BLOCKED]
     assert not any("비어 있다" in detail for detail in details)
-
-
-def test_부하가_미끄러지듯_떨어지면_INSERT를_막는다():
-    """직전 사이클보다 부하가 GRIPPER_SLIP_LOAD_DROP 이상 떨어지면 물체가
-    미끄러지는 중일 수 있다 — 라이다와 무관한 독립 신호라 위치 판정을
-    빼도 그대로 남는다."""
-    host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
-    dropped = HOLDING_LOAD - bc.GRIPPER_SLIP_LOAD_DROP - 0.001
-    ports = _ports(host=host, arm=FakeArm(load_ratio=dropped))
-
-    nxt = _carry_with_previous(previous_load=HOLDING_LOAD).execute(ports)
-
-    assert Report.INSERT_BLOCKED in host.reported_kinds
-    assert isinstance(nxt, BaselineCarryState)
 
 
 def test_투하_후_부하가_줄면_성공으로_보고하고_IDLE로_돌아간다():

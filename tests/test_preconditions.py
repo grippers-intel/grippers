@@ -3,6 +3,8 @@
 Pi가 판단하는 것은 자기 센서로만 알 수 있는 것뿐이다. 좌표가 필요한
 판단(물체 앞에 제대로 섰는가 등)이 여기 들어오면 그건 Host의 일이 샌 것이다."""
 
+import math
+
 from domain.task import baseline_constants as bc
 from domain.task.preconditions import (
     GraspInputs,
@@ -20,7 +22,13 @@ def _grasp(**overrides):
 
 def _insert(**overrides):
     base = dict(estop_set=False, base_stopped=True, gripper_load=0.0626,
-                grasp_confirmed=True, profile="chess_queen", load_change=0.0)
+                grasp_confirmed=True,
+                face_ok=True, face_distance_m=bc.BASKET_STOP_LIDAR_M,
+                face_yaw_error_rad=0.0, face_reason="정면 확보", profile="chess_queen",
+                # 2026-08-26 검증 지점의 실측 수준 값들.
+                face_point_count=97, face_lateral_offset_m=0.0,
+                face_lateral_known=False,
+                distance_change_m=0.0, load_change=0.0)
     base.update(overrides)
     return InsertInputs(**base)
 
@@ -58,25 +66,58 @@ def test_미충족_사유를_전부_모아서_돌려준다():
     assert report.detail.count("/") == 1
 
 
-# ── INSERT (2026-09-04 라이다 제거) ─────────────────────────────────────────
-#
-# 사용자 지시로 바구니 위치 판정(라이다 거리·yaw·좌우 오프셋·점 개수·판독
-# 안정성)을 전부 뺐다 — "여기서 넣어라"는 전적으로 Host의 판단이고, Pi는
-# 자기 상태만 보고 그대로 따른다. 남은 조건은 전부 "지금 팔을 펼쳐도
-# 안전한가"이지 "바구니가 정말 거기 있는가"가 아니다.
+# ── INSERT ────────────────────────────────────────────────────────────────
 
 
-def test_전부_충족되면_통과한다():
+def test_라이다가_거리와_정렬을_맞추면_통과한다():
     report = check_insert(_insert())
 
     assert report.ok
 
 
-def test_E_STOP이_걸려_있으면_막는다():
-    report = check_insert(_insert(estop_set=True))
+def test_정면을_못_잡으면_거리는_보지도_않는다():
+    """`ok=False`일 때 거리 숫자는 의미가 없다."""
+    report = check_insert(_insert(face_ok=False, face_distance_m=math.inf,
+                                  face_reason="점 부족"))
 
     assert not report.ok
-    assert any("E-STOP" in reason for reason in report.reasons)
+    assert len(report.reasons) == 1
+    assert "점 부족" in report.reasons[0]
+
+
+def test_바구니가_허용치보다_멀면_막는다():
+    far = bc.BASKET_STOP_LIDAR_M + bc.BASKET_STOP_TOLERANCE_M + 0.01
+    report = check_insert(_insert(face_distance_m=far))
+
+    assert not report.ok
+    assert any("멀다" in reason for reason in report.reasons)
+
+
+def test_절벽_아래를_읽으면_막는다():
+    """빔이 테두리를 넘어가면 판독값이 커지는 방향으로 틀린다 — 하한 아래는
+    우리가 교정한 그 면이 아닐 수 있다는 신호다."""
+    report = check_insert(_insert(face_distance_m=bc.BASKET_MIN_LIDAR_M - 0.001))
+
+    assert not report.ok
+    assert any("하한보다 가깝다" in reason for reason in report.reasons)
+
+
+def test_실기에서_성공한_두_지점은_모두_통과한다():
+    """2026-08-26 나이트 0.1386, 퀸 0.1301 — 둘 다 투하에 성공했다."""
+    assert check_insert(_insert(face_distance_m=0.1386)).ok
+    assert check_insert(_insert(face_distance_m=0.1301)).ok
+
+
+def test_실기에서_성공한_정렬_오차는_통과한다():
+    """+2.82도로 투하에 성공했다."""
+    assert check_insert(_insert(face_yaw_error_rad=math.radians(2.82))).ok
+
+
+def test_정렬이_허용치를_넘으면_막는다():
+    report = check_insert(_insert(face_yaw_error_rad=math.radians(20.0)))
+
+    assert not report.ok
+    assert any("정렬이 틀어졌다" in reason for reason in report.reasons)
 
 
 def test_빈손이면_막는다():
@@ -101,13 +142,6 @@ def test_확인된_파지는_부하가_낮아도_비었다고_안_한다():
     assert not any("비어 있다" in reason for reason in report.reasons)
 
 
-def test_차체가_안_멈췄으면_막는다():
-    report = check_insert(_insert(base_stopped=False))
-
-    assert not report.ok
-    assert any("정지하지 않았다" in reason for reason in report.reasons)
-
-
 def test_무엇을_들고_있는지_모르면_막는다():
     report = check_insert(_insert(profile=None))
 
@@ -115,7 +149,54 @@ def test_무엇을_들고_있는지_모르면_막는다():
     assert any("놓기 폭을 정할 수 없다" in reason for reason in report.reasons)
 
 
-# ── 부하 안정성(미끄러짐) — 라이다와 무관한 독립 신호라 그대로 남는다 ──────
+# ── 2026-08-26에 추가한 네 가지 조건 ──────────────────────────────────────
+
+
+def test_좌우로_밀려_있으면_막는다():
+    """거리와 yaw만으로는 안 보이는 오차다 — 둘 다 정상인데 바깥에 떨어진다."""
+    report = check_insert(_insert(face_lateral_known=True,
+                                  face_lateral_offset_m=0.090))
+
+    assert not report.ok
+    assert any("좌우로 밀려" in reason for reason in report.reasons)
+
+
+def test_좌우_오프셋을_모르면_통과시킨다():
+    """양쪽 가장자리가 다 창 밖이면 그 자체가 '충분히 가운데'라는 뜻이다."""
+    assert check_insert(_insert(face_lateral_known=False,
+                                face_lateral_offset_m=0.0)).ok
+
+
+def test_허용_범위_안의_좌우_오프셋은_통과한다():
+    assert check_insert(_insert(face_lateral_known=True,
+                                face_lateral_offset_m=0.050)).ok
+
+
+def test_정면_점이_부족하면_막는다():
+    """빔이 테두리를 스치기 시작하면 완전히 놓치기 전에 점이 먼저 준다."""
+    report = check_insert(_insert(face_point_count=20))
+
+    assert not report.ok
+    assert any("점이 부족" in reason for reason in report.reasons)
+
+
+def test_직전_판독이_없으면_한_사이클_더_본다():
+    report = check_insert(_insert(distance_change_m=None))
+
+    assert not report.ok
+    assert any("직전 판독이 없다" in reason for reason in report.reasons)
+
+
+def test_판독이_흔들리면_막는다():
+    """합의 속도 0.1m/s면 한 사이클에 10mm 움직인다 — 주행 중이면 반드시 걸린다."""
+    report = check_insert(_insert(distance_change_m=-0.010))
+
+    assert not report.ok
+    assert any("흔들린다" in reason for reason in report.reasons)
+
+
+def test_잡음_수준의_변화는_통과한다():
+    assert check_insert(_insert(distance_change_m=0.003)).ok
 
 
 def test_부하가_떨어지고_있으면_막는다():

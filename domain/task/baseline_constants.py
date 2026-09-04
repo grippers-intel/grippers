@@ -391,12 +391,6 @@ LIDAR_MIN_RANGE_M = 0.020       # 실측 — LDRobot LD19 (RPLidar A1이 아니�
 # 뜻, 아래 BASKET_LATERAL_TOLERANCE_M 주석 참고)이었다. 창의 위쪽 끝에
 # 두는 이유: 약 0.125m에서 빔이 테두리를 넘어 바구니를 통째로 놓친다.
 # 아래가 절벽이므로 붙이는 쪽이 아니라 떨어지는 쪽이 안전하다.
-# ⚠️ 2026-09-04 사용자 지시로 `preconditions.check_insert`가 이 아래
-# BASKET_STABILITY_TOLERANCE_M까지의 라이다 문턱값을 더 이상 참조하지
-# 않는다 — INSERT 위치 판정을 Host에 전부 넘겼다(baseline_mission.py
-# BaselineCarryState 주석 참고). 실측값 자체는 여전히 유효한 하드웨어
-# 기록이라 지우지 않고 남긴다 — 라이다 기반 확인을 다시 넣게 되면 이
-# 값들부터 다시 쓰면 된다.
 BASKET_STOP_LIDAR_M = 0.140  # 실측 2026-08-26
 
 # ⚠️ TODO(기록만, 2026-09-03 실기): 장난감(box) 바구니 INSERT 중 차체가

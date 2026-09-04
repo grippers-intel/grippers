@@ -14,14 +14,8 @@ Pi가 판단하는 것은 자기 센서로만 알 수 있는 것뿐이다:
 
   그리퍼 부하   — 지금 무언가를 물고 있는가, 비어 있는가
   자기 뎁스캠   — 내려가서 집을 물체가 정말 앞에 있는가, 무엇인가
+  라이다        — 바구니 정면이 팔을 펼쳐도 되는 거리·각도에 있는가
   E-STOP·정지   — 지금 움직이고 있지는 않은가
-
-⚠️ 2026-09-04까지는 라이다(바구니 정면 거리·각도)도 이 목록에 있었다.
-사용자 지시로 뺐다 — Host가 좌표를 전부 소유한다는 원칙을 INSERT까지
-끝까지 적용해, "정말 도착했는가"를 Pi가 라이다로 다시 확인하는 이중
-판정을 없앴다. 이제 INSERT 전환은 Pi 자기 상태(정지·파지 확인·부하
-안정성)만 본다 — 위치가 맞는지는 Host의 몫이고 Host의 ArUco 하드스톱
-(mission_config.BASKET_HARD_STOP_MARGIN_M)이 근접 안전판으로 남는다.
 
 이 구분이 흐려지면 같은 판정을 Host와 Pi가 각각 하게 되고, 둘이 어긋날 때
 어느 쪽을 믿을지 정할 방법이 없어진다.
@@ -67,16 +61,7 @@ class GraspInputs:
 
 @dataclass
 class InsertInputs:
-    """INSERT 판정에 필요한 관측값 묶음.
-
-    ⚠️ 2026-09-04 사용자 지시로 라이다 기반 항목(바구니 정면 거리·yaw·좌우
-    오프셋·점 개수·판독 안정성)을 전부 뺐다. Host가 좌표·경로·정지 위치를
-    전부 소유한다는 원칙(baseline_ports.py)을 INSERT까지 끝까지 적용한
-    것이다 — Pi가 라이다로 "정말 도착했는가"를 다시 확인하던 이중 판정을
-    없애고, Host가 INSERT를 보내면 Pi는 자기 상태(정지·파지 확인·부하
-    안정성)만 보고 그대로 실행한다. 위치가 틀렸을 때의 안전판은 이제
-    Host 쪽 ArUco 하드스톱(mission_config.BASKET_HARD_STOP_MARGIN_M)뿐이다
-    — Pi는 더 이상 걸러내지 않는다."""
+    """INSERT 판정에 필요한 관측값 묶음."""
 
     estop_set: bool
     base_stopped: bool
@@ -88,11 +73,18 @@ class InsertInputs:
     # 실제로 물고 있어도 능동 토크를 안 낸다 — baseline_mission.py의
     # BaselineGraspState 주석 참고) 이 게이트가 영원히 막혔다. 이제는 그때
     # 끝난 판정을 다시 재지 않고 그대로 믿는다 — gripper_load는 여기 아래
-    # 부하 안정성(직전 사이클 대비 변화량)에만 쓴다.
+    # ④ 부하 안정성(직전 사이클 대비 변화량)에만 쓴다.
     grasp_confirmed: bool
+    face_ok: bool
+    face_distance_m: float
+    face_yaw_error_rad: float
+    face_reason: str = ""
     profile: str | None = None
-    # 직전 사이클과 비교한 부하 변화. None이면 비교할 이전 표본이 없다는
-    # 뜻이다 — 팔을 펼치기 전 미끄러짐만 잡는, 라이다와 무관한 독립 신호다.
+    face_point_count: int = 0
+    face_lateral_offset_m: float = 0.0
+    face_lateral_known: bool = False
+    # 직전 사이클과 비교한 값들. None이면 비교할 이전 표본이 없다는 뜻이다.
+    distance_change_m: float | None = None
     load_change: float | None = None
 
 
@@ -133,13 +125,9 @@ def check_grasp(inputs: GraspInputs) -> PreconditionReport:
 def check_insert(inputs: InsertInputs) -> PreconditionReport:
     """INSERT 전환 조건 (임무 4번).
 
-    ⚠️ 2026-09-04 사용자 지시로 바구니 위치 판정(라이다 거리·yaw·좌우
-    오프셋·점 개수·판독 안정성)을 전부 뺐다 — "여기서 넣어라"는 전적으로
-    Host의 판단이고, Pi는 자기 상태만 보고 그대로 따른다. 남은 조건은
-    전부 "지금 팔을 펼쳐도 안전한가"이지 "바구니가 정말 거기 있는가"가
-    아니다 — 그 판단은 Host가 하고, 틀렸을 때의 안전판도 이제 Host 쪽
-    (ArUco 하드스톱)에만 있다. 라이다 기반 판정 이력은 이 파일의 git
-    이력 및 `error_budget.md`/`sequences.md` 구판에 남아 있다."""
+    INSERT는 팔을 크게 전개하는 동작이라 틀렸을 때의 비용이 이 미션에서
+    가장 크다 — 물체가 바구니 밖으로 떨어지거나 테두리에 걸린다. 그래서
+    **모르면 실패**를 가장 엄격하게 적용한다."""
     reasons = []
 
     if inputs.estop_set:
@@ -160,8 +148,52 @@ def check_insert(inputs: InsertInputs) -> PreconditionReport:
     if inputs.profile is None:
         reasons.append("무엇을 들고 있는지 모른다 — 놓기 폭을 정할 수 없다")
 
-    # 부하 안정성 — 팔을 펼치기 전에 미끄러짐을 잡는다. 라이다와 무관한
-    # 독립 신호라 위치 판정을 빼도 그대로 남는다.
+    if not inputs.face_ok:
+        # 라이다가 바구니 정면을 못 잡았다. 거리 숫자는 의미가 없다.
+        reasons.append(f"바구니 정면을 잡지 못했다 ({inputs.face_reason})")
+        return PreconditionReport(False, tuple(reasons))
+
+    upper = bc.BASKET_STOP_LIDAR_M + bc.BASKET_STOP_TOLERANCE_M
+    if inputs.face_distance_m > upper:
+        reasons.append(
+            f"바구니가 멀다 (라이다 {inputs.face_distance_m:.3f}m > {upper:.3f}m)")
+    elif inputs.face_distance_m < bc.BASKET_MIN_LIDAR_M:
+        # 절벽 아래를 읽고 있다 — 우리가 교정한 그 면이 아닐 수 있다.
+        reasons.append(
+            f"라이다 판독이 하한보다 가깝다 ({inputs.face_distance_m:.3f}m < "
+            f"{bc.BASKET_MIN_LIDAR_M:.3f}m) — 테두리를 넘겨보고 있을 수 있다")
+
+    if abs(inputs.face_yaw_error_rad) > bc.BASKET_YAW_TOLERANCE_RAD:
+        reasons.append(
+            f"정렬이 틀어졌다 (yaw {inputs.face_yaw_error_rad:+.3f}rad > "
+            f"{bc.BASKET_YAW_TOLERANCE_RAD:.3f}rad)")
+
+    # ① 좌우 오프셋 — 거리와 yaw만으로는 안 보이는 오차다. 바구니와 나란한
+    # 채로 옆으로 밀려 있으면 둘 다 정상인데 물체는 바깥에 떨어진다.
+    # 모르는 경우(창을 양쪽 다 채움)는 통과시킨다 — 그 상황 자체가 "가장자리가
+    # 창 밖에 있을 만큼 가운데"라는 뜻이다.
+    if inputs.face_lateral_known and (
+            abs(inputs.face_lateral_offset_m) > bc.BASKET_LATERAL_TOLERANCE_M):
+        reasons.append(
+            f"좌우로 밀려 있다 ({inputs.face_lateral_offset_m * 1000:+.0f}mm > "
+            f"±{bc.BASKET_LATERAL_TOLERANCE_M * 1000:.0f}mm)")
+
+    # ③ 점 개수 — 빔이 테두리를 스치기 시작하면 완전히 놓치기 전에 여기가
+    # 먼저 준다.
+    if inputs.face_point_count < bc.BASKET_MIN_FACE_POINTS:
+        reasons.append(
+            f"정면 점이 부족하다 ({inputs.face_point_count}개 < "
+            f"{bc.BASKET_MIN_FACE_POINTS}개) — 테두리를 스치고 있을 수 있다")
+
+    # ② 연속 판독 일치 — 한 프레임 튐과 "차체가 아직 안 멈춤"을 함께 잡는다.
+    if inputs.distance_change_m is None:
+        reasons.append("직전 판독이 없다 — 한 사이클 더 확인해야 한다")
+    elif abs(inputs.distance_change_m) > bc.BASKET_STABILITY_TOLERANCE_M:
+        reasons.append(
+            f"판독이 흔들린다 ({inputs.distance_change_m * 1000:+.0f}mm) — "
+            "아직 움직이는 중이거나 관측이 불안정하다")
+
+    # ④ 부하 안정성 — 팔을 펼치기 전에 미끄러짐을 잡는다.
     if inputs.load_change is not None and inputs.load_change < -bc.GRIPPER_SLIP_LOAD_DROP:
         reasons.append(
             f"그리퍼 부하가 떨어지고 있다 ({inputs.load_change:+.4f}) — "
