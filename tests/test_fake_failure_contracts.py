@@ -205,18 +205,24 @@ def test_every_port_method_with_a_failure_value_is_covered():
 # 별개다. 아래는 그 두 번째 절반이다.
 
 
-def test_라이다_관측_실패는_INSERT를_막는다():
-    """`ok=False`를 돌려줘도 거리 필드를 읽고 진행하면 계약이 무의미해진다."""
+def test_라이다_관측_실패는_INSERT를_막는다(monkeypatch):
+    """`ok=False`를 돌려줘도 거리 필드를 읽고 진행하면 계약이 무의미해진다.
+
+    ⚠️ 2026-09-04 "1로 가볼게" 지시로 LIDAR_INSERT_CHECK_ENABLED의 현재
+    실제 값은 False다 — 이 테스트는 게이트가 켜졌을 때의 계약을 보는
+    것이라 True로 강제한다."""
     import threading
 
     from domain.adapters.fake.fake_host_link import FakeHostLink as _Host
     from domain.ports.baseline_ports import HostCommand, MissionState, Report
+    from domain.task import baseline_constants as bc
     from domain.task.baseline_mission import (
         BaselineCarryState,
         BaselinePorts,
         LinkWatchdog,
     )
 
+    monkeypatch.setattr(bc, "LIDAR_INSERT_CHECK_ENABLED", True)
     host = _Host([HostCommand(MissionState.INSERT, stop=True)])
     ports = BaselinePorts(
         base=FakeBase(), arm=FakeArm(load_ratio=0.14),

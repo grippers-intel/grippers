@@ -16,6 +16,22 @@ from domain.task.preconditions import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _lidar_gate_on(request, monkeypatch):
+    """이 파일은 라이다 게이트 자체(켜져 있을 때의 판정 로직)를 검증하는
+    곳이다 — LIDAR_INSERT_CHECK_ENABLED의 "지금 실기에서 뭘 믿고 도는가"
+    라는 실제 값(2026-09-04 현재 False, "1로 가볼게" 지시)과는 별개로,
+    여기 있는 테스트들은 항상 켜진 상태를 전제로 짜여 있다. 스위치 자체를
+    시험하는 테스트들(파일 아래쪽)은 monkeypatch로 각자 원하는 값을 다시
+    덮어써서 이 기본값을 무시한다.
+
+    딱 하나, 아래 "지금 실제 값이 뭔가"를 확인하는 테스트만은 이 기본값
+    자체가 시험 대상이라 여기서 건드리지 않는다."""
+    if request.node.name == "test_현재값은_사용자가_정한_실기_시험_상태다":
+        return
+    monkeypatch.setattr(bc, "LIDAR_INSERT_CHECK_ENABLED", True)
+
+
 def _grasp(**overrides):
     base = dict(base_stopped=True, detected_label="queen")
     base.update(overrides)
@@ -265,10 +281,12 @@ def test_실측_두_띠는_겹치지_않는다():
 # 한다는 요구를 그대로 고정한다.
 
 
-def test_기본값은_켜져_있다():
-    """되돌리기 전 기존 동작을 그대로 유지한다 — 스위치 도입 자체가 라이다
-    검증을 약화시키면 안 된다."""
-    assert bc.LIDAR_INSERT_CHECK_ENABLED is True
+def test_현재값은_사용자가_정한_실기_시험_상태다():
+    """2026-09-04 사용자 지시("1로 가볼게")로 지금은 꺼져 있다 — Host
+    목표영역 게이트만으로 사선 INSERT를 실기에서 시험하는 중이다. 이
+    값이 바뀌면(True로 되돌리거나) 이 테스트도 같이 갱신해서, "지금
+    실제로 뭘 믿고 도는가"가 코드에서 항상 눈에 보이게 한다."""
+    assert bc.LIDAR_INSERT_CHECK_ENABLED is False
 
 
 def test_꺼두면_정면을_못_잡아도_통과한다(monkeypatch):

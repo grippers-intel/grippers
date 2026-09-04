@@ -315,8 +315,13 @@ def test_파지_실패_보고에_시도_횟수가_실린다(run_through):
     assert "1번째 시도 실패" in failures[0], failures[0]
 
 
-def test_라이다가_바구니를_못_보면_INSERT로_안_넘어간다(run_through):
-    """"모르면 실패"가 이 포트의 계약이다 — 관측이 없는데 팔을 펴면 안 된다."""
+def test_라이다가_바구니를_못_보면_INSERT로_안_넘어간다(run_through, monkeypatch):
+    """"모르면 실패"가 이 포트의 계약이다 — 관측이 없는데 팔을 펴면 안 된다.
+
+    ⚠️ 2026-09-04 "1로 가볼게" 지시로 LIDAR_INSERT_CHECK_ENABLED의 현재
+    실제 값은 False다 — 이 테스트는 게이트가 켜졌을 때의 계약을 보는
+    것이라 True로 강제한다."""
+    monkeypatch.setattr(bc, "LIDAR_INSERT_CHECK_ENABLED", True)
     blind = BasketFace(ok=False, distance_m=float("inf"),
                        yaw_error_rad=float("inf"), reason="정면 미검출")
     _names, host, _ports = run_through(lidar=FakeLidar(script=[blind]))

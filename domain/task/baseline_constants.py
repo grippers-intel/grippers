@@ -405,7 +405,14 @@ LIDAR_MIN_RANGE_M = 0.020       # 실측 — LDRobot LD19 (RPLidar A1이 아니�
 # INSERT 로직은 이미 한 번 제거했다 되돌린 적이 있다(2026-09-04, 커밋
 # 597738b) — 다시 뗄 일이 생기면 이 스위치 하나로 끝나야 한다는 게 이번
 # 설계의 목표다. 여러 파일에 흩어진 라이다 조건을 다시 찾아 헤매지 않게.
-LIDAR_INSERT_CHECK_ENABLED = True
+#
+# 2026-09-04 사용자 지시로 지금은 False다 — Host 목표영역 게이트만으로
+# 사선 INSERT를 실기에서 바로 시험해 보기로 했다("1로 가볼게"). 라이다의
+# 정면 단일평면 인식(fit_basket_face)이 아직 사선/모서리를 못 받아
+# 주므로, 켜 둔 채로는 Host가 허용한 사선 접근이 여기서 다시 막힌다 —
+# 그래서 이번 실기 구간 동안은 끄고 Host 게이트만 믿는다. 결과가 나쁘면
+# True로 되돌리면 그대로 기존 라이다 확인으로 복귀한다.
+LIDAR_INSERT_CHECK_ENABLED = False
 
 BASKET_STOP_LIDAR_M = 0.140  # 실측 2026-08-26
 

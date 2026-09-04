@@ -447,8 +447,14 @@ def test_라이다가_정면을_잡고_거리가_맞으면_INSERT로_간다():
     assert isinstance(nxt, BaselineInsertState)
 
 
-def test_라이다가_정면을_못_잡으면_INSERT를_막는다():
-    """모르면 실패 — 팔을 크게 전개하는 동작이라 막는 쪽이 싸다."""
+def test_라이다가_정면을_못_잡으면_INSERT를_막는다(monkeypatch):
+    """모르면 실패 — 팔을 크게 전개하는 동작이라 막는 쪽이 싸다.
+
+    ⚠️ 2026-09-04 "1로 가볼게" 지시로 LIDAR_INSERT_CHECK_ENABLED의 현재
+    실제 값은 False다(Host 목표영역 게이트만 믿는 실기 시험 중) — 이
+    테스트는 "라이다 게이트가 켜져 있을 때 여전히 옳게 막는가"를 보는
+    것이라 그 실제 값과 무관하게 True로 강제한다."""
+    monkeypatch.setattr(bc, "LIDAR_INSERT_CHECK_ENABLED", True)
     host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
     ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), lidar=FakeLidar())
 
@@ -458,8 +464,11 @@ def test_라이다가_정면을_못_잡으면_INSERT를_막는다():
     assert isinstance(nxt, BaselineCarryState)
 
 
-def test_바구니가_절벽보다_가까우면_INSERT를_막는다():
-    """판독이 하한 아래면 테두리를 넘겨보고 있을 수 있다."""
+def test_바구니가_절벽보다_가까우면_INSERT를_막는다(monkeypatch):
+    """판독이 하한 아래면 테두리를 넘겨보고 있을 수 있다.
+
+    ⚠️ 위 테스트와 같은 이유로 라이다 게이트를 True로 강제한다."""
+    monkeypatch.setattr(bc, "LIDAR_INSERT_CHECK_ENABLED", True)
     host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
     close = _good_face(bc.BASKET_MIN_LIDAR_M - 0.005)
     ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), lidar=FakeLidar([close]))
