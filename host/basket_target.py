@@ -55,7 +55,10 @@ from localizer import box_pose
 
 # 사용자 실측 지시값(2026-09-04, 같은 날 저녁 재조정 — 처음엔 좌우 5cm였다가
 # "아까 준 좌표에서 양옆으로 3cm, 바구니 안쪽 3cm로 조정해"로 좁혔다).
-TARGET_HALF_WIDTH_M = 0.03      # 입구 중심 기준 좌우(가로) 절반폭
+# 2026-09-05 실기(manual_insert_probe.py) 후 사용자 지시로 좌우 폭을 다시
+# 5cm로 되돌렸다 — 안쪽 깊이(TARGET_INSET_DEPTH_M)는 이번엔 언급이 없어서
+# 3cm 그대로 뒀다.
+TARGET_HALF_WIDTH_M = 0.05      # 입구 중심 기준 좌우(가로) 절반폭
 TARGET_INSET_DEPTH_M = 0.03    # 입구 중심에서 바구니 안쪽으로 깊이
 
 # 2026-09-05 실기(manual_insert_probe.py)로 처음 이 값을 실제 자세에서
@@ -71,8 +74,9 @@ MAX_APPROACH_DIST_M = 0.25     # 목표 영역에서 이 거리 안이면 "가�
 # 사선 전부에서 벽/모서리 분간이 됐다(잔차 1.5~7mm) — 그러니 45도까지는
 # 받아들여야 이 기능을 도입한 취지(사선 허용)가 산다. 그보다 넉넉히 잡되
 # 90도(완전히 옆을 봄)까지는 안 열어 준다.
-# ⚠️ 실기 조정 대상 — 아직 이 각도로 실제 INSERT를 검증하지 않았다.
-MAX_FACING_ERROR_DEG = 50.0
+# 2026-09-05 실기(manual_insert_probe.py) 후 사용자 지시로 75도로 더 늘렸다.
+# ⚠️ 실기 조정 대상 — 아직 이 각도 끝까지 실제 INSERT를 검증하지 않았다.
+MAX_FACING_ERROR_DEG = 75.0
 
 
 class InsertGateResult(NamedTuple):

@@ -41,6 +41,19 @@ Pi 쪽에서만 울릴 수 있고, 여기서 원격으로 트리거할 방법이
 입력은 받지 않는다(팔이 움직이는 도중에 차를 몰면 안 된다) — 결과가 오면
 화면에 찍고 다시 평소 운전으로 돌아간다.
 
+⚠️ **2026-09-05 첫 실기에서 이게 안 먹었다** — Pi의 진짜 FSM(baseline_mission.py)
+은 상태 객체가 자기가 인식하는 다음 상태로만 넘어가서, IDLE에서 곧장
+INSERT로 점프하는 경로가 아예 없다(GRASP_FORCE도 결국 팔이 실제 파지를
+수행한다). 그래서 이 스크립트는 이제 **시작하자마자 한 번**
+`MissionState.DEBUG_FORCE_CARRY`(테스트 전용 우회로, `baseline_ports.py`
+참고)를 보내 실제 파지 없이 CARRY로 먼저 들어간 뒤에 WASD 운전을
+시작한다 — 그래야 나중에 Enter의 "PLACE"가 유효한 명령이 된다. 이 우회로는
+Pi가 **막 부팅/bringup 직후 IDLE일 때만** 먹는다 — run_mission.py를 방금
+돌렸거나 중간에 멈췄다면 Pi가 이미 다른 상태에 있어 안 먹을 수 있다(그럴
+땐 Pi를 재기동하거나 IDLE로 되돌린 뒤 다시 실행할 것). 드랍 자세/개방폭은
+`baseline_mission.DEBUG_FORCE_CARRY_LABEL`(기본값 "rook")의 교시 계획을
+쓴다 — 실제로 무엇을 손에 쥐여줬든 이 라벨 기준으로 팔이 움직인다.
+
 ## 조작
 
     w        전진(go)
@@ -194,6 +207,30 @@ def main() -> int:
     print(f"대상 상자: {args.box}  목표영역 x=[{box_lo:.3f},{box_hi:.3f}] "
           f"y=[{box_ylo:.3f},{box_yhi:.3f}]  center_x={center_x:.3f}")
     print(f"로그: {log_path}")
+
+    # 2026-09-05 — Pi FSM은 IDLE에서 INSERT로 곧장 못 간다(모듈 docstring의
+    # "2026-09-05 첫 실기" 항목 참고). 그래서 WASD를 받기 전에 먼저
+    # DEBUG_FORCE_CARRY로 실제 파지 없이 CARRY에 들어가 둔다. 최대 1초간
+    # 반복 전송하고(UDP 유실 대비), Pi가 IDLE을 벗어났는지(poll_status()
+    # != "IDLE")로 성공 여부를 확인한다 — 실패해도 진행은 시키되, Enter를
+    # 눌러도 이번에도 안 될 수 있다고 분명히 경고한다.
+    print("DEBUG_FORCE_CARRY 전송 중 — 실제 파지 없이 CARRY로 먼저 들어갑니다...",
+          flush=True)
+    force_carry_ok = False
+    _handshake_deadline = time.monotonic() + 1.0
+    while time.monotonic() < _handshake_deadline:
+        link.send(MissionCommand("stop", "DEBUG_FORCE_CARRY", 0.0, 0.0, 0.0))
+        if link.poll_status() != "IDLE":
+            force_carry_ok = True
+            break
+        time.sleep(LOOP_PERIOD_S)
+    if force_carry_ok:
+        print("CARRY 진입 확인 — Enter로 INSERT를 보낼 수 있습니다.\n", flush=True)
+    else:
+        print("⚠️ CARRY 진입을 확인 못 했습니다 — Pi가 막 IDLE이 아니었을 수 있습니다"
+              "(run_mission.py를 방금 돌렸다면 Pi를 재기동하세요). 계속 진행하지만"
+              " Enter를 눌러도 이번에도 팔이 안 움직일 수 있습니다.\n", flush=True)
+    _log(f"DEBUG_FORCE_CARRY_SENT ok={force_carry_ok}")
     print("-" * 70, flush=True)
 
     current_cmd = "stop"

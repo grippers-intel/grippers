@@ -136,6 +136,11 @@ _STATE_TO_PI = {
     # 씀)도 빠져 있었다. GRASP_ALIGN과 이유가 같다 — Pi 쪽에 특별한 판정이
     # 필요 없는 순수 주행이라 APPROACH로 보낸다.
     "RETURN_HOME":    MissionState.APPROACH,
+    # 2026-09-05 테스트 전용 — manual_insert_probe.py만 이 이름을 쓴다.
+    # mission.py(run_mission.py의 정식 미션 State)엔 이 이름이 없다 — 실제
+    # 파지 없이 CARRY로 바로 들어가는 우회로라 정식 경로에 노출되면 안 된다
+    # (baseline_ports.MissionState.DEBUG_FORCE_CARRY 주석 참고).
+    "DEBUG_FORCE_CARRY": MissionState.DEBUG_FORCE_CARRY,
     # 2026-09-02에 AWAIT_CONTINUE/AWAIT_COMMAND/IDLE(그룹(chess/toy) 소진
     # 시 계속/정지를 사람에게 묻는 기능)이 들어오며 이 표에도 세 항목이
     # 추가됐었으나, 2026-09-04 밤 사용자 지시("AWAIT 다 없애라고. 원래
