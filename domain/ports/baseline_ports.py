@@ -80,8 +80,21 @@ class MissionState:
     # 돌린다. 보정값이 0이면 이 단계 자체가 보고 없이 건너뛰어진다.
     SAFE_300 = "SAFE_300"
 
+    # 테스트 전용 우회로 (사용자 지시, 2026-09-05). CARRY에서 이 상태를
+    # 받으면 _judge_insert()의 라이다 기반 check_insert 게이트(요·좌우·
+    # 거리 판정)를 완전히 건너뛰고 곧장 BaselineInsertState로 들어간다.
+    # manual_insert_probe.py가 safe_300(servo 1 요 보정) 자체만 확인하려는데,
+    # 정식 라이다 게이트가 계속 INSERT_BLOCKED를 내며 CARRY에 가둬서 팔이
+    # 아예 안 움직였다 — DEBUG_FORCE_CARRY와 같은 이유로 필요해졌다.
+    #
+    # ⚠️ run_mission.py는 이 상태를 절대 보내지 않는다 — 2026-09-04 밤
+    # 바구니 놓침 사고 이후 재활성화한 Pi 자신의 최종 안전판(check_insert)을
+    # 우회하는 통로라, 정식 미션 경로에 노출되면 그 사고가 반복될 수 있다.
+    # Host 쪽 `_STATE_TO_PI`에도 manual_insert_probe.py만 이 이름을 쓴다.
+    DEBUG_FORCE_INSERT = "DEBUG_FORCE_INSERT"
+
     ALL = (IDLE, APPROACH, GRASP, GRASP_FORCE, CARRY, APPROACH_BOX, INSERT, DONE, ESTOP,
-           DEBUG_FORCE_CARRY)
+           DEBUG_FORCE_CARRY, DEBUG_FORCE_INSERT)
 
 
 class Report:

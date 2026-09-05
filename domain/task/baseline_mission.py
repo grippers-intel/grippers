@@ -640,6 +640,13 @@ class BaselineCarryState(State):
         face = ports.lidar.basket_face()
         self.sample = (face, ports.arm.get_load())
 
+        if command.state == MissionState.DEBUG_FORCE_INSERT:
+            # 테스트 전용 우회로 — 라이다 게이트(check_insert)를 건너뛰고
+            # 곧장 투하로 들어간다(DEBUG_FORCE_INSERT 정의부 주석 참고).
+            ports.host.report(Report.STATE, MissionState.INSERT,
+                              "DEBUG_FORCE_INSERT — 라이다 게이트 우회, 시험 전용")
+            return BaselineInsertState(self.label, self.grasp_confirmed)
+
         if command.state == MissionState.INSERT:
             return self._judge_insert(ports, command, face)
 

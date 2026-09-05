@@ -561,6 +561,40 @@ def test_직전_표본이_읽기_실패였으면_부하_안정성_검사를_건�
     assert isinstance(nxt, BaselineInsertState)
 
 
+# ── DEBUG_FORCE_INSERT (테스트 전용 우회로, 2026-09-05) ─────────────────────
+
+
+def test_DEBUG_FORCE_INSERT는_라이다_게이트_없이_바로_INSERT로_간다():
+    """manual_insert_probe.py 전용 — 2026-09-05 실기: 정식 "PLACE"를
+    보내면 _judge_insert의 라이다 게이트가 계속 INSERT_BLOCKED만 내고
+    CARRY에 눌러앉아 팔이 안 움직였다(사용자 지시 — "라이다 명령이 왜
+    들어가 있어? 빼고"). 라이다가 아예 안 잡혀도(FakeLidar() 기본값,
+    face.ok=False) DEBUG_FORCE_INSERT는 상관없이 넘어가야 한다."""
+    host = FakeHostLink([HostCommand(MissionState.DEBUG_FORCE_INSERT, stop=True)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD), lidar=FakeLidar())
+
+    nxt = _carry_with_previous().execute(ports)
+
+    assert Report.INSERT_BLOCKED not in host.reported_kinds
+    assert isinstance(nxt, BaselineInsertState)
+
+
+def test_DEBUG_FORCE_INSERT는_yaw_correction_deg를_그대로_넘긴다():
+    """safe_300이 이 우회로를 거쳐서도 여전히 servo 1 보정을 받아야 한다."""
+    host = FakeHostLink([HostCommand(MissionState.DEBUG_FORCE_INSERT, stop=True,
+                                     yaw_correction_deg=8.0)])
+    arm = FakeArm(load_ratio=[0.0626, 0.0313])
+    ports = _ports(host=host, arm=arm, lidar=FakeLidar())
+
+    # BaselineCarryState.execute()는 DEBUG_FORCE_INSERT를 받으면 곧장
+    # BaselineInsertState를 반환할 뿐 실행하지 않는다 — 실제 safe_300
+    # 동작은 반환된 상태를 한 번 더 실행해야 나온다(FSM 루프와 같은 순서).
+    nxt = _carry_with_previous().execute(ports)
+    nxt.execute(ports)
+
+    assert arm.yaw_offsets and arm.yaw_offsets[0] == pytest.approx(math.radians(8.0))
+
+
 def test_투하_후_부하가_줄면_성공으로_보고하고_IDLE로_돌아간다():
     host = FakeHostLink()
     arm = FakeArm(load_ratio=[0.0626, 0.0313])
