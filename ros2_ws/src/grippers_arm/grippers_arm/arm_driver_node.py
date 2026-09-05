@@ -373,6 +373,16 @@ class ArmDriverNode(Node):
             self._on_offset_base_yaw,
             callback_group=cb_group,
         )
+        # safe_300 전용(사용자 지시, 2026-09-05) — 아래 MAX_BASE_YAW_OFFSET_RAD
+        # 정의부 주석 참고. 같은 메시지 타입(OffsetBaseYaw)을 다른 서비스
+        # 이름으로 등록해 두 한계각을 완전히 분리한다. 새 .srv도, colcon
+        # 재빌드도 필요 없다 — 이미 컴파일된 메시지를 이름만 다르게 쓴다.
+        self.create_service(
+            OffsetBaseYaw,
+            "arm_driver/drop_yaw_correction",
+            self._on_drop_yaw_correction,
+            callback_group=cb_group,
+        )
         self.get_logger().info(
             "arm_driver_node ready — "
             f"auto_align_on_first_move={self._auto_align_pending}"
@@ -1500,30 +1510,57 @@ class ArmDriverNode(Node):
     # ⚠️ 2026-08-29까지 여기 240mm(= 64mm)로 적혀 있었다. 실측 전 어림값이다.
     MAX_BASE_YAW_OFFSET_RAD = math.radians(15.0)
 
+    # safe_300(드랍 직전 servo 1 요 보정, 2026-09-05) 전용 한계각 — 사용자
+    # 지시로 45도로 잡았다. 위 MAX_BASE_YAW_OFFSET_RAD(15도)와 일부러
+    # 공유하지 않는다: 그 값은 GRASP 하강 시 턱 폭 허용치(±76mm)에서
+    # 역산된, 물리적으로 근거 있는 한계라 안 건드린다. 여기(드랍 직전
+    # 300mm 자세)는 물체를 이미 확실히 쥔 채 바닥과 접촉이 없는 전혀 다른
+    # 상황이라 같은 한계를 쓸 이유가 없다.
+    #
+    # ⚠️ 45도는 **실기로 검증되지 않은 값이다** — 사용자가 위험을 감수하고
+    # 지시한 수치이지, 차체·배선과의 충돌 여유를 실측해서 나온 값이 아니다.
+    # 처음 시험할 때 팔이 차체 옆이나 배선에 닿지 않는지 반드시 눈으로
+    # 확인할 것.
+    MAX_DROP_YAW_OFFSET_RAD = math.radians(45.0)
+
     # STS3215는 한 바퀴가 4096 카운트다.
     RAW_PER_RADIAN = 4096.0 / (2.0 * math.pi)
 
     def _on_offset_base_yaw(self, request, response):
-        """servo 1만 현재 위치에서 offset_rad만큼 돌린다.
+        """servo 1만 현재 위치에서 offset_rad만큼 돌린다(GRASP 좌우보정용,
+        한계 ±15도). 본체는 _offset_base_yaw_impl — 클래스 docstring 참고."""
+        return self._offset_base_yaw_impl(
+            request, response, self.MAX_BASE_YAW_OFFSET_RAD, "offset_base_yaw")
 
-        GRASP 하강 **전에** 부른다. servo 1은 safe/grasp/midpoint 사이를
-        오가는 동안 `_freeze_servo1`이 현재값을 그대로 물려주므로, 여기서
-        한 번 돌려 두면 그 뒤 하강 경로가 그 각도를 이어받는다 — 교시 자세의
-        servo 1 절대값으로 되돌아가지 않는다.
+    def _on_drop_yaw_correction(self, request, response):
+        """servo 1만 현재 위치에서 offset_rad만큼 돌린다(safe_300 드랍 보정용,
+        한계 ±45도). 본체는 _offset_base_yaw_impl — 클래스 docstring 참고."""
+        return self._offset_base_yaw_impl(
+            request, response, self.MAX_DROP_YAW_OFFSET_RAD, "drop_yaw_correction")
 
-        한계각을 넘거나 관절 범위를 벗어나면 **움직이지 않고 거부한다.**
-        여기서 무리하게 돌리면 팔이 차체 옆을 치거나, 하강 경로가 교시된
-        평면에서 벗어난다."""
+    def _offset_base_yaw_impl(self, request, response, limit_rad, log_label):
+        """servo 1만 현재 위치에서 offset_rad만큼 돌린다 — 실제 구현.
+
+        GRASP 하강 **전에**(또는 safe_300 드랍 직전에) 부른다. servo 1은
+        safe/grasp/midpoint 사이를 오가는 동안 `_freeze_servo1`이 현재값을
+        그대로 물려주므로, 여기서 한 번 돌려 두면 그 뒤 하강 경로가 그
+        각도를 이어받는다 — 교시 자세의 servo 1 절대값으로 되돌아가지
+        않는다.
+
+        한계각(`limit_rad`, 호출자마다 다름 — MAX_BASE_YAW_OFFSET_RAD /
+        MAX_DROP_YAW_OFFSET_RAD)을 넘거나 관절 범위를 벗어나면 **움직이지
+        않고 거부한다.** 여기서 무리하게 돌리면 팔이 차체 옆을 치거나,
+        하강 경로가 교시된 평면에서 벗어난다."""
         response.ok = False
         response.position_raw = 0
         offset = float(request.offset_rad)
         if not math.isfinite(offset):
             response.message = "offset_rad가 수치가 아닙니다"
             return response
-        if abs(offset) > self.MAX_BASE_YAW_OFFSET_RAD:
+        if abs(offset) > limit_rad:
             response.message = (
                 f"보정각 {math.degrees(offset):+.1f}도가 한계 "
-                f"±{math.degrees(self.MAX_BASE_YAW_OFFSET_RAD):.0f}도를 넘습니다 — "
+                f"±{math.degrees(limit_rad):.0f}도를 넘습니다 — "
                 "차량을 다시 세워야 합니다")
             return response
 
@@ -1559,14 +1596,14 @@ class ArmDriverNode(Node):
             # 재회전 필요"로 Host 에 차량 재정렬을 요청한다 — 팔로 못 고칠
             # 만큼 틀어졌으면 차를 다시 세우는 것이 맞고, 이미 있는 경로다.
             drift_raw = target - IDLE_CRADLE_RAW[0]
-            limit_raw = self.MAX_BASE_YAW_OFFSET_RAD * self.RAW_PER_RADIAN
+            limit_raw = limit_rad * self.RAW_PER_RADIAN
             if abs(drift_raw) > limit_raw:
                 response.message = (
                     f"servo 1이 교시 정면에서 "
                     f"{math.degrees(drift_raw / self.RAW_PER_RADIAN):+.1f}도까지 "
-                    f"벌어집니다 — 한계 ±{math.degrees(self.MAX_BASE_YAW_OFFSET_RAD):.0f}도. "
+                    f"벌어집니다 — 한계 ±{math.degrees(limit_rad):.0f}도. "
                     "차량을 다시 세워야 합니다")
-                self.get_logger().warn(f"offset_base_yaw: {response.message}")
+                self.get_logger().warn(f"{log_label}: {response.message}")
                 return response
 
             goal = {servo_id: actual[servo_id] for servo_id in range(1, 6)}
@@ -1595,7 +1632,7 @@ class ArmDriverNode(Node):
             settled = self._read_joint_positions(backend)
             if settled is None:
                 response.message = "보정 후 관절 위치 읽기 실패 — 돌았는지 확인 불가"
-                self.get_logger().error(f"offset_base_yaw: {response.message}")
+                self.get_logger().error(f"{log_label}: {response.message}")
                 return response
             response.position_raw = int(settled[1])
             error = response.position_raw - target
@@ -1604,10 +1641,10 @@ class ArmDriverNode(Node):
                 f"servo 1 {actual[1]} -> {response.position_raw} "
                 f"(목표 {target}, 잔차 {error:+d} raw, {math.degrees(offset):+.1f}도)")
             if response.ok:
-                self.get_logger().info(f"offset_base_yaw: {response.message}")
+                self.get_logger().info(f"{log_label}: {response.message}")
             else:
                 self.get_logger().warn(
-                    f"offset_base_yaw: 도달 실패 — {response.message} "
+                    f"{log_label}: 도달 실패 — {response.message} "
                     f"(허용 ±{BASE_YAW_TOLERANCE_RAW} raw)")
             return response
         except Exception as exc:  # noqa: BLE001 -- 서비스 경계

@@ -54,6 +54,11 @@ class Ros2ArmDriver(ArmDriver):
         self._fold_client = node.create_client(Trigger, "arm_driver/fold_to_cradle")
         self._hold_client = node.create_client(Trigger, "arm_driver/hold_position")
         self._yaw_client = node.create_client(OffsetBaseYaw, "arm_driver/offset_base_yaw")
+        # safe_300 전용(사용자 지시, 2026-09-05) — 같은 메시지 타입을 별도
+        # 서비스 이름으로 쓴다(arm_driver_node의 MAX_DROP_YAW_OFFSET_RAD
+        # 주석 참고 — offset_base_yaw와 한계각이 다르다).
+        self._drop_yaw_client = node.create_client(
+            OffsetBaseYaw, "arm_driver/drop_yaw_correction")
 
     def move_to_cartesian(self, xyz_m: Point3, down: bool = False) -> bool:
         """도달하면 True. 액션 서버가 없거나 결과가 오지 않으면 **False**
@@ -129,6 +134,18 @@ class Ros2ArmDriver(ArmDriver):
             return False
         if not res.ok:
             self._node.get_logger().warn(f"offset_base_yaw 거부: {res.message}")
+        return res.ok
+
+    def correct_drop_yaw(self, offset_rad: float) -> bool:
+        """safe_300 요 보정. 서비스가 없거나 노드가 거부하면 **False** —
+        그런 경우도 INSERT는 계속 진행한다(ArmDriver.correct_drop_yaw 참고)."""
+        req = OffsetBaseYaw.Request(offset_rad=float(offset_rad))
+        res = call_service(self._node, self._drop_yaw_client, req,
+                           label="drop_yaw_correction", timeout_sec=BASE_YAW_TIMEOUT_SEC)
+        if res is None:
+            return False
+        if not res.ok:
+            self._node.get_logger().warn(f"drop_yaw_correction 거부: {res.message}")
         return res.ok
 
     def hold_position(self) -> None:

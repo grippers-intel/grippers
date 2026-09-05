@@ -71,6 +71,15 @@ FAILURE_CONTRACTS = [
         "`False`",
     ),
     (
+        # safe_300 전용 — offset_base_yaw와 별도 한계각(45도)을 쓰지만
+        # 실패 계약은 같다: 거부되면 False, 투하 자체는 계속한다.
+        ArmDriver,
+        "correct_drop_yaw",
+        lambda: FakeArm(drop_yaw_offset_ok=False).correct_drop_yaw(0.5),
+        False,
+        "`False`",
+    ),
+    (
         # 자기 뎁스캠이 목표를 못 찾으면 None — GRASP 조건 판정이 그걸
         # 미충족으로 읽어 Host에 되돌려준다.
         Perception,

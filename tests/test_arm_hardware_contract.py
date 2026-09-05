@@ -191,6 +191,42 @@ def test_fold_to_cradle_checks_servos_before_and_after_motion():
     assert "go" not in names
 
 
+def test_offset_base_yaw_and_drop_yaw_correction_use_separate_limits():
+    """2026-09-05 사용자 지시 — safe_300(드랍 직전 servo 1 요 보정) 한계각을
+    45도로 넓히면서, GRASP 좌우보정의 물리적 근거가 있는 ±15도
+    (MAX_BASE_YAW_OFFSET_RAD)는 절대 같이 넓어지면 안 된다. 두 공개
+    핸들러가 서로 다른 한계 상수를 공유 구현(_offset_base_yaw_impl)에
+    넘기는지 직접 확인한다."""
+    # 두 상수는 math.radians(...) 호출이라 _module_constants의
+    # literal_eval로는 못 읽는다 — 소스에서 문자열로 직접 확인한다.
+    source = ARM_NODE.read_text(encoding="utf-8")
+    assert "MAX_BASE_YAW_OFFSET_RAD = math.radians(15.0)" in source
+    assert "MAX_DROP_YAW_OFFSET_RAD = math.radians(45.0)" in source
+
+    offset_fn = _function("_on_offset_base_yaw")
+    drop_fn = _function("_on_drop_yaw_correction")
+    offset_call = next(
+        call for call in _calls(offset_fn) if _called_name(call) == "_offset_base_yaw_impl")
+    drop_call = next(
+        call for call in _calls(drop_fn) if _called_name(call) == "_offset_base_yaw_impl")
+
+    def _attr_name(node):
+        return node.attr if isinstance(node, ast.Attribute) else None
+
+    assert _attr_name(offset_call.args[2]) == "MAX_BASE_YAW_OFFSET_RAD"
+    assert _attr_name(drop_call.args[2]) == "MAX_DROP_YAW_OFFSET_RAD"
+
+
+def test_drop_yaw_correction_service_is_registered():
+    """arm_driver/drop_yaw_correction이 __init__에서 실제로 등록되는지 —
+    등록을 빠뜨리면 클라이언트(ros2_arm_driver.correct_drop_yaw)가 매번
+    타임아웃으로 실패한다."""
+    init = _function("__init__")
+    source = ast.unparse(init)
+    assert "arm_driver/drop_yaw_correction" in source
+    assert "self._on_drop_yaw_correction" in source
+
+
 def test_gripper_checks_servo_and_position_write_result():
     fn = _function("_on_set_gripper")
     names = [_called_name(call) for call in _calls(fn)]
@@ -909,8 +945,10 @@ def test_좌우_보정_허용오차가_정렬_허용치를_분간할_수_있다(
 
 
 def test_좌우_보정은_전용_허용오차로_움직인다():
-    """`_on_offset_base_yaw` 가 기본 격자를 그대로 쓰면 위 계산이 무의미하다."""
-    fn = _function("_on_offset_base_yaw")
+    """`_offset_base_yaw_impl`(2026-09-05부터 `_on_offset_base_yaw`와
+    `_on_drop_yaw_correction`이 공유하는 실제 구현)이 기본 격자를 그대로
+    쓰면 위 계산이 무의미하다."""
+    fn = _function("_offset_base_yaw_impl")
     source = ast.unparse(fn)
 
     assert "tolerance_raw=" in source, "허용오차를 안 넘긴다 — 기본 격자로 간다"
@@ -920,7 +958,7 @@ def test_좌우_보정은_전용_허용오차로_움직인다():
 def test_좌우_보정은_도달을_확인하고_답한다():
     """예전엔 무조건 ok=True 였다. 안 움직였는데 성공이 나가면 Pi 는 보정이
     먹은 줄 알고 같은 관측·같은 보정을 무한히 반복한다."""
-    fn = _function("_on_offset_base_yaw")
+    fn = _function("_offset_base_yaw_impl")
     source = ast.unparse(fn)
 
     assert "response.ok = abs(" in source or "abs(error) <= BASE_YAW_TOLERANCE_RAW" in source, (
@@ -930,12 +968,16 @@ def test_좌우_보정은_도달을_확인하고_답한다():
 
 def test_한계각은_교시_정면_기준_절대각이다():
     """이 서비스는 현재 위치 기준 **상대** 회전이다. 한 번의 요청 크기만
-    보면 같은 요청이 반복될 때 servo 1 이 얼마든지 멀리 걸어간다."""
-    fn = _function("_on_offset_base_yaw")
-    source = ast.unparse(fn)
+    보면 같은 요청이 반복될 때 servo 1 이 얼마든지 멀리 걸어간다.
 
-    assert "IDLE_CRADLE_RAW" in source, "교시 정면을 기준으로 안 잡는다"
-    assert "MAX_BASE_YAW_OFFSET_RAD" in source
+    한계각 상수 자체는 2026-09-05부터 얇은 래퍼(_on_offset_base_yaw)에서
+    넘기고 공유 구현(_offset_base_yaw_impl)은 limit_rad 매개변수로만
+    받는다 — 그래서 두 함수를 나눠서 확인한다."""
+    impl_source = ast.unparse(_function("_offset_base_yaw_impl"))
+    wrapper_source = ast.unparse(_function("_on_offset_base_yaw"))
+
+    assert "IDLE_CRADLE_RAW" in impl_source, "교시 정면을 기준으로 안 잡는다"
+    assert "MAX_BASE_YAW_OFFSET_RAD" in wrapper_source
 
 
 # ── servo 1이 틀어진 채로 GRASP를 도는가 (2026-08-29) ──────────────────────

@@ -93,6 +93,27 @@ class ArmDriver(ABC):
         무리하게 돌리는 것보다 Host에 다시 세워 달라고 하는 편이 싸다."""
 
     @abstractmethod
+    def correct_drop_yaw(self, offset_rad: float) -> bool:
+        """servo 1(팔 베이스 요)을 현재 위치에서 offset_rad만큼 돌린다.
+
+        safe_300 — INSERT가 "drop"(300mm) 자세에 도달해 그리퍼를 열기
+        **전에** 부르는 요 보정이다(사용자 지시, 2026-09-05). Host가 차량을
+        NUDGE 경계선에서 방향에 상관없이 세우고 남은 잔여 지향 오차를
+        yaw_correction_deg로 실어 보내면, 여기서 그만큼 흡수한다.
+
+        `offset_base_yaw()`와 구현·서비스가 같은 모양(servo 1만 상대 회전)
+        이지만 **한계각이 다르다** — 완전히 별도의 메서드로 둔다. 그쪽
+        한계는 GRASP 턱 폭 허용치에서 역산된 물리적 근거가 있는 값이라
+        건드리지 않는다(arm_driver_node.MAX_BASE_YAW_OFFSET_RAD 주석
+        참고); 여기(드랍 직전, 물체를 이미 확실히 쥔 채 바닥 접촉 없는
+        상황)는 물리적 상황 자체가 달라 더 넓게(사용자 지시로 45도) 잡는다.
+
+        **한계각을 넘거나 관절 범위를 벗어나면 움직이지 않고 `False`.**
+        그런 경우도 INSERT 자체는 포기하지 않는다 — 보정 없이 여는 것이
+        물체를 든 채 무한정 멈춰 있는 것보다 낫다(BaselineInsertState
+        참고)."""
+
+    @abstractmethod
     def hold_position(self) -> None:
         """현재 관절 자세를 그대로 유지한다 (E-STOP 시 파지물 낙하 방지용).
 

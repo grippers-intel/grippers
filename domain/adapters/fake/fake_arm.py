@@ -21,12 +21,14 @@ class FakeArm(ArmDriver):
         self,
         move_ok: bool = True,
         yaw_offset_ok: bool = True,
+        drop_yaw_offset_ok: bool = True,
         reorient_ok: bool = True,
         fold_ok: bool = True,
         load_ratio: float | list[float] = LOAD_HOLDING,
     ):
         self._move_ok = move_ok
         self._yaw_offset_ok = yaw_offset_ok
+        self._drop_yaw_offset_ok = drop_yaw_offset_ok
         self._reorient_ok = reorient_ok
         self._fold_ok = fold_ok
         # get_load()는 GRASP(높을수록 성공)과 HANDOVER(낮을수록 성공)가 정반대
@@ -41,6 +43,7 @@ class FakeArm(ArmDriver):
         self.floor_pose_calls = []
         self.gripper_widths = []
         self.yaw_offsets = []
+        self.drop_yaw_offsets = []
         # 붙잡기는 안전 경로다 — 복구가 실패했을 때 최소한 이건 불렸는지
         # 테스트가 확인할 수 있어야 한다(2026-08-29).
         self.hold_calls = 0
@@ -71,6 +74,13 @@ class FakeArm(ArmDriver):
         """`yaw_offset_ok=False`로 한계각 초과·관절 범위 밖 거부를 주입한다."""
         self.yaw_offsets.append(offset_rad)
         return self._yaw_offset_ok
+
+    def correct_drop_yaw(self, offset_rad: float) -> bool:
+        """`drop_yaw_offset_ok=False`로 한계각 초과·관절 범위 밖 거부를
+        주입한다 — offset_base_yaw와 별도 한계각을 쓰는 safe_300 전용
+        메서드라 호출 기록도 따로 남긴다."""
+        self.drop_yaw_offsets.append(offset_rad)
+        return self._drop_yaw_offset_ok
 
     def hold_position(self) -> None:
         self.hold_calls += 1

@@ -592,7 +592,7 @@ def test_DEBUG_FORCE_INSERT는_yaw_correction_deg를_그대로_넘긴다():
     nxt = _carry_with_previous().execute(ports)
     nxt.execute(ports)
 
-    assert arm.yaw_offsets and arm.yaw_offsets[0] == pytest.approx(math.radians(8.0))
+    assert arm.drop_yaw_offsets and arm.drop_yaw_offsets[0] == pytest.approx(math.radians(8.0))
 
 
 def test_투하_후_부하가_줄면_성공으로_보고하고_IDLE로_돌아간다():
@@ -661,7 +661,7 @@ def test_yaw_correction_deg가_0이면_servo_1을_건드리지_않는다():
 
     BaselineInsertState("queen").execute(ports)
 
-    assert arm.yaw_offsets == []
+    assert arm.drop_yaw_offsets == []
     assert MissionState.SAFE_300 not in [state for _r, state, _d, _f in host.reports]
 
 
@@ -675,18 +675,18 @@ def test_yaw_correction_deg가_있으면_그리퍼를_열기_전에_servo_1을_�
 
     BaselineInsertState("queen").execute(ports)
 
-    assert arm.yaw_offsets == pytest.approx([math.radians(12.0), math.radians(-12.0)])
+    assert arm.drop_yaw_offsets == pytest.approx([math.radians(12.0), math.radians(-12.0)])
     assert MissionState.SAFE_300 in [state for _r, state, _d, _f in host.reports]
     # 놓기 자체는 평소대로 성공해야 한다 — 보정 추가가 기존 판정을 깨면 안 된다.
     assert Report.INSERT_DONE in host.reported_kinds
 
 
 def test_servo_1_보정이_거부돼도_투하는_계속한다():
-    """offset_base_yaw가 한계각 초과 등으로 거부(False)해도, 물체를 든 채
-    무한정 멈추는 것보다 보정 없이 여는 편이 낫다는 판단이다
+    """correct_drop_yaw가 한계각(45도) 초과 등으로 거부(False)해도, 물체를
+    든 채 무한정 멈추는 것보다 보정 없이 여는 편이 낫다는 판단이다
     (BaselineInsertState 클래스 docstring과 같은 원칙)."""
     host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True, yaw_correction_deg=90.0)])
-    arm = FakeArm(load_ratio=[0.0626, 0.0313], yaw_offset_ok=False)
+    arm = FakeArm(load_ratio=[0.0626, 0.0313], drop_yaw_offset_ok=False)
     ports = _ports(host=host, arm=arm)
 
     BaselineInsertState("queen").execute(ports)
@@ -696,7 +696,7 @@ def test_servo_1_보정이_거부돼도_투하는_계속한다():
                if _s == MissionState.SAFE_300]
     assert any("거부됨" in d for d in details)
     # 거부됐으니 되돌릴 것도 없다 — 편도 요청 한 번만 나가야 한다.
-    assert arm.yaw_offsets == [math.radians(90.0)]
+    assert arm.drop_yaw_offsets == [math.radians(90.0)]
 
 
 # ── E-STOP ────────────────────────────────────────────────────────────────
