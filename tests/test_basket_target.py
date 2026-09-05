@@ -106,3 +106,17 @@ def test_목표영역_안에_있으면_지향_상관없이_통과():
     result = bt.check_basket_insert_gate(robot_xy, robot_yaw_deg=123.0, box_name="chess")
     assert result.distance_m < 1e-6
     assert result.ok
+
+
+def test_목표영역_폭은_물리_바구니_폭_안에서만_넓힌다():
+    """2026-09-05 밤 사용자 지시 — "servo1을 안돌려도 되도록 바구니 내
+    투하영역을 키우자". 목표영역이 넓을수록 PLACE가 매 사이클 재는
+    facing_error_deg(=safe_300 servo1 보정각)가 작아진다 — 그런데 물리
+    바구니 폭(config.BOX_W)을 넘기면 벽에 닿는다. 벽까지 여유가 남는지
+    수치로 고정해 둔다(이력 전체가 실기 사고로 오르내린 값이라 회귀
+    방지용)."""
+    assert bt.TARGET_HALF_WIDTH_M == pytest.approx(0.065)
+    assert bt.TARGET_INSET_DEPTH_M == pytest.approx(0.06)
+    margin_each_side = cfg.BOX_W / 2.0 - bt.TARGET_HALF_WIDTH_M
+    assert margin_each_side > 0.03, (
+        "목표영역이 물리 바구니 폭에 비해 너무 넓다 — 벽에 닿을 여유가 3cm도 안 된다")
