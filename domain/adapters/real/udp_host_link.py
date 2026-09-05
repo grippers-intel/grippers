@@ -1,12 +1,18 @@
 """UdpHostLink — HostLink 포트의 실기 구현. Host PC와 UDP+JSON으로 말한다.
 
-프로토콜은 Host 쪽 `VEHICLE_LINK_PROTOCOL.md`가 단일 소스다. 여기서는 팀이
-2026-08-26에 확정한 **다섯 필드**만 읽는다:
+프로토콜은 Host 쪽 `VEHICLE_LINK_PROTOCOL.md`가 단일 소스다. 팀이
+2026-08-26에 확정한 다섯 필드에 더해, 2026-09-05에 `yaw_correction_deg`
+(safe_300 — INSERT가 그리퍼를 열기 전 servo 1로 흡수할 잔여 지향 오차,
+도 단위)를 여섯 번째로 추가했다:
 
-    state · linear_x · linear_y · angular_z · stop
+    state · linear_x · linear_y · angular_z · stop · yaw_correction_deg
 
-Host가 다른 필드를 더 보내도 무시한다 — 좌표나 경로가 섞여 들어오더라도
-Pi가 그것을 읽기 시작하는 순간 역할 분담이 무너지기 때문이다.
+Host가 이 여섯 외의 필드를 더 보내도 무시한다 — 좌표나 경로가 섞여
+들어오더라도 Pi가 그것을 읽기 시작하는 순간 역할 분담이 무너지기
+때문이다. yaw_correction_deg는 예외로 추가됐다 — angular_z(차체 회전
+속도)처럼 Host가 계산한 각도 하나를 Pi가 그대로 실행만 하는 값이라
+"공간을 아는 것은 Host뿐"이라는 원칙을 어기지 않는다(HostCommand
+docstring 참고).
 
 ## 왜 최신 것만 보는가
 
@@ -88,6 +94,7 @@ class UdpHostLink:
                 linear_y=float(data.get("linear_y", 0.0)),
                 angular_z=float(data.get("angular_z", 0.0)),
                 stop=bool(data.get("stop", False)),
+                yaw_correction_deg=float(data.get("yaw_correction_deg", 0.0)),
             )
         except (TypeError, ValueError):
             self._warn("Host 패킷의 속도 필드가 수치가 아니다 — 버림")
