@@ -191,6 +191,24 @@ class BaselinePorts:
     # VLA 백엔드가 쓰는 포트. classic 에서는 None 이어도 된다.
     vla: object = None
 
+    # ── 뎁스 관문 ──────────────────────────────────────────────────────────
+    #
+    # 기본은 켜짐이다. 끄면 **뎁스 카메라를 한 번도 안 본다** — 물체 식별,
+    # 정렬 판정, 파지 성공의 두 번째 신호가 전부 빠진다.
+    #
+    # 왜 끄는 선택지가 있는가: 주행이 탑뷰 ArUco 로 물체 앞에 세워 주고 파지를
+    # VLA 가 하는 구성에서는 Pi 의 뎁스캠이 경로에 없다. 그런데 이 FSM 은 뎁스
+    # 관측이 없으면 GRASP 로 넘어가지 못한다(metric_ok 가 아니면 UNKNOWN).
+    #
+    # ⚠️ 끄면 잃는 것이 분명하다. 성공 판정이 **서보 부하 하나**로 줄어서,
+    # 물체 모서리를 살짝 물었거나 턱끼리 문 경우도 통과한다. 사람이 눈으로
+    # 지켜보는 시연에서나 감수할 만한 거래다.
+    use_depth_gate: bool = True
+    # 뎁스 관문을 껐을 때 쓸 라벨. HostCommand 에는 라벨이 없고(상태와 속도뿐)
+    # 뎁스캠 식별이 빠지므로 어딘가에서 와야 한다. ACT 는 이 문자열을 정책
+    # 입력으로 받지 않는다 — 쓰이는 곳은 파지 프로파일 하나다.
+    default_grasp_label: str = "queen"
+
 
 # ── 공통 동작 ──────────────────────────────────────────────────────────────
 
@@ -347,6 +365,20 @@ class BaselineApproachState(State):
         약 1.7초 동안 보고가 끊긴다** — Host 워치독을 그보다 넉넉히 잡아야
         한다."""
         ports.base.stop()
+        if not ports.use_depth_gate:
+            # 뎁스캠을 안 본다. 식별도 정렬 판정도 건너뛰고 바로 GRASP 다 —
+            # "물체가 팔 앞에 있다"는 판단을 탑뷰를 보는 Host 가 이미 했고,
+            # 그 판단으로 GRASP 명령을 보낸 것이기 때문이다.
+            #
+            # creep 거리는 0 이다. VLA 경로는 차체를 밀지 않고 정책이 스스로
+            # 뻗는다(_grasp_vla 주석). classic 백엔드로 이 모드를 쓰면 미세
+            # 전진 없이 교시 자세로만 집게 되므로 성공률이 떨어진다.
+            label = ports.default_grasp_label
+            ports.host.report(
+                Report.GRASP_READY, self.name,
+                f"{label} 뎁스 관문 꺼짐 — 정렬 판정 없이 진행")
+            return BaselineGraspState(label, 0.0, self.retries)
+
         observation = ports.perception.identify_target()
         label = observation.label if observation is not None else None
         inputs = pc.GraspInputs(
