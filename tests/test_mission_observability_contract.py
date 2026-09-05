@@ -18,6 +18,18 @@ ORCHESTRATOR = (
 )
 BRINGUP = ROOT / "ros2_ws" / "src" / "grippers_bringup" / "launch" / "bringup.launch.py"
 
+#: LoggedPort 로 감싸는 하드웨어 포트들. Host 링크와 라이다는 여기 없다 —
+#: 전자는 사이클마다 도는 순수 입출력이라 로그가 폭주하고, 후자는 판정 결과를
+#: 그대로 Host 에 보고하므로 이미 기록이 남는다.
+WRAPPED_PORT_CLASSES = (
+    "Ros2MecanumBase",
+    "Ros2ArmDriver",
+    "Ros2Perception",
+    # VLA 파지 백엔드(2026-09-06). grasp_backend=vla 일 때만 만들어지지만
+    # 감싸는 것은 똑같다 — 정책이 무엇을 돌려줬는지가 실기에서 제일 궁금하다.
+    "Ros2VlaGrasp",
+)
+
 
 class RecordingLogger:
     def __init__(self):
@@ -83,12 +95,17 @@ def test_hardware_ports_are_wrapped_for_boundary_logging():
 
     Host 링크와 라이다는 감싸지 않는다 — 전자는 사이클마다 도는 순수
     입출력이라 로그가 폭주하고, 후자는 판정 결과를 그대로 Host에 보고하므로
-    이미 기록이 남는다."""
+    이미 기록이 남는다.
+
+    개수를 리터럴로 박지 않는다 — 포트가 하나 늘 때마다 이 테스트만 깨지고,
+    깨진 이유가 "감싸는 걸 빠뜨렸다"인지 "포트가 늘었다"인지 구분이 안 된다.
+    2026-09-06 에 VLA 포트가 늘면서 실제로 그랬다. 목록에서 개수를 끌어오면
+    포트를 추가한 사람이 목록에 이름을 넣는 것만으로 끝난다."""
     source = ORCHESTRATOR.read_text(encoding="utf-8")
 
-    assert source.count("LoggedPort(") == 3
-    for port in ("Ros2MecanumBase", "Ros2ArmDriver", "Ros2Perception"):
+    for port in WRAPPED_PORT_CLASSES:
         assert port in source
+    assert source.count("LoggedPort(") == len(WRAPPED_PORT_CLASSES)
 
 
 def test_logged_port_calls_pass_the_name_first():
@@ -106,7 +123,7 @@ def test_logged_port_calls_pass_the_name_first():
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Name) and call.func.id == "LoggedPort"
     ]
-    assert len(calls) == 3
+    assert len(calls) == len(WRAPPED_PORT_CLASSES)
     for call in calls:
         first_arg = call.args[0]
         assert isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str), (

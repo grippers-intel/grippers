@@ -16,8 +16,9 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def launch_setup(context):
@@ -33,11 +34,40 @@ def launch_setup(context):
     use_fake_arm = LaunchConfiguration("use_fake_arm")
     use_fake_perception = LaunchConfiguration("use_fake_perception")
     use_fake_interpreter = LaunchConfiguration("use_fake_interpreter")
+    use_fake_host = LaunchConfiguration("use_fake_host")
+    host_ip = LaunchConfiguration("host_ip")
     scan_floor_enabled = LaunchConfiguration("scan_floor_enabled")
     record_bag = LaunchConfiguration("record_bag")
     bag_output = LaunchConfiguration("bag_output")
     arm_port = LaunchConfiguration("arm_port")
     host_ip = LaunchConfiguration("host_ip")
+    auto_align_on_first_move = LaunchConfiguration("auto_align_on_first_move")
+    use_vla = LaunchConfiguration("use_vla")
+    policy_source = LaunchConfiguration("policy_source")
+    policy_url = LaunchConfiguration("policy_url")
+    policy_calibration_file = LaunchConfiguration("policy_calibration_file")
+    checkpoint = LaunchConfiguration("checkpoint")
+    device = LaunchConfiguration("device")
+    gripper_cam_publish_hz = LaunchConfiguration("gripper_cam_publish_hz")
+    grasp_backend = LaunchConfiguration("grasp_backend")
+    use_depth_gate = LaunchConfiguration("use_depth_gate")
+    default_grasp_label = LaunchConfiguration("default_grasp_label")
+
+    # ⚠️ use_vla 를 끄면 그리퍼캠 발행도 **함께** 꺼져야 한다. perception_node 의
+    # 기본값이 0.0(끔)이고 "켜기 전에는 이 노드의 동작이 전과 완전히 같다"가
+    # 그쪽 주석의 약속이라, 여기서 무조건 10Hz 를 박으면 VLA 를 안 쓰는 실기에서도
+    # 1280x720 캡처가 매초 돌아 4코어를 갉아먹는다.
+    #
+    # use_fake_* 주석이 말하는 함정과 같은 종류다 — 스위치 하나가 여러 자리에
+    # 걸쳐 있으면 하나만 빠져도 "껐다고 믿었는데 도는" 상태가 된다. 그래서
+    # 인자를 둘로 나누되 **묶는 계산을 여기 한 곳에 둔다.**
+    gripper_cam_hz = ParameterValue(
+        PythonExpression([
+            gripper_cam_publish_hz, " if '", use_vla,
+            "'.lower() in ('true', '1') else 0.0",
+        ]),
+        value_type=float,
+    )
 
     # ⚠️ 2026-08-23: controller.launch.py를 그대로 쓰지 않는다 — HANDOFF.md
     # 실기 확인: 이 launch가 포함하는 imu_filter.launch.py가 `imu_calib`
@@ -73,7 +103,16 @@ def launch_setup(context):
         executable="perception_node",
         output="screen",
         condition=UnlessCondition(use_fake_perception),
-        parameters=[{"scan_floor_enabled": scan_floor_enabled}],
+        parameters=[
+            {
+                "scan_floor_enabled": scan_floor_enabled,
+                # 그리퍼캠을 토픽으로 내보낸다 — vla_inference 가 이걸 구독한다.
+                # 카메라를 소유한 노드가 여기라서 여기서 발행해야 한다
+                # (gripper_cam_publisher_node 를 따로 띄우면 같은 장치를 두 번 열어
+                # Device or resource busy 다 — 그 노드 docstring 의 경고).
+                "gripper_cam_publish_hz": gripper_cam_hz,
+            }
+        ],
     )
     # perception_node는 회전 보정된 스트림만 구독한다 — 이 노드가 없으면
     # 카메라가 뒤집힌 프레임에서 YOLO가 매 프레임 오검출을 낸다(2026-08-26
@@ -90,7 +129,41 @@ def launch_setup(context):
         executable="arm_driver",
         output="screen",
         condition=UnlessCondition(use_fake_arm),
-        parameters=[{"arm_port": arm_port}],
+        parameters=[
+            {
+                "arm_port": arm_port,
+                # 빈 문자열이면 arm_driver 가 "미설정" 으로 로그만 남기고 넘어가고
+                # ExecuteJointChunk(VLA 재생)만 거부된다 — classic 경로는 그대로다.
+                # 그래서 use_vla 와 무관하게 항상 넘겨도 안전하다.
+                "policy_calibration_file": policy_calibration_file,
+                # ⚠️ 이 인자가 없어서 실기에서 껐다고 생각하고 켠 채로 돌렸다
+                # (2026-09-05). ros2 launch 는 모르는 인자를 오류로 알리지
+                # 않으므로 auto_align_on_first_move:=false 가 조용히 사라졌다.
+                # use_depth_gate 때와 같은 사고이고 원인도 같다 — 노드에만
+                # 파라미터를 두고 런치에 배선하지 않았다.
+                "auto_align_on_first_move": auto_align_on_first_move,
+            }
+        ],
+    )
+    # VLA 파지 백엔드. 기본은 꺼져 있다 — 미션 FSM 의 classic GRASP 가 여전히
+    # 기본 경로이고, remote 추론은 노트북과 네트워크에 의존하기 때문이다.
+    #
+    # ⚠️ 이 노드는 카메라를 직접 열지 않는다. perception_node 의
+    # gripper_cam_publish_hz 로 나오는 토픽을 구독한다(위 gripper_cam_hz 참고).
+    vla_inference_node = Node(
+        package="grippers_vla",
+        executable="vla_inference_node",
+        output="screen",
+        condition=IfCondition(use_vla),
+        parameters=[
+            {
+                "policy_source": policy_source,
+                "policy_url": policy_url,
+                # local 일 때만 쓰인다. remote 면 노드가 이 값을 아예 안 읽는다.
+                "checkpoint": checkpoint,
+                "device": device,
+            }
+        ],
     )
     bag_recorder = ExecuteProcess(
         cmd=["ros2", "bag", "record", "-a", "-o", bag_output],
@@ -108,7 +181,16 @@ def launch_setup(context):
                     "use_fake_arm": use_fake_arm,
                     "use_fake_perception": use_fake_perception,
                     "use_fake_interpreter": use_fake_interpreter,
+                    "use_fake_host": use_fake_host,
                     "host_ip": host_ip,
+                    # ⚠️ 이 셋을 여기 안 넘기면 launch 인자를 줘도 **조용히**
+                    # 기본값으로 돈다. 2026-09-05 실기에서 그랬다 —
+                    # use_depth_gate:=false 를 줬는데 뎁스 관문이 그대로 켜져
+                    # 있어서 GRASP_BLOCKED("물체가 전진 거리 밖이다")로 막혔다.
+                    # ros2 launch 는 모르는 인자를 오류로 알리지 않는다.
+                    "grasp_backend": grasp_backend,
+                    "use_depth_gate": use_depth_gate,
+                    "default_grasp_label": default_grasp_label,
                 }
             ],
         ),
@@ -137,6 +219,7 @@ def launch_setup(context):
         perception_node,
         depth_cam_rotate_node,
         arm_driver_node,
+        vla_inference_node,
         bag_recorder,
         *grippers_nodes,
     ]
@@ -165,6 +248,25 @@ def generate_launch_description():
                 default_value="true",
                 description="true면 language 노드 없이 ScriptedInterpreter 사용",
             ),
+            # ⚠️ 이 둘이 없어서 실기 통합이 막혀 있었다(2026-08-28 확인).
+            # host_ip 기본값이 작성자 개발 PC 주소라, 다른 사람이 Host를 띄우면
+            # **명령은 가는데 보고는 남의 PC로 갔다.** 명령이 단방향이라 차는
+            # 정상적으로 움직이고 Host만 아무것도 못 받는다 — 링크가 끊긴 것처럼
+            # 보이지만 절반만 연결된 상태다.
+            #
+            # 근본 해법은 UdpHostLink가 **명령을 보낸 쪽으로** 보고하게 한 것이고
+            # (같은 날 수정), 이 인자는 그것을 끄고 고정하고 싶을 때 쓴다.
+            DeclareLaunchArgument(
+                "use_fake_host",
+                default_value="false",
+                description="true면 UDP 없이 FakeHostLink 사용 (Host 없이 시험)",
+            ),
+            DeclareLaunchArgument(
+                "host_ip",
+                default_value="192.168.0.10",
+                description="보고를 보낼 Host 주소의 **초기값**. 첫 명령이 오면 "
+                            "그 명령을 보낸 주소로 자동으로 바뀐다",
+            ),
             DeclareLaunchArgument(
                 "scan_floor_enabled",
                 default_value="false",
@@ -180,6 +282,104 @@ def generate_launch_description():
                 # arm_driver_node도 기동 시 베이스 보드 포트 충돌을 검사한다.
                 default_value="/dev/soarm",
                 description="SO-ARM101 시리얼 포트 (udev 기본값: /dev/soarm)",
+            ),
+            # ── VLA 파지 백엔드 ────────────────────────────────────────────
+            #
+            # 기본이 false 인 이유는 두 가지다. (1) 미션 FSM 의 classic GRASP 가
+            # 여전히 기본 경로다. (2) policy_source 기본값이 remote 라, 켜면
+            # **노트북의 policy_server 가 떠 있어야** 노드가 기동한다 — 없으면
+            # health 에서 일찍 실패한다. 그 편이 파지 도중에 알게 되는 것보다 낫지만,
+            # 시연 기본값이 네트워크에 의존해서는 안 된다.
+            DeclareLaunchArgument(
+                "grasp_backend",
+                default_value="classic",
+                description="파지 백엔드 classic|vla. vla 면 정책이 파지를 대신하고 "
+                "실패하면 그 자리에서 classic 으로 한 번 더 시도한다",
+            ),
+            DeclareLaunchArgument(
+                "use_depth_gate",
+                default_value="true",
+                description="false 면 뎁스캠을 안 본다 — 물체 식별·정렬 판정·파지 성공의 "
+                "두 번째 신호가 빠진다. 주행(탑뷰)이 세운 자리에서 곧장 파지한다",
+            ),
+            DeclareLaunchArgument(
+                "default_grasp_label",
+                default_value="queen",
+                description="use_depth_gate=false 일 때 쓸 라벨. 파지 프로파일 선택에만 쓴다",
+            ),
+            DeclareLaunchArgument(
+                "auto_align_on_first_move",
+                default_value="true",
+                description="false면 첫 이동 때 IDLE 자동 정렬을 하지 않는다. "
+                "IDLE_CRADLE_RAW 가 실제 교시 자세와 어긋나 있을 때 끈다 — "
+                "정렬이 잠긴 관절을 밀어 버린다(2026-09-05 wrist_roll 909틱)",
+            ),
+            DeclareLaunchArgument(
+                "use_vla",
+                default_value="false",
+                description="true면 vla_inference_node를 띄우고 그리퍼캠 발행을 켠다 "
+                "(policy_source 기본 remote — 노트북 policy_server가 필요하다)",
+            ),
+            # ⚠️ 기본이 local 인 이유는 **ACT 가 이 하드웨어에서 실시간이 되기
+            # 때문**이다. 2026-09-05 실측(act_v5_all 120k, 180x320):
+            #
+            #   Pi 로컬  397~465ms (듀티 14%)  — perception·arm_driver·
+            #                                   vla_inference 가 같이 도는 조건
+            #   원격     117ms     (듀티 3.5%) — 리사이즈·전송·추론·회신 왕복 전부
+            #
+            # 원격이 3.5배 빠르지만 둘 다 청크 3.33초 안에 여유롭게 들어간다.
+            # 여유가 있는데 시연 경로에 노트북과 네트워크 의존을 하나 더 만들
+            # 이유가 없다. remote 가 필요한 자리는 따로 있다 — SmolVLA 처럼
+            # Pi 에서 실시간이 안 되는 정책(tools/arm/smolvla_check.py)과,
+            # 체크포인트를 자주 갈아끼워 200MB 전송이 부담일 때다.
+            DeclareLaunchArgument(
+                "policy_source",
+                default_value="local",
+                description="local이면 Pi가 체크포인트를 들고 직접 추론하고, "
+                "remote면 policy_url의 policy_server에 맡긴다",
+            ),
+            DeclareLaunchArgument(
+                "policy_url",
+                default_value="http://192.168.0.2:8770",
+                description="policy_source=remote일 때 추론 서버 주소",
+            ),
+            # ⚠️ **저장소 밖**(/shared)에 둔다. 저장소 안에 두면 git stash -u 에
+            # 통째로 휩쓸린다 — 2026-09-05 에 ckpt_v5_all 이 그렇게 딸려 들어가
+            # 전송 시각(mtime)까지 지워졌다. act_v5/act_queen_v3 도 같은 자리에
+            # 있었다.
+            #
+            # ⚠️ 새 체크포인트를 넣을 때 config.json 의 "pretrained_revision" 을
+            # 빼야 한다. 지금 lerobot 의 ACTConfig 가 그 필드를 거부해서
+            # DecodingError 로 죽는다(2026-09-05, 60k·120k 둘 다 겪었다).
+            # 원본은 config.json.orig 로 남겨 두는 것이 이 저장소의 관례다.
+            DeclareLaunchArgument(
+                "checkpoint",
+                default_value="/shared/act_v5_all_180_120k_120000",
+                description="policy_source=local일 때 쓸 pretrained_model 디렉터리 "
+                "(act_v5_all 120k steps, 학습 리사이즈 180x320)",
+            ),
+            DeclareLaunchArgument(
+                "device",
+                default_value="cpu",
+                description="policy_source=local일 때 추론 장치. Pi 에는 가속기가 "
+                "없으므로 cpu 다",
+            ),
+            # ⚠️ 저장소 안의 이 파일이 기준이다 — 노트북의 lerobot 캘리브레이션
+            # 캐시(~/.cache/huggingface/lerobot/.../grippers_arm.json)와 같은
+            # 내용이고, 녹화 때 lerobot 이 실제로 읽은 것이 그쪽이다.
+            # Pi 의 /shared/hf_cache 사본은 gripper range_max 가 2378 로 멈춘
+            # 옛 것이니 쓰지 말 것(2026-09-05 확인).
+            DeclareLaunchArgument(
+                "policy_calibration_file",
+                default_value="/grippers/host/vla/calibration/grippers_arm.json",
+                description="정책 좌표계 캘리브레이션. 빈 문자열이면 "
+                "ExecuteJointChunk(VLA 재생)만 거부되고 classic 경로는 그대로다",
+            ),
+            DeclareLaunchArgument(
+                "gripper_cam_publish_hz",
+                default_value="10.0",
+                description="그리퍼캠 발행 주기. use_vla=false면 이 값과 무관하게 "
+                "0(끔)이 된다 — launch_setup의 gripper_cam_hz 주석 참고",
             ),
             DeclareLaunchArgument(
                 "host_ip",

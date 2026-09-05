@@ -28,6 +28,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/ReorientArm.action"
   "action/MoveToCartesian.action"
   "action/MoveToFloorPose.action"
+  "action/ExecuteJointChunk.action"
+  "action/RunVlaGrasp.action"
   DEPENDENCIES geometry_msgs action_msgs
 )
 

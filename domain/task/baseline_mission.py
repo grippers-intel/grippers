@@ -179,6 +179,18 @@ class BaselinePorts:
     # 상태 객체는 전이마다 새로 만들어지므로 상태를 들고 있을 수 없다.
     base_liveness: LivenessLatch = field(default_factory=LivenessLatch)
 
+    # ── 파지 백엔드 ────────────────────────────────────────────────────────
+    #
+    # "classic" 이 기본이다. 여러 번 실기 검증된 경로다. 시연에서 켤 때만
+    # 파라미터로 "vla" 를 준다.
+    #
+    # VLA 가 대체하는 것은 **파지 동작뿐**이다 — 정렬 판정(APPROACH), CARRY
+    # 전환, 성공 판정(부하 + 뎁스)은 양쪽이 똑같이 쓴다. 성공 판정을 공유하는
+    # 것이 핵심이다: 정책이 헛손질해도 이미 실기로 검증된 두 신호가 잡아낸다.
+    grasp_backend: str = "classic"
+    # VLA 백엔드가 쓰는 포트. classic 에서는 None 이어도 된다.
+    vla: object = None
+
 
 # ── 공통 동작 ──────────────────────────────────────────────────────────────
 
@@ -427,72 +439,80 @@ class BaselineGraspState(State):
         # 정면을 볼 수 있는 마지막 순간이다 — grasp 자세로 내려가면 팔이
         # 뎁스 카메라를 가린다(tools/demo_rook_run.py 2단계와 같은 이유).
         ports.perception.remember_target(self.label)
+        # ── 파지 백엔드 분기 ────────────────────────────────────────────
+        #
+        # VLA 가 대체하는 것은 **파지 동작뿐**이다. 아래 CARRY 전환과 성공
+        # 판정(부하 + 뎁스)은 양쪽이 똑같이 쓴다 — 그 판정이 여러 번 실기
+        # 사고를 겪으며 다듬어진 부분이라, 정책이 헛손질해도 거기서 잡힌다.
+        if getattr(ports, "grasp_backend", "classic") == "vla":
+            if not self._grasp_vla(ports, gp):
+                return self._failed(ports, "VLA 파지 루프 실패")
+        else:
+            if not ports.arm.move_to_floor_pose(gp.profile, "safe"):
+                return self._failed(ports, "safe 자세 실패")
+            # 내려가기 전에 연다 — 닫힌 손가락이 물체가 있는 공간을 통과해
+            # 내려가면 물체를 밀어낸다(사용자 지시 2026-08-24).
+            ports.arm.set_gripper(gp.preopen_width_mm)
+            if not ports.arm.move_to_floor_pose(gp.profile, "grasp"):
+                return self._failed(ports, "grasp 자세 실패")
 
-        if not ports.arm.move_to_floor_pose(gp.profile, "safe"):
-            return self._failed(ports, "safe 자세 실패")
-        # 내려가기 전에 연다 — 닫힌 손가락이 물체가 있는 공간을 통과해
-        # 내려가면 물체를 밀어낸다(사용자 지시 2026-08-24).
-        ports.arm.set_gripper(gp.preopen_width_mm)
-        if not ports.arm.move_to_floor_pose(gp.profile, "grasp"):
-            return self._failed(ports, "grasp 자세 실패")
+            # ⚠️ 전진은 **팔이 내려가 그리퍼가 열린 뒤**다 (사용자 지시 2026-08-24,
+            # 재확인 2026-08-29). 이 전진의 목적은 "물체 가까이 가는 것"이 아니라
+            # **물체를 벌어진 턱 사이로 밀어 넣는 것**이고, 그래야 평행 턱의 넓은
+            # 목이 좌우 자기정렬 효과를 낸다(grasp_alignment 모듈 docstring).
+            #
+            # 2026-08-29까지 이 호출이 `safe` 앞에 있었다 — 차체가 먼저 가고 팔이
+            # 나중에 내려오는 순서라, 밀어 넣는 것이 아니라 물체 위로 내려가
+            # 감싸는 동작이었고 자기정렬 효과가 없었다. 최초 커밋(241003a) 이후
+            # 아무도 안 건드린 자리인데, 실기로 검증된 tools/demo_rook_run.py 는
+            # 처음부터 이 순서였다(2단계 팔 내리기 -> 3단계 미세 전진).
+            #
+            # ⚠️ 이 구간에서는 **회전이 절대 금지**다. 그리퍼가 바닥에서 2.6cm
+            # 위에 열린 채 떠 있어서, 제자리 회전은 그것을 바닥과 물체를 가로질러
+            # 옆으로 쓴다. `creep_forward_timed` 도 직진만 내므로 계약상
+            # 지켜진다 — 여기에 회전을 섞는 구현으로 바꾸면 안 된다
+            # (demo_rook_run.py 의 CREEP_KEYMAP 이 회전 키를 일부러 뺀 것과
+            # 같은 이유).
+            #
+            # 2026-09-02: 관측 거리(self.creep_m, ga.creep_distance_m)로 미는
+            # 양을 계산하던 방식을 버렸다 — 300→500mm 상한, +300mm 보너스까지
+            # 조정해도 실기에서 16~70mm 수준의 미세 전진만 나왔고(원인은 이
+            # 계산 자체가 아니라 배포 지연이었던 것으로 나중에 드러났지만),
+            # 사용자가 신뢰성이 불투명한 관측 기반 계산 대신 결정론적인
+            # 시간·속도 개방루프를 지시했다("거리 단위가 아니라 1.5초간 0.1의
+            # 속도로 전진"). `self.creep_m is None` 게이트(위)는 그대로 둔다 —
+            # 그건 "전진량이 얼마인가"가 아니라 "물체가 애초에 유효하게 관측
+            # 됐는가"를 보는 것이라 여기와 무관하다.
+            if not ports.base.creep_forward_timed(bc.GRASP_CREEP_OPEN_LOOP_SPEED_MPS,
+                                                  bc.GRASP_CREEP_OPEN_LOOP_SEC):
+                return self._failed(ports, "미세 전진 실패")
 
-        # ⚠️ 전진은 **팔이 내려가 그리퍼가 열린 뒤**다 (사용자 지시 2026-08-24,
-        # 재확인 2026-08-29). 이 전진의 목적은 "물체 가까이 가는 것"이 아니라
-        # **물체를 벌어진 턱 사이로 밀어 넣는 것**이고, 그래야 평행 턱의 넓은
-        # 목이 좌우 자기정렬 효과를 낸다(grasp_alignment 모듈 docstring).
-        #
-        # 2026-08-29까지 이 호출이 `safe` 앞에 있었다 — 차체가 먼저 가고 팔이
-        # 나중에 내려오는 순서라, 밀어 넣는 것이 아니라 물체 위로 내려가
-        # 감싸는 동작이었고 자기정렬 효과가 없었다. 최초 커밋(241003a) 이후
-        # 아무도 안 건드린 자리인데, 실기로 검증된 tools/demo_rook_run.py 는
-        # 처음부터 이 순서였다(2단계 팔 내리기 -> 3단계 미세 전진).
-        #
-        # ⚠️ 이 구간에서는 **회전이 절대 금지**다. 그리퍼가 바닥에서 2.6cm
-        # 위에 열린 채 떠 있어서, 제자리 회전은 그것을 바닥과 물체를 가로질러
-        # 옆으로 쓴다. `creep_forward_timed` 도 직진만 내므로 계약상
-        # 지켜진다 — 여기에 회전을 섞는 구현으로 바꾸면 안 된다
-        # (demo_rook_run.py 의 CREEP_KEYMAP 이 회전 키를 일부러 뺀 것과
-        # 같은 이유).
-        #
-        # 2026-09-02: 관측 거리(self.creep_m, ga.creep_distance_m)로 미는
-        # 양을 계산하던 방식을 버렸다 — 300→500mm 상한, +300mm 보너스까지
-        # 조정해도 실기에서 16~70mm 수준의 미세 전진만 나왔고(원인은 이
-        # 계산 자체가 아니라 배포 지연이었던 것으로 나중에 드러났지만),
-        # 사용자가 신뢰성이 불투명한 관측 기반 계산 대신 결정론적인
-        # 시간·속도 개방루프를 지시했다("거리 단위가 아니라 1.5초간 0.1의
-        # 속도로 전진"). `self.creep_m is None` 게이트(위)는 그대로 둔다 —
-        # 그건 "전진량이 얼마인가"가 아니라 "물체가 애초에 유효하게 관측
-        # 됐는가"를 보는 것이라 여기와 무관하다.
-        if not ports.base.creep_forward_timed(bc.GRASP_CREEP_OPEN_LOOP_SPEED_MPS,
-                                              bc.GRASP_CREEP_OPEN_LOOP_SEC):
-            return self._failed(ports, "미세 전진 실패")
-
-        ports.arm.set_gripper(gp.close_width_mm)
-        # ⚠️ 2026-09-03 실기(box) — 여기서 부하를 미리 재서 문턱을 넘겨야만
-        # 들어올리기를 시도하던 게이트를 없앴다. 3번째 시도는 첫 판독
-        # 0.2502(문턱을 훌쩍 넘김)로 세게 물었는데, midpoint 이동 뒤 다시
-        # 잰 값(0.03대)이 떨어져 실패 처리됐다. 그런데 **정지 뒤 사용자가
-        # 직접 확인하니 그리퍼가 그때까지도 박스를 꽉 물고 있어서 힘으로
-        # 빼냈다** — 그립은 그대로였는데 부하 판독만 낮게 나온 것이었다.
-        # 서보가 목표 자세에 도달해 정착하면 실제로 물고 있어도 능동으로
-        # 토크를 더 내지 않아 부하가 실제보다 낮게 읽히는 것으로 보인다
-        # (부하는 "지금 얼마나 힘주고 있는가"이지 "지금 뭔가를 물고
-        # 있는가"가 아니다). 09-02 10:41도 같은 종류의 오탐이었다 — 정착된
-        # 자세에서 부하를 다시 재는 방식 자체가 신뢰할 수 없다는 뜻이다.
-        #
-        # 그래서 부하로 미리 거르지 않는다 — **판정은 팔이 물리적으로
-        # 끝까지 움직였는가(move_to_floor_pose의 reached, 서보 위치 확인
-        # 이라 신뢰할 수 있다)와, CARRY 자세에 도달한 뒤 딱 한 번 하는
-        # 최종 판정(아래)에 맡긴다**(사용자 지시 2026-09-03: "CARRY에서
-        # 최종 판정이 맞다"). 이렇게 하면 이번처럼 중간에 부하가 잘못
-        # 낮게 읽혀도 도중에 실패로 확정되지 않고 CARRY까지 간다 — 다만
-        # 그 최종 판정 자체는 AND다(부하와 뎁스 둘 다 있어야 성공, 아래
-        # 판정부 코멘트 참고) — star/box에서 부하 판독 하나만 믿을 수
-        # 없다고 해서 남은 신호(뎁스) 하나로 성공을 만들어주지는 않는다.
-        if not ports.arm.move_to_floor_pose(gp.profile, "midpoint"):
-            return self._failed(ports, "들어올리기(midpoint) 실패")
-        if not ports.arm.move_to_floor_pose(gp.profile, "safe"):
-            return self._failed(ports, "safe 복귀 실패")
+            ports.arm.set_gripper(gp.close_width_mm)
+            # ⚠️ 2026-09-03 실기(box) — 여기서 부하를 미리 재서 문턱을 넘겨야만
+            # 들어올리기를 시도하던 게이트를 없앴다. 3번째 시도는 첫 판독
+            # 0.2502(문턱을 훌쩍 넘김)로 세게 물었는데, midpoint 이동 뒤 다시
+            # 잰 값(0.03대)이 떨어져 실패 처리됐다. 그런데 **정지 뒤 사용자가
+            # 직접 확인하니 그리퍼가 그때까지도 박스를 꽉 물고 있어서 힘으로
+            # 빼냈다** — 그립은 그대로였는데 부하 판독만 낮게 나온 것이었다.
+            # 서보가 목표 자세에 도달해 정착하면 실제로 물고 있어도 능동으로
+            # 토크를 더 내지 않아 부하가 실제보다 낮게 읽히는 것으로 보인다
+            # (부하는 "지금 얼마나 힘주고 있는가"이지 "지금 뭔가를 물고
+            # 있는가"가 아니다). 09-02 10:41도 같은 종류의 오탐이었다 — 정착된
+            # 자세에서 부하를 다시 재는 방식 자체가 신뢰할 수 없다는 뜻이다.
+            #
+            # 그래서 부하로 미리 거르지 않는다 — **판정은 팔이 물리적으로
+            # 끝까지 움직였는가(move_to_floor_pose의 reached, 서보 위치 확인
+            # 이라 신뢰할 수 있다)와, CARRY 자세에 도달한 뒤 딱 한 번 하는
+            # 최종 판정(아래)에 맡긴다**(사용자 지시 2026-09-03: "CARRY에서
+            # 최종 판정이 맞다"). 이렇게 하면 이번처럼 중간에 부하가 잘못
+            # 낮게 읽혀도 도중에 실패로 확정되지 않고 CARRY까지 간다 — 다만
+            # 그 최종 판정 자체는 AND다(부하와 뎁스 둘 다 있어야 성공, 아래
+            # 판정부 코멘트 참고) — star/box에서 부하 판독 하나만 믿을 수
+            # 없다고 해서 남은 신호(뎁스) 하나로 성공을 만들어주지는 않는다.
+            if not ports.arm.move_to_floor_pose(gp.profile, "midpoint"):
+                return self._failed(ports, "들어올리기(midpoint) 실패")
+            if not ports.arm.move_to_floor_pose(gp.profile, "safe"):
+                return self._failed(ports, "safe 복귀 실패")
         if not ports.arm.move_to_floor_pose(gp.profile, "carry"):
             return self._failed(ports, "CARRY 전환 실패")
 
@@ -550,6 +570,31 @@ class BaselineGraspState(State):
         # 0에 가깝게 읽혀서(위 미들포인트 주석 참고) 그 게이트가 영원히
         # 막혔다. 판정은 한 번만 하고, 그 뒤로는 신뢰한다.
         return BaselineCarryState(self.label, grasp_confirmed=True)
+
+    def _grasp_vla(self, ports, gp) -> bool:
+        """정책이 파지를 대신한다. 성공했다고 **주장**하면 True.
+
+        진짜 성공 판정은 여기서 하지 않는다 — `execute` 꼬리의 부하 + 뎁스
+        두 신호가 classic 과 똑같이 판정한다. 이 함수는 "정책 루프가
+        끝까지 돌았는가"만 본다.
+
+        ⚠️ classic 과 달리 `creep_forward` 를 하지 않는다. 학습 때 차체는
+        **정지해 있었고** 정책이 스스로 뻗어서 물체를 집었다. 여기서 차체를
+        밀면 정책이 본 적 없는 조건이 된다.
+
+        ⚠️ 시작 자세를 IDLE 로 맞춘다. 학습 회차 118개의 첫 관측이 전부
+        IDLE 크래들이었다(2026-09-04 측정: pan -4.75, lift -103.21,
+        elbow 95.93, wrist 73.33 / 교시 IDLE 과 2도 이내). 다른 자세에서
+        시작하면 분포 밖이다.
+        """
+        if ports.vla is None:
+            ports.host.report(Report.GRASP_BLOCKED, self.name,
+                              "grasp_backend=vla 인데 VLA 포트가 없다")
+            return False
+        if not ports.arm.move_to_floor_pose(gp.profile, "idle"):
+            ports.host.report(Report.GRASP_BLOCKED, self.name, "VLA 시작 자세(IDLE) 실패")
+            return False
+        return bool(ports.vla.run_grasp(self.label))
 
     def _failed(self, ports, detail):
         """파지 실패 — 팔을 붙잡고 APPROACH로 되돌아가 Host의 판단을 기다린다.

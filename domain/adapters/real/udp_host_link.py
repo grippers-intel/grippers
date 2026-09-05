@@ -42,8 +42,33 @@ RECV_BUFFER = 4096
 
 class UdpHostLink:
     def __init__(self, host_ip: str, command_port: int = COMMAND_PORT,
-                 status_port: int = STATUS_PORT, logger=None):
+                 status_port: int = STATUS_PORT, logger=None,
+                 follow_commander: bool = True):
+        """`host_ip`는 **첫 명령이 오기 전까지만** 쓰는 초기값이다.
+
+        `follow_commander`가 참이면, 명령이 실제로 파싱된 순간 보고 대상을
+        **그 명령을 보낸 주소**로 바꾼다.
+
+        ## 왜 이렇게 하나
+
+        예전에는 `host_ip`가 설정값 하나뿐이었고 기본값이 작성자 개발 PC
+        주소(192.168.0.10)였다. 다른 사람이 Host를 띄우면 **명령은 가는데
+        보고는 남의 PC로 간다.** 명령이 단방향이라 차는 정상적으로 움직이고,
+        Host만 아무 보고도 못 받아 GRASP에서 영원히 멈춘다 — 링크가 끊긴
+        것처럼 보이지만 실제로는 절반만 연결된 상태다. 찾기 어려운 종류다.
+
+        "우리를 조종하는 쪽에 보고한다"는 규칙이면 설정할 것이 없어진다.
+        DHCP로 주소가 바뀌어도, 담당자가 바뀌어도 맞는다.
+
+        ## 안전
+
+        **파싱에 성공한 명령**의 출처만 채택한다. 아무 UDP 패킷이나 보낸다고
+        보고가 그쪽으로 따라가지 않는다. 포트는 계속 `status_port`를 쓴다.
+        고정하고 싶으면 `follow_commander=False`로 끄고 `host_ip`를 준다.
+        """
         self._host = (host_ip, status_port)
+        self._status_port = status_port
+        self._follow = follow_commander
         self._logger = logger
         self._lock = threading.Lock()
         self._latest = None
@@ -71,9 +96,22 @@ class UdpHostLink:
             command = self._parse(payload)
             if command is None:
                 continue
+            if self._follow:
+                self._adopt(_addr)
             with self._lock:
                 self._latest = command
                 self._fresh = True
+
+    def _adopt(self, addr):
+        """보고 대상을 명령을 보낸 쪽으로 맞춘다. 바뀔 때만 한 줄 남긴다."""
+        target = (addr[0], self._status_port)
+        if target == self._host:
+            return
+        before, self._host = self._host, target
+        if self._logger is not None:
+            self._logger.info(
+                f"보고 대상 변경: {before[0]} -> {target[0]}:{target[1]} "
+                "(명령을 보낸 쪽으로 맞춤)")
 
     def _parse(self, payload):
         """망가진 패킷은 **버린다.** 반쯤 읽어서 0으로 채우면 그 0이 곧
