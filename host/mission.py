@@ -1142,7 +1142,19 @@ class MissionFSM:
 
         elif self.state == State.CARRY_TO_DEST:
             assert self.dest_xy is not None
-            obstacles = _other_pieces(piece_map)
+            # 2026-09-06 사용자 지시로 발견/수정: 여기만 exclude_xy를 안 넘겨서
+            # 이미 그리퍼로 집어 든 self._target_xy(방금 파지한 기물의 원래
+            # 판 위 좌표)가 매 사이클 장애물 후보에 다시 섞여 들어갔다 —
+            # APPROACH_PIECE(892/903행)는 애초에 자기 목표를 스스로의
+            # 장애물로 보지 않으려고 exclude_xy=self._target_xy를 쓰는데,
+            # CARRY_TO_DEST만 그 인자를 빠뜨렸다. 실제로 들고 있는 기물은
+            # 이미 차 위에 있어 판 위에 없어야 정상이지만, 오버헤드 웹캠이
+            # 그 자리에서 간헐적으로(잔상·오검출) 다시 잡으면 GridPathPlanner가
+            # 그 유령 장애물을 피하려고 매번 다른 경로를 골라 버벅이며
+            # 회전했다가 다시 정상화되는 것처럼 보인다(사용자 실기 관찰).
+            # self._target_xy는 PLACE 완료 시점(1723행)까지 그대로 남아 있어
+            # CARRY_TO_DEST 전 구간에서 안전하게 쓸 수 있다.
+            obstacles = _other_pieces(piece_map, exclude_xy=self._target_xy)
             # 2026-09-05, 사용자 지시: 상자로 향할 때는 dest_xy(_box_front_xy,
             # 상자 중심에서 0.325m 물러난 점)가 아니라 INSERT 목표영역
             # "중심"을 향해 몬다 — dest_xy는 목표중심에서 0.165m 떨어져 있어
