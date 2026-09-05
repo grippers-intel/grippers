@@ -74,6 +74,12 @@ class MissionState:
     # 사본이다 — 그쪽을 고칠 때 이 파일도 같이 맞출 것.
     DEBUG_FORCE_CARRY = "DEBUG_FORCE_CARRY"
 
+    # INSERT 안의 관측용 하위 단계(Report.STATE 전용, 2026-09-05 사용자
+    # 지시) — Pi의 BaselineInsertState가 "drop" 자세 도달 후 그리퍼를 열기
+    # **전에** command.yaw_correction_deg로 servo 1을 보정할 때만 한 차례
+    # 보고한다. Host가 명령으로 보내는 이름이 아니라서 ALL에는 안 넣는다.
+    SAFE_300 = "SAFE_300"
+
     ALL = (IDLE, APPROACH, GRASP, GRASP_FORCE, CARRY, APPROACH_BOX, INSERT, DONE, ESTOP,
            DEBUG_FORCE_CARRY)
 
@@ -129,7 +135,7 @@ class HostCommand:
     """Host가 한 사이클에 보내는 지시 전부.
 
     좌표가 없다는 점이 이 자료형의 핵심이다. `state`는 "지금 이 상태로
-    가라", 나머지 넷은 "그동안 이렇게 움직여라"다.
+    가라", 나머지는 "그동안 이렇게 움직여라"다.
 
     속도 값은 Host가 채워 보내지만 Pi가 합의된 크기로 **잘라서** 쓴다
     (`domain/task/motion.py`). 안전 한계는 그 한계를 어길 수 있는 쪽이
@@ -140,6 +146,15 @@ class HostCommand:
     linear_y: float = 0.0        # 수평이동 (m/s, + 왼쪽)
     angular_z: float = 0.0       # 제자리회전 (rad/s, + 반시계)
     stop: bool = False           # 제자리정지 — 나머지 셋을 무시하고 즉시 정지
+    # INSERT의 safe_300 단계에서 그리퍼를 열기 **전에** servo 1(팔 베이스
+    # 요)로 흡수할 잔여 지향 오차(도, + 반시계 — pose.yaw_deg와 같은 부호계).
+    # 2026-09-05 사용자 지시: 차량이 NUDGE 경계선에서 방향에 상관없이 바로
+    # 서게 하고, 남은 오차는 팔로 보정한다. angular_z와 마찬가지로 Host가
+    # 계산해 값만 건네고 Pi는 그 값이 어디서 왔는지 모른 채 실행만 한다.
+    # 0.0이면 보정 없음(safe_300 단계 자체를 건너뛴다 — grippers-baseline-wt의
+    # BaselineInsertState 참고. 이 필드는 두 저장소의 baseline_ports.py에
+    # 각각 독립적으로 유지된다 — 공유 git 이력이 없다).
+    yaw_correction_deg: float = 0.0
 
     @property
     def wants_motion(self) -> bool:

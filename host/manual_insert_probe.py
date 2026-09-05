@@ -41,6 +41,27 @@ Pi 쪽에서만 울릴 수 있고, 여기서 원격으로 트리거할 방법이
 입력은 받지 않는다(팔이 움직이는 도중에 차를 몰면 안 된다) — 결과가 오면
 화면에 찍고 다시 평소 운전으로 돌아간다.
 
+## safe_300 실기 확인(2026-09-05)
+
+NUDGE_LINE에 진입하는 순간의 `gate.facing_error_deg`(배너에 찍히는 바로 그
+지향오차)를 그대로 `MissionCommand.yaw_correction_deg`에 실어 INSERT와
+함께 보낸다. Pi의 `BaselineInsertState`는 drop(300mm) 자세에 도달했지만
+그리퍼를 열기 **전에**, 이 값이 0이 아니면 `offset_base_yaw()`로 servo
+1(팔 베이스 요)을 그만큼 돌려 흡수하고, 놓은 뒤 idle로 접기 전에 원래
+각도로 되돌린다 — 차량을 다시 회전시키지 않고 팔로 잔여 오차를 흡수하는
+경로(safe_300)를 이 도구 하나로 실기 검증할 수 있다.
+
+⚠️ 아직 자동화되지 않은 부분: 이 도구는 여전히 "차가 정면에 가깝게 들어와
+NUDGE_LINE을 넘는 순간"을 사람이 WASD로 만들어 준다 — host/mission.py의
+CARRY_TO_DEST/FACE_BOX/NUDGE_BOX는 손대지 않았다. "차량이 방향에 상관없이
+경계선에서 바로 서고, 그 잔여 오차 전부를 팔로 흡수" 하는 자동 경로는
+아직 없다 — 지금 있는 것은 그 잔여 오차를 servo 1로 흡수하는 **뒷단
+메커니즘 자체가 실기에서 먹는지**를 사람이 대신 서서 확인하는 수단이다.
+⚠️ servo 1 회전의 부호(+가 어느 쪽으로 도는지)가 `facing_error_deg`의
+부호와 실제로 같은 방향인지도 아직 실기로 확인되지 않았다 — 첫 시험에서
+보정이 오차를 줄이는 대신 키우면 `offset_base_yaw` 호출부의 부호를
+뒤집어야 한다.
+
 ⚠️ **2026-09-05 첫 실기에서 이게 안 먹었다** — Pi의 진짜 FSM(baseline_mission.py)
 은 상태 객체가 자기가 인식하는 다음 상태로만 넘어가서, IDLE에서 곧장
 INSERT로 점프하는 경로가 아예 없다(GRASP_FORCE도 결국 팔이 실제 파지를
@@ -247,10 +268,19 @@ def main() -> int:
     pose_lost_warned = False
     pose = None   # finally 블록에서 참조 — 첫 사이클 전에 죽어도 NameError 안 나게
 
-    def _send(cmd: str, status: str, pose) -> None:
+    def _send(cmd: str, status: str, pose, yaw_correction_deg: float = 0.0) -> None:
         link.send(MissionCommand(cmd, status, pose.x if pose else 0.0,
                                  pose.y if pose else 0.0,
-                                 pose.yaw_deg if pose else 0.0))
+                                 pose.yaw_deg if pose else 0.0,
+                                 yaw_correction_deg=yaw_correction_deg))
+
+    # safe_300 실기 확인용(2026-09-05) — NUDGE_LINE 진입 순간 이미 계산돼
+    # 있는 gate.facing_error_deg(아래 배너에도 찍히는 바로 그 값)를 그대로
+    # INSERT 명령에 실어 보낸다. 자동 계산 경로(host/mission.py 쪽 "차량이
+    # 방향 무관하게 경계선에서 서고 남은 오차를 팔로 흡수") 전체를 아직
+    # 안 만들었어도, 이 도구로 지금 당장 servo 1 보정 자체가 실기에서
+    # 먹는지만 따로 검증할 수 있다.
+    pending_yaw_correction_deg = 0.0
 
     with _RawKeys() as keys:
         try:
@@ -323,7 +353,11 @@ def main() -> int:
 
                 if mode == "insert":
                     # mission.py PLACE 상태와 정확히 같은 명령을 계속 보낸다.
-                    _send("stop", "PLACE", pose)
+                    # yaw_correction_deg만 추가 — NUDGE_LINE 진입 순간 캡처해
+                    # 둔 지향오차(아래 gate.ok 배너 참고)를 실어 Pi의 safe_300이
+                    # 그리퍼를 열기 전 servo 1로 흡수하게 한다.
+                    _send("stop", "PLACE", pose,
+                          yaw_correction_deg=pending_yaw_correction_deg)
                     if report_status in ("PLACE_DONE", "FAILED"):
                         elapsed = now - insert_started_at
                         mark = "✅ PLACE_DONE" if report_status == "PLACE_DONE" else "❌ FAILED"
@@ -351,12 +385,19 @@ def main() -> int:
                 if not prev_gate_ok and gate.ok and mode == "drive":
                     current_cmd = "stop"
                     mode = "confirm"
+                    # 이 순간의 잔여 지향오차를 그대로 servo 1 보정값으로 쓴다
+                    # (safe_300 실기 확인용, 2026-09-05). Enter를 누르기까지
+                    # 시간이 걸려도 다시 갱신하지 않는다 — "경계선에서 멈춘
+                    # 순간"의 오차를 보는 것이 이 도구의 취지와 맞는다.
+                    pending_yaw_correction_deg = gate.facing_error_deg
                     _bell(5)
                     print("\n" + "=" * 70)
                     print("🔔 NUDGE_LINE 진입 — Host 판정: 여기서부터 INSERT 시도해 볼 만함")
                     print(f"   pose=({pose.x:.3f},{pose.y:.3f}) yaw={pose.yaw_deg:.1f}°")
                     print(f"   목표영역까지 {gate.distance_m*1000:.0f}mm, "
                           f"지향오차 {gate.facing_error_deg:+.1f}°")
+                    print(f"   Enter를 누르면 이 지향오차({pending_yaw_correction_deg:+.1f}°)를 "
+                          "safe_300에서 servo 1로 보정합니다.")
                     print("   차를 정지시켰습니다. 지금 자세에서 그리퍼의 기물을 "
                           "확인하세요.")
                     print("   Enter 를 치면 INSERT(drop 300mm → IDLE) 를 실행합니다.")

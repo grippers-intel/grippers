@@ -88,6 +88,11 @@ class MissionCommand:
     target_label: Optional[str] = None
     fresh: bool = True
     t: float = field(default_factory=time.monotonic)
+    # safe_300에서 그리퍼를 열기 전 servo 1로 흡수할 잔여 지향 오차(도).
+    # 2026-09-05 사용자 지시 — HostCommand.yaw_correction_deg로 그대로
+    # 실려 나간다(encode() 참고). status가 PLACE/INSERT가 아닌 사이클에는
+    # 의미가 없다 — Pi는 BaselineInsertState 진입 사이클에서만 이 값을 본다.
+    yaw_correction_deg: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +431,11 @@ def encode(cmd: MissionCommand) -> HostCommand:
     숫자를 다시 적으면 두 벌이 되고, 갈라지는 순간 Pi 가 조용히 잘라낸 값으로
     돌아 Host 의 경로 계산과 실제 주행이 어긋난다. 안전 한계 자체는 여전히
     Pi 가 집행한다 — Host 가 무엇을 보내든 바퀴를 돌리는 쪽이 자른다.
+
+    `cmd.yaw_correction_deg`는 위 다섯 분기와 무관하게 매번 그대로 실어
+    보낸다(2026-09-05, safe_300) — 차체 속도가 아니라 Pi의 BaselineInsertState가
+    그리퍼를 열기 전 servo 1로 흡수할 잔여 지향 오차다. 기본값 0.0이면
+    Pi 쪽에서 그 단계 자체를 건너뛴다.
     """
     state = _STATE_TO_PI.get(cmd.status)
     if state is None:
@@ -443,12 +453,14 @@ def encode(cmd: MissionCommand) -> HostCommand:
         return HostCommand(state=MissionState.IDLE, stop=True)
 
     if cmd.cmd == "go":
-        return HostCommand(state=state, linear_x=AGREED_LINEAR_MPS)
+        return HostCommand(state=state, linear_x=AGREED_LINEAR_MPS,
+                            yaw_correction_deg=cmd.yaw_correction_deg)
     if cmd.cmd == "back":
         # 예전 4어휘(go/stop/yaw+/yaw-)에는 후진이 없었다. 속도 형식으로
         # 바뀌면서 부호만 뒤집으면 되는 것이 됐다 — Pi 의 `_clamp` 가
         # copysign 이라 음수 크기를 그대로 잘라 준다. GRASP_ALIGN 이 쓴다.
-        return HostCommand(state=state, linear_x=-AGREED_LINEAR_MPS)
+        return HostCommand(state=state, linear_x=-AGREED_LINEAR_MPS,
+                            yaw_correction_deg=cmd.yaw_correction_deg)
     if cmd.cmd in ("left", "right"):
         # 메카넘 횡이동. 바구니 앞 좌우 정렬에만 쓴다 — 바구니와 나란한 채
         # 옆으로 밀려 있으면 거리도 yaw 도 정상으로 나오는데 물체는 바구니
@@ -458,13 +470,18 @@ def encode(cmd: MissionCommand) -> HostCommand:
         # 부호는 ROS 규약 그대로 +y = 왼쪽이다. Pi 의 실기 확인(2026-08-28)
         # 으로 linear_y 는 0.03 m/s 까지 실제로 돈다.
         sign = 1.0 if cmd.cmd == "left" else -1.0
-        return HostCommand(state=state, linear_y=sign * AGREED_LINEAR_MPS)
+        return HostCommand(state=state, linear_y=sign * AGREED_LINEAR_MPS,
+                            yaw_correction_deg=cmd.yaw_correction_deg)
     if cmd.cmd == "yaw+":
-        return HostCommand(state=state, angular_z=AGREED_ROTATION_RAD_S)
+        return HostCommand(state=state, angular_z=AGREED_ROTATION_RAD_S,
+                            yaw_correction_deg=cmd.yaw_correction_deg)
     if cmd.cmd == "yaw-":
-        return HostCommand(state=state, angular_z=-AGREED_ROTATION_RAD_S)
-    # "stop" 과 모르는 값 전부 — 모르면 정지한다.
-    return HostCommand(state=state, stop=True)
+        return HostCommand(state=state, angular_z=-AGREED_ROTATION_RAD_S,
+                            yaw_correction_deg=cmd.yaw_correction_deg)
+    # "stop" 과 모르는 값 전부 — 모르면 정지한다. PLACE/INSERT는 항상 이
+    # 분기로 온다("stop", "PLACE") — safe_300 보정값이 실려 나가야 할
+    # 자리가 바로 여기다.
+    return HostCommand(state=state, stop=True, yaw_correction_deg=cmd.yaw_correction_deg)
 
 
 class VehicleLink:
