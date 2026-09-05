@@ -55,12 +55,15 @@ def test_부피가_큰_물체는_완전히_짓누르지_않는다():
     test_부피가_큰_box_star는_완전히_짓누르지_않는다과 대칭)과 반드시
     같이 맞출 것 — 2026-09-05, 이 파일만 그 예외를 안 받아서
     grasp_test_console.py가 cube를 0.0mm로(도메인이 실제로 쓰는 7.0mm가
-    아니라) 닫는 어긋남이 실기로 드러났다."""
+    아니라) 닫는 어긋남이 실기로 드러났다.
+
+    2026-09-05 실기에서 7.0mm로 servo 6 통신 실패가 두 번 재현된 뒤
+    사용자 지시로 12.0mm로 더 완화했다."""
     module = _load_profiles()
     profiles = module.FLOOR_GRASP_PROFILES
 
-    assert profiles["cube"].close_width_mm == 7.0
-    assert profiles["star_column"].close_width_mm == 7.0
+    assert profiles["cube"].close_width_mm == 12.0
+    assert profiles["star_column"].close_width_mm == 12.0
     # soccer_polyhedron은 언급되지 않아 여전히 GRIPPER_GRASP_MIN_MM이다.
     assert profiles["soccer_polyhedron"].close_width_mm == module.GRIPPER_GRASP_MIN_MM
 
@@ -301,13 +304,13 @@ def test_every_label_now_uses_the_grasp_floor_directly():
     나머지 넷(rook/cube/star_column/soccer_polyhedron)은 물체 폭 기반
     공식값을 그대로 썼다. 물체 폭과 무관하게 하한을 직접 쓰되, 2026-09-03
     예외(cube/star_column, 위 test_부피가_큰_물체는_완전히_짓누르지_않는다
-    참고)는 그 하한이 아니라 7.0mm다."""
+    참고)는 그 하한이 아니라 12.0mm다(2026-09-05, 7.0mm에서 완화)."""
     profiles = _load_profiles()
     floor = profiles.GRIPPER_GRASP_MIN_MM
 
     for name in profiles.FLOOR_GRASP_PROFILES:
         if name in ("cube", "star_column"):
-            assert profiles.FLOOR_GRASP_PROFILES[name].close_width_mm == 7.0
+            assert profiles.FLOOR_GRASP_PROFILES[name].close_width_mm == 12.0
         else:
             assert profiles.FLOOR_GRASP_PROFILES[name].close_width_mm == floor
 

@@ -138,7 +138,11 @@ def _release_width(object_width_mm: float) -> float:
 # 복제된 짝)과 반드시 같이 맞출 것 — 2026-09-05까지 이 파일만 그 예외를
 # 안 받아서, grasp_test_console.py(이 표를 직접 읽는다)가 cube를 실제 미션이
 # 쓰는 7.0mm가 아니라 0.0mm로 닫는 어긋남이 실기로 드러났다.
-_CLOSE_WIDTH_OVERRIDE_MM = {"cube": 7.0, "star_column": 7.0}
+#
+# 2026-09-05 실기에서 7.0mm로 servo 6(그리퍼) 통신 실패가 두 번 연속
+# 재현된 뒤 사용자 지시로 12.0mm로 완화 — baseline_mission.py의 같은 값과
+# 함께 바꿨다(시험적 조정, 인과 확정 아님).
+_CLOSE_WIDTH_OVERRIDE_MM = {"cube": 12.0, "star_column": 12.0}
 
 
 def _close_width(object_width_mm: float, profile: str | None = None) -> float:
