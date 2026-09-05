@@ -592,7 +592,9 @@ def test_DEBUG_FORCE_INSERT는_yaw_correction_deg를_그대로_넘긴다():
     nxt = _carry_with_previous().execute(ports)
     nxt.execute(ports)
 
-    assert arm.drop_yaw_offsets and arm.drop_yaw_offsets[0] == pytest.approx(math.radians(8.0))
+    # 2026-09-05 실기에서 부호가 반대로 확인돼(사용자 보고) 호출부에서
+    # 뒤집는다 — 여기서도 그 뒤집힌 부호를 기대해야 한다.
+    assert arm.drop_yaw_offsets and arm.drop_yaw_offsets[0] == pytest.approx(math.radians(-8.0))
 
 
 def test_투하_후_부하가_줄면_성공으로_보고하고_IDLE로_돌아간다():
@@ -675,7 +677,10 @@ def test_yaw_correction_deg가_있으면_그리퍼를_열기_전에_servo_1을_�
 
     BaselineInsertState("queen").execute(ports)
 
-    assert arm.drop_yaw_offsets == pytest.approx([math.radians(12.0), math.radians(-12.0)])
+    # 2026-09-05 실기 확인: facing_error_deg를 그대로 넘기면 servo 1이
+    # 반대 방향으로 돌아 오차를 오히려 키운다(사용자 보고) — 호출부에서
+    # 부호를 뒤집으므로 여기서도 뒤집힌 부호로 나가고, 복귀는 그 반대다.
+    assert arm.drop_yaw_offsets == pytest.approx([math.radians(-12.0), math.radians(12.0)])
     assert MissionState.SAFE_300 in [state for _r, state, _d, _f in host.reports]
     # 놓기 자체는 평소대로 성공해야 한다 — 보정 추가가 기존 판정을 깨면 안 된다.
     assert Report.INSERT_DONE in host.reported_kinds
@@ -696,7 +701,7 @@ def test_servo_1_보정이_거부돼도_투하는_계속한다():
                if _s == MissionState.SAFE_300]
     assert any("거부됨" in d for d in details)
     # 거부됐으니 되돌릴 것도 없다 — 편도 요청 한 번만 나가야 한다.
-    assert arm.drop_yaw_offsets == [math.radians(90.0)]
+    assert arm.drop_yaw_offsets == [math.radians(-90.0)]
 
 
 # ── E-STOP ────────────────────────────────────────────────────────────────

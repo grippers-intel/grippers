@@ -840,7 +840,14 @@ class BaselineInsertState(State):
             ports.host.report(
                 Report.STATE, MissionState.SAFE_300,
                 f"servo 1 요 보정 {yaw_correction_deg:+.1f}도 적용 시도")
-            correction_rad = math.radians(yaw_correction_deg)
+            # ⚠️ 2026-09-05 실기 확인: facing_error_deg 부호를 그대로 넘기면
+            # servo 1이 오차를 줄이는 게 아니라 반대쪽으로 돈다(사용자 보고
+            # — "servo1이 돌았는데, 반대방향으로 돌았어"). facing_error_deg는
+            # 차량 좌표계 기준, servo 1의 +방향은 팔 베이스 좌표계 기준이라
+            # 둘의 부호축이 반대인 것으로 실측됐다 — 여기서 부호를 뒤집어
+            # 흡수한다(manual_insert_probe.py 상단 docstring에 이미 예견해
+            # 둔 대응).
+            correction_rad = -math.radians(yaw_correction_deg)
             if ports.arm.correct_drop_yaw(correction_rad):
                 applied_rad = correction_rad
             else:
