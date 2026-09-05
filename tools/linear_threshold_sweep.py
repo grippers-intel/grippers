@@ -47,6 +47,7 @@ from pathlib import Path
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from std_msgs.msg import UInt16
 from sensor_msgs.msg import LaserScan
 
 #: 빔 거리 변화의 중앙값이 이보다 크면 "움직였다"고 본다(m). 정지 상태의
@@ -62,6 +63,18 @@ RAMP_SKIP_S = 0.3
 #: 낸다. 어느 토픽으로 보내든 0 이 사이사이 끼어들므로 주기를 높여 눌러야
 #: 한다 — 근거는 rotation_threshold_sweep.DEFAULT_TICK_HZ 주석과 같다.
 DEFAULT_TICK_HZ = 60.0
+#: 이 전압 아래에서 잰 값은 못 믿는다(mV). 전압이 떨어지면 모터 토크가 같이
+#: 떨어져서 데드밴드가 위로 올라간다 — 즉 배터리 상태가 측정값에 그대로
+#: 섞인다.
+#:
+#: 2026-09-05 에 그 함정을 밟았다. 같은 날 두 번 잰 직진 문턱이 서로 모순됐고
+#: (0.20 이 3.3cm 움직였다가 0.24 도 0.2cm), 그 사이에 전압이 8.2V 에서
+#: 7.4V 로 떨어진 것이 원인이었다. 하마터면 그 값으로 AGREED_LINEAR_MPS 를
+#: 고칠 뻔했다.
+#:
+#: 7600 은 저장소 실측 기준(7181 정상 주행 / 6944 베이스 정지)보다 여유를 둔
+#: 값이다. 문턱을 재려면 정상 주행 하한이 아니라 넉넉한 상태여야 한다.
+MIN_BATTERY_MV = 7600
 
 
 class Sweep(Node):
@@ -70,8 +83,15 @@ class Sweep(Node):
         self.tick_hz = tick_hz
         self.pub = self.create_publisher(Twist, topic, 10)
         self.create_subscription(LaserScan, "/scan_raw", self._on_scan, 5)
+        self.create_subscription(UInt16, "/ros_robot_controller/battery",
+                                 self._on_battery, 10)
+        self.battery_mv = None
+
         self.scan = None
         self.seen = 0
+
+    def _on_battery(self, msg) -> None:
+        self.battery_mv = int(msg.data)
 
     def _on_scan(self, msg: LaserScan) -> None:
         self.seen += 1
@@ -118,6 +138,8 @@ def main() -> int:
     ap.add_argument("--topic", default="controller/cmd_vel")
     ap.add_argument("--rate", type=float, default=DEFAULT_TICK_HZ)
     ap.add_argument("--out", default="/grippers/runs/linear_sweep.jsonl")
+    ap.add_argument("--skip-battery-check", action="store_true",
+                    help="전압이 낮아도 강행한다. 값을 못 믿는다는 걸 알고 쓸 것")
     args = ap.parse_args()
 
     if max(args.speeds) > 0.4:
@@ -126,6 +148,22 @@ def main() -> int:
 
     rclpy.init()
     node = Sweep(args.topic, args.rate)
+    # 배터리부터 본다. 낮은 전압에서 잰 문턱은 배터리 상태를 재는 것이지
+    # 로봇의 성질을 재는 것이 아니다 — 근거는 MIN_BATTERY_MV 주석.
+    deadline = time.monotonic() + 6.0
+    while node.battery_mv is None and time.monotonic() < deadline:
+        rclpy.spin_once(node, timeout_sec=0.1)
+    if node.battery_mv is None:
+        print("배터리 값을 못 읽었습니다 — ros_robot_controller 가 떠 있는지 보십시오")
+    elif node.battery_mv < MIN_BATTERY_MV:
+        print(f"배터리 {node.battery_mv} mV — {MIN_BATTERY_MV} mV 미만입니다.")
+        print("이 전압에서 잰 문턱은 로봇이 아니라 배터리 상태를 재는 것입니다.")
+        print("충전한 뒤 다시 재십시오. (--skip-battery-check 로 넘길 수 있습니다)")
+        if not args.skip_battery_check:
+            return 1
+    else:
+        print(f"배터리 {node.battery_mv} mV — 측정 가능")
+
     print("라이다를 기다리는 중 ...", flush=True)
     deadline = time.monotonic() + 10.0
     while node.seen == 0 and time.monotonic() < deadline:
