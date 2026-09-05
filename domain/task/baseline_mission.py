@@ -42,6 +42,7 @@ GRASP와 INSERT만 "한 번의 execute에서 시퀀스 전체를 수행"한다. 
 하다(`LinkWatchdog`).
 """
 
+import math
 from dataclasses import dataclass, field
 
 from domain.ports.baseline_ports import MissionState, Report
@@ -790,6 +791,11 @@ class BaselineInsertState(State):
         # 것이지 그리퍼가 놓친 게 아니므로 판정이 리셋될 이유가 없다.
         self.grasp_confirmed = grasp_confirmed
 
+    # servo 1 보정을 편도로 요청했는데 도착 못 미치는 등 응답이 없을 때(포트
+    # 계약상 offset_base_yaw는 도달 실패도 항상 bool을 준다 — 이 값은 순수
+    # 방어용, 실제로는 안 쓰일 것으로 본다).
+    _NO_CORRECTION_DEG = 0.0
+
     def execute(self, ports):
         ports.host.report(Report.STATE, self.name)
         ports.base.stop()
@@ -801,6 +807,38 @@ class BaselineInsertState(State):
             # 표본(라이다·부하)은 버리지만 grasp_confirmed는 들고 간다 — 팔
             # 자세만 실패했지 그리퍼가 놓친 게 아니다.
             return BaselineCarryState(self.label, grasp_confirmed=self.grasp_confirmed)
+
+        # safe_300 — "drop" 자세(300mm)에 도달했지만 아직 그리퍼는 열지
+        # 않은 상태다. Host가 차량을 NUDGE 경계선에서 방향 그대로(방향에
+        # 상관없이) 세우고 남은 지향 오차를 yaw_correction_deg로 실어 보내면,
+        # 여기서 그리퍼를 열기 **전에** servo 1을 그만큼 돌려 흡수한다
+        # (사용자 지시, 2026-09-05 — 차량을 다시 회전시키는 대신 팔로
+        # 보정한다). 값이 0이면 이 단계 자체가 보고 없이 통째로 건너뛰어진다
+        # — 기존 경로(차량이 이미 FACE_BOX로 정렬해 오는 경우)와 100% 동일하게
+        # 동작한다.
+        #
+        # ⚠️ offset_base_yaw는 servo 1 한계각(교시 정면 기준)을 넘으면 그
+        # 자리에서 거부하고 False를 준다 — 그런 경우도 투하 자체는 포기하지
+        # 않는다. 팔로 다 못 흡수한 오차를 안고 여는 것이 물체를 든 채
+        # 무한정 멈춰 있는 것보다 낫다는 판단이다(다른 실패들과 같은 원칙 —
+        # BaselineInsertState 클래스 docstring 참고). 대신 보고에 실패
+        # 사실을 남겨 Host가 다음 기물부터 반영할 수 있게 한다.
+        command = ports.host.latest_command()
+        yaw_correction_deg = (
+            command.yaw_correction_deg if command is not None else self._NO_CORRECTION_DEG)
+        applied_rad = 0.0
+        if yaw_correction_deg != 0.0:
+            ports.host.report(
+                Report.STATE, MissionState.SAFE_300,
+                f"servo 1 요 보정 {yaw_correction_deg:+.1f}도 적용 시도")
+            correction_rad = math.radians(yaw_correction_deg)
+            if ports.arm.offset_base_yaw(correction_rad):
+                applied_rad = correction_rad
+            else:
+                ports.host.report(
+                    Report.STATE, MissionState.SAFE_300,
+                    f"servo 1 요 보정 {yaw_correction_deg:+.1f}도 거부됨 — "
+                    "보정 없이 투하를 계속한다")
 
         before = ports.arm.get_load()
         ports.arm.set_gripper(gp.release_width_mm)
@@ -817,6 +855,16 @@ class BaselineInsertState(State):
         released = True if load_read_failed else after <= before - self.RELEASE_LOAD_DROP
 
         ports.arm.set_gripper(CLOSED_MM)
+        # safe_300에서 servo 1을 돌렸으면, idle로 접기 전에 먼저 그 각도를
+        # 되돌린다(사용자 지시) — idle 자체도 servo 1을 교시 절대값으로
+        # 되돌리긴 하지만(_move_floor_stage 참고), 큰 보정각을 그대로 안고
+        # 5관절 글라이드를 한 번에 타는 대신 servo 1만 먼저 원위치시켜
+        # 시작 자세를 always drop pose 그대로로 맞춘다.
+        if applied_rad != 0.0:
+            if not ports.arm.offset_base_yaw(-applied_rad):
+                ports.host.report(
+                    Report.STATE, MissionState.SAFE_300,
+                    "servo 1 원위치 복귀 실패 — idle 글라이드가 대신 정렬한다")
         folded = ports.arm.move_to_floor_pose(gp.profile, "idle")
 
         if released:

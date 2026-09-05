@@ -6,6 +6,7 @@ Host가 보낸 속도가 만든다. 예외는 GRASP/INSERT를 실행한 뒤 그 
 넘어가는 두 자리뿐이다.
 """
 
+import math
 import threading
 
 import pytest
@@ -611,6 +612,57 @@ def test_접기_전에_그리퍼를_닫는다():
     stages = [stage for _profile, stage in arm.floor_pose_calls]
     assert widths[-1] == 9.0
     assert stages[-1] == "idle"
+
+
+# ── safe_300: 그리퍼를 열기 전 servo 1 요 보정 (사용자 지시, 2026-09-05) ────
+
+
+def test_yaw_correction_deg가_0이면_servo_1을_건드리지_않는다():
+    """차량이 이미 정면을 맞춰 온 기존 경로와 100% 동일해야 한다 — 기본값
+    (HostCommand.yaw_correction_deg=0.0)에서는 safe_300 자체가 없었던
+    것처럼 동작해야 한다."""
+    host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
+    arm = FakeArm(load_ratio=[0.0626, 0.0313])
+    ports = _ports(host=host, arm=arm)
+
+    BaselineInsertState("queen").execute(ports)
+
+    assert arm.yaw_offsets == []
+    assert MissionState.SAFE_300 not in [state for _r, state, _d, _f in host.reports]
+
+
+def test_yaw_correction_deg가_있으면_그리퍼를_열기_전에_servo_1을_돌린다():
+    """safe_300 — Host가 NUDGE 경계선에서 남은 지향 오차를 실어 보내면,
+    그리퍼를 열기(투하) **전에** servo 1로 흡수하고, 놓은 뒤 idle로 접기
+    전에 원래 각도로 되돌린다."""
+    host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True, yaw_correction_deg=12.0)])
+    arm = FakeArm(load_ratio=[0.0626, 0.0313])
+    ports = _ports(host=host, arm=arm)
+
+    BaselineInsertState("queen").execute(ports)
+
+    assert arm.yaw_offsets == pytest.approx([math.radians(12.0), math.radians(-12.0)])
+    assert MissionState.SAFE_300 in [state for _r, state, _d, _f in host.reports]
+    # 놓기 자체는 평소대로 성공해야 한다 — 보정 추가가 기존 판정을 깨면 안 된다.
+    assert Report.INSERT_DONE in host.reported_kinds
+
+
+def test_servo_1_보정이_거부돼도_투하는_계속한다():
+    """offset_base_yaw가 한계각 초과 등으로 거부(False)해도, 물체를 든 채
+    무한정 멈추는 것보다 보정 없이 여는 편이 낫다는 판단이다
+    (BaselineInsertState 클래스 docstring과 같은 원칙)."""
+    host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True, yaw_correction_deg=90.0)])
+    arm = FakeArm(load_ratio=[0.0626, 0.0313], yaw_offset_ok=False)
+    ports = _ports(host=host, arm=arm)
+
+    BaselineInsertState("queen").execute(ports)
+
+    assert Report.INSERT_DONE in host.reported_kinds
+    details = [d for _r, _s, d, _f in host.reports
+               if _s == MissionState.SAFE_300]
+    assert any("거부됨" in d for d in details)
+    # 거부됐으니 되돌릴 것도 없다 — 편도 요청 한 번만 나가야 한다.
+    assert arm.yaw_offsets == [math.radians(90.0)]
 
 
 # ── E-STOP ────────────────────────────────────────────────────────────────
