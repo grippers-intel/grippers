@@ -67,10 +67,11 @@ CARRY_TO_DEST/FACE_BOX/NUDGE_BOX는 손대지 않았다. "차량이 방향에 �
 경계선에서 바로 서고, 그 잔여 오차 전부를 팔로 흡수" 하는 자동 경로는
 아직 없다 — 지금 있는 것은 그 잔여 오차를 servo 1로 흡수하는 **뒷단
 메커니즘 자체가 실기에서 먹는지**를 사람이 대신 서서 확인하는 수단이다.
-⚠️ servo 1 회전의 부호(+가 어느 쪽으로 도는지)가 `facing_error_deg`의
-부호와 실제로 같은 방향인지도 아직 실기로 확인되지 않았다 — 첫 시험에서
-보정이 오차를 줄이는 대신 키우면 `offset_base_yaw` 호출부의 부호를
-뒤집어야 한다.
+⚠️ servo 1 회전 부호는 2026-09-05 첫 실기에서 반대로 확인됐다(사용자
+보고 — "servo1이 돌았는데, 반대방향으로 돌았어") — `facing_error_deg`를
+그대로 넘기면 오차를 줄이는 대신 키운다. `baseline_mission.py`의
+`BaselineInsertState.execute()`에서 `correct_drop_yaw`를 부를 때 부호를
+뒤집도록 고쳤다(`correction_rad = -math.radians(yaw_correction_deg)`).
 
 ⚠️ **2026-09-05 첫 실기에서 이게 안 먹었다** — Pi의 진짜 FSM(baseline_mission.py)
 은 상태 객체가 자기가 인식하는 다음 상태로만 넘어가서, IDLE에서 곧장
