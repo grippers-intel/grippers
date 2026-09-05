@@ -57,7 +57,15 @@ from localizer import box_pose
 # "아까 준 좌표에서 양옆으로 3cm, 바구니 안쪽 3cm로 조정해"로 좁혔다).
 TARGET_HALF_WIDTH_M = 0.03      # 입구 중심 기준 좌우(가로) 절반폭
 TARGET_INSET_DEPTH_M = 0.03    # 입구 중심에서 바구니 안쪽으로 깊이
-MAX_APPROACH_DIST_M = 0.15     # 목표 영역에서 이 거리 안이면 "가깝다"
+
+# 2026-09-05 실기(manual_insert_probe.py)로 처음 이 값을 실제 자세에서
+# 확인해보니 0.15에서 NUDGE_LINE이 걸려 사용자가 보기에 바구니에 "너무
+# 가깝다"고 판단 — 10cm 더 여유를 두라는 지시로 0.25로 늘렸다. 아래
+# SOUTH_APPROACH_SECTOR_RADIUS_M도 이 값을 그대로 참조하므로 같이 늘어난다
+# (basket_target.py 뒷부분 주석 — 두 반경은 항상 같아야 한다는 설계 그대로
+# 유지). 목표 영역 자체(TARGET_HALF_WIDTH_M/TARGET_INSET_DEPTH_M)는 안 건드
+# 렸다 — "언제 멈출까"만 바뀌었지 "어디가 목표인가"는 그대로다.
+MAX_APPROACH_DIST_M = 0.25     # 목표 영역에서 이 거리 안이면 "가깝다"
 
 # "바라보고 있다"의 허용 오차. 이번 세션 라이다 실측으로 정면·45도·30도
 # 사선 전부에서 벽/모서리 분간이 됐다(잔차 1.5~7mm) — 그러니 45도까지는
