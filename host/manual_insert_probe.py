@@ -63,10 +63,21 @@ NUDGE_LINE에 진입하는 순간의 `gate.facing_error_deg`(배너에 찍히는
 
 ⚠️ 아직 자동화되지 않은 부분: 이 도구는 여전히 "차가 정면에 가깝게 들어와
 NUDGE_LINE을 넘는 순간"을 사람이 WASD로 만들어 준다 — host/mission.py의
-CARRY_TO_DEST/FACE_BOX/NUDGE_BOX는 손대지 않았다. "차량이 방향에 상관없이
-경계선에서 바로 서고, 그 잔여 오차 전부를 팔로 흡수" 하는 자동 경로는
-아직 없다 — 지금 있는 것은 그 잔여 오차를 servo 1로 흡수하는 **뒷단
-메커니즘 자체가 실기에서 먹는지**를 사람이 대신 서서 확인하는 수단이다.
+CARRY_TO_DEST/FACE_BOX/NUDGE_BOX(회전·정렬 루프)는 손대지 않았다. "차량이
+방향에 상관없이 경계선에서 바로 서고, 그 잔여 오차 전부를 팔로 흡수" 하는
+자동 경로(FACE_BOX 완전 제거)는 여전히 없다 — 그 루프를 걷어내려면 새
+전방위 주행 원시 동작이 필요해서 위험·복잡도가 훨씬 크다고 판단해 미룬
+것이다(별개 결정, 이 파일 계속 유효).
+
+이 도구로 servo 1 뒷단 메커니즘 자체가 실기에서 먹는 것까지 확인한 뒤
+(2026-09-05, 사용자 지시 — "run_mission에 해당 로직을 반영해주고"),
+`mission.py`의 실제 PLACE 상태에도 반영했다 — FACE_BOX/NUDGE_BOX는 그대로
+두고, PLACE가 매 사이클 보내는 real INSERT 명령에 그 순간의
+`check_basket_insert_gate().facing_error_deg`를 `yaw_correction_deg`로
+얹기만 했다. FACE_BOX/NUDGE_BOX가 이미 잘 맞춰 왔으면 이 값은 0에 가까워
+safe_300이 사실상 건너뛰어지므로(BaselineInsertState 참고) 기존 동작은
+그대로다 — 자동 경로 전체를 새로 만든 게 아니라 이미 있는 접근 위에
+안전망 한 겹을 얹은 것이다.
 ⚠️ servo 1 회전 부호는 2026-09-05 첫 실기에서 반대로 확인됐다(사용자
 보고 — "servo1이 돌았는데, 반대방향으로 돌았어") — `facing_error_deg`를
 그대로 넘기면 오차를 줄이는 대신 키운다. `baseline_mission.py`의

@@ -1550,7 +1550,27 @@ class MissionFSM:
             self.nav_path = None
             self.last_nav = None
             self.last_cmd = "stop"
-            link.send(MissionCommand("stop", "PLACE", pose.x, pose.y, pose.yaw_deg))
+            # safe_300 실기 확인(manual_insert_probe.py, 2026-09-05)을 실제
+            # 미션 경로에 반영한다 — FACE_BOX/NUDGE_BOX는 그대로 두고(그
+            # 회전·정렬 루프는 손대지 않는다), 매 PLACE 사이클마다 그
+            # 순간의 잔여 지향오차를 같이 실어 보낸다. FACE_BOX/NUDGE_BOX가
+            # 이미 잘 맞춰 왔으면 이 값은 0에 가까워 safe_300 자체가
+            # 사실상 건너뛰어지고(BaselineInsertState 참고), 그래도 남는
+            # 오차가 있으면(사선 진입 허용, NUDGE_ROTATE_DIAGONAL_TOLERANCE_RAD
+            # =20도까지 허용) Pi가 그리퍼를 열기 직전 servo 1로 흡수한다 —
+            # 라이다 게이트(check_insert)는 전혀 안 건드린다. 매 사이클
+            # 다시 계산하는 이유: PLACE는 INSERT_BLOCKED로 NUDGE_BOX를
+            # 여러 번 왕복할 수 있어(아래 else 분기), 최종적으로 Pi가
+            # 실제 BaselineInsertState로 넘어가는 그 사이클의 오차라야
+            # 의미가 있다 — NUDGE_BOX 진입 시점 값을 얼려 두면 그사이
+            # 왕복으로 낡아진다.
+            dest_box_name = mcfg.PIECE_DEST_BOX.get(self.target_label)
+            yaw_correction_deg = 0.0
+            if dest_box_name is not None:
+                yaw_correction_deg = basket_target.check_basket_insert_gate(
+                    robot_xy, pose.yaw_deg, dest_box_name).facing_error_deg
+            link.send(MissionCommand("stop", "PLACE", pose.x, pose.y, pose.yaw_deg,
+                                     yaw_correction_deg=yaw_correction_deg))
             status = link.poll_status() if not self.ready_to_advance else "IDLE"
             if status == "PLACE_DONE":
                 self.ready_to_advance = True
