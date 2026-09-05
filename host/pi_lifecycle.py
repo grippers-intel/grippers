@@ -83,7 +83,13 @@ def _ssh(pi_host: str, pi_user: str, remote_cmd: str, timeout: float) -> subproc
     return subprocess.run(
         ["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
          f"{pi_user}@{pi_host}", remote_cmd],
-        capture_output=True, text=True, timeout=timeout)
+        capture_output=True, text=True, timeout=timeout,
+        # ⚠️ text=True 만 주면 Windows 는 로캘 기본(cp949)으로 디코드한다.
+        # Pi 는 한글 UTF-8 을 내므로 첫 한글 바이트에서 UnicodeDecodeError 가
+        # 나고, 그게 subprocess 의 리더 스레드 안에서 터져 bringup 확인이
+        # 통째로 실패한다(2026-09-06, Windows Host). errors 까지 주는 이유는
+        # 원격 로그에 깨진 바이트가 섞여도 확인 자체는 계속돼야 하기 때문이다.
+        encoding="utf-8", errors="replace")
 
 
 def _docker_exec(pi_host: str, pi_user: str, inner_cmd: str, timeout: float,
