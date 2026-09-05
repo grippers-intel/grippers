@@ -63,13 +63,21 @@ try:
 except ImportError:
     _HAILO_AVAILABLE = False
 
-# 🔴 임시 비활성화 (2026-08-22, 배포 전용 — 커밋 안 함): AI HAT+2가 부팅마다
-# "Timeout waiting for firmware file / Failed writing SOC firmware on stage 2"로
-# 죽는다 (재부팅 2회 + 완전 파워사이클 1회로도 재현, hailortcli scan에 장치 자체가
-# 안 잡힘). Hailo 커뮤니티의 동일 증상 스레드가 온보드 DDR 손상으로 결론났다.
-# 새 보드가 들어오기 전까지 여기서 강제로 꺼서 scan_floor가 Hailo 경로를 안 탄다 —
-# 아래 CPU YOLO 경로가 대신한다. 하드웨어 복구되면 이 한 줄만 지우면 된다.
-_HAILO_AVAILABLE = False
+# 2026-08-22~2026-09-06 사이 여기 `_HAILO_AVAILABLE = False`로 강제 꺼 뒀었다 —
+# AI HAT+2가 부팅마다 "Timeout waiting for firmware file / Failed writing SOC
+# firmware on stage 2"로 죽어서(재부팅 2회 + 완전 파워사이클 1회로도 재현,
+# hailortcli scan에 장치 자체가 안 잡힘), Hailo 커뮤니티의 동일 증상 스레드가
+# 온보드 DDR 손상으로 결론난 상태였다.
+#
+# 2026-09-06 사용자 지시로 되살린다 — 같은 날 저녁 점검(vcgencmd get_throttled=
+# 0x0, lspci에 Hailo-10H 정상 인식, hailortcli fw-control identify 정상 응답
+# FW 5.1.1, dmesg에 펌웨어 로딩까지 에러 없이 완료)에서 위 증상이 재현되지
+# 않았다. ⚠️ 이 점검들은 PCIe 링크·펌웨어 부팅까지만 확인한 것이지 실제 추론을
+# 검증한 게 아니다 — DDR 손상이 진짜였다면 가벼운 identify 호출이 아니라 실제
+# 모델 추론(지속적인 메모리 접근) 중에야 다시 죽을 수 있다. 그래서 아래
+# _load_hailo_model()이 실패해도 CPU YOLO로 넘어가도록 폴백을 남겨 뒀다 — 다시
+# 죽으면 이 폴백이 조용히 CPU 경로로 받아 준다(_load_hailo_model()의 warn 로그로
+# 알 수 있다).
 
 try:
     from ultralytics import YOLO
@@ -470,6 +478,14 @@ class PerceptionNode(Node):
         self._cpu_yolo_model = None
         if _HAILO_AVAILABLE:
             self._load_hailo_model()
+            # 2026-09-06: Hailo가 import는 되는데 실제 로드(_load_hailo_model)가
+            # 실패하면(예: 다시 DDR 손상 재발) 예전엔 아무 백엔드도 안 남고
+            # scan_floor가 통째로 죽었다 — CPU YOLO로 넘어가게 폴백을 둔다.
+            if self._hailo_model is None and _CPU_YOLO_AVAILABLE:
+                self.get_logger().warn(
+                    "scan_floor: Hailo 로드 실패 — CPU YOLO로 폴백"
+                )
+                self._load_cpu_yolo_model()
         elif _CPU_YOLO_AVAILABLE:
             self._load_cpu_yolo_model()
         else:
