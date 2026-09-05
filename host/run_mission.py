@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import queue
 import signal
+import shutil
 import sys
 import threading
 import time
@@ -460,9 +461,26 @@ def _run_mission(args) -> int:
                 base_alarm=getattr(link, "base_alarm", None),
                 ready=fsm.ready_to_advance, hz=_last_hz)
 
+            # ⚠️ pose 를 잃으면 FSM 이 step() 입구에서 그대로 나가고 명령도
+            # 안 나간다. 그런데 화면에도 아무것도 안 찍혀서, 밖에서 보면
+            # "hz 만 도는데 차가 안 움직임"으로만 보인다 — 2026-09-05 실기에서
+            # 이걸 Pi 쪽 문제로 오해해 UDP 수신·워치독·노드 상태까지 뒤진 뒤에야
+            # Host 가 애초에 안 보내고 있었다는 걸 알았다. Pi 워치독이 알아서
+            # 세우므로 동작은 안전하지만, 이유는 보여 줘야 한다.
+            if not pose.ok and frames_seen % 10 == 0:
+                line = (f"[로봇 잃음] 마커가 안 보입니다 — 명령을 보내지 않습니다 "
+                        f"(cams={pose.n_cams}). 팔이 마커를 가렸거나 작업 영역 밖입니다")
+                width = shutil.get_terminal_size((100, 24)).columns - 1
+                print("\r" + line[:width].ljust(width), end="", flush=True)
+
             if fsm.state == State.SEARCH_TARGET and frames_seen % 10 == 0:
-                print(f"\r[SEARCH_TARGET] 작업 영역에 남은 기물 없음 — {pose}   ",
-                      end="", flush=True)
+                # ⚠️ 한 줄에 담기지 않으면 터미널이 줄을 접고, 그러면 \r 가
+                # 시작이 아니라 접힌 줄 머리로 돌아가 이전 내용이 안 지워진다
+                # — 같은 문구가 두 번 찍힌 것처럼 보인다(2026-09-05).
+                why = fsm.search_reason or "남은 기물 없음"
+                line = f"[SEARCH_TARGET] {why} — {pose}"
+                width = shutil.get_terminal_size((100, 24)).columns - 1
+                print("\r" + line[:width].ljust(width), end="", flush=True)
 
             if live_map is not None:
                 live_map.update(pose, pmap, goal=fsm.nav_goal, nav=fsm.last_nav,

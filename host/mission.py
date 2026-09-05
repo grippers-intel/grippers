@@ -58,6 +58,18 @@ class State(Enum):
     DONE = auto()
 
 
+def _in_workspace(p: XY) -> bool:
+    """작업 영역(WORKSPACE_X x WORKSPACE_Y) 안인가.
+
+    같은 판정이 _nearest_piece · _find_label · visible_labels 에 인라인으로
+    들어 있다. 그 셋은 건드리지 않았다 — 여기서는 SEARCH_TARGET 이 "왜 후보가
+    없는지" 설명할 때와 host/diag_pieces.py 가 쓴다.
+    """
+    wx0, wx1 = cfg.WORKSPACE_X
+    wy0, wy1 = cfg.WORKSPACE_Y
+    return wx0 <= p[0] <= wx1 and wy0 <= p[1] <= wy1
+
+
 def _other_pieces(piece_map: PieceMap, exclude_xy: Optional[XY] = None,
                    tol: float = 0.05) -> list[XY]:
     """지도에 있는 모든 기물 좌표. exclude_xy 를 주면 그 근처(tol 이내) 한 점만 뺀다.
@@ -491,7 +503,13 @@ class MissionFSM:
         # 동안은 SEARCH_TARGET 후보에서 뺀다 — 단 그것 말고 후보가 하나도
         # 없어지면 다시 후보로 본다(_nearest_piece/_find_label 의 2단계
         # 탐색 참고, 사용자 지시 2026-09-01).
-        self.skipped: list[XY] = []
+        # (좌표, 보류한 시각). mcfg.SKIP_EXPIRY_S 가 지나면 저절로 풀린다 —
+        # 시효가 없으면 일시적인 고장까지 영구 보류가 되고, 푸는 방법이
+        # Mode 버튼 두 번(= reset)뿐이라 아는 사람만 풀 수 있다.
+        self.skipped: list[tuple[XY, float]] = []
+
+        # SEARCH_TARGET 에서 후보를 못 고른 이유. 화면과 콘솔이 그대로 쓴다.
+        self.search_reason = None
 
         self._path_planner.reset()
         self._drive.reset()
@@ -569,6 +587,13 @@ class MissionFSM:
         link.send(MissionCommand(cmd, "APPROACH_PIECE", pose.x, pose.y,
                                  pose.yaw_deg, target_label=self.target_label))
 
+    def _active_skips(self) -> list[XY]:
+        """아직 시효가 안 지난 보류 좌표들. 지난 것은 목록에서도 지운다."""
+        now = time.monotonic()
+        self.skipped = [(xy, t) for (xy, t) in self.skipped
+                        if now - t < mcfg.SKIP_EXPIRY_S]
+        return [xy for (xy, _t) in self.skipped]
+
     def _skip_target(self, why: str) -> None:
         """지금 대상을 보류하고 기본 위치(mcfg.DEFAULT_HOME_XY)로 돌아간 뒤
         SEARCH_TARGET 으로 돌아간다(2026-09-01 사용자 지시).
@@ -581,7 +606,7 @@ class MissionFSM:
         좌표를 `skipped` 에 남기는 것이 핵심이다 — 안 남기면 SEARCH_TARGET 이
         같은 기물을 또 "가장 가까운 것"으로 골라 무한 반복한다."""
         if self._target_xy is not None:
-            self.skipped.append(self._target_xy)
+            self.skipped.append((self._target_xy, time.monotonic()))
         print(f"[mission] {self.target_label} 보류: {why} — 기본 위치로 복귀합니다")
         self._align = None
         self._align_from = None
@@ -802,15 +827,29 @@ class MissionFSM:
             self.nav_path = None
             self.last_nav = None
             self.last_cmd = None
+            skips = self._active_skips()
             # 사용자 지시(instruction_resolver.py)로 라벨이 지정돼 있으면
             # 그 라벨만 찾는다 — 없으면 평소처럼 최근접 우선(2026-09-01).
             if self._instructed_label is not None:
                 found = _find_label(piece_map, self._instructed_label, robot_xy,
-                                    self.skipped)
+                                    skips)
             else:
-                found = _nearest_piece(piece_map, robot_xy, self.skipped,
+                found = _nearest_piece(piece_map, robot_xy, skips,
                                        category=self.category)
             self.ready_to_advance = found is not None
+            # 왜 후보가 없는지 남긴다. "없음"에는 세 가지 다른 뜻이 있고 사람이
+            # 할 일이 각각 다르다 — 기물을 놓아야 하는지, 보류가 풀리길
+            # 기다려야 하는지, 영역 안으로 옮겨야 하는지. 이걸 구분해 주지
+            # 않아서 2026-09-05 실기에서 검출이 멀쩡한데도 한참 헤맸다.
+            if found is not None:
+                self.search_reason = None
+            elif not piece_map:
+                self.search_reason = "지도에 기물 없음"
+            elif any(_in_workspace(p) for pts in piece_map.values() for p in pts):
+                self.search_reason = (f"보류됨 {len(skips)}개 — "
+                                      f"{mcfg.SKIP_EXPIRY_S:.0f}초 뒤 재시도")
+            else:
+                self.search_reason = "기물이 작업 영역 밖"
             if found is not None and self._should_advance():
                 label, xy = found
                 # "fetch" 의도(사용자 지시로 목적지 오버라이드가 있음)면 그
