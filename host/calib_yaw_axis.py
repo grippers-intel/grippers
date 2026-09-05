@@ -87,6 +87,12 @@ def _pose(loc, cams, caps, detector, tries: int = 30):
 def _drive(link, loc, cams, caps, detector, cmd: str, seconds: float):
     """cmd 를 seconds 동안 보내면서 pose 를 계속 갱신한다.
 
+    ⚠️ 상태 문자열은 **Host 내부 이름**(mission.State)이어야 한다. Pi 쪽 이름
+    ("APPROACH")을 넘기면 vehicle_link._STATE_TO_PI 에 없어서 안전값
+    IDLE + stop=True 로 떨어진다 — 전진 명령이 정지로 바뀌어 나가고, 밖에서
+    보면 "명령은 보내는데 차가 안 움직인다"로만 보인다(2026-09-06 실기에서
+    이걸로 한참 헤맸다). 여기서 쓰는 것은 APPROACH_PIECE 다.
+
     ⚠️ **pose 를 얻었는지와 무관하게 매 사이클 보낸다.** 처음에는 pose 가 있는
     사이클에만 보냈는데, 그러면 마커를 놓칠 때마다 명령이 끊기고 Pi 워치독이
     0.3초 만에 세운다 — 2026-09-05 첫 실행에서 4회 중 3회가 0.5cm 도 못
@@ -99,18 +105,30 @@ def _drive(link, loc, cams, caps, detector, cmd: str, seconds: float):
     end = time.monotonic() + seconds
     last = None
     cycles = hits = 0
+    tick = 0
     while time.monotonic() < end:
-        cycles += 1
-        pose = _pose(loc, cams, caps, detector, tries=1)
-        if pose is not None:
-            last, hits = pose, hits + 1
-        link.send(MissionCommand(cmd, "APPROACH",
+        # ⚠️ 송신을 카메라 읽기와 붙여 두면 안 된다. 카메라 2대를 읽는 데
+        # 60~100ms 가 들어 실제 송신이 ~10Hz 로 떨어지는데, Pi 오케스트레이터의
+        # 주기도 10Hz 라 지터로 세 번에 한 번은 새 명령을 못 찾는다. 그러면
+        # 워치독이 정지를 내고, 모터가 초당 여러 번 끊겨 정지마찰을 못 뜯는다
+        # — 2026-09-06 실측: /cmd_vel 의 34%, set_motor 의 43% 가 0 이었고
+        # 차는 6초 동안 0mm 를 갔다.
+        #
+        # 그래서 송신은 50Hz 로 돌리고, pose 는 다섯 번에 한 번만 읽는다.
+        # 좌표는 화면 표시용 참고 필드라 조금 낡아도 된다.
+        tick += 1
+        if tick % 5 == 1:
+            cycles += 1
+            pose = _pose(loc, cams, caps, detector, tries=1)
+            if pose is not None:
+                last, hits = pose, hits + 1
+        link.send(MissionCommand(cmd, "APPROACH_PIECE",
                                  last.x if last else 0.0,
                                  last.y if last else 0.0,
                                  last.yaw_deg if last else 0.0))
         time.sleep(0.02)
     for _ in range(8):
-        link.send(MissionCommand("stop", "APPROACH",
+        link.send(MissionCommand("stop", "APPROACH_PIECE",
                                  last.x if last else 0.0,
                                  last.y if last else 0.0,
                                  last.yaw_deg if last else 0.0))

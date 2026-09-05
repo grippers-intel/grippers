@@ -1071,6 +1071,8 @@ class ArmDriverNode(Node):
         for step_index in range(1, steps + 1):
             ratio = step_index / steps
             for servo_id in range(1, 6):
+                if servo_id == 5:
+                    continue
                 position = round(start[servo_id] + ratio * (goal[servo_id] - start[servo_id]))
                 if not backend.drv.set_position(servo_id, position):
                     raise ArmHardwareUnavailableError(
