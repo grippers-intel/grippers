@@ -263,7 +263,25 @@ def main() -> int:
                     if key == "q":
                         quit_requested = True
                         break
-                    if mode == "confirm" and key in ("\r", "\n"):
+                    if mode == "insert" and key in (" ", "x"):
+                        # 2026-09-05 실기 — Pi의 lidar 기반 check_insert(요·좌우·
+                        # 거리 허용치가 이 도구의 Host 게이트보다 훨씬 빡빡하다,
+                        # BASKET_YAW_TOLERANCE_RAD=0.087·BASKET_LATERAL_TOLERANCE_M
+                        # =0.070·BASKET_STOP_LIDAR_M±TOLERANCE)이 계속
+                        # INSERT_BLOCKED를 내면 이 모드에서 나갈 방법이 전에는
+                        # 없었다(q로 도구 전체를 끄는 것 말고는). CARRY는 그대로
+                        # 유지한 채(Pi FSM은 계속 BaselineCarryState다 — 다시
+                        # DEBUG_FORCE_CARRY를 보낼 필요 없다) 드라이브만 재개한다.
+                        mode = "drive"
+                        current_cmd = "stop"
+                        last_key_at = now
+                        prev_gate_ok = False   # 지금 위치가 아직 게이트 안이면
+                                               # 바로 다음 사이클에 확인 배너를 다시 띄운다
+                        print("\n[INSERT 취소] 드라이브로 복귀합니다 — 자세를 다시 "
+                              "잡고 NUDGE_LINE에서 다시 Enter를 눌러 보세요.\n",
+                              flush=True)
+                        _log("INSERT_CANCELLED_BY_USER")
+                    elif mode == "confirm" and key in ("\r", "\n"):
                         mode = "insert"
                         insert_started_at = now
                         insert_last_warn_at = now
