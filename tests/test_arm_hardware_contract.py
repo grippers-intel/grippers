@@ -193,15 +193,15 @@ def test_fold_to_cradle_checks_servos_before_and_after_motion():
 
 def test_offset_base_yaw_and_drop_yaw_correction_use_separate_limits():
     """2026-09-05 사용자 지시 — safe_300(드랍 직전 servo 1 요 보정) 한계각을
-    45도로 넓히면서, GRASP 좌우보정의 물리적 근거가 있는 ±15도
-    (MAX_BASE_YAW_OFFSET_RAD)는 절대 같이 넓어지면 안 된다. 두 공개
-    핸들러가 서로 다른 한계 상수를 공유 구현(_offset_base_yaw_impl)에
-    넘기는지 직접 확인한다."""
+    처음엔 45도, 실기 2회 연속 성공 뒤 60도로 넓혔다. GRASP 좌우보정의
+    물리적 근거가 있는 ±15도(MAX_BASE_YAW_OFFSET_RAD)는 절대 같이
+    넓어지면 안 된다. 두 공개 핸들러가 서로 다른 한계 상수를 공유
+    구현(_offset_base_yaw_impl)에 넘기는지 직접 확인한다."""
     # 두 상수는 math.radians(...) 호출이라 _module_constants의
     # literal_eval로는 못 읽는다 — 소스에서 문자열로 직접 확인한다.
     source = ARM_NODE.read_text(encoding="utf-8")
     assert "MAX_BASE_YAW_OFFSET_RAD = math.radians(15.0)" in source
-    assert "MAX_DROP_YAW_OFFSET_RAD = math.radians(45.0)" in source
+    assert "MAX_DROP_YAW_OFFSET_RAD = math.radians(60.0)" in source
 
     offset_fn = _function("_on_offset_base_yaw")
     drop_fn = _function("_on_drop_yaw_correction")

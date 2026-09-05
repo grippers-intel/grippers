@@ -825,7 +825,7 @@ class BaselineInsertState(State):
         # 동작한다.
         #
         # ⚠️ correct_drop_yaw는 servo 1 한계각(교시 정면 기준, 사용자 지시로
-        # ±45도 — GRASP 좌우보정의 ±15도와 별개다. arm_driver_node의
+        # ±60도 — GRASP 좌우보정의 ±15도와 별개다. arm_driver_node의
         # MAX_DROP_YAW_OFFSET_RAD 주석 참고)을 넘으면 그 자리에서 거부하고
         # False를 준다 — 그런 경우도 투하 자체는 포기하지 않는다. 팔로 다
         # 못 흡수한 오차를 안고 여는 것이 물체를 든 채 무한정 멈춰 있는

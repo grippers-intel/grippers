@@ -687,7 +687,7 @@ def test_yaw_correction_deg가_있으면_그리퍼를_열기_전에_servo_1을_�
 
 
 def test_servo_1_보정이_거부돼도_투하는_계속한다():
-    """correct_drop_yaw가 한계각(45도) 초과 등으로 거부(False)해도, 물체를
+    """correct_drop_yaw가 한계각(60도) 초과 등으로 거부(False)해도, 물체를
     든 채 무한정 멈추는 것보다 보정 없이 여는 편이 낫다는 판단이다
     (BaselineInsertState 클래스 docstring과 같은 원칙)."""
     host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True, yaw_correction_deg=90.0)])
