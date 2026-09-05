@@ -542,28 +542,14 @@ def _run_mission(args) -> int:
             link.close()
         logger.close()
 
-    # --- 실행 후 코멘트 (2026-09-04) ---
+    # ⚠️ 여기 있던 "실행 후 코멘트" 프롬프트를 뺐다(2026-09-06, Windows).
     #
-    # 위 summary()는 "GRASP_FAILED 1회 · GRASP_DONE 1회"처럼 사건의 종류와
-    # 횟수만 남긴다 — 그게 재시도 끝에 성공한 것인지, 첫 시도가 왜
-    # 실패했는지는 그 자리에 있던 사람만 안다. 그 맥락을 로그 파일에 같이
-    # 묻어 두면 사후 분석 때 요약표만으로는 안 보이는 사정이 드러난다.
+    # 종료 직후 _line_q 에서 한 줄을 기다리며 부연 설명을 받는 기능이었는데,
+    # Windows 에서는 그 큐를 채우는 _line_reader 스레드가 돌지 않아 미션이
+    # 끝나도 프롬프트에서 못 빠져나온다.
     #
-    # ⚠️ 여기서 input()으로 새로 stdin을 읽으면 안 된다 — 위 _line_reader
-    # 스레드가 데몬이라 종료해도 안 죽고, EOF가 아닌 한 다음 줄을 계속
-    # 기다리고 있다(§ 위 "터미널 입력 한 줄" 주석과 같은 이유로, 같은
-    # stdin을 두 스레드가 동시에 readline()하면 어느 쪽이 줄을 가져갈지
-    # 알 수 없다). 그래서 새로 읽지 않고 그 스레드가 채우는 같은 큐
-    # (_line_q)에서 받는다 — 이 시점엔 메인 루프가 매 사이클 비우던 것도
-    # 끝났으므로 큐는 비어 있고, 다음에 들어오는 한 줄이 곧 이 코멘트다.
-    if (_stdin_ready and _log_path is not None
-            and _line_reader_thread is not None and _line_reader_thread.is_alive()):
-        print("<부연 설명을 입력하세요.>")
-        print("> ", end="", flush=True)
-        note = _line_q.get().strip()
-        if note:
-            mission_log.append_annotation(_log_path, note)
-            print(f"[기록됨] {_log_path}")
+    # 로그 자체는 그대로 남는다(MissionLogger). 코멘트를 남기려면
+    # mission_log.append_annotation 을 따로 부르면 된다.
 
     print(f"\n\n종료 — 마지막 상태: {fsm.state.name}")
     return 0
