@@ -35,10 +35,34 @@ def test_floor_grasp_profiles_match_measured_object_geometry():
     # 2026-09-02: 물체 폭과 무관하게 여섯 전부 파지 전용 하한(GRIPPER_
     # GRASP_MIN_MM)을 직접 쓴다(기어 백래시 — 서보 한계까지 밀어붙여야
     # 한다는 사용자 지시). 2026-08-25에는 얇은 체스말 둘만 이 하한에
-    # 걸렸었다.
-    assert all(profile.close_width_mm == module.GRIPPER_GRASP_MIN_MM
-              for profile in profiles.values())
+    # 걸렸었다. 2026-09-03에 box/star(여기 profile 이름으로는 cube/
+    # star_column)만 예외가 다시 생겼다 — 아래 test_부피가_큰_물체는_
+    # 완전히_짓누르지_않는다 참고.
+    bottoms_out = {name: p for name, p in profiles.items()
+                   if name not in ("cube", "star_column")}
+    assert all(p.close_width_mm == module.GRIPPER_GRASP_MIN_MM
+              for p in bottoms_out.values())
     assert all(profile.preopen_width_mm == 168.0 for profile in profiles.values())
+
+
+def test_부피가_큰_물체는_완전히_짓누르지_않는다():
+    """2026-09-03 사용자 지시로 cube/star_column(도메인 라벨 box/star)만
+    예외를 둔다 — 부피가 커서 0.0mm(서보 한계)까지 밀어붙이지 않고
+    2026-09-02 이전 하한이던 7.0mm를 유지한다.
+
+    domain/task/baseline_mission.py의 _CLOSE_WIDTH_OVERRIDE_MM(같은
+    계층 분리로 복제된 짝, test_baseline_mission.py의
+    test_부피가_큰_box_star는_완전히_짓누르지_않는다과 대칭)과 반드시
+    같이 맞출 것 — 2026-09-05, 이 파일만 그 예외를 안 받아서
+    grasp_test_console.py가 cube를 0.0mm로(도메인이 실제로 쓰는 7.0mm가
+    아니라) 닫는 어긋남이 실기로 드러났다."""
+    module = _load_profiles()
+    profiles = module.FLOOR_GRASP_PROFILES
+
+    assert profiles["cube"].close_width_mm == 7.0
+    assert profiles["star_column"].close_width_mm == 7.0
+    # soccer_polyhedron은 언급되지 않아 여전히 GRIPPER_GRASP_MIN_MM이다.
+    assert profiles["soccer_polyhedron"].close_width_mm == module.GRIPPER_GRASP_MIN_MM
 
 
 def test_every_profile_squeezes_by_the_same_margin_unless_the_jaw_bottoms_out():
@@ -48,6 +72,8 @@ def test_every_profile_squeezes_by_the_same_margin_unless_the_jaw_bottoms_out():
     module = _load_profiles()
 
     for name, profile in module.FLOOR_GRASP_PROFILES.items():
+        if name in ("cube", "star_column"):
+            continue  # 2026-09-03 예외(7.0mm 하한) — 위 test_부피가_큰_물체는_완전히_짓누르지_않는다 참고
         squeeze = profile.object_width_mm - profile.close_width_mm
         bottomed_out = profile.close_width_mm == module.GRIPPER_GRASP_MIN_MM
         assert bottomed_out or squeeze == module.GRIPPER_SQUEEZE_MM, name
@@ -59,7 +85,8 @@ def test_the_thin_chess_pieces_are_the_ones_that_bottom_out():
 
     2026-09-02 사용자 지시(기어 백래시 — 서보 한계까지 밀어붙여야 한다)로
     물체 폭에서 빼는 방식 자체를 버리고 모든 라벨이 하한을 직접 쓴다 —
-    이제는 여섯 전부가 "바닥"이다."""
+    2026-09-03에 cube/star_column만 다시 예외(7.0mm)가 됐으므로, 지금은
+    나머지 넷이 "바닥"이다."""
     module = _load_profiles()
     profiles = module.FLOOR_GRASP_PROFILES
 
@@ -68,7 +95,7 @@ def test_the_thin_chess_pieces_are_the_ones_that_bottom_out():
         for name, profile in profiles.items()
         if profile.close_width_mm == module.GRIPPER_GRASP_MIN_MM
     }
-    assert bottomed == set(profiles)
+    assert bottomed == set(profiles) - {"cube", "star_column"}
     assert (
         profiles["chess_knight"].object_width_mm,
         profiles["chess_knight"].grasp_center_height_mm,
@@ -272,13 +299,17 @@ def test_every_label_now_uses_the_grasp_floor_directly():
     """사용자 지시(2026-09-02, 기어 백래시 — 서보 한계까지 밀어붙여야 한다)의
     실제 결과 — 2026-08-25에는 하한에 걸려 있던 queen/knight 둘만 바뀌고
     나머지 넷(rook/cube/star_column/soccer_polyhedron)은 물체 폭 기반
-    공식값을 그대로 썼다. 이제는 물체 폭과 무관하게 여섯 전부가 하한을
-    직접 쓴다."""
+    공식값을 그대로 썼다. 물체 폭과 무관하게 하한을 직접 쓰되, 2026-09-03
+    예외(cube/star_column, 위 test_부피가_큰_물체는_완전히_짓누르지_않는다
+    참고)는 그 하한이 아니라 7.0mm다."""
     profiles = _load_profiles()
     floor = profiles.GRIPPER_GRASP_MIN_MM
 
     for name in profiles.FLOOR_GRASP_PROFILES:
-        assert profiles.FLOOR_GRASP_PROFILES[name].close_width_mm == floor
+        if name in ("cube", "star_column"):
+            assert profiles.FLOOR_GRASP_PROFILES[name].close_width_mm == 7.0
+        else:
+            assert profiles.FLOOR_GRASP_PROFILES[name].close_width_mm == floor
 
 
 def test_close_width_clamps_at_the_grasp_floor_not_the_empty_closed_width():

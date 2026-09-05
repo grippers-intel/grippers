@@ -221,6 +221,13 @@ LATERAL_BIAS_M = 0.0291
 
 LOAD_THRESHOLD = 0.04  # domain/task/states.py GraspState.LOAD_THRESHOLD과 동일
 
+# arm_driver_node.GRIPPER_LOAD_READ_FAILED와 같은 값(2026-09-05) — 부하를
+# 아예 못 읽었을 때(서보 통신 오류)의 신호다. "0.0에 가깝다"와 혼동하면
+# 안 된다: 전자는 통신 문제, 후자는 진짜로 빈 채라는 뜻이라 대응이 다르다.
+# arm_driver_node를 그대로 import하면 rclpy 노드 전체를 끌어오므로, 이
+# 콘솔의 다른 상수들(K_CLASS 등)과 같은 방식으로 값만 복사해 둔다.
+GRIPPER_LOAD_READ_FAILED = -1.0
+
 # 이 콘솔 자신은 더 이상 그리퍼캠을 안 쓰지만(2026-09-01, 아래 GripperCam
 # docstring 참고), auto_grasp_sequence.py·grasp_cycle.py·
 # straight_approach_calibrate.py가 여기서 GripperCam/restart_perception_node/
@@ -1020,7 +1027,10 @@ def main():
             print(f"  닫힘(폭 {close_width_mm}mm). load_ratio={resp.load_ratio:.4f} (기준 {LOAD_THRESHOLD})")
             log.log("step5_close", ok=True, close_width_mm=close_width_mm,
                     load_ratio=resp.load_ratio)
-            if resp.load_ratio < LOAD_THRESHOLD:
+            if resp.load_ratio == GRIPPER_LOAD_READ_FAILED:
+                print("  [경고] 부하 읽기 실패(-1.0, 서보 통신 오류) — "
+                      "빈 채인지 아닌지 이 값으로는 알 수 없다. 눈으로 확인할 것")
+            elif resp.load_ratio < LOAD_THRESHOLD:
                 print(f"  [경고] 닫힘 부하가 기준({LOAD_THRESHOLD}) 미만 — 빈 채로 닫혔을 수 있다")
             # ⚠️ 2026-08-24 실기: 여기서 곧바로 들어올려 닫힘과 상승이 겹쳤다.
             # arm_driver의 set_gripper가 위치 정지까지 기다리도록 고쳤지만
@@ -1034,7 +1044,10 @@ def main():
                 return
             mid_load = node.get_load()
             print(f"  midpoint load_ratio={mid_load:.4f}" if mid_load is not None else "  load 확인 실패")
-            if mid_load is not None and mid_load < LOAD_THRESHOLD:
+            if mid_load == GRIPPER_LOAD_READ_FAILED:
+                print("  [경고] 부하 읽기 실패(-1.0, 서보 통신 오류) — "
+                      "미끄러짐 여부를 이 값으로는 알 수 없다. 눈으로 확인할 것")
+            elif mid_load is not None and mid_load < LOAD_THRESHOLD:
                 print("  [경고] 부하가 기준 미만 — 파지 실패(미끄러짐) 가능성")
             log.log("step5_midpoint", ok=True, load_ratio=mid_load)
 
@@ -1058,7 +1071,16 @@ def main():
                 log.log("step7_drop", ok=False)
                 recover_to_idle(node, profile, log, "drop 자세 실패")
                 return
-            node.set_gripper(168.0)  # domain/task/states.py OPEN_MM
+            # 2026-09-05 실기: 이 호출을 확인 없이 던졌다가(반환값 미확인,
+            # 로그·출력 없음) 실제로 그리퍼가 안 열렸는데도 아무 신호가 없어
+            # "왜 안 열렸는지" 알 방법이 없었다 — 3단계(그리퍼 열기)는 이미
+            # ok를 확인·출력·로그하는데 7단계만 빠져 있었다. 같은 방식으로
+            # 맞춘다.
+            release_resp = node.set_gripper(168.0)  # domain/task/states.py OPEN_MM
+            release_ok = bool(release_resp and release_resp.ok)
+            print(f"  그리퍼 {'열림' if release_ok else '열기 실패'}(168.0mm)"
+                  + ("" if release_ok else " — arm.log 확인할 것, 물체가 안 놓였을 수 있다"))
+            log.log("step7_release", ok=release_ok)
             node.move_floor_pose(profile, "idle")
             log.log("step7_drop", ok=True)
             # 물체를 놓았으니 벌어진 채로 두지 않는다 — align_to_idle.py가 IDLE의

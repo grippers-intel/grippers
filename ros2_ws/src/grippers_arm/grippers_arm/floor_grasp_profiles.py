@@ -131,8 +131,19 @@ def _release_width(object_width_mm: float) -> float:
     return GRIPPER_OPEN_MM
 
 
-def _close_width(object_width_mm: float) -> float:
-    """파지 목표 폭 — 이제 물체 폭과 무관하게 GRIPPER_GRASP_MIN_MM이다.
+# 2026-09-03 사용자 지시로 box/star(도메인 라벨 기준 — 여기 profile 이름으로는
+# cube/star_column)만 예외를 둔다: 부피가 큰 물체라 0.0mm까지 완전히 짓누르지
+# 않고 7.0mm(2026-09-02 이전 하한)를 유지한다.
+# domain/task/baseline_mission.py의 _CLOSE_WIDTH_OVERRIDE_MM(같은 계층 분리로
+# 복제된 짝)과 반드시 같이 맞출 것 — 2026-09-05까지 이 파일만 그 예외를
+# 안 받아서, grasp_test_console.py(이 표를 직접 읽는다)가 cube를 실제 미션이
+# 쓰는 7.0mm가 아니라 0.0mm로 닫는 어긋남이 실기로 드러났다.
+_CLOSE_WIDTH_OVERRIDE_MM = {"cube": 7.0, "star_column": 7.0}
+
+
+def _close_width(object_width_mm: float, profile: str | None = None) -> float:
+    """파지 목표 폭 — 물체 폭과 무관하게 GRIPPER_GRASP_MIN_MM이다(단,
+    `_CLOSE_WIDTH_OVERRIDE_MM`에 있는 profile은 그 값).
 
     **파지 전용** 하한이지 빈 닫힘 폭(GRIPPER_CLOSED_MM)이 아니다. 물체가
     턱을 멈춰 주므로 파지 때는 더 좁게 명령해 위치 오차(=힘)를 키울 수
@@ -145,15 +156,18 @@ def _close_width(object_width_mm: float) -> float:
     2026-09-02 사용자 지시(기어 백래시 — 서보 한계까지 밀어붙여야 한다)로
     물체 폭에서 빼는 방식 자체를 버렸다 — 하한(이번에 7.0 -> 0.0)을 모든
     라벨에 직접 쓴다. baseline_mission.py(도메인, 실제 미션이 쓰는 값)와
-    같은 정책이다."""
+    같은 정책이다. 2026-09-03에 box/star만 위 이유로 다시 7.0으로 되돌아갔고
+    (baseline_mission.py), 이 함수도 그 예외를 받는다."""
+    if profile is not None and profile in _CLOSE_WIDTH_OVERRIDE_MM:
+        return _CLOSE_WIDTH_OVERRIDE_MM[profile]
     return GRIPPER_GRASP_MIN_MM
 
 
 # 2026-08-24: 낮은 물체 3종(cube/star_column/soccer_polyhedron)의 파지 중심
 # 높이를 20.0 -> 26.0mm로 올림. 아래 HORIZONTAL_GABE_LOW_26_DEG 주석 참고.
 FLOOR_GRASP_PROFILES = {
-    "cube": FloorGraspProfile(40.0, 26.0, GRIPPER_OPEN_MM, _close_width(40.0), _release_width(40.0)),
-    "star_column": FloorGraspProfile(45.0, 26.0, GRIPPER_OPEN_MM, _close_width(45.0), _release_width(45.0)),
+    "cube": FloorGraspProfile(40.0, 26.0, GRIPPER_OPEN_MM, _close_width(40.0, "cube"), _release_width(40.0)),
+    "star_column": FloorGraspProfile(45.0, 26.0, GRIPPER_OPEN_MM, _close_width(45.0, "star_column"), _release_width(45.0)),
     "soccer_polyhedron": FloorGraspProfile(46.0, 26.0, GRIPPER_OPEN_MM, _close_width(46.0), _release_width(46.0)),
     "chess_knight": FloorGraspProfile(22.0, 60.0, GRIPPER_OPEN_MM, _close_width(22.0), _release_width(22.0)),
     "chess_rook": FloorGraspProfile(24.5, 45.0, GRIPPER_OPEN_MM, _close_width(24.5), _release_width(24.5)),
