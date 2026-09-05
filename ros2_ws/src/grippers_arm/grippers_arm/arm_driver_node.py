@@ -483,8 +483,18 @@ class ArmDriverNode(Node):
         *,
         enable_torque_on_start: bool,
     ) -> None:
-        """기동 시 6개 서보의 통신·torque 상태를 확인한다."""
-        states = {servo_id: backend.drv.get_torque(servo_id) for servo_id in ALL_SERVO_IDS}
+        """기동 시 6개 서보의 통신·torque 상태를 확인한다.
+
+        2026-09-05 실기: 재기동 직후 이 단발 읽기가 servo 6에서 한 번
+        실패해 노드 자체가 기동에 실패했다(FATAL, 프로세스 종료) —
+        `_require_operational_servos`가 오늘 이미 겪은 것과 같은 문제를
+        기동 경로에서도 그대로 갖고 있었다. 같은 처방(재시도)을 적용한다.
+        재시도까지 다 실패하면 그건 진짜 통신 불능(배선 등)이라는 뜻이고,
+        그때는 여기서 여전히 기동을 막는 것이 맞다."""
+        states = {
+            servo_id: self._read_with_retry(backend.drv.get_torque, servo_id)
+            for servo_id in ALL_SERVO_IDS
+        }
 
         unreadable = [servo_id for servo_id, enabled in states.items() if enabled is None]
         if unreadable:
@@ -519,7 +529,8 @@ class ArmDriverNode(Node):
             )
 
         still_disabled = [
-            servo_id for servo_id in ALL_SERVO_IDS if backend.drv.get_torque(servo_id) is not True
+            servo_id for servo_id in ALL_SERVO_IDS
+            if self._read_with_retry(backend.drv.get_torque, servo_id) is not True
         ]
         if still_disabled:
             raise ArmHardwareUnavailableError(

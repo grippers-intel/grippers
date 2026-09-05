@@ -101,12 +101,21 @@ def test_startup_checks_serial_connection_and_torque():
 
 
 def test_startup_torque_checks_each_servo():
+    """2026-09-05 실기: 재기동 직후 이 단발 읽기가 servo 6에서 한 번 실패해
+    노드 자체가 기동에 실패했다(FATAL) — _read_load/_require_operational_servos와
+    같은 문제라 같은 처방(재시도)을 적용했다. get_torque는 이제
+    _read_with_retry의 reader로만 불린다."""
     fn = _function("_check_startup_torque")
     names = [_called_name(call) for call in _calls(fn)]
 
-    assert "get_torque" in names
+    assert "_read_with_retry" in names
+    assert "get_torque" not in names
     assert "set_torque" in names
     assert "set_all_torque" not in names
+
+    retry_call = next(call for call in _calls(fn) if _called_name(call) == "_read_with_retry")
+    reader_arg = retry_call.args[0]
+    assert isinstance(reader_arg, ast.Attribute) and reader_arg.attr == "get_torque"
 
 
 def test_move_checks_servos_before_and_after_motion():
