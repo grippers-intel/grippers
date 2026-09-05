@@ -102,13 +102,14 @@ _OBJECT_WIDTH_MM = {
 # 있으면 그 자체로 읽기가 더 불안정해질 수 있다는 심증이다(확인된 인과는
 # 아니다).
 #
-# 2026-09-05 실기(grasp_test_console.py --raw-cls box)에서 7.0mm로 두 번
-# 연속 재현된 servo 6(그리퍼) 통신 실패("SO-ARM101 servo 통신 실패 —
-# servo IDs: [6]")를 관찰한 뒤 사용자 지시로 12.0mm로 완화한다 — 서보를
-# 더 안 밀어붙이면 통신이 더 안정되는지 확인하는 시험적 조정이다(인과
-# 확정 아님). ros2_ws/.../floor_grasp_profiles.py의 같은 자리와 반드시
-# 같이 맞출 것.
-_CLOSE_WIDTH_OVERRIDE_MM = {"box": 12.0, "star": 12.0}
+# 2026-09-05 실기(grasp_test_console.py --raw-cls box)에서 7.0mm로 servo 6
+# (그리퍼) 통신 실패("SO-ARM101 servo 통신 실패 — servo IDs: [6]")가
+# 재현돼 12.0mm로 완화해봤으나, 12.0mm에서도 같은 자리(midpoint 도달
+# 직후)에서 똑같이 재현됐다 — 파지 폭과는 무관하다는 뜻이라(cube 프로파일
+# 의 grasp_center_height_mm=26.0 자세 자체가 원인일 가능성 쪽으로 기움),
+# 사용자 지시로 7.0mm로 되돌린다. ros2_ws/.../floor_grasp_profiles.py의
+# 같은 자리와 반드시 같이 맞출 것.
+_CLOSE_WIDTH_OVERRIDE_MM = {"box": 7.0, "star": 7.0}
 
 
 _PROFILE_BY_LABEL = {
