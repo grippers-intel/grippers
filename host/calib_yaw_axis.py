@@ -68,6 +68,11 @@ TURN_BETWEEN_RUNS_S = 2.0
 #: 움직여도 방향 오차는 1도 아래다. 그보다 짧으면 잡음이 방향을 지배한다.
 MIN_TRAVEL_M = 0.10
 
+#: 한 회차 안에서 yaw 가 이보다 많이 변하면 순수 직진으로 못 본다(도).
+#: 2026-09-06 에 회전 관성이 남은 채 전진해 155도 어긋난 회차가 나왔다.
+#: 정상 회차의 yaw 변화는 1도 아래였으므로 5도면 넉넉하다.
+MAX_TURN_DURING_RUN_DEG = 5.0
+
 
 def _pose(loc, cams, caps, detector, tries: int = 30):
     """신선한 pose 하나. 못 얻으면 None."""
@@ -136,6 +141,31 @@ def _drive(link, loc, cams, caps, detector, cmd: str, seconds: float):
     return cycles, hits
 
 
+def _wait_still(loc, cams, caps, detector, max_s: float = 4.0,
+                still_deg: float = 0.8) -> None:
+    """yaw 가 멈출 때까지 기다린다.
+
+    ⚠️ 회전 직후 고정 시간만 쉬면 부족하다. 2026-09-06 실측에서 도는 도중에
+    전진이 시작돼 이동 방향이 yaw 와 155도까지 어긋난 회차가 나왔다 — 이
+    도구는 "차가 자기 정면으로 갔다"를 전제하므로 그 회차는 통째로 못 쓴다.
+
+    팀원 주행 코드의 ESCAPE 모드도 같은 이유로 위험하다(정렬을 무시한 전진 —
+    navigator.DriveMode.ESCAPE 주석). 여기서는 우리가 직접 명령을 내므로
+    ESCAPE 는 안 걸리지만, 회전 관성은 그대로 남는다.
+    """
+    end = time.monotonic() + max_s
+    prev = None
+    while time.monotonic() < end:
+        pose = _pose(loc, cams, caps, detector, tries=1)
+        if pose is not None:
+            if prev is not None:
+                d = abs((pose.yaw_deg - prev + 180.0) % 360.0 - 180.0)
+                if d < still_deg:
+                    return
+            prev = pose.yaw_deg
+        time.sleep(0.15)
+
+
 def _circular_mean(degs: list[float]) -> float:
     x = sum(math.cos(math.radians(d)) for d in degs)
     y = sum(math.sin(math.radians(d)) for d in degs)
@@ -191,6 +221,13 @@ def main() -> int:
                 print(f"[{run+1}] {travel*100:.1f}cm — 명령({args.distance*100:.0f}cm)보다 "
                       f"너무 멉니다. 측위가 튀었을 수 있어 버립니다")
                 continue
+            # 이동 중에 yaw 가 크게 변했으면 순수 직진이 아니다 — 회전이
+            # 섞인 궤적의 시작·끝만 이으면 방향이 엉뚱하게 나온다.
+            turned = abs((after.yaw_deg - before.yaw_deg + 180.0) % 360.0 - 180.0)
+            if turned > MAX_TURN_DURING_RUN_DEG:
+                print(f"[{run+1}] 이동 중 yaw 가 {turned:.1f}도 변했습니다 — "
+                      "직진이 아니라 버립니다")
+                continue
             moved_deg = math.degrees(math.atan2(dy, dx))
             # 보고된 yaw 는 이동 전후가 같아야 정상이다(직진이므로).
             reported = _circular_mean([before.yaw_deg, after.yaw_deg])
@@ -202,7 +239,7 @@ def main() -> int:
 
             if run < args.runs - 1:
                 _drive(link, loc, cams, caps, detector, "yaw+", TURN_BETWEEN_RUNS_S)
-                time.sleep(0.5)
+                _wait_still(loc, cams, caps, detector)
     finally:
         # 어떤 경로로 끝나든 세운다. 예외로 전진 명령이 마지막에 남으면
         # Pi 워치독이 잡을 때까지 계속 간다.
