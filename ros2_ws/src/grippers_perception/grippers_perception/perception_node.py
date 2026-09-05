@@ -24,6 +24,7 @@ Ros2Perception.confirm_grasp()가 여기 observe_target 서비스를 재사용�
 
 import math
 import statistics
+import threading
 import time
 
 import rclpy
@@ -44,6 +45,7 @@ from grippers_perception.cpu_yolo_scan_mapping import (
 )
 from grippers_perception.floor_consensus import CONF_THRESHOLD, confirmed_tracks, track_bbox_xyxy
 from grippers_perception.hailo_scan_mapping import HAILO_CLASS_NAMES, object_class_for_hailo_id
+from grippers_perception.gripper_cam_geometry import orient
 
 try:
     from sensor_msgs.msg import CameraInfo, Image
@@ -86,6 +88,39 @@ try:
 except ImportError:
     _CPU_YOLO_AVAILABLE = False
 
+
+# ── confirm_grasp (1단계, classical CV 임시 구현) ───────────────────────────
+# YOLO가 아직 안 붙어서(2026-08-21 기준) 실기 로그 수집을 시작하려고 정교한
+# 검출 없이 "기준(빈 그리퍼) 프레임과 지금 프레임이 얼마나 다른가"만 본다.
+# GRASP는 이 결과를 아직 판정에 안 쓴다(domain/task/states.py GraspState 참고) —
+# 로그만 쌓아서 나중에 임계값을 실측으로 잡는다.
+GRIPPER_CAM_DEVICE_DEFAULT = "/dev/gripper_cam"
+# ⚠️ VLA 학습 데이터와 같은 해상도여야 한다. 정책은 1280x720 으로 찍은 화면만
+# 보고 배웠고, 이 카메라(ABKO APC-850)는 **4:3 을 요청하면 좌우를 잘라낸다** —
+# 640x480 은 축소가 아니라 크롭이라 가로 화각의 25% 가 사라진다(RECORDING.md).
+# 그 상태로 정책에 넣으면 학습 때 못 본 화각의 화면이 들어간다.
+#
+# 640x480 은 2026-08-21(커밋 36e9d6e) 에 icSpring 카메라 기준으로 들어온 값이고,
+# 8/30 광각 교체 커밋(5d7c63d)은 회전만 정리하고 이 상수는 그대로 뒀다.
+GRIPPER_CAM_WIDTH = 1280
+GRIPPER_CAM_HEIGHT = 720
+GRIPPER_CAM_WARMUP_FRAMES = 5  # 노출 자동조정 전 프레임은 검게 나온다 (실기 확인됨)
+# 그리퍼캠 프레임을 토픽으로 내보낼지. 0 = 끔(기본). VLA 를 쓸 때만 켠다.
+# 정책은 청크 하나(100스텝 = 3.33초)당 관측 한 장만 쓰므로 높을 이유가 없다.
+GRIPPER_CAM_PUBLISH_HZ_DEFAULT = 0.0
+GRIPPER_CAM_TOPIC_DEFAULT = "gripper_cam/image_raw"
+# 손가락은 프레임 하단 중앙 일부에만 작게 잡힌다(2026-08-21 실기 스냅샷 확인) —
+# 전체 프레임으로 diff를 내면 배경(의자·책상) 변화에 신호가 희석된다. 정확한
+# 비율은 카메라 장착이 바뀌면 같이 바뀌니 재장착 후 스냅샷으로 재확인할 것.
+GRIPPER_CAM_ROI = (0.30, 0.55, 0.70, 1.00)  # (x0, y0, x1, y1), 프레임 폭/높이 비율
+# 실측 4건(2026-08-21, n=1 각각) 기준 임시치 — "실측 확정"은 아니지만 최소한
+# 관측값 안쪽에 두는 게 관측값 밖(15.0)보다 낫다:
+#   빈 그리퍼 4.65 · 축구공(위치 이탈) 1.88 · 별 7.46 · 큐브 10.97
+# 15.0은 네 값 전부보다 커서 confirmed가 상시 False였다(PR #185 리뷰 지적).
+# TODO: 실측 — 케이스를 더 모아 재보정한다. confirm_grasp 로그(diff_score)를
+# 실제 파지 성공/실패 케이스별로 모은다. ros2 param set으로 재배포 없이
+# 튜닝할 수 있게 파라미터로도 노출한다.
+CONFIRM_GRASP_DIFF_THRESHOLD_DEFAULT = 6.0
 
 # ── scan_floor (2026-08-21 신설, 2026-08-23 갱신) ────────────────────────────
 # ⚠️ 클래스별 거리 보정값(CLASS_DISTANCE_CALIBRATION_SQRT_PX_M, 아래 "RGB
@@ -419,6 +454,24 @@ def _bgr_from_image_msg(msg):
     raise ValueError(f"지원하지 않는 인코딩: {msg.encoding}")
 
 
+def _image_msg_from_bgr(frame, stamp, frame_id="gripper_cam"):
+    """BGR cv2 배열을 Image 메시지로 바꾼다 — `_bgr_from_image_msg` 의 역방향.
+
+    여기서도 **cv_bridge 를 쓰지 않는다.** 같은 이유다 — 이 환경의 cv_bridge 는
+    numpy 2.x 에서 세그폴트를 낸다(위 함수 주석 참고). `gripper_cam_publisher_node`
+    는 CvBridge 를 쓰므로 이 컨테이너에서는 켜면 안 된다.
+    """
+    msg = Image()
+    msg.header.stamp = stamp
+    msg.header.frame_id = frame_id
+    msg.height, msg.width = frame.shape[:2]
+    msg.encoding = "bgr8"
+    msg.is_bigendian = 0
+    msg.step = msg.width * 3
+    msg.data = np.ascontiguousarray(frame).tobytes()
+    return msg
+
+
 class PerceptionNode(Node):
     def __init__(self):
         super().__init__("perception_node")
@@ -468,6 +521,49 @@ class PerceptionNode(Node):
             self._on_observe_target,
             callback_group=cb_group,
         )
+
+        self.declare_parameter("gripper_cam_device", GRIPPER_CAM_DEVICE_DEFAULT)
+        self.declare_parameter("confirm_grasp_diff_threshold", CONFIRM_GRASP_DIFF_THRESHOLD_DEFAULT)
+        # confirm_grasp 와 발행 타이머가 같은 VideoCapture 를 만진다. 콜백이
+        # ReentrantCallbackGroup 이고 MultiThreadedExecutor 로 스핀하므로 정말로
+        # 동시에 들어온다 — read() 중에 다른 쪽이 release() 하면 죽는다.
+        self._grasp_cam_lock = threading.Lock()
+        self._grasp_cam = None
+        self._grasp_cam_reference = None  # 기준(빈 그리퍼) 프레임 — 그레이스케일
+        if _GRASP_CAM_CV_AVAILABLE:
+            self._grasp_cam_reference = self._capture_grasp_frame()
+            if self._grasp_cam_reference is None:
+                self.get_logger().warn(
+                    "confirm_grasp: 기준 프레임 캡처 실패 — 그리퍼캠 연결/조명 확인 필요"
+                )
+        else:
+            self.get_logger().warn("opencv 미설치 — confirm_grasp 항상 confirmed=False 반환")
+
+        # 그리퍼캠 프레임을 토픽으로도 내보낸다 — VLA 정책(vla_inference)이 쓴다.
+        #
+        # 왜 여기냐면, **이 노드가 이미 장치를 소유하고 있기 때문**이다.
+        # `gripper_cam_publisher_node` 를 따로 띄우면 같은 `/dev/gripper_cam` 을
+        # 두 번 열어 `Device or resource busy` 가 난다(그 노드 docstring 의 경고).
+        # HLD 노드 표도 perception 의 책임을 "카메라 소유"로 적고 있다.
+        #
+        # 기본은 0 = 끔이다. 켜기 전에는 이 노드의 동작이 전과 완전히 같다.
+        self.declare_parameter("gripper_cam_publish_hz", GRIPPER_CAM_PUBLISH_HZ_DEFAULT)
+        self.declare_parameter("gripper_cam_topic", GRIPPER_CAM_TOPIC_DEFAULT)
+        self._gripper_cam_pub = None
+        publish_hz = float(self.get_parameter("gripper_cam_publish_hz").value)
+        if publish_hz > 0.0:
+            if not (_CV_AVAILABLE and _GRASP_CAM_CV_AVAILABLE):
+                self.get_logger().warn(
+                    "gripper_cam_publish_hz 가 켜져 있지만 sensor_msgs/opencv 가 없어 발행하지 않습니다"
+                )
+            else:
+                topic = self.get_parameter("gripper_cam_topic").value
+                self._gripper_cam_pub = self.create_publisher(Image, topic, 1)
+                self.create_timer(1.0 / publish_hz, self._on_gripper_cam_timer)
+                self.get_logger().info(
+                    f"그리퍼캠 발행: {topic} @ {publish_hz:.1f}Hz "
+                    f"({GRIPPER_CAM_WIDTH}x{GRIPPER_CAM_HEIGHT}, 회전 적용됨)"
+                )
 
         self.declare_parameter("scan_floor_enabled", SCAN_FLOOR_ENABLED_DEFAULT)
         self.declare_parameter("hailo_hef_path", HAILO_HEF_PATH_DEFAULT)
@@ -950,6 +1046,76 @@ class PerceptionNode(Node):
         response.top = 0.0
         response.contact_risk = True
         return response
+
+    # ---- confirm_grasp (1단계, classical CV 임시 구현) ----
+    def _open_grasp_cam(self):
+        device = self.get_parameter("gripper_cam_device").value
+        cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+        if not cap.isOpened():
+            cap.release()
+            return None
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, GRIPPER_CAM_WIDTH)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, GRIPPER_CAM_HEIGHT)
+        return cap
+
+    def _capture_grasp_frame(self):
+        """그리퍼캠에서 그레이스케일 프레임 한 장을 잡는다. 카메라가 없거나
+        읽기에 실패하면 **None** — 호출자가 confirmed=False로 접는다.
+
+        열려 있던 캡처가 죽어 있으면(핫플러그 재연결 등) 한 번 다시 연다.
+        노출 자동조정이 끝나기 전 프레임은 실기에서 검게 나오는 게 확인됐으므로
+        (2026-08-21) 앞쪽 몇 프레임은 버린다."""
+        frame = self._capture_grasp_bgr()
+        if frame is None:
+            return None
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    def _capture_grasp_bgr(self, warmup: bool = True):
+        """그리퍼캠 프레임 한 장을 **BGR 그대로** 잡는다. 회전은 적용한 상태.
+
+        `_capture_grasp_frame` 과 발행 타이머가 같은 캡처를 공유하기 위해
+        분리했다. **장치를 여는 곳은 이 노드 하나여야 한다** — perception 이
+        `/dev/gripper_cam` 을 계속 붙들고 있어서, 다른 노드가 같은 장치를 열면
+        `Device or resource busy` 가 난다.
+
+        `warmup` 은 처음 열었을 때 노출이 안정될 때까지 버리는 용도다. 연속
+        발행에서는 매번 6장을 잡을 이유가 없어 끈다 — 15Hz 로 발행하면 초당
+        90장을 grab 하게 되어 Pi CPU 를 그냥 태운다.
+        """
+        if not _GRASP_CAM_CV_AVAILABLE:
+            return None
+        with self._grasp_cam_lock:
+            if self._grasp_cam is None or not self._grasp_cam.isOpened():
+                self._grasp_cam = self._open_grasp_cam()
+                warmup = True  # 방금 열었으면 노출이 안 잡혀 있다
+            if self._grasp_cam is None:
+                return None
+            if warmup:
+                for _ in range(GRIPPER_CAM_WARMUP_FRAMES):
+                    self._grasp_cam.grab()
+            ok, frame = self._grasp_cam.read()
+            if not ok or frame is None:
+                self._grasp_cam.release()
+                self._grasp_cam = None
+                return None
+        # 장착이 뒤집혀 있다. 여기서 돌려야 GRIPPER_CAM_ROI(하단 중앙)가
+        # 계속 손가락을 가리키고, VLA 정책도 학습 때와 같은 방향을 본다
+        # — gripper_cam_geometry 참고.
+        return orient(frame)
+
+    def _on_gripper_cam_timer(self):
+        """그리퍼캠 프레임을 토픽으로 내보낸다. 발행이 꺼져 있으면 안 불린다."""
+        frame = self._capture_grasp_bgr(warmup=False)
+        if frame is None:
+            # 매 주기 경고를 찍으면 로그가 잠긴다 — throttle 로 낮춘다.
+            self.get_logger().warn(
+                "그리퍼캠 프레임 읽기 실패", throttle_duration_sec=5.0
+            )
+            return
+        self._gripper_cam_pub.publish(
+            _image_msg_from_bgr(frame, self.get_clock().now().to_msg())
+        )
 
     @staticmethod
     def _letterbox(frame, size):
