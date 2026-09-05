@@ -508,6 +508,12 @@ class MissionFSM:
         # DriveSequencer/next_waypoint 쪽엔 장애물을 안 넘긴다. 거기 회피
         # 로직은 가장 가까운 장애물 하나만 보고 우회점을 잡아서, 서로 밀어내는
         # 장애물 두 개 사이에서 영원히 왕복하는 버그가 있었다.
+        #
+        # GridPathPlanner 자신이 "로봇이 실제로 유의미하게 움직였는지"를
+        # 보고 그렇지 않으면 직전 결과를 그대로 돌려준다(2026-09-06, 사용자
+        # 지시로 근본 수정 — "제자리에서 이상하게 돈다". PATH_REPLAN_MIN_
+        # MOVE_M 정의부 주석 참고) — 여기서는 그냥 매 사이클 부르기만 하면
+        # 된다.
         sub_goal, corner, blocked_by = self._path_planner.update(
             robot_xy, pose.yaw_deg, target_xy, obstacles)
         self.nav_corner = corner

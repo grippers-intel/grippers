@@ -356,11 +356,18 @@ class GridPathPlanner:
         self._gx, self._gy = np.meshgrid(
             self.x0 + np.arange(self.nx) * cell,
             self.y0 + np.arange(self.ny) * cell)
+        # 마지막으로 실제 계산했을 때의 결과와 그때의 로봇 위치 — 아래
+        # update()의 "왜 위치로 얼리는가" 주석 참고.
+        self._frozen_result: Optional[tuple[XY, Optional[XY], Optional[str]]] = None
+        self._frozen_robot_xy: Optional[XY] = None
 
     def reset(self) -> None:
         """구간이 바뀔 때 부른다. 경로는 매 사이클 처음부터 다시 짜므로
-        지울 상태는 화면 표시용 last_path 뿐이다."""
+        지울 상태는 화면 표시용 last_path 뿐이다 — 얼려 둔 결과도 새
+        구간과 섞이면 안 되니 같이 지운다."""
         self.last_path = None
+        self._frozen_result = None
+        self._frozen_robot_xy = None
 
     # -- 격자 -------------------------------------------------------------
     def _pos(self, i: int, j: int) -> XY:
@@ -383,10 +390,47 @@ class GridPathPlanner:
         margin: float = mcfg.OBSTACLE_MARGIN_M,
         arrive_tol: float = min(mcfg.GRASP_TRIGGER_DIST_M, mcfg.PLACE_TRIGGER_DIST_M),
     ) -> tuple[XY, Optional[XY], Optional[str]]:
+        """로봇이 마지막 실제 계산 때 위치에서 PATH_REPLAN_MIN_MOVE_M 이내로
+        밖에 안 움직였으면 다시 계산하지 않고 그 결과를 그대로 돌려준다
+        (2026-09-06, 사용자 지시로 근본 수정 — "제자리에서 이상하게 돈다").
+
+        원인: 이 경로는 매 사이클 처음부터 다시 짜고(클래스 docstring
+        "왜 매 사이클 다시 짜는가") 회전량은 비용에 안 넣는다("무엇을
+        최소화하는가 — 거리다"). 그래서 로봇이 ROTATE 중이라 실제로는
+        거의 안 움직였는데도, 근처 장애물을 사이에 둔 좌/우 우회 비용이
+        비슷하면 mm 단위 위치 흔들림만으로 탐색 결과(sub_goal)가 뒤집힐
+        수 있다. DriveSequencer는 회전 관성(coast)으로 ROTATE가 끝난 뒤에도
+        STOP<->ROTATE를 다시 오갈 수 있는데, 그때마다 이 흔들리는
+        sub_goal로 목표각을 다시 잠그면 실제 필요한 것보다 훨씬 큰 호를
+        그리며 뱅뱅 도는 것처럼 보였다(실기 로그 — CARRY_TO_DEST, 위치는
+        5cm 이내인데 yaw는 135도 넘게 돌았다 되돌아옴).
+
+        DriveSequencer의 모드(ROTATE/STOP/FORWARD)를 직접 물어서 얼리지
+        않는 이유: 그 모드 이름과 "실제로 유의미하게 움직였는가"가
+        정확히 대응하지 않는다 — 예를 들어 FORWARD로 막 전환된 한
+        사이클은 아직 실제로는 안 움직였을 수 있고, 반대로 새 부분목표에
+        막 도착한 순간(ROTATE 진입 직전)은 이미 그 전 사이클까지 충분히
+        움직인 뒤다. 실제로 물어야 할 것은 "그때보다 지금 위치가 정말
+        달라졌는가" 그 자체이므로, 이 클래스가 직접 자신의 마지막 계산
+        위치와 비교해 판단한다 — 회전은 정의상 제자리라 이 값이 저절로
+        얼어붙고, 실제 전진은 한 사이클 이동량(초당 약 0.1~0.2m, 14Hz
+        기준 7~14mm)이 이 문턱보다 훨씬 커서 사실상 매 사이클 다시
+        계산된다."""
+        if (self._frozen_result is not None and self._frozen_robot_xy is not None
+                and math.hypot(robot_xy[0] - self._frozen_robot_xy[0],
+                               robot_xy[1] - self._frozen_robot_xy[1])
+                <= mcfg.PATH_REPLAN_MIN_MOVE_M):
+            return self._frozen_result
+
+        def _freeze(result: tuple[XY, Optional[XY], Optional[str]]):
+            self._frozen_result = result
+            self._frozen_robot_xy = robot_xy
+            return result
+
         self.last_path = None
         if math.hypot(target_xy[0] - robot_xy[0],
                       target_xy[1] - robot_xy[1]) <= mcfg.AXIS_LEG_TOLERANCE_M:
-            return target_xy, None, None
+            return _freeze((target_xy, None, None))
 
         free = self._free_grid(obstacles, robot_xy,
                                obstacle_radius + robot_radius + margin)
@@ -400,11 +444,11 @@ class GridPathPlanner:
         if goal_mask is None:
             # 갈 수 있는 칸이 하나도 없다 — 제자리에 선다. 목표로 직진시키면
             # 기물을 뚫고 간다.
-            return robot_xy, None, "blocked"
+            return _freeze((robot_xy, None, "blocked"))
 
         cells = self._search(start, goal_mask, free)
         if cells is None or len(cells) < 2:
-            return target_xy, None, None           # 이미 도착 거리 안
+            return _freeze((target_xy, None, None))     # 이미 도착 거리 안
 
         pts = self._smooth([self._pos(*c) for c in cells], obstacles, robot_xy,
                            obstacle_radius + robot_radius + margin)
@@ -414,10 +458,10 @@ class GridPathPlanner:
         if unreachable:
             # 목표까지는 못 간다(기물이 자유공간을 갈라놨다). 갈 수 있는 데까지
             # 가 두면 기물을 하나씩 치우면서 길이 열린다. 뚫고 가지는 않는다.
-            return sub_goal, corner, "blocked"
+            return _freeze((sub_goal, corner, "blocked"))
         # 한 구간이면 곧장 간 것. 그보다 많으면 뭔가 피하고 있다는 뜻 —
         # LiveMap 이 그때만 회피 표시를 한다.
-        return sub_goal, corner, ("piece" if len(pts) > 2 else None)
+        return _freeze((sub_goal, corner, ("piece" if len(pts) > 2 else None)))
 
     def _smooth(self, pts: list[XY], obstacles, robot_xy: XY,
                 safe: float) -> list[XY]:
