@@ -629,6 +629,12 @@ class UdpVehicleLink(VehicleLink):
             "linear_y":  host_cmd.linear_y,
             "angular_z": host_cmd.angular_z,
             "stop":      host_cmd.stop,
+            # 2026-09-05, safe_300 — 이 필드를 여기서 안 실었더니 encode()가
+            # host_cmd.yaw_correction_deg를 제대로 채워도 실제로는 전선에
+            # 한 번도 안 나갔다(Pi가 항상 기본값 0.0만 받음). 팀이 확정한
+            # 다섯 필드(2026-08-26)에 여섯 번째로 추가 — udp_host_link.py의
+            # 같은 필드 주석 참고.
+            "yaw_correction_deg": host_cmd.yaw_correction_deg,
         }).encode("utf-8")
         try:
             self._send_sock.sendto(payload, (self.pi_ip, self.cmd_port))
