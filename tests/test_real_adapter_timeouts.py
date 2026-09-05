@@ -89,6 +89,44 @@ def test_timeout_constants_are_module_level():
     assert {k: found.get(k) for k in expected} == expected
 
 
+def test_creep_forward_timed_never_sleeps_past_the_motor_watchdog():
+    """2026-09-05 실기 진단 — "GRASP 미세전진이 어제보다 확연히 적게
+    움직인다". 원인: creep_forward_timed()가 apply_velocity()를 한 번만
+    부르고 duration_s(1.5초) 전체를 한 번에 sleep했는데, 같은 날 아침
+    추가된 STM32 모터 워치독(0.5초 무응답 시 강제 0속도)이 중간에 끼어들어
+    실제로는 명령의 1/3 정도만 밀고 멈췄다. 이제 MOTOR_KEEPALIVE_INTERVAL_S
+    간격으로 재전송하는 반복문이어야 한다 — 다시 단발 sleep(duration_s)로
+    돌아가면 이 버그가 조용히 재발한다."""
+    tree = _parse(REAL_DIR / "ros2_mecanum_base.py")
+    fn = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "creep_forward_timed")
+
+    assert any(isinstance(n, ast.While) for n in ast.walk(fn)), (
+        "creep_forward_timed가 반복문 없이 단발로 sleep하고 있다 — "
+        "모터 워치독(0.5초)이 duration_s 전체를 채우기 전에 끼어든다")
+
+    sleep_calls = [
+        call for call in _all_calls(fn) if _called_name(call) == "_sleep"]
+    assert sleep_calls, "creep_forward_timed에서 _sleep 호출을 못 찾았다"
+    for call in sleep_calls:
+        arg = call.args[0] if call.args else None
+        assert not (isinstance(arg, ast.Name) and arg.id == "duration_s"), (
+            "duration_s를 통째로 한 번에 sleep한다 — 워치독 문턱(0.5초)을 "
+            "넘겨서 중간에 모터가 강제로 멈출 수 있다")
+
+    keepalive = next(
+        node.value.value
+        for node in _parse(REAL_DIR / "ros2_mecanum_base.py").body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name) and target.id == "MOTOR_KEEPALIVE_INTERVAL_S"
+        and isinstance(node.value, ast.Constant))
+    assert keepalive < 0.5, (
+        f"MOTOR_KEEPALIVE_INTERVAL_S={keepalive}가 모터 워치독 문턱(0.5초)"
+        "보다 짧지 않다 — 재전송이 워치독보다 늦으면 그사이 강제로 멈춘다")
+
+
 def test_monitor_clearance_uses_the_short_safety_timeout():
     """안전 판정만 상한이 짧다 — INSERT 중 반복 호출되므로 일반 서비스와 같은
     3초를 기다리면 베이스가 움직이는 도중 3초간 판단이 멈춘다."""

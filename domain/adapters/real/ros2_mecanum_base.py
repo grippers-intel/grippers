@@ -77,6 +77,20 @@ _ROTATE_EPSILON = 1e-6
 # 을 export하고 mission_orchestrator만 재기동하면 된다(다른 노드는 안 건드림).
 ROTATE_BURST_DISABLE_ENV = "GRIPPERS_DISABLE_ROTATE_BURST"
 
+# creep_forward_timed()가 한 번의 apply_velocity() 뒤 얼마 만에 다시 속도를
+# 재전송할지(2026-09-05, 실기 진단 — "GRASP 미세전진이 어제보다 확연히
+# 적게 움직인다"). 같은 날 아침 추가된 STM32 모터 워치독
+# (ros_robot_controller_sdk.DEFAULT_MOTOR_WATCHDOG_TIMEOUT_S=0.5초 — 여기서
+# 그 상수를 직접 import하지 않는다, ROS2 드라이버 레이어라 domain이 참조하면
+# 안 되는 경계다)이 set_motor_speed()가 0.5초 넘게 안 불리면 스스로 0속도를
+# 강제 전송한다. creep_forward_timed는 원래 apply_velocity()를 딱 한 번만
+# 부르고 duration_s(GRASP 미세전진은 1.5초) 전체를 한 번에 sleep했다 —
+# 그래서 약 0.5초 만에 워치독이 끼어들어 모터를 강제로 멈췄고, 실제로는
+# 명령한 1.5초의 1/3 정도만 밀고 멈췄다("어제까지는 잘됐다"는 이 워치독이
+# 그날 아침에야 생겼기 때문이다 — 그 전엔 이 문제 자체가 없었다). 워치독
+# 문턱(0.5초)보다 확실히 짧게 잡아 재전송이 절대 안 늦지 않게 한다.
+MOTOR_KEEPALIVE_INTERVAL_S = 0.2
+
 
 class Ros2MecanumBase(BaseDriver):
     def __init__(self, node, clock_sleep=None, clock=time.monotonic):
@@ -234,16 +248,29 @@ class Ros2MecanumBase(BaseDriver):
     def creep_forward_timed(self, speed_mps: float, duration_s: float) -> bool:
         """이 속도로 이 시간만큼 열린 루프로 밀고 멈춘다 (사용자 지시,
         2026-09-02) — GRASP 미세 전진을 관측 기반 거리 계산 대신 고정된
-        시간·속도로 낸다. `creep_forward`처럼 버스트로 쪼개지 않는다 —
+        시간·속도로 낸다. `creep_forward`처럼 거리 단위로 쪼개지는 않지만,
+        MOTOR_KEEPALIVE_INTERVAL_S(0.2초)마다 속도를 다시 실어 보낸다 —
         여기 쓰는 속도(호출자가 `baseline_constants.
         GRASP_CREEP_OPEN_LOOP_SPEED_MPS`를 넘긴다, 0.1 m/s)가 이미
-        데드밴드(0.05 m/s) 위라 연속으로 내도 바퀴가 죽지 않는다."""
+        데드밴드(0.05 m/s) 위라 연속으로 내도 바퀴가 죽지 않는다.
+
+        ⚠️ 2026-09-05 실기로 드러난 버그: 예전에는 apply_velocity()를 딱
+        한 번만 부르고 duration_s 전체를 한 번에 sleep했다 — 그날 아침
+        추가된 STM32 모터 워치독(0.5초 무응답 시 강제 0속도, 위
+        MOTOR_KEEPALIVE_INTERVAL_S 정의부 참고)이 중간에 끼어들어 명령한
+        시간의 1/3 정도만 밀고 멈췄다("GRASP 미세전진이 어제보다 확연히
+        적게 움직인다"는 사용자 보고와 정확히 일치). 이제 워치독 문턱보다
+        확실히 짧은 간격으로 계속 재전송해 절대 끼어들지 않게 한다."""
         if self._sleep is None:
             import time
             self._sleep = time.sleep
         try:
-            self.apply_velocity(speed_mps, 0.0, 0.0)
-            self._sleep(duration_s)
+            elapsed = 0.0
+            while elapsed < duration_s:
+                self.apply_velocity(speed_mps, 0.0, 0.0)
+                step = min(MOTOR_KEEPALIVE_INTERVAL_S, duration_s - elapsed)
+                self._sleep(step)
+                elapsed += step
             self.stop()
         except Exception:                       # noqa: BLE001 -- 실기 경로
             self.stop()
