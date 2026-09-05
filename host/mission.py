@@ -1189,7 +1189,11 @@ class MissionFSM:
                           if self._face_target_yaw_deg is not None
                           else mcfg.BOX_FACE_YAW_DEG)
             yaw_err = (target_yaw - pose.yaw_deg + 180.0) % 360.0 - 180.0
-            aligned = abs(yaw_err) <= mcfg.DRIVE_YAW_TOLERANCE_DEG
+            # 일반 주행용 DRIVE_YAW_TOLERANCE_DEG가 아니라 박스 전용
+            # BOX_FACE_YAW_TOLERANCE_DEG를 쓴다 — safe_300이 드랍 직전
+            # servo 1로 잔여 오차를 흡수하므로 여기서 회전으로 무리하게
+            # 좁힐 필요가 없다(정의부 주석 참고, 2026-09-05).
+            aligned = abs(yaw_err) <= mcfg.BOX_FACE_YAW_TOLERANCE_DEG
             self.ready_to_advance = aligned
             nav = DriveCommand(
                 mode=DriveMode.STOP if aligned else DriveMode.ROTATE,
@@ -1292,7 +1296,10 @@ class MissionFSM:
                 moved = math.hypot(robot_xy[0] - self._nudge_from[0],
                                    robot_xy[1] - self._nudge_from[1])
             yaw_err = (nudge_target_yaw - pose.yaw_deg + 180.0) % 360.0 - 180.0
-            aligned = abs(yaw_err) <= mcfg.DRIVE_YAW_TOLERANCE_DEG
+            # FACE_BOX와 같은 이유로 여기도 BOX_FACE_YAW_TOLERANCE_DEG를
+            # 쓴다(2026-09-05) — 전진 중 직진 유지 기준도 결국 같은 박스
+            # 목표 방위 얘기다.
+            aligned = abs(yaw_err) <= mcfg.BOX_FACE_YAW_TOLERANCE_DEG
             # 2026-09-02 실기(2건): 여기서 계획 거리(want_m)를 다 채울 때까지
             # Pi 보고를 하나도 안 읽고 있다가, PLACE 에 들어가서야 처음
             # poll_status() 를 불러 확인했다 — ArUco 데드레커닝이 실제와
