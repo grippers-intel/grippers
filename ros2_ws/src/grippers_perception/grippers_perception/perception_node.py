@@ -54,6 +54,16 @@ try:
 except ImportError:
     _CV_AVAILABLE = False
 
+try:
+    import cv2
+    import numpy as np
+
+    _GRASP_CAM_CV_AVAILABLE = True
+except ImportError:
+    # 그리퍼캠 경로만 끈다 — 뎁스캠 쪽(_CV_AVAILABLE)과 별개로 둔 이유는
+    # 한쪽이 없다고 다른 쪽까지 멈출 이유가 없기 때문이다.
+    _GRASP_CAM_CV_AVAILABLE = False
+
 import cv2
 import numpy as np
 
