@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import queue
 import signal
+import math
 import shutil
 import sys
 import threading
@@ -384,7 +385,30 @@ def _run_mission(args) -> int:
             pmap = tracker.update(obs_lists)
             _t_geti = time.perf_counter(); hz_acc["geti"] += _t_geti - _t_cap
 
+            _state_before = fsm.state
+            _target_before = fsm._target_xy
             fsm.step(pose, pmap, link)
+            # ⚠️ GRASP 진입 순간 물체가 **로봇 기준** 어디에 있는지 남긴다.
+            #
+            # VLA 정책은 학습 때 본 위치에서만 물체를 집는다 — 좌우 이미지
+            # 응답이 액션 std 의 0.62% 라 물체를 눈으로 좇지 못한다(2026-09-04
+            # 홀드아웃). 그래서 "팔이 뻗는 양"이 일정해도 차가 서는 자리가
+            # 흔들리면 파지가 실패한다.
+            #
+            # 이 한 줄이 그 둘을 가른다. 여러 회차의 전방/좌우 값이 흩어져
+            # 있으면 정지 위치 문제이고, 모여 있는데도 실패하면 정책 문제다.
+            # 지금까지는 구분할 방법이 없었다.
+            if (_state_before != fsm.state and fsm.state.name == "GRASP"
+                    and _target_before is not None and pose.ok):
+                _dx = _target_before[0] - pose.x
+                _dy = _target_before[1] - pose.y
+                _c = math.cos(math.radians(pose.yaw_deg))
+                _s = math.sin(math.radians(pose.yaw_deg))
+                _fwd = (_dx * _c + _dy * _s) * 1000.0     # 로봇 정면(+) mm
+                _lat = (-_dx * _s + _dy * _c) * 1000.0    # 로봇 좌측(+) mm
+                print(f"\n[파지 진입] 물체가 로봇 기준 전방 {_fwd:+.0f}mm · "
+                      f"좌우 {_lat:+.0f}mm  (yaw {pose.yaw_deg:+.1f}도)\n",
+                      flush=True)
             _t_fsm = time.perf_counter(); hz_acc["fsm"] += _t_fsm - _t_geti
             frames_seen += 1
 
