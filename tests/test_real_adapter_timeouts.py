@@ -53,6 +53,11 @@ def test_adapter_files_are_all_covered():
         "ros2_lidar.py",
         "ros2_mecanum_base.py",
         "ros2_perception.py",
+        # VLA 파지 백엔드(2026-09-06). 목록에 이름을 넣는 것이 새 어댑터를
+        # 아래 대기-상한 검사에 통과시키는 절차다 — 빠뜨리면 그 어댑터만
+        # 검사 밖에 남아 "서버가 없으면 FSM 이 영원히 멈추는" 회귀가 조용히
+        # 들어올 수 있다.
+        "ros2_vla_grasp.py",
     }
     assert CALL_HELPER.exists()
 
