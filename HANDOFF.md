@@ -84,15 +84,22 @@
 
 ---
 
-## 1. 지금 상태 (2026-08-28)
+## 1. 지금 상태 (2026-09-05 갱신 — git log·코드로 재확인, 아래 §1a 참고)
 
 | 항목 | 상태 |
 |---|---|
-| 브랜치 | `kica927/baseline_mission` — `origin`·`personal-mirror` 동기화, 개인 미러 main은 PR #42까지 머지 |
-| 테스트 | `tests/` 422개 통과 (`PYTHONPATH=. python -m pytest tests`) |
+| 브랜치 | `kica927/baseline_mission` @ `b855096` — `origin` 대비 28커밋, `personal-mirror` 대비 2커밋 앞섬(둘 다 미push) |
+| 테스트 | 08-27 기준 422개 통과 확인 이후 `test_stm32_motor_watchdog.py` 등 다수 추가됨 — 정확한 현재 개수는 `PYTHONPATH=. python -m pytest tests` 재실행 확인 필요 |
 | Pi 단독 기능 | 파지 → CARRY → 저속 접근 → 자동정지 → INSERT, **여섯 클래스 전부 실기 검증** (08-27) |
-| Pi 실기 배포 | Pi는 `c3a2bb1`에서 멈춤 — `28d4626`→`aca9d75` 네 커밋 미배포(LAN 끊김). `git pull`만 하면 됨 |
-| Host ↔ Pi 연동 | 🔴 한 번도 붙여 본 적 없음. Host 저장소가 확정 이전 규격이라 그대로 붙이면 차량이 안 움직임 |
+| Host ↔ Pi 연동 | 09-02부터 실기로 연동된 것으로 보임(아래 §1a) — 이전 버전의 "🔴 한 번도 안 붙어봄"은 08-28 스냅샷이 갱신 안 된 채 남아 있던 것 |
+| `use_fake_base` 기본값 | 코드(`mission_orchestrator_node.py:68`)상 `False`(진짜 바퀴) — 이전 버전의 "지금은 true로 떠 있음"도 같은 이유로 낡은 값이었음 |
+| 모터 워치독 | `d289195`(09-05)로 STM32 write_timeout(0.2s)·모터 워치독(0.5s) 추가. **두 값 다 추측값** — 실기 정상 왕복 지연을 재고 조정할 것(§3-1 계속 미해결) |
+
+### 1a. Host↔Pi 연동 판단 근거와 남은 확인
+
+- `domain/ports/baseline_ports.py`의 `HostCommand`가 이미 확정 5필드(`state`/`linear_x`/`linear_y`/`angular_z`/`stop`) 규격으로 구현돼 있다 — 8/27 요청 문서가 지적한 "확정 이전 규격" 문제가 아니다.
+- git log에 09-02 실기, 09-04 밤(toy 입구 밖 투하 사고) 등 **Host 명령으로 로봇이 실제로 움직인 사건**이 날짜별로 기록돼 있다. "투하 사고"는 옮기다 실패한 사건이지 연결이 안 됐다는 뜻이 아니다.
+- 다만 이 갱신은 로컬 git log·코드 대조로 재구성한 것이고, **지금 이 순간 Pi가 그 상태로 떠 있는지는 이 세션에서 SSH로 재확인하지 못했다.** 다음 접속 시 컨트롤러→orchestrator 순서로 띄운 뒤 `ros2 topic info /cmd_vel`의 구독자 수로 확인할 것(`RUNBOOK_2026-09-08.md` §3.5 참고).
 
 ## 2. 구조 한 줄씩
 
@@ -105,10 +112,10 @@
 - `tools/grasp_geometry_calibrate.py --mode k|jaw|load|scale|confirm` — 파지 기하 실측 도구.
 - `tools/host_link_conformance.py --as-is|--translated` — Host 실제 코드와 로컬 적합성 시험(하드웨어 불필요).
 
-## 3. 다음 접속 시 순서
+## 3. 다음 접속 시 순서 (2026-09-05 갱신 — 아래는 09-05 세션 기준 재작성, 실기 재확인 전제)
 
-1. LAN 복구 → 컨테이너 `/grippers`에서 `git pull` → `aca9d75` 확인.
-2. `28d4626`(INSERT 좌우 오프셋 게이팅) 실기 확인 — 일부러 오프셋을 만들어 ⛔ 분기가 도는지.
-3. `mission_orchestrator`를 `use_fake_base:=false`로 재기동 (지금은 `true`로 떠 있음).
-4. `perception_node`·`depth_cam_rotate_node` 확인.
-5. Host 팀이 `grippers_host_requests_20260827.md` 1~2번을 반영하면 루프백 → 실기 통합.
+1. 컨테이너 `/grippers`에서 `git pull` → `b855096` 확인(§1 참고, 위 항목들은 로컬 git log 기준이라 Pi 쪽이 뒤처져 있을 수 있음).
+2. §1a대로 `ros2 topic info /cmd_vel` 구독자 수로 Host↔Pi 연동이 실제로 살아 있는지 확인.
+3. `perception_node`·`depth_cam_rotate_node` 확인.
+4. 물리 상수 실측 3종 진행 — `T_stop`(정지 지연·오버슈트), 모터 워치독 발동 시간(위 §1의 write_timeout/watchdog 추측값 검증 겸), `identify_target` 6클래스 왕복 지연. `pi_capture/mac/analyze_stop.py`·`analyze_watchdog.py`로 분석.
+5. 사선 진입 INSERT 15°/30° 실측 — `grippers-host-mac/host/manual_insert_probe.py` (WASD 수동 접근, 화면에 `pose.yaw_deg`·`gate.facing_error_deg` 실시간 표시됨 — 추가 개발 불필요, 바로 사용 가능).

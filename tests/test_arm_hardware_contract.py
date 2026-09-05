@@ -245,6 +245,24 @@ def test_load_read_failure_is_logged():
     assert isinstance(reader_arg, ast.Attribute) and reader_arg.attr == "get_load"
 
 
+def test_servo_operational_check_retries_before_declaring_unavailable():
+    """2026-09-05 실기: grasp_test_console.py --raw-cls box 첫 호출(그리퍼를
+    한 번도 안 움직인 시점)의 get_torque(6) 단발 실패로 그리퍼가 아예 열리지도
+    못하고 끝났다 — 이 함수가 재시도 없이 한 번만 읽고 바로
+    ArmHardwareUnavailableError를 던졌기 때문이다. _read_load가 2026-09-04에
+    같은 문제(통신 순간 실패를 하드 실패로 오판)를 겪고 _read_with_retry로
+    옮긴 전례를 그대로 따른다."""
+    fn = _function("_require_operational_servos")
+    names = [_called_name(call) for call in _calls(fn)]
+
+    assert "_read_with_retry" in names
+    assert "get_torque" not in names
+
+    retry_call = next(call for call in _calls(fn) if _called_name(call) == "_read_with_retry")
+    reader_arg = retry_call.args[0]
+    assert isinstance(reader_arg, ast.Attribute) and reader_arg.attr == "get_torque"
+
+
 def test_startup_logs_idle_offset_but_never_moves_a_servo():
     init = _function("__init__")
     names = [_called_name(call) for call in _calls(init)]

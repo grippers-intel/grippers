@@ -582,14 +582,23 @@ class ArmDriverNode(Node):
                 )
 
     def _require_operational_servos(self, servo_ids=ALL_SERVO_IDS) -> None:
-        """모션 전후 대상 서보가 통신 가능하고 torque ON인지 확인한다."""
+        """모션 전후 대상 서보가 통신 가능하고 torque ON인지 확인한다.
+
+        2026-09-05 실기: grasp_test_console.py --raw-cls box 첫 호출(그리퍼를
+        아직 한 번도 움직이지 않은 시점)의 get_torque(6)가 한 번 실패해 그리퍼가
+        아예 열리지도 못했다 — 이 함수가 재시도 없이 단 한 번 읽고 바로
+        ArmHardwareUnavailableError를 던졌기 때문이다. _read_load가 2026-09-04에
+        같은 문제(통신 순간 실패를 하드 실패로 오판)를 겪고 _read_with_retry로
+        옮긴 전례를 그대로 따른다 — 진짜 통신 불능이면 재시도 후에도 여전히
+        None이라 계약은 그대로 지켜진다.
+        """
         backend = soarm._backend(real=True)
 
         unavailable = []
         torque_off = []
 
         for servo_id in servo_ids:
-            enabled = backend.drv.get_torque(servo_id)
+            enabled = self._read_with_retry(backend.drv.get_torque, servo_id)
             if enabled is None:
                 unavailable.append(servo_id)
             elif not enabled:
