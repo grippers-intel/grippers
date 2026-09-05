@@ -38,6 +38,8 @@ arm_driver 하나여야 한다 — 두 좌표계의 Homing_Offset 이 달라 wri
 """
 
 import threading
+import json
+import pathlib
 import time
 
 import numpy as np
@@ -117,6 +119,13 @@ class VlaInferenceNode(Node):
         # 원격 왕복 117ms(3.5%). 원격이 3.5배 빠르지만 둘 다 청크 3.33초 안에
         # 여유롭게 들어가므로, 시연 경로에 네트워크를 끼울 이유가 없다.
         # remote 가 필요한 자리는 Pi 에서 실시간이 안 되는 정책(SmolVLA)이다.
+        # 파지 한 번을 통째로 남긴다. 빈 문자열이면 끔.
+        #
+        # 왜 필요한가: 정책이 무엇을 보고 무엇을 했는지 사후에 볼 방법이 없다.
+        # 2026-09-06 실기에서 "거리 오차가 일관되지 않다 — 그리퍼보다 가깝거나
+        # 멀거나가 반복된다"는 관찰이 나왔는데, 프레임이 없으면 그게 정책의
+        # 거리 판단 문제인지 차량 정지 위치 문제인지 가릴 수가 없다.
+        self.declare_parameter("record_dir", "")
         self.declare_parameter("policy_source", "local")
         self.declare_parameter("policy_url", "http://192.168.0.2:8770")
 
@@ -213,6 +222,49 @@ class VlaInferenceNode(Node):
             return None
         return list(response.policy_state)
 
+    def _start_recording(self, label: str):
+        """이번 파지를 담을 폴더. 기록이 꺼져 있거나 못 만들면 None."""
+        base = str(self.get_parameter("record_dir").value or "").strip()
+        if not base:
+            return None
+        try:
+            d = pathlib.Path(base) / f"{time.strftime('%Y%m%d_%H%M%S')}_{label}"
+            d.mkdir(parents=True, exist_ok=True)
+            return d
+        except OSError as e:  # noqa: BLE001 — 기록 실패로 파지를 막지 않는다
+            self.get_logger().warn(f"기록 폴더를 못 만들었습니다: {e}")
+            return None
+
+    def _record_chunk(self, run_dir, index: int, frame, state, chunk) -> None:
+        """청크 하나의 입력·출력을 남긴다.
+
+        ⚠️ 기록이 실패해도 파지는 계속한다. 진단용 곁가지가 본 동작을 막으면
+        안 된다 — 같은 원칙이 tools/capture_stop_frames.py 주석에도 있다.
+
+        프레임은 정책에 넣은 축소본이 아니라 **원본 그대로** 남긴다. 사람이
+        보려는 것은 "전체 상황"(물체가 턱보다 앞인가 뒤인가, 가려졌는가)이고,
+        180x320 으로는 그게 잘 안 보인다.
+        """
+        if run_dir is None:
+            return
+        try:
+            import cv2
+            cv2.imwrite(str(run_dir / f"{index:02d}.jpg"), frame,
+                        [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+            first = [round(float(v), 4) for v in np.asarray(chunk)[0]]
+            last = [round(float(v), 4) for v in np.asarray(chunk)[-1]]
+            with open(run_dir / "chunks.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "chunk": index,
+                    "wall": time.strftime("%H:%M:%S"),
+                    "state": [round(float(v), 4) for v in state],
+                    "action_first": first,
+                    "action_last": last,
+                }, ensure_ascii=False) + "\n")
+        except Exception as e:  # noqa: BLE001 — 파지를 계속하는 것이 우선
+            self.get_logger().warn(f"청크 기록 실패: {type(e).__name__}: {e}",
+                                   throttle_duration_sec=10.0)
+
     def _send_chunk(self, chunk) -> bool:
         """청크를 arm_driver 에 넘기고 재생이 끝날 때까지 기다린다."""
         if not self._chunk_client.wait_for_server(timeout_sec=2.0):
@@ -259,6 +311,7 @@ class VlaInferenceNode(Node):
         chunks = 0
         extended = False
         prev_frame = None      # 멈춘 카메라 판정용 — 직전 청크의 그림
+        run_dir = self._start_recording(label)
         try:
             while chunks < MAX_CHUNKS:
                 if goal_handle.is_cancel_requested:
@@ -308,6 +361,7 @@ class VlaInferenceNode(Node):
                     return result
 
                 chunk = self._runner.predict_chunk(frame, state, task)
+                self._record_chunk(run_dir, chunks + 1, frame, state, chunk)
                 if not np.isfinite(chunk).all():
                     result.ok, result.chunks = False, chunks
                     result.message = "정책이 NaN/Inf 를 냈습니다"

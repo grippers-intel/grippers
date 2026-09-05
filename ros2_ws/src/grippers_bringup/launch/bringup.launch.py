@@ -47,6 +47,7 @@ def launch_setup(context):
     policy_url = LaunchConfiguration("policy_url")
     policy_calibration_file = LaunchConfiguration("policy_calibration_file")
     checkpoint = LaunchConfiguration("checkpoint")
+    vla_record_dir = LaunchConfiguration("vla_record_dir")
     device = LaunchConfiguration("device")
     gripper_cam_publish_hz = LaunchConfiguration("gripper_cam_publish_hz")
     grasp_backend = LaunchConfiguration("grasp_backend")
@@ -161,6 +162,7 @@ def launch_setup(context):
                 "policy_url": policy_url,
                 # local 일 때만 쓰인다. remote 면 노드가 이 값을 아예 안 읽는다.
                 "checkpoint": checkpoint,
+                "record_dir": vla_record_dir,
                 "device": device,
             }
         ],
@@ -313,6 +315,13 @@ def generate_launch_description():
                 description="false면 첫 이동 때 IDLE 자동 정렬을 하지 않는다. "
                 "IDLE_CRADLE_RAW 가 실제 교시 자세와 어긋나 있을 때 끈다 — "
                 "정렬이 잠긴 관절을 밀어 버린다(2026-09-05 wrist_roll 909틱)",
+            ),
+            DeclareLaunchArgument(
+                "vla_record_dir",
+                default_value="",
+                description="비우면 끔. 주면 파지 한 번마다 폴더를 만들어 청크별 "
+                "그리퍼캠 원본과 관절값·액션을 남긴다 — 정책이 무엇을 보고 무엇을 "
+                "했는지 사후에 보는 유일한 수단이다",
             ),
             DeclareLaunchArgument(
                 "use_vla",
