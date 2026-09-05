@@ -120,3 +120,34 @@ def test_목표영역_폭은_물리_바구니_폭_안에서만_넓힌다():
     margin_each_side = cfg.BOX_W / 2.0 - bt.TARGET_HALF_WIDTH_M
     assert margin_each_side > 0.03, (
         "목표영역이 물리 바구니 폭에 비해 너무 넓다 — 벽에 닿을 여유가 3cm도 안 된다")
+
+
+def test_무회전_영역은_넓은_목표영역보다_확실히_좁다():
+    """2026-09-05 밤 사용자 지시 — "servo1이 안 돌아도 되는 영역을 따로
+    만들자". 이 좁은 영역이 위 넓은 목표영역(TARGET_HALF_WIDTH_M/
+    TARGET_INSET_DEPTH_M)보다 넓어지면, "이미 괜찮으면 안 돌린다"는
+    취지가 무너지고 사실상 항상 안 돌리는 쪽으로 퇴화한다."""
+    assert bt.NO_ROTATION_HALF_WIDTH_M == pytest.approx(0.03)
+    assert bt.NO_ROTATION_INSET_DEPTH_M == pytest.approx(0.03)
+    assert bt.NO_ROTATION_HALF_WIDTH_M < bt.TARGET_HALF_WIDTH_M
+    assert bt.NO_ROTATION_INSET_DEPTH_M < bt.TARGET_INSET_DEPTH_M
+
+
+def test_무회전_영역을_이미_보고_있으면_지향_오차가_있어도_통과한다():
+    """정면(90도)에서 8도 벗어난 자세 — 넓은 목표영역 기준 지향오차는
+    0이 아니지만(그래서 이전엔 servo1을 조금이라도 돌렸다), 무회전
+    영역(NO_ROTATION_FACING_TOLERANCE_DEG=8도) 안이라 그대로 둬도
+    된다고 판정해야 한다."""
+    ex, ey = _edge_center("chess")
+    robot_xy = (ex, ey - 0.15)
+    result = bt.check_no_rotation_zone(robot_xy, robot_yaw_deg=82.0, box_name="chess")
+    assert result.ok, result.reason
+
+
+def test_무회전_영역_밖이면_그대로_통과하지_않는다():
+    """정면에서 30도나 벗어나면 무회전 영역으로도 통과시키면 안 된다 —
+    그 정도 오차는 여전히 servo1 보정이 필요하다."""
+    ex, ey = _edge_center("chess")
+    robot_xy = (ex, ey - 0.15)
+    result = bt.check_no_rotation_zone(robot_xy, robot_yaw_deg=60.0, box_name="chess")
+    assert not result.ok

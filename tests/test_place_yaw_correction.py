@@ -75,6 +75,25 @@ def test_정면으로_잘_들어왔으면_보정값이_0에_가깝다():
     assert link.sent[-1].yaw_correction_deg == pytest.approx(0.0, abs=1.0)
 
 
+def test_무회전_영역_안이면_지향오차가_있어도_보정을_안_보낸다():
+    """2026-09-05 밤 사용자 지시 — "servo1이 안 돌아도 되는 영역을 따로
+    만들자 ... 돌아서 투하하는 지점이 가끔 너무 왼쪽이라 아슬아슬해".
+    이 자세는 넓은 목표영역 기준 지향오차가 0이 아니지만(6도 — 예전
+    같으면 servo1을 6도 돌렸다), basket_target.NO_ROTATION_*(좁은
+    영역) 기준으로는 이미 충분해서 PLACE가 보정을 아예 안 보내야 한다."""
+    center_x, center_y = basket_target.target_center("chess")
+    x, y, yaw_deg = center_x, center_y - 0.15, 84.0
+    fsm, link, pose = _place_fsm(x, y, yaw_deg, "rook")
+
+    wide = basket_target.check_basket_insert_gate((x, y), yaw_deg, "chess")
+    assert wide.facing_error_deg != 0.0   # 이 자세가 실제로 넓은 기준으론 오차를 만드는지 확인
+    assert basket_target.check_no_rotation_zone((x, y), yaw_deg, "chess").ok
+
+    fsm.step(pose, {}, link)
+
+    assert link.sent[-1].yaw_correction_deg == 0.0
+
+
 def test_상자_목적지가_아니면_보정을_안_보낸다():
     """PIECE_DEST_BOX에 없는 라벨(사람에게 직접 가져다주는 경우)은 상자가
     없으니 safe_300 보정도 의미가 없다 — 0으로 고정."""

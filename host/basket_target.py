@@ -93,6 +93,30 @@ MAX_APPROACH_DIST_M = 0.25     # 목표 영역에서 이 거리 안이면 "가�
 # ⚠️ 실기 조정 대상 — 아직 이 각도 끝까지 실제 INSERT를 검증하지 않았다.
 MAX_FACING_ERROR_DEG = 75.0
 
+# ---------------------------------------------------------------------------
+# "servo1을 안 돌려도 되는" 좁은 영역 (사용자 지시, 2026-09-05 밤 — "servo1이
+# 안 돌아도 되는 영역을 따로 만들자. ... 돌아서 투하하는 지점이 가끔 너무
+# 왼쪽이라 아슬아슬해. 그러니 영역에 그리퍼가 들어올 것 같으면 servo1은
+# 그냥 냅두고 drop하자").
+#
+# 위 TARGET_HALF_WIDTH_M/TARGET_INSET_DEPTH_M(6.5cm/6cm)는 "이 근처면 INSERT를
+# 시도해 볼 만하다"는 넓은 1차 관문이다 — 그런데 PLACE가 매 사이클 재는
+# facing_error_deg를 그대로 servo1 보정각으로 써 왔기 때문에, 로봇이 이
+# 넓은 영역의 가장자리(=벽에 더 가까운 지점)를 향하고 있을 때도 계속 그
+# 가장자리 쪽으로 보정을 걸어 드랍 지점이 벽에 아슬아슬하게 붙는 경우가
+# 나왔다. 그래서 이보다 훨씬 좁은(2026-09-04 최초 값과 같은 3cm/3cm) 이
+# 영역을 따로 두고, 로봇이 지금 자세 그대로도(보정 없이) 이 좁은 영역을
+# 향하고 있다고 볼 만하면 servo1을 아예 건드리지 않는다 — 매번 정확히
+# 중앙을 노리다가 위험한 가장자리로 몰리느니, 이미 충분히 좋은 자세는
+# 그냥 두는 쪽을 택한다.
+NO_ROTATION_HALF_WIDTH_M = 0.03
+NO_ROTATION_INSET_DEPTH_M = 0.03
+
+# 위 좁은 영역 기준 지향오차가 이 안이면 "보정 없이도 그 영역에 들어갈
+# 것"으로 보고 servo1을 그대로 둔다. ⚠️ 아직 실기로 튜닝된 적 없는 값 —
+# 드랍이 좁은 영역을 벗어나 떨어지면 이 상수부터 의심할 것.
+NO_ROTATION_FACING_TOLERANCE_DEG = 8.0
+
 
 class InsertGateResult(NamedTuple):
     ok: bool
@@ -176,6 +200,25 @@ def check_basket_insert_gate(
     ok = not reasons
     reason = "목표 영역 도달 + 지향 확인" if ok else "; ".join(reasons)
     return InsertGateResult(ok, distance, facing_error, (tx, ty), reason)
+
+
+def check_no_rotation_zone(
+    robot_xy: tuple[float, float],
+    robot_yaw_deg: float,
+    box_name: str,
+) -> InsertGateResult:
+    """지금 자세 그대로(servo1 보정 없이) 놓아도 좁은 목표영역
+    (NO_ROTATION_HALF_WIDTH_M/NO_ROTATION_INSET_DEPTH_M)에 들어갈 만한지
+    판정한다. PLACE는 이 결과가 ok면 yaw_correction_deg를 0으로 두고 그냥
+    드랍한다(위 NO_ROTATION_* 주석 참고) — 거리 조건은 안 본다(PLACE는
+    이미 멈춰 도착한 상태라 항상 가깝다), 지향만 본다."""
+    return check_basket_insert_gate(
+        robot_xy, robot_yaw_deg, box_name,
+        half_width_m=NO_ROTATION_HALF_WIDTH_M,
+        inset_depth_m=NO_ROTATION_INSET_DEPTH_M,
+        max_distance_m=math.inf,
+        facing_tolerance_deg=NO_ROTATION_FACING_TOLERANCE_DEG,
+    )
 
 
 # ---------------------------------------------------------------------------

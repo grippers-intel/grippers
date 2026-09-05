@@ -1589,8 +1589,17 @@ class MissionFSM:
             dest_box_name = mcfg.PIECE_DEST_BOX.get(self.target_label)
             yaw_correction_deg = 0.0
             if dest_box_name is not None:
-                yaw_correction_deg = basket_target.check_basket_insert_gate(
-                    robot_xy, pose.yaw_deg, dest_box_name).facing_error_deg
+                # 2026-09-05 밤 사용자 지시 — "servo1이 안 돌아도 되는 영역을
+                # 따로 만들자 ... 돌아서 투하하는 지점이 가끔 너무 왼쪽이라
+                # 아슬아슬해". 지금 자세 그대로도 좁은 영역
+                # (basket_target.NO_ROTATION_*)에 들어갈 만하면 servo1은
+                # 손대지 않는다 — 매번 정확히 중앙을 노리다가 넓은
+                # 목표영역(TARGET_HALF_WIDTH_M) 가장자리(벽 쪽)로 보정이
+                # 몰리는 위험을 없앤다.
+                if not basket_target.check_no_rotation_zone(
+                        robot_xy, pose.yaw_deg, dest_box_name).ok:
+                    yaw_correction_deg = basket_target.check_basket_insert_gate(
+                        robot_xy, pose.yaw_deg, dest_box_name).facing_error_deg
             link.send(MissionCommand("stop", "PLACE", pose.x, pose.y, pose.yaw_deg,
                                      yaw_correction_deg=yaw_correction_deg))
             status = link.poll_status() if not self.ready_to_advance else "IDLE"
