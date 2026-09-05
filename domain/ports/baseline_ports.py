@@ -60,7 +60,21 @@ class MissionState:
     DONE = "DONE"
     ESTOP = "ESTOP"
 
-    ALL = (IDLE, APPROACH, GRASP, GRASP_FORCE, CARRY, APPROACH_BOX, INSERT, DONE, ESTOP)
+    # 테스트 전용 우회로 (사용자 지시, 2026-09-05). IDLE에서 이 상태를
+    # 받으면 실제 파지를 하나도 안 거치고 grasp_confirmed=True인 CARRY로
+    # 바로 들어간다 — manual_insert_probe.py가 "손으로 그리퍼에 기물을
+    # 끼워 두고 INSERT 기하(사선 진입·반경·drop pose)만 확인"하려는데,
+    # 정식 FSM은 IDLE에서 INSERT로 곧장 못 가게 막혀 있어서(GRASP_FORCE도
+    # 결국 팔이 실제로 바닥 파지를 수행한다) 이 상태가 필요했다.
+    #
+    # ⚠️ run_mission.py는 이 상태를 절대 보내지 않는다 — grasp_confirmed를
+    # 실제 파지 확인 없이 참으로 만드는 우회로라, 정식 미션 경로에 노출되면
+    # INSERT의 안전 판정 전제 자체가 무너진다. Host 쪽 `_STATE_TO_PI`에도
+    # manual_insert_probe.py만 이 이름을 쓴다.
+    DEBUG_FORCE_CARRY = "DEBUG_FORCE_CARRY"
+
+    ALL = (IDLE, APPROACH, GRASP, GRASP_FORCE, CARRY, APPROACH_BOX, INSERT, DONE, ESTOP,
+           DEBUG_FORCE_CARRY)
 
 
 class Report:

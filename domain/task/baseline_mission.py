@@ -118,6 +118,13 @@ def plan_for_label(label):
     return _PROFILE_BY_LABEL.get(label)
 
 
+# MissionState.DEBUG_FORCE_CARRY로 CARRY에 바로 들어갈 때 쓸 라벨(2026-09-05).
+# 실제 파지가 없어 Host/Pi 어느 쪽도 진짜 라벨을 모르므로 하나 고정해 둔다 —
+# INSERT의 drop 자세/그리퍼 개방폭이 이 라벨의 교시 계획을 그대로 쓴다.
+# 다른 물체로 시험하려면 이 상수만 바꾸면 된다.
+DEBUG_FORCE_CARRY_LABEL = "rook"
+
+
 def object_width_mm(label):
     """그 라벨 물체의 실측 폭(mm). 모르는 라벨이면 **None**.
 
@@ -252,6 +259,12 @@ class BaselineIdleState(State):
 
         if command.state == MissionState.APPROACH:
             return BaselineApproachState()
+        if command.state == MissionState.DEBUG_FORCE_CARRY:
+            # 테스트 전용 우회로 — MissionState.DEBUG_FORCE_CARRY 정의 참고.
+            # 실제 파지 없이 grasp_confirmed=True로 CARRY에 바로 들어간다.
+            ports.host.report(Report.STATE, MissionState.CARRY,
+                               "DEBUG_FORCE_CARRY — 실제 파지 아님, 시험 전용")
+            return BaselineCarryState(DEBUG_FORCE_CARRY_LABEL, grasp_confirmed=True)
         if command.state == MissionState.DONE:
             return BaselineDoneState()
         return self

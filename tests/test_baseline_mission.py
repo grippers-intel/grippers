@@ -17,6 +17,7 @@ from domain.adapters.fake.scripted_perception import ScriptedPerception
 from domain.ports.baseline_ports import BasketFace, HostCommand, MissionState, Report
 from domain.task import baseline_constants as bc
 from domain.task.baseline_mission import (
+    DEBUG_FORCE_CARRY_LABEL,
     BaselineApproachState,
     BaselineCarryState,
     BaselineGraspState,
@@ -145,6 +146,36 @@ def test_회전과_병진이_섞인_명령은_거부하고_되돌려준다():
     assert base.velocity_calls == []
     assert base.stop_calls >= 1
     assert Report.REJECTED in host.reported_kinds
+
+
+# ── DEBUG_FORCE_CARRY (테스트 전용 우회로, 2026-09-05) ─────────────────────
+
+
+def test_DEBUG_FORCE_CARRY는_실제_파지_없이_CARRY로_바로_들어간다():
+    """manual_insert_probe.py 전용 — IDLE에서 이 상태를 받으면 GRASP를
+    아예 안 거치고 grasp_confirmed=True인 CARRY로 간다."""
+    host = FakeHostLink([HostCommand(MissionState.DEBUG_FORCE_CARRY, stop=True)])
+    ports = _ports(host=host)
+
+    nxt = BaselineIdleState().execute(ports)
+
+    assert isinstance(nxt, BaselineCarryState)
+    assert nxt.label == DEBUG_FORCE_CARRY_LABEL
+    assert nxt.grasp_confirmed is True
+    assert plan_for_label(DEBUG_FORCE_CARRY_LABEL) is not None, (
+        "DEBUG_FORCE_CARRY_LABEL이 모르는 라벨이면 INSERT의 plan_for_label이 "
+        "None을 돌려줘 드랍 자세를 못 낸다")
+
+
+def test_DEBUG_FORCE_CARRY는_APPROACH_등_다른_상태에서는_안_먹는다():
+    """이 우회로는 IDLE에서만 받는다 — APPROACH 중간에도 먹히면 정식 GRASP
+    시퀀스를 건너뛸 길이 하나 더 생긴다."""
+    host = FakeHostLink([HostCommand(MissionState.DEBUG_FORCE_CARRY, stop=True)])
+    ports = _ports(host=host)
+
+    nxt = BaselineApproachState().execute(ports)
+
+    assert not isinstance(nxt, BaselineCarryState)
 
 
 # ── 임무 1번: 상태 보고 ────────────────────────────────────────────────────
