@@ -73,6 +73,17 @@ CARRY_TO_DEST/FACE_BOX/NUDGE_BOX는 손대지 않았다. "차량이 방향에 �
 `BaselineInsertState.execute()`에서 `correct_drop_yaw`를 부를 때 부호를
 뒤집도록 고쳤다(`correction_rad = -math.radians(yaw_correction_deg)`).
 
+⚠️ **2026-09-05 두 번째 실기 — 두 번째 Enter에서 팔이 아예 안 움직였다**
+(사용자 보고 — "두번째 시도는 팔이 안 움직이네"). `BaselineInsertState.execute()`는
+성공/실패 상관없이 항상 진짜 `BaselineIdleState`로 돌아가는데, `BaselineIdleState`는
+APPROACH/DEBUG_FORCE_CARRY/DONE만 받는다 — 그 뒤 이 도구가 계속 보내는
+"CARRY_TO_DEST"(=MissionState.CARRY)는 IDLE에서 조용히 무시된다(단
+`_drive`는 IDLE에서도 먹으므로 차량 자체는 정상 주행처럼 보인다). 그
+상태로 두 번째 Enter를 쳐도 `DEBUG_FORCE_INSERT`가 IDLE의 인식 목록에
+없어 아무 일도 안 난다. 고침: `DEBUG_FORCE_CARRY` 핸드셰이크를
+`_force_carry()` 함수로 빼서 시작할 때뿐 아니라 INSERT 결과(PLACE_DONE/
+FAILED)가 나올 때마다 매번 다시 부른다.
+
 ⚠️ **2026-09-05 첫 실기에서 이게 안 먹었다** — Pi의 진짜 FSM(baseline_mission.py)
 은 상태 객체가 자기가 인식하는 다음 상태로만 넘어가서, IDLE에서 곧장
 INSERT로 점프하는 경로가 아예 없다(GRASP_FORCE도 결국 팔이 실제 파지를
@@ -247,23 +258,40 @@ def main() -> int:
     # 반복 전송하고(UDP 유실 대비), Pi가 IDLE을 벗어났는지(poll_status()
     # != "IDLE")로 성공 여부를 확인한다 — 실패해도 진행은 시키되, Enter를
     # 눌러도 이번에도 안 될 수 있다고 분명히 경고한다.
-    print("DEBUG_FORCE_CARRY 전송 중 — 실제 파지 없이 CARRY로 먼저 들어갑니다...",
-          flush=True)
-    force_carry_ok = False
-    _handshake_deadline = time.monotonic() + 1.0
-    while time.monotonic() < _handshake_deadline:
-        link.send(MissionCommand("stop", "DEBUG_FORCE_CARRY", 0.0, 0.0, 0.0))
-        if link.poll_status() != "IDLE":
-            force_carry_ok = True
-            break
-        time.sleep(LOOP_PERIOD_S)
-    if force_carry_ok:
-        print("CARRY 진입 확인 — Enter로 INSERT를 보낼 수 있습니다.\n", flush=True)
-    else:
-        print("⚠️ CARRY 진입을 확인 못 했습니다 — Pi가 막 IDLE이 아니었을 수 있습니다"
-              "(run_mission.py를 방금 돌렸다면 Pi를 재기동하세요). 계속 진행하지만"
-              " Enter를 눌러도 이번에도 팔이 안 움직일 수 있습니다.\n", flush=True)
-    _log(f"DEBUG_FORCE_CARRY_SENT ok={force_carry_ok}")
+    #
+    # ⚠️ 2026-09-05 두 번째 실기에서 확인: INSERT(DEBUG_FORCE_INSERT)가
+    # 끝나면(성공이든 실패든) BaselineInsertState.execute()는 항상
+    # BaselineIdleState로 돌아간다(위 execute() 참고) — CARRY에 안
+    # 남는다. BaselineIdleState는 APPROACH/DEBUG_FORCE_CARRY/DONE 만
+    # 받으므로, 그 뒤 계속 "CARRY_TO_DEST"(=MissionState.CARRY)로
+    # 운전해도 Pi는 IDLE에 그대로 머문다(단 _drive는 IDLE에서도 먹으므로
+    # 차량 자체는 정상으로 움직여 사람 눈에는 안 티가 난다) — 그 상태로
+    # 두 번째 Enter를 쳐도 DEBUG_FORCE_INSERT가 IDLE의 인식 목록에 없어
+    # 조용히 무시되고 팔이 전혀 안 움직인다(사용자 보고 — "두번째 시도는
+    # 팔이 안 움직이네"). 그래서 이 핸드셰이크를 함수로 빼서 시작할 때
+    # 한 번, 그리고 INSERT 결과가 나올 때마다(성공/실패 상관없이) 매번
+    # 다시 부른다.
+    def _force_carry() -> bool:
+        print("DEBUG_FORCE_CARRY 전송 중 — 실제 파지 없이 CARRY로 먼저 들어갑니다...",
+              flush=True)
+        ok = False
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            link.send(MissionCommand("stop", "DEBUG_FORCE_CARRY", 0.0, 0.0, 0.0))
+            if link.poll_status() != "IDLE":
+                ok = True
+                break
+            time.sleep(LOOP_PERIOD_S)
+        if ok:
+            print("CARRY 진입 확인 — Enter로 INSERT를 보낼 수 있습니다.\n", flush=True)
+        else:
+            print("⚠️ CARRY 진입을 확인 못 했습니다 — Pi가 막 IDLE이 아니었을 수 있습니다"
+                  "(run_mission.py를 방금 돌렸다면 Pi를 재기동하세요). 계속 진행하지만"
+                  " Enter를 눌러도 이번에도 팔이 안 움직일 수 있습니다.\n", flush=True)
+        _log(f"DEBUG_FORCE_CARRY_SENT ok={ok}")
+        return ok
+
+    force_carry_ok = _force_carry()
     print("-" * 70, flush=True)
 
     current_cmd = "stop"
@@ -380,6 +408,11 @@ def main() -> int:
                         print(f"\n{mark} — {elapsed:.1f}초 걸림. IDLE로 돌아갔습니다. "
                               f"평소 운전으로 복귀합니다.\n", flush=True)
                         _log(f"INSERT_RESULT {report_status} elapsed_s={elapsed:.1f}")
+                        # BaselineInsertState는 성공/실패 상관없이 항상 진짜
+                        # BaselineIdleState로 돌아간다 — 다음 Enter가 먹으려면
+                        # CARRY를 다시 만들어 둬야 한다(위 _force_carry 정의부
+                        # 주석 참고, 2026-09-05 두 번째 실기에서 확인).
+                        _force_carry()
                         mode = "drive"
                         current_cmd = "stop"
                         last_key_at = now
