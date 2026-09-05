@@ -60,7 +60,11 @@ def test_제자리정지가_다른_모든_필드를_이긴다():
 
 def test_직진과_수평이동은_함께_와도_된다():
     """메카넘에서 대각선 이동은 한 동작이다 — '제자리'라는 단서가 붙은 건 회전뿐."""
-    decision = resolve_motion(_command(linear_x=0.1, linear_y=0.1))
+    # 입력에 리터럴을 안 쓴다 — 확인하려는 것은 "합의 속도가 그대로 나오는가"
+    # 이지 특정 숫자가 아니다. 2026-09-06 에 0.1 -> 0.15 로 올리자 이 테스트만
+    # 깨졌는데, 상수를 쓰면 그런 일이 없다.
+    decision = resolve_motion(_command(linear_x=AGREED_LINEAR_MPS,
+                                       linear_y=AGREED_LINEAR_MPS))
 
     assert decision.ok
     assert decision.motion.linear_x == AGREED_LINEAR_MPS
@@ -125,7 +129,8 @@ def test_이미_느리면_그대로_둔다():
 def test_다른_상태는_안_낮춘다():
     """주행 구간까지 느리게 하면 시연이 하염없이 길어진다."""
     for state in (MissionState.APPROACH, MissionState.CARRY):
-        decision = resolve_motion(HostCommand(state=state, linear_x=0.1))
+        decision = resolve_motion(
+            HostCommand(state=state, linear_x=mo.AGREED_LINEAR_MPS))
 
         assert decision.motion.linear_x == pytest.approx(mo.AGREED_LINEAR_MPS)
 
