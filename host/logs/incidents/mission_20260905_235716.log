@@ -1,0 +1,23 @@
+# 기록 시작 2026-09-05 23:57:16
+# 텍스트 /Users/lemma/Desktop/intel/grippers_project/grippers-host-mac/host/logs/mission_20260905_235716.log
+# JSONL  /Users/lemma/Desktop/intel/grippers_project/grippers-host-mac/host/logs/mission_20260905_235716.jsonl
+[    0.0s] 시작
+[    1.8s] SEARCH_TARGET → APPROACH_PIECE  목표 queen
+[    4.9s] · APPROACH_PIECE cmd=go    pose=(0.828, 0.394,   62.3°)  11.0Hz
+
+============================================================
+실행 요약 — 9.0초 · 84사이클 · 사건 2건
+============================================================
+
+상태별 체류
+  APPROACH_PIECE       7.1s (79.6%)  1회 진입
+  SEARCH_TARGET        1.8s (19.9%)  1회 진입
+
+구동계 경보 없음
+
+기록: /Users/lemma/Desktop/intel/grippers_project/grippers-host-mac/host/logs/mission_20260905_235716.log
+      /Users/lemma/Desktop/intel/grippers_project/grippers-host-mac/host/logs/mission_20260905_235716.jsonl
+============================================================
+
+# 사용자 코멘트 (2026-09-05 23:57:31)
+# ㅇ

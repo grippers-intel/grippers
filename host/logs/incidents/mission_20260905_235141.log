@@ -1,0 +1,27 @@
+# 기록 시작 2026-09-05 23:51:41
+# 텍스트 /Users/lemma/Desktop/intel/grippers_project/grippers-host-mac/host/logs/mission_20260905_235141.log
+# JSONL  /Users/lemma/Desktop/intel/grippers_project/grippers-host-mac/host/logs/mission_20260905_235141.jsonl
+[    0.0s] 시작
+[    1.8s] SEARCH_TARGET → APPROACH_PIECE  목표 queen
+[    4.9s] · APPROACH_PIECE cmd=yaw-  pose=(0.833, 0.392,   90.9°)  14.1Hz
+[    7.9s] · APPROACH_PIECE cmd=yaw-  pose=(0.833, 0.392,   91.0°)  14.8Hz
+[   11.0s] · APPROACH_PIECE cmd=yaw-  pose=(0.833, 0.392,   91.1°)  14.4Hz
+[   14.0s] · APPROACH_PIECE cmd=yaw-  pose=(0.833, 0.392,   90.9°)  14.4Hz
+[   17.0s] · APPROACH_PIECE cmd=yaw-  pose=(0.833, 0.392,   91.0°)  14.8Hz
+
+============================================================
+실행 요약 — 19.3초 · 257사이클 · 사건 2건
+============================================================
+
+상태별 체류
+  APPROACH_PIECE      17.4s (90.4%)  1회 진입
+  SEARCH_TARGET        1.8s ( 9.4%)  1회 진입
+
+구동계 경보 없음
+
+기록: /Users/lemma/Desktop/intel/grippers_project/grippers-host-mac/host/logs/mission_20260905_235141.log
+      /Users/lemma/Desktop/intel/grippers_project/grippers-host-mac/host/logs/mission_20260905_235141.jsonl
+============================================================
+
+# 사용자 코멘트 (2026-09-05 23:52:06)
+# 왜 안움직여

@@ -1,0 +1,85 @@
+{"t": 0.043, "cycle": 1, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.833, "y": 0.3923, "yaw": 91.02}
+{"t": 0.272, "cycle": 2, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8328, "y": 0.3924, "yaw": 90.9}
+{"t": 0.539, "cycle": 3, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8327, "y": 0.3924, "yaw": 90.95}
+{"t": 0.635, "cycle": 4, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8329, "y": 0.3924, "yaw": 90.96}
+{"t": 0.701, "cycle": 5, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8286, "y": 0.39, "yaw": 92.61}
+{"t": 0.767, "cycle": 6, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8328, "y": 0.3924, "yaw": 90.93}
+{"t": 0.833, "cycle": 7, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8286, "y": 0.39, "yaw": 92.94}
+{"t": 0.901, "cycle": 8, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8329, "y": 0.3924, "yaw": 91.01}
+{"t": 0.965, "cycle": 9, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8332, "y": 0.3923, "yaw": 91.05}
+{"t": 1.03, "cycle": 10, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8332, "y": 0.3924, "yaw": 90.99}
+{"t": 1.096, "cycle": 11, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.833, "y": 0.3923, "yaw": 90.99}
+{"t": 1.195, "cycle": 12, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8328, "y": 0.3923, "yaw": 91.06}
+{"t": 1.26, "cycle": 13, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.833, "y": 0.3924, "yaw": 91.15}
+{"t": 1.328, "cycle": 14, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8329, "y": 0.3923, "yaw": 91.03}
+{"t": 1.459, "cycle": 15, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8329, "y": 0.3924, "yaw": 90.85}
+{"t": 1.528, "cycle": 16, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8329, "y": 0.3925, "yaw": 91.03}
+{"t": 1.593, "cycle": 17, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.833, "y": 0.3925, "yaw": 91.02}
+{"t": 1.656, "cycle": 18, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8331, "y": 0.3925, "yaw": 90.98}
+{"t": 1.723, "cycle": 19, "state": "SEARCH_TARGET", "cmd": null, "target": null, "ready": false, "pose_ok": true, "x": 0.8328, "y": 0.3925, "yaw": 90.87}
+{"t": 1.826, "cycle": 20, "state": "APPROACH_PIECE", "cmd": null, "target": "queen", "ready": false, "pose_ok": true, "x": 0.8329, "y": 0.3925, "yaw": 91.01}
+{"t": 1.961, "cycle": 21, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8331, "y": 0.3925, "yaw": 90.92, "hz": 10.67}
+{"t": 2.057, "cycle": 22, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8329, "y": 0.3925, "yaw": 90.77, "hz": 10.67}
+{"t": 2.153, "cycle": 23, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8329, "y": 0.3924, "yaw": 90.95, "hz": 10.67}
+{"t": 2.25, "cycle": 24, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8329, "y": 0.3925, "yaw": 90.8, "hz": 10.67}
+{"t": 2.318, "cycle": 25, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8329, "y": 0.3925, "yaw": 90.93, "hz": 10.67}
+{"t": 2.417, "cycle": 26, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8331, "y": 0.3924, "yaw": 91.03, "hz": 10.67}
+{"t": 2.519, "cycle": 27, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.833, "y": 0.3925, "yaw": 90.99, "hz": 10.67}
+{"t": 2.616, "cycle": 28, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.833, "y": 0.3924, "yaw": 90.96, "hz": 10.67}
+{"t": 2.713, "cycle": 29, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8331, "y": 0.3926, "yaw": 90.82, "hz": 10.67}
+{"t": 2.78, "cycle": 30, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8331, "y": 0.3926, "yaw": 90.68, "hz": 10.67}
+{"t": 2.946, "cycle": 31, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8331, "y": 0.3928, "yaw": 90.26, "hz": 10.67}
+{"t": 3.044, "cycle": 32, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8304, "y": 0.3902, "yaw": 89.93, "hz": 10.67}
+{"t": 3.142, "cycle": 33, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.835, "y": 0.394, "yaw": 85.59, "hz": 10.67}
+{"t": 3.209, "cycle": 34, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8302, "y": 0.3918, "yaw": 86.9, "hz": 10.67}
+{"t": 3.273, "cycle": 35, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8296, "y": 0.3918, "yaw": 86.09, "hz": 10.67}
+{"t": 3.341, "cycle": 36, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8328, "y": 0.3943, "yaw": 83.12, "hz": 10.67}
+{"t": 3.411, "cycle": 37, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.832, "y": 0.3935, "yaw": 83.05, "hz": 10.67}
+{"t": 3.505, "cycle": 38, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8312, "y": 0.3914, "yaw": 80.98, "hz": 10.67}
+{"t": 3.575, "cycle": 39, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8266, "y": 0.388, "yaw": 80.79, "hz": 10.67}
+{"t": 3.671, "cycle": 40, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8269, "y": 0.3878, "yaw": 79.16, "hz": 10.67}
+{"t": 3.77, "cycle": 41, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8272, "y": 0.3884, "yaw": 79.79, "hz": 11.04}
+{"t": 3.871, "cycle": 42, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.827, "y": 0.3892, "yaw": 77.39, "hz": 11.04}
+{"t": 3.972, "cycle": 43, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8319, "y": 0.3934, "yaw": 74.19, "hz": 11.04}
+{"t": 4.072, "cycle": 44, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8264, "y": 0.3906, "yaw": 74.57, "hz": 11.04}
+{"t": 4.198, "cycle": 45, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.825, "y": 0.3898, "yaw": 72.98, "hz": 11.04}
+{"t": 4.299, "cycle": 46, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8249, "y": 0.3899, "yaw": 72.55, "hz": 11.04}
+{"t": 4.398, "cycle": 47, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.829, "y": 0.3929, "yaw": 69.25, "hz": 11.04}
+{"t": 4.495, "cycle": 48, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8288, "y": 0.3936, "yaw": 66.58, "hz": 11.04}
+{"t": 4.595, "cycle": 49, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8286, "y": 0.3939, "yaw": 66.37, "hz": 11.04}
+{"t": 4.661, "cycle": 50, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8254, "y": 0.3919, "yaw": 66.36, "hz": 11.04}
+{"t": 4.731, "cycle": 51, "state": "APPROACH_PIECE", "cmd": "yaw-", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8296, "y": 0.3946, "yaw": 64.17, "hz": 11.04}
+{"t": 4.825, "cycle": 52, "state": "APPROACH_PIECE", "cmd": "stop", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8286, "y": 0.3943, "yaw": 62.38, "hz": 11.04}
+{"t": 4.889, "cycle": 53, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8284, "y": 0.3944, "yaw": 62.31, "hz": 11.04}
+{"t": 4.956, "cycle": 54, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8289, "y": 0.3944, "yaw": 61.62, "hz": 11.04}
+{"t": 5.026, "cycle": 55, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8288, "y": 0.3948, "yaw": 60.56, "hz": 11.04}
+{"t": 5.125, "cycle": 56, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8253, "y": 0.3928, "yaw": 62.7, "hz": 11.04}
+{"t": 5.225, "cycle": 57, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8314, "y": 0.3997, "yaw": 58.36, "hz": 11.04}
+{"t": 5.324, "cycle": 58, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8339, "y": 0.4055, "yaw": 56.01, "hz": 11.04}
+{"t": 5.423, "cycle": 59, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8374, "y": 0.4128, "yaw": 54.74, "hz": 11.04}
+{"t": 5.527, "cycle": 60, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8422, "y": 0.4204, "yaw": 54.24, "hz": 11.04}
+{"t": 5.691, "cycle": 61, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8481, "y": 0.428, "yaw": 53.95, "hz": 10.78}
+{"t": 5.786, "cycle": 62, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.853, "y": 0.4374, "yaw": 55.21, "hz": 10.78}
+{"t": 5.885, "cycle": 63, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8625, "y": 0.448, "yaw": 53.53, "hz": 10.78}
+{"t": 5.979, "cycle": 64, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8638, "y": 0.4516, "yaw": 54.86, "hz": 10.78}
+{"t": 6.085, "cycle": 65, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8691, "y": 0.4589, "yaw": 55.12, "hz": 10.78}
+{"t": 6.186, "cycle": 66, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8807, "y": 0.4706, "yaw": 53.78, "hz": 10.78}
+{"t": 6.279, "cycle": 67, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8813, "y": 0.4741, "yaw": 55.23, "hz": 10.78}
+{"t": 6.348, "cycle": 68, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.89, "y": 0.4824, "yaw": 53.75, "hz": 10.78}
+{"t": 6.446, "cycle": 69, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8958, "y": 0.4898, "yaw": 53.63, "hz": 10.78}
+{"t": 6.509, "cycle": 70, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.894, "y": 0.49, "yaw": 54.03, "hz": 10.78}
+{"t": 6.578, "cycle": 71, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.8978, "y": 0.4948, "yaw": 55.33, "hz": 10.78}
+{"t": 6.68, "cycle": 72, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.9095, "y": 0.5064, "yaw": 53.59, "hz": 10.78}
+{"t": 6.778, "cycle": 73, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.915, "y": 0.5132, "yaw": 53.51, "hz": 10.78}
+{"t": 6.908, "cycle": 74, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.9234, "y": 0.5239, "yaw": 53.31, "hz": 10.78}
+{"t": 7.003, "cycle": 75, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.9235, "y": 0.5267, "yaw": 55.41, "hz": 10.78}
+{"t": 7.072, "cycle": 76, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.9275, "y": 0.5312, "yaw": 55.14, "hz": 10.78}
+{"t": 7.172, "cycle": 77, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.9378, "y": 0.542, "yaw": 54.82, "hz": 10.78}
+{"t": 7.271, "cycle": 78, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.9438, "y": 0.5492, "yaw": 54.77, "hz": 10.78}
+{"t": 7.37, "cycle": 79, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.9501, "y": 0.5573, "yaw": 53.65, "hz": 10.78}
+{"t": 7.467, "cycle": 80, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.9495, "y": 0.559, "yaw": 55.41, "hz": 10.78}
+{"t": 7.57, "cycle": 81, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.9594, "y": 0.5692, "yaw": 53.59, "hz": 10.31}
+{"t": 7.668, "cycle": 82, "state": "APPROACH_PIECE", "cmd": "go", "target": "queen", "ready": false, "pose_ok": true, "x": 0.962, "y": 0.5741, "yaw": 53.9, "hz": 10.31}
+{"t": 7.765, "cycle": 83, "state": "APPROACH_PIECE", "cmd": "yaw+", "target": "queen", "ready": false, "pose_ok": true, "x": 0.9667, "y": 0.5806, "yaw": 55.53, "hz": 10.31}
+{"t": 7.862, "cycle": 84, "state": "APPROACH_PIECE", "cmd": "yaw+", "target": "queen", "ready": false, "pose_ok": true, "x": 0.9774, "y": 0.5912, "yaw": 53.55, "hz": 10.31}
+{"annotation": "ㅇ", "t": "2026-09-05 23:57:31"}
