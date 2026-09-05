@@ -146,6 +146,29 @@ def object_width_mm(label):
     return entry[1] if entry else None
 
 
+class ArmParkLatch:
+    """팔이 접힌 상태인가. 아니면 **주행을 막는다.**
+
+    2026-09-06 실기: VLA 파지가 실패해 팔이 미등록 자세에 남았는데 Host 가
+    RETURN_HOME 으로 넘어가 팔을 뻗은 채 주행했다. Host 는 팔 상태를 모르고
+    알 이유도 없다(역할 분담) — 아는 쪽인 Pi 가 막는다.
+
+    상태 객체는 전이마다 새로 만들어지므로 포트에 둔다. LinkWatchdog 과 같다.
+    """
+
+    def __init__(self) -> None:
+        self.parked = True
+        self.reason = ""
+
+    def mark_parked(self) -> None:
+        self.parked = True
+        self.reason = ""
+
+    def mark_unparked(self, reason: str) -> None:
+        self.parked = False
+        self.reason = reason
+
+
 class LinkWatchdog:
     """Host 명령이 연속으로 몇 번 빠졌는지 센다.
 
@@ -187,6 +210,8 @@ class BaselinePorts:
     # VLA 가 대체하는 것은 **파지 동작뿐**이다 — 정렬 판정(APPROACH), CARRY
     # 전환, 성공 판정(부하 + 뎁스)은 양쪽이 똑같이 쓴다. 성공 판정을 공유하는
     # 것이 핵심이다: 정책이 헛손질해도 이미 실기로 검증된 두 신호가 잡아낸다.
+    # 팔이 접혀 있는가. 안 접혔으면 _drive 가 주행을 거부한다.
+    arm_parked: ArmParkLatch = field(default_factory=ArmParkLatch)
     grasp_backend: str = "classic"
     # VLA 백엔드가 쓰는 포트. classic 에서는 None 이어도 된다.
     vla: object = None
@@ -218,6 +243,21 @@ def _drive(ports, command, state_name) -> bool:
 
     거부 사유를 그대로 Host에 돌려주는 이유: Pi가 추측해서 둘 중 하나를
     실행하면 Host는 자기가 무엇을 잘못 보냈는지 영영 모른다."""
+    # ⚠️ 팔이 안 접혔으면 안 달린다. 2026-09-06 실기에서 VLA 파지 실패 뒤
+    # 팔을 뻗은 채 RETURN_HOME 주행을 했다 — 부딪히면 팔이 부서지고 라이다
+    # 시야도 가린다. Host 는 팔 상태를 모르므로(HostCommand 에 없다) 아는
+    # 쪽인 Pi 가 막는다. 정지 명령은 통과시킨다 — 멈추는 것은 언제나 안전하다.
+    latch = getattr(ports, "arm_parked", None)
+    if latch is not None and not latch.parked:
+        pre = resolve_motion(command)
+        if pre.ok and not pre.motion.is_stop:
+            ports.base.stop()
+            ports.host.report(
+                Report.REJECTED, state_name,
+                f"팔이 안 접혀 주행을 막는다 — {latch.reason}. "
+                "tools/align_to_idle.py 로 정렬한 뒤 다시 시도하십시오")
+            return False
+
     decision = resolve_motion(command)
     if not decision.ok:
         ports.base.stop()
@@ -623,10 +663,24 @@ class BaselineGraspState(State):
             ports.host.report(Report.GRASP_BLOCKED, self.name,
                               "grasp_backend=vla 인데 VLA 포트가 없다")
             return False
-        if not ports.arm.move_to_floor_pose(gp.profile, "idle"):
+        # ⚠️ move_to_floor_pose(idle) 를 쓰면 안 된다. 그 경로는 **등록된
+        # 자세에서 출발할 때만** 허용된다(safe/drop/carry). 정책은 학습한 대로
+        # 자유롭게 뻗으므로 끝 자세가 등록 자세와 다르고, 그러면 다음 시도의
+        # 시작 자세조차 못 잡아 팔이 갇힌다 — 2026-09-06 실기에서 15회가 전부
+        # "등록된 자세 어디에도 가깝지 않다(safe 로 630, 허용 500)"로 죽었다.
+        #
+        # fold_to_cradle 은 _auto_align_to_idle 에 위임하고, 그 함수는 어디서
+        # 시작하든 안전한 경로를 고른다(바닥 높이면 safe 를 경유해 들어 올린다).
+        # 자세 게이트가 없다.
+        if not ports.arm.fold_to_cradle():
             ports.host.report(Report.GRASP_BLOCKED, self.name, "VLA 시작 자세(IDLE) 실패")
             return False
-        return bool(ports.vla.run_grasp(self.label))
+        ok = bool(ports.vla.run_grasp(self.label))
+        if not ok:
+            # 정책이 실패하면 팔이 미등록 자세에 남는다. 여기서 접어 두지
+            # 않으면 다음 시도도, 주행도 그 자세에서 시작한다.
+            ports.arm.fold_to_cradle()
+        return ok
 
     def _failed(self, ports, detail):
         """파지 실패 — 팔을 붙잡고 APPROACH로 되돌아가 Host의 판단을 기다린다.
@@ -664,7 +718,15 @@ class BaselineGraspState(State):
         if gp is not None:
             recovered = ports.arm.move_to_floor_pose(gp.profile, "recover_idle")
         if not recovered:
+            # recover_idle 은 등록 자세에서만 출발할 수 있다. VLA 가 끝낸
+            # 자세는 등록 자세가 아니라 여기서 거의 항상 실패한다 —
+            # fold_to_cradle 은 자세 게이트가 없으니 한 번 더 시도한다.
+            recovered = ports.arm.fold_to_cradle()
+        if not recovered:
             ports.arm.hold_position()
+            ports.arm_parked.mark_unparked("파지 실패 뒤 팔을 접지 못했다")
+        else:
+            ports.arm_parked.mark_parked()
 
         note = "" if recovered else " · ⚠️ 팔이 중간 자세에 멈춰 있다(수동 정렬 필요)"
         ports.host.report(Report.GRASP_FAILED, MissionState.APPROACH,

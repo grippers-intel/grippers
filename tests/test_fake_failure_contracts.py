@@ -368,11 +368,20 @@ def test_복구도_실패하면_붙잡고_사람에게_알린다():
     )
 
     class StuckArm(FakeArm):
-        """내려가기는 하는데 복구는 못 하는 팔."""
+        """내려가기는 하는데 복구는 못 하는 팔.
+
+        복구 경로가 2026-09-06 부터 두 단계다 — recover_idle 이 실패하면
+        fold_to_cradle 을 한 번 더 시도한다(VLA 가 끝낸 자세는 등록 자세가
+        아니라 recover_idle 이 거의 항상 거부되기 때문). "복구도 실패"를
+        재현하려면 둘 다 실패해야 한다.
+        """
 
         def move_to_floor_pose(self, profile: str, stage: str) -> bool:
             ok = super().move_to_floor_pose(profile, stage)
             return False if stage == "recover_idle" else ok
+
+        def fold_to_cradle(self) -> bool:
+            return False
 
     host = _Host()
     # 2026-09-03 실기(box) 이후로 부하만으로는 미리 안 거르므로, 뎁스도
