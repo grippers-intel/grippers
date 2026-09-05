@@ -33,13 +33,23 @@ Pi 쪽에서만 울릴 수 있고, 여기서 원격으로 트리거할 방법이
 벨 소리가 들린다.
 
 **Enter 는 실제 INSERT 명령을 보낸다** (사용자 확인, 2026-09-05 — Pi 의
-`arm_driver`가 이미 알고 있는 `drop`(300mm, 옛 195mm) 자세다). mission.py
-의 PLACE 상태와 정확히 같은 방식으로 `MissionCommand("stop", "PLACE", ...)`
-를 계속 보낸다(`status="PLACE"` → `vehicle_link._STATE_TO_PI`가
-`MissionState.INSERT`로 옮긴다) — Pi 가 팔을 drop(300mm)으로 옮겨 그리퍼를
-열고, 성공/실패를 판정한 뒤 IDLE 로 복귀할 때까지 기다린다. 그동안 새 WASD
-입력은 받지 않는다(팔이 움직이는 도중에 차를 몰면 안 된다) — 결과가 오면
-화면에 찍고 다시 평소 운전으로 돌아간다.
+`arm_driver`가 이미 알고 있는 `drop`(300mm, 옛 195mm) 자세다). 정식
+`MissionState.INSERT`("PLACE")가 아니라 **`DEBUG_FORCE_INSERT`**(테스트
+전용 우회로, `baseline_ports.py` 참고)를 보낸다 — Pi 가 팔을 drop(300mm)
+으로 옮겨 그리퍼를 열고, 성공/실패를 판정한 뒤 IDLE 로 복귀할 때까지
+기다린다. 그동안 새 WASD 입력은 받지 않는다(팔이 움직이는 도중에 차를
+몰면 안 된다) — 결과가 오면 화면에 찍고 다시 평소 운전으로 돌아간다.
+
+⚠️ **정식 "PLACE"를 보내면 안 먹는다** — 2026-09-05 실기에서 확인: Pi의
+`BaselineCarryState._judge_insert()`가 라이다 기반 `check_insert` 게이트
+(요·좌우·거리 판정, 2026-09-04 밤 바구니 놓침 사고 이후 재활성화된 최종
+안전판)를 거치는데, 이 도구는 그 게이트를 만족시킬 만큼 정밀하게 세우는
+용도가 아니라서 계속 `INSERT_BLOCKED`만 받고 CARRY에 눌러앉아 팔이 아예
+안 움직인다(사용자 지시 — "라이다 명령이 왜 들어가 있어? 빼고"). 이
+도구는 그 게이트를 시험하는 게 아니라 **safe_300(servo 1 요 보정) 자체**를
+확인하는 것이므로 `DEBUG_FORCE_INSERT`로 그 게이트를 건너뛴다. 정식
+run_mission.py 경로의 그 안전판은 전혀 안 건드렸다 — 이 우회로는
+manual_insert_probe.py만 쓴다.
 
 ## safe_300 실기 확인(2026-09-05)
 
@@ -68,12 +78,13 @@ INSERT로 점프하는 경로가 아예 없다(GRASP_FORCE도 결국 팔이 실�
 수행한다). 그래서 이 스크립트는 이제 **시작하자마자 한 번**
 `MissionState.DEBUG_FORCE_CARRY`(테스트 전용 우회로, `baseline_ports.py`
 참고)를 보내 실제 파지 없이 CARRY로 먼저 들어간 뒤에 WASD 운전을
-시작한다 — 그래야 나중에 Enter의 "PLACE"가 유효한 명령이 된다. 이 우회로는
-Pi가 **막 부팅/bringup 직후 IDLE일 때만** 먹는다 — run_mission.py를 방금
-돌렸거나 중간에 멈췄다면 Pi가 이미 다른 상태에 있어 안 먹을 수 있다(그럴
-땐 Pi를 재기동하거나 IDLE로 되돌린 뒤 다시 실행할 것). 드랍 자세/개방폭은
-`baseline_mission.DEBUG_FORCE_CARRY_LABEL`(기본값 "rook")의 교시 계획을
-쓴다 — 실제로 무엇을 손에 쥐여줬든 이 라벨 기준으로 팔이 움직인다.
+시작한다 — 그래야 나중에 Enter의 `DEBUG_FORCE_INSERT`가 유효한 명령이
+된다. 이 우회로는 Pi가 **막 부팅/bringup 직후 IDLE일 때만** 먹는다 —
+run_mission.py를 방금 돌렸거나 중간에 멈췄다면 Pi가 이미 다른 상태에
+있어 안 먹을 수 있다(그럴 땐 Pi를 재기동하거나 IDLE로 되돌린 뒤 다시
+실행할 것). 드랍 자세/개방폭은 `baseline_mission.DEBUG_FORCE_CARRY_LABEL`
+(기본값 "rook")의 교시 계획을 쓴다 — 실제로 무엇을 손에 쥐여줬든 이
+라벨 기준으로 팔이 움직인다.
 
 ## 조작
 
@@ -352,11 +363,15 @@ def main() -> int:
                     _log("POSE_RECOVERED")
 
                 if mode == "insert":
-                    # mission.py PLACE 상태와 정확히 같은 명령을 계속 보낸다.
-                    # yaw_correction_deg만 추가 — NUDGE_LINE 진입 순간 캡처해
-                    # 둔 지향오차(아래 gate.ok 배너 참고)를 실어 Pi의 safe_300이
-                    # 그리퍼를 열기 전 servo 1로 흡수하게 한다.
-                    _send("stop", "PLACE", pose,
+                    # 2026-09-05 실기: "PLACE"(정식 INSERT)를 보냈더니 Pi의
+                    # 라이다 기반 check_insert 게이트(요·좌우·거리 판정)가
+                    # 계속 INSERT_BLOCKED만 내고 CARRY에 눌러앉아 팔이 아예
+                    # 안 움직였다 — 이 도구는 safe_300(servo 1 요 보정) 자체를
+                    # 확인하려는 것이지 라이다 게이트를 시험하려는 게 아니다
+                    # (사용자 지시 — "라이다 명령이 왜 들어가 있어? 빼고").
+                    # DEBUG_FORCE_INSERT로 그 게이트를 건너뛰고 곧장
+                    # BaselineInsertState로 들어간다.
+                    _send("stop", "DEBUG_FORCE_INSERT", pose,
                           yaw_correction_deg=pending_yaw_correction_deg)
                     if report_status in ("PLACE_DONE", "FAILED"):
                         elapsed = now - insert_started_at

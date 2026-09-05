@@ -80,8 +80,16 @@ class MissionState:
     # 보고한다. Host가 명령으로 보내는 이름이 아니라서 ALL에는 안 넣는다.
     SAFE_300 = "SAFE_300"
 
+    # 테스트 전용 우회로 (사용자 지시, 2026-09-05). CARRY에서 이 상태를
+    # 받으면 Pi의 라이다 기반 check_insert 게이트(요·좌우·거리 판정)를
+    # 완전히 건너뛰고 곧장 BaselineInsertState로 들어간다 — DEBUG_FORCE_CARRY와
+    # 같은 이유(manual_insert_probe.py의 safe_300 단독 확인)로 필요해졌다.
+    # run_mission.py는 절대 보내지 않는다 — grippers-baseline-wt의
+    # DEBUG_FORCE_INSERT 처리부 주석 참고.
+    DEBUG_FORCE_INSERT = "DEBUG_FORCE_INSERT"
+
     ALL = (IDLE, APPROACH, GRASP, GRASP_FORCE, CARRY, APPROACH_BOX, INSERT, DONE, ESTOP,
-           DEBUG_FORCE_CARRY)
+           DEBUG_FORCE_CARRY, DEBUG_FORCE_INSERT)
 
 
 class Report:

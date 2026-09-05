@@ -146,6 +146,13 @@ _STATE_TO_PI = {
     # 파지 없이 CARRY로 바로 들어가는 우회로라 정식 경로에 노출되면 안 된다
     # (baseline_ports.MissionState.DEBUG_FORCE_CARRY 주석 참고).
     "DEBUG_FORCE_CARRY": MissionState.DEBUG_FORCE_CARRY,
+    # 2026-09-05 테스트 전용 — manual_insert_probe.py만 이 이름을 쓴다.
+    # CARRY에서 Pi의 라이다 기반 check_insert 게이트를 건너뛰고 곧장
+    # BaselineInsertState(safe_300 포함)로 들어간다. run_mission.py엔 이
+    # 이름이 없다 — 2026-09-04 밤 바구니 놓침 사고 이후 재활성화한 Pi의
+    # 최종 안전판을 우회하는 통로라 정식 경로에 노출되면 안 된다
+    # (baseline_ports.MissionState.DEBUG_FORCE_INSERT 주석 참고).
+    "DEBUG_FORCE_INSERT": MissionState.DEBUG_FORCE_INSERT,
     # 2026-09-02에 AWAIT_CONTINUE/AWAIT_COMMAND/IDLE(그룹(chess/toy) 소진
     # 시 계속/정지를 사람에게 묻는 기능)이 들어오며 이 표에도 세 항목이
     # 추가됐었으나, 2026-09-04 밤 사용자 지시("AWAIT 다 없애라고. 원래
