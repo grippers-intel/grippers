@@ -102,14 +102,17 @@ _OBJECT_WIDTH_MM = {
 # 있으면 그 자체로 읽기가 더 불안정해질 수 있다는 심증이다(확인된 인과는
 # 아니다).
 #
-# 2026-09-05 실기(grasp_test_console.py --raw-cls box)에서 7.0mm로 servo 6
-# (그리퍼) 통신 실패("SO-ARM101 servo 통신 실패 — servo IDs: [6]")가
-# 재현돼 12.0mm로 완화해봤으나, 12.0mm에서도 같은 자리(midpoint 도달
-# 직후)에서 똑같이 재현됐다 — 파지 폭과는 무관하다는 뜻이라(cube 프로파일
-# 의 grasp_center_height_mm=26.0 자세 자체가 원인일 가능성 쪽으로 기움),
-# 사용자 지시로 7.0mm로 되돌린다. ros2_ws/.../floor_grasp_profiles.py의
-# 같은 자리와 반드시 같이 맞출 것.
-_CLOSE_WIDTH_OVERRIDE_MM = {"box": 7.0, "star": 7.0}
+# 2026-09-05 실기(grasp_test_console.py --raw-cls box)에서 7.0mm·12.0mm
+# 둘 다 servo 6(그리퍼) 통신 실패("SO-ARM101 servo 통신 실패 — servo
+# IDs: [6]")가 재현됐다. rook(자세 45mm)으로 박스를 쥐게 해봐도 같은
+# 실패가 났고, 반대로 rook 자세로 룩(가는 물체)을 쥐면 닫힘 load_ratio가
+# 낮고 성공했다 — 자세가 아니라 **닫힘 load_ratio(부하)**가 실패를
+# 예측했다(servo 6에 토크 제한이 없어, 목표 폭이 실제 물체 폭보다 한참
+# 좁으면 서보가 계속 밀어붙이며 스톨 부하로 오래 버틴다). box(실측
+# 40mm)/star(45mm)를 20.0mm까지 늘려 스톨 부하 자체를 줄여 본다(사용자
+# 지시 — "20mm로, 안 잡힐 수도 있지만"). ros2_ws/.../floor_grasp_profiles.py
+# 의 같은 자리와 반드시 같이 맞출 것.
+_CLOSE_WIDTH_OVERRIDE_MM = {"box": 20.0, "star": 20.0}
 
 
 _PROFILE_BY_LABEL = {

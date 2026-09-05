@@ -461,10 +461,12 @@ def test_부피가_큰_box_star는_완전히_짓누르지_않는다():
     2026-09-02 이전 하한이던 7.0mm를 유지한다. soccer는 언급되지 않아
     여전히 GRIPPER_GRASP_MIN_MM(0.0mm) 그대로다(위 테스트가 이미 덮음).
 
-    2026-09-05 실기에서 12.0mm로도 같은 servo 6 통신 실패가 재현돼(파지
-    폭과 무관하다고 판단) 7.0mm로 되돌아왔다."""
-    assert plan_for_label("box").close_width_mm == 7.0
-    assert plan_for_label("star").close_width_mm == 7.0
+    2026-09-05 실기에서 7.0mm·12.0mm 둘 다 servo 6 통신 실패가 재현됐고,
+    닫힘 load_ratio(부하)가 자세와 무관하게 실패를 예측한다는 게
+    드러났다 — 스톨 부하를 줄이려 물체 실측 폭에 더 가까운 20.0mm로
+    늘렸다(사용자 지시 — "안 잡힐 수도 있지만")."""
+    assert plan_for_label("box").close_width_mm == 20.0
+    assert plan_for_label("star").close_width_mm == 20.0
 
 
 # ── 임무 4번: INSERT 조건 판정과 수행 ──────────────────────────────────────

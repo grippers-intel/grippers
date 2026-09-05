@@ -139,11 +139,14 @@ def _release_width(object_width_mm: float) -> float:
 # 안 받아서, grasp_test_console.py(이 표를 직접 읽는다)가 cube를 실제 미션이
 # 쓰는 7.0mm가 아니라 0.0mm로 닫는 어긋남이 실기로 드러났다.
 #
-# 2026-09-05 실기에서 7.0mm→12.0mm로 시험했으나 12.0mm에서도 같은 자리
-# (midpoint 도달 직후)에서 servo 6 통신 실패가 똑같이 재현돼, 파지 폭과
-# 무관하다는 게 드러났다 — 사용자 지시로 7.0mm로 되돌린다.
-# baseline_mission.py의 같은 값과 함께 바꿨다.
-_CLOSE_WIDTH_OVERRIDE_MM = {"cube": 7.0, "star_column": 7.0}
+# 2026-09-05 실기에서 7.0mm→12.0mm로 시험했으나 둘 다 servo 6 통신 실패가
+# 재현됐고, rook 자세로 박스를 쥐게 해봐도 같은 실패가 나 자세와는 무관함이
+# 드러났다 — 닫힘 load_ratio(부하)가 실패를 예측했다(servo 6에 토크
+# 제한이 없어 목표 폭이 실제 물체 폭보다 한참 좁으면 스톨 부하로 오래
+# 버틴다). 물체 실측 폭(cube 40mm/star_column 45mm)에 더 가깝게
+# 20.0mm까지 늘려 스톨 부하를 줄여 본다 — baseline_mission.py의 같은
+# 값과 함께 바꿨다.
+_CLOSE_WIDTH_OVERRIDE_MM = {"cube": 20.0, "star_column": 20.0}
 
 
 def _close_width(object_width_mm: float, profile: str | None = None) -> float:
