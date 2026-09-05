@@ -1427,7 +1427,22 @@ class MissionFSM:
                 # 후진은 위험 반경에서 빠져나오는 길이다 — 목표 영역
                 # 게이트로 조기 종료시키지 않는다(위 hard_stop 관련 주석과
                 # 같은 이유).
-                done_confirmed = moved >= want_m or ready_early or live_too_close
+                #
+                # ⚠️ 2026-09-05 실기로 드러난 버그: 여기 live_too_close 를
+                # 다른 축(forward/left/right)과 똑같이 "끝났다"에 넣고
+                # 있었다. 그런데 back 을 계획하는 이유 자체가 "너무
+                # 가깝다"(live_too_close)이므로, back 이 시작되는 바로 그
+                # 사이클에 이미 live_too_close=True 라 moved 가 0인 채로
+                # 즉시 done=True 가 나 버렸다 — 실제로는 단 한 번도 "back"
+                # cmd 를 내보내지 못하고 PLACE 로 곧장 되돌아갔다. 요가 크게
+                # 틀어져(0.2~0.48rad) 라이다가 바구니 테두리를 비스듬히
+                # 봐서 실제보다 가깝게 잘못 읽히는 상황(라이다 하한
+                # 근처에서 진동)에서 이게 154회 연속 반복되며 완전히
+                # 멎었다(사용자 보고 — "파지 미세전진 제대로 안됨, INSERT
+                # 버그"). live_too_close 를 빼서 실제로 want_m 만큼 물러난
+                # 뒤에야 끝났다고 본다 — hard_stop 을 안 넣는 것과 정확히
+                # 같은 이유다.
+                done_confirmed = moved >= want_m or ready_early
                 host_gate_hit = False
             else:   # "forward"
                 done_confirmed = (moved >= want_m or ready_early or live_too_close
