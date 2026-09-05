@@ -349,7 +349,7 @@ def main() -> int:
                 report_status = link.poll_status()
 
                 if not pose.ok and mode != "insert":
-                    _send("stop", "NUDGE_BOX", None)
+                    _send("stop", "CARRY_TO_DEST", None)
                     if not pose_lost_warned:
                         pose_lost_warned = True
                         print("\n⚠️ ArUco 포즈를 놓쳤습니다 — 정지 명령만 보냅니다"
@@ -429,8 +429,20 @@ def main() -> int:
                     _log(f"CENTERLINE_CROSS x={pose.x:.3f} center_x={center_x:.3f}")
                 prev_x = pose.x
 
+                # 2026-09-05 실기: status를 "NUDGE_BOX"(→ MissionState.
+                # APPROACH_BOX)로 보냈더니, Pi의 BaselineCarryState가 매
+                # 사이클 라이다로 retreat_if_too_close를 판정해 0.128m
+                # 안의 아무 물체(벽·기물 등, 바구니가 아니어도)에도
+                # base.stop()을 걸고 INSERT_BLOCKED를 냈다 — 목표 근처가
+                # 아니어도, Enter를 누르기 한참 전부터도 걸려서 WASD가
+                # 안 먹혔다(사용자 지시 — "라이다가 왜 또 나와"). 이 도구는
+                # 사람이 보면서 세우는 것이 유일한 안전장치라고 이미 문서화돼
+                # 있으므로(위 "안전" 절 참고), 평소 운전에는 그 라이다 판정이
+                # 아예 안 걸리는 "CARRY_TO_DEST"(→ MissionState.CARRY)를 쓴다
+                # — NUDGE_LINE 진입·촉발 판정 자체는 여전히 Host의
+                # check_basket_insert_gate(라이다 아님)가 한다.
                 send_cmd = "stop" if mode == "confirm" else current_cmd
-                _send(send_cmd, "NUDGE_BOX", pose)
+                _send(send_cmd, "CARRY_TO_DEST", pose)
 
                 sys.stdout.write(
                     f"\r[{send_cmd:5s}] pose=({pose.x:6.3f},{pose.y:6.3f},"
@@ -442,7 +454,7 @@ def main() -> int:
 
                 time.sleep(max(0.0, LOOP_PERIOD_S - (time.perf_counter() - tick_start)))
         finally:
-            _send("stop", "NUDGE_BOX", pose)
+            _send("stop", "CARRY_TO_DEST", pose)
             print("\n\n[종료] 정지 명령을 보냈습니다.", flush=True)
             _log("STOP_AND_EXIT")
             log_f.close()
