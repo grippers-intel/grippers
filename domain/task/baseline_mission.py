@@ -616,19 +616,36 @@ class BaselineGraspState(State):
         # 0.0000으로 읽혔다"(읽기는 성공, 값이 낮다)는 더 이상 뎁스만으로
         # 구제되지 않는다 — 그건 AND가 원래부터 잡아야 하는 진짜 실패다.
         carried = ports.arm.get_load()
-        vanished = ports.perception.confirm_grasp()
         load_unknown = carried < 0.0
         load_ok = (not load_unknown) and carried >= bc.LOAD_THRESHOLD
-        success = vanished if load_unknown else (load_ok and vanished)
-        if not success:
+
+        if not ports.use_depth_gate:
+            # ⚠️ 뎁스캠을 안 보는 구성에서는 confirm_grasp 가 성공을 낼 수
+            # 없다. 그대로 두면 **실제로 물었는데도 항상 실패**로 읽고 물체를
+            # 도로 떨어뜨린다 — 2026-09-06 실기에서 queen 을 집고도 그랬다.
+            #
+            # 판정이 서보 부하 하나로 줄어든다는 것은 use_depth_gate 를 끌 때
+            # 이미 감수한 거래다(BaselinePorts.use_depth_gate 주석). 물체
+            # 모서리를 살짝 물었거나 턱끼리 문 경우도 통과하므로 사람이 눈으로
+            # 지켜보는 시연에서만 쓸 것.
+            success = load_ok
+            reason = (f"부하를 못 읽었다 (뎁스 관문 꺼짐 — 판단 근거가 없다)"
+                      if load_unknown else
+                      f"부하 {carried:.4f} < 문턱 {bc.LOAD_THRESHOLD}")
+        else:
+            vanished = ports.perception.confirm_grasp()
+            success = vanished if load_unknown else (load_ok and vanished)
             reason = (
                 f"부하를 못 읽었고 목표도 그대로 보인다 (부하 {carried:.4f})"
                 if load_unknown else
                 f"부하 {carried:.4f} · 뎁스 사라짐 {vanished} — 둘 다 만족해야 한다"
             )
+        if not success:
             return self._failed(ports, reason)
 
         detail = f"{self.label} 부하 {carried:.4f}"
+        if not ports.use_depth_gate:
+            detail += " · 뎁스 관문 꺼짐 — 부하 하나로만 판정"
         if load_unknown:
             detail += " · 부하 읽기 실패, 뎁스 사라짐으로만 확인"
         else:
