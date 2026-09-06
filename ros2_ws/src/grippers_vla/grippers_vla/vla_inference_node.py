@@ -103,6 +103,23 @@ class VlaInferenceNode(Node):
         self.declare_parameter("gripper_cam_topic", "gripper_cam/image_raw")
         self.declare_parameter("fps", 30.0)
         self.declare_parameter("max_step_deg", 5.0)
+        # 정책이 낸 shoulder_pan 에 더할 각도(도). 물체가 정면에서 벗어났을 때
+        # 팔의 도달 지점을 통째로 옆으로 옮긴다. 0 이면 아무 일도 없다.
+        #
+        # ⚠️ **미리 servo 1 을 돌려 놓는 것으로는 안 된다.** 정책은 절대
+        # 관절값을 내므로, 사전 회전은 첫 청크가 자기가 배운 pan 값을
+        # 절대값으로 명령하면서 그대로 되돌아간다. 출력에 더해야 살아남는다.
+        #
+        # 이 방식이 성립하는 근거는 정책의 pan 이 거의 상수라는 것이다 —
+        # v5_all 전체에서 shoulder_pan std 가 6.31도뿐이다(리눅스 세션 측정,
+        # 2026-09-06 정정판). 좌우를 안 보고 배웠다는 뜻이고, 뒤집어 말하면
+        # **일정한 바이어스를 더해도 정책이 저항하지 않는다.**
+        #
+        # ⚠️ mm/도 환산은 실기로 재야 한다. 리치 294mm 기준 기하로는 약
+        # 5.1mm/도지만, 폐루프에서 그대로 나오는지는 미확인이다. 재는 법:
+        # 이 값을 5, 10 으로 놓고 파지를 돌려 도달 지점이 얼마나 옮겨가는지
+        # 본다.
+        self.declare_parameter("pan_bias_deg", 0.0)
         self.declare_parameter("timeout_s", 45.0)
         # ⚠️ 줄이지 말 것. ACT 는 시간을 안 봐서 "언제 펴는가"가 청크 안에
         # 들어 있다. 2026-09-02 실측: 30 으로 줄였더니 그리퍼가 열리기 직전에
@@ -377,7 +394,14 @@ class VlaInferenceNode(Node):
                     return result
 
                 chunk = self._runner.predict_chunk(frame, state, task)
+                # 기록은 **바이어스 전** 값으로 남긴다 — 정책이 무엇을 냈는지가
+                # 진단의 근거이고, 우리가 얹은 보정과 섞이면 못 가린다.
                 self._record_chunk(run_dir, chunks + 1, frame, state, chunk)
+                pan_bias = float(self.get_parameter("pan_bias_deg").value)
+                if pan_bias:
+                    # shoulder_pan 은 0번 열이다(JOINTS 순서, policy_runner).
+                    chunk = np.array(chunk, dtype=np.float32, copy=True)
+                    chunk[:, 0] += pan_bias
                 if not np.isfinite(chunk).all():
                     result.ok, result.chunks = False, chunks
                     result.message = "정책이 NaN/Inf 를 냈습니다"
