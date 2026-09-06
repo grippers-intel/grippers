@@ -63,6 +63,7 @@ from .floor_grasp_profiles import (
     TAUGHT_HOMING_OFFSETS,
     TAUGHT_POSITION_LIMITS,
 )
+from .gripper_motion import gripper_speed_change
 from . import calib_identity
 from . import position_limit_registers as poslim
 
@@ -231,6 +232,8 @@ VLA_ACCEL_RAW = 30
 #
 # 0 을 주면 예전처럼 무제한이 된다(런타임 파라미터 vla_gripper_speed_raw).
 VLA_GRIPPER_SPEED_RAW = 600
+# 방향 판정과 데드밴드는 gripper_motion 에 있다 — rclpy 없이 import 되는
+# 순수 모듈이라 규칙을 **실행해서** 시험할 수 있다.
 # 스텝당 관절 이동 상한 기본값(도). rollout_policy.py 의 --max-rel 기본값과
 # 같은 자리다 — 정책이 분포 밖 입력에 튀어도 한 스텝에 갈 수 있는 거리를 묶는다.
 VLA_MAX_STEP_DEG_DEFAULT = 5.0
@@ -1014,11 +1017,11 @@ class ArmDriverNode(Node):
                 backend.drv.set_speed(servo_id, VLA_SPEED_RAW)
                 backend.drv.set_acceleration(servo_id, VLA_ACCEL_RAW)
 
-            # 그리퍼만 뒤에 덮어쓴다 — 위 루프가 servo 6 에도 무제한을 걸기
-            # 때문에 순서가 뒤바뀌면 안 된다(VLA_GRIPPER_SPEED_RAW 주석).
-            grip_speed = int(self.get_parameter("vla_gripper_speed_raw").value)
-            if grip_speed > 0:
-                backend.drv.set_speed(GRIPPER_SERVO_ID, grip_speed)
+            # 그리퍼 상한은 **닫을 때만** 건다. 위 루프가 servo 6 에도 무제한을
+            # 걸어 뒀으니 지금 상태는 무제한이고, 아래 재생 루프가 지령의 방향을
+            # 보고 필요할 때만 바꿔 쓴다.
+            grip_close_speed = int(self.get_parameter("vla_gripper_speed_raw").value)
+            grip_limited = False
 
             # 스텝 제한의 기준점은 처음 한 번만 실제로 읽고, 그 뒤로는 우리가
             # 보낸 목표를 이어 쓴다. 30Hz 재생 중에 매 스텝 서보 6개를 되읽으면
@@ -1050,6 +1053,32 @@ class ArmDriverNode(Node):
 
                 offset = step * len(ALL_SERVO_IDS)
                 goal = self._policy_to_taught_raw(req.positions[offset:offset + len(ALL_SERVO_IDS)])
+
+                # ⚠️ 닫을 때만 묶는다 — 여는 것은 빈 공간에서 일어난다.
+                #
+                # 촬영 데이터의 그리퍼 순간 속도를 방향별로 나눠 보면 열기가
+                # 더 빠르다(리눅스 세션 실측, raw/s):
+                #
+                #            중앙   p90   p95    p99   최대
+                #     닫기    270   603   670    844  1,110
+                #     열기    450   670   780  1,110  1,530
+                #
+                # 600 을 양방향에 걸면 열기 프레임의 18% 가 잘린다. 그러면 VLA
+                # 시작에서 턱이 다 벌어지기 전에 팔이 내려가 물체를 건드릴 수
+                # 있다 — 고치려던 것과 같은 사고를 반대편에서 만드는 셈이다.
+                # 닫기는 중앙값이 270 이라 대부분 상한에 안 닿고, 물체를 치는
+                # 상위 11% 만 잘린다. 그것이 정확히 이 상한의 목적이다.
+                #
+                # 클램프는 크기만 줄이고 부호는 안 바꾸므로 방향은 클램프 전에
+                # 봐도 같다.
+                new_grip_speed = gripper_speed_change(
+                    goal[GRIPPER_SERVO_ID] - last[GRIPPER_SERVO_ID],
+                    grip_close_speed,
+                    grip_limited,
+                )
+                if new_grip_speed is not None:
+                    backend.drv.set_speed(GRIPPER_SERVO_ID, new_grip_speed)
+                    grip_limited = new_grip_speed == grip_close_speed
                 step_clamped = False
                 for servo_id in ALL_SERVO_IDS:
                     move = goal[servo_id] - last[servo_id]

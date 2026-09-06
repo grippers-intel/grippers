@@ -10,28 +10,33 @@
 공간을 지나가므로 속도가 곧 충격이 되지 않는다. 그리퍼는 반대다 — **물체와
 부딪히는 것이 일**이라 무제한 속도가 그대로 충격이 된다.
 
+## 그런데 닫을 때만이다
+
+열기까지 묶으면 반대편에서 같은 사고를 만든다. VLA 시작에서 턱이 다 벌어지기
+전에 팔이 내려가면 그 자체로 물체를 건드린다. 촬영 실측에서 열기가 닫기보다
+빨랐다는 것이 이 판단의 근거다.
+
 ## 값의 출처
 
-리눅스 세션이 학습 데이터(v5_all 118회차)에서 잰 실측이다. 정책 단위(0~100)
-를 이 노드의 raw 로 옮기는 환산은 캘리브레이션 파일이 정하므로, 여기서도
-그 파일을 읽어 계산한다 — 캘리브레이션이 바뀌면 이 테스트가 같이 따라간다.
-
-    촬영 실제 평균  100.5 unit/s     <- 턱이 실제로 낸 속도
-    촬영 실제 최대  141.3 unit/s
+리눅스 세션이 학습 데이터(v5_all)에서 잰 실측이다. 정책 단위(0~100)를 이
+노드의 raw 로 옮기는 환산은 캘리브레이션 파일이 정하므로 여기서도 그 파일을
+읽어 계산한다 — 캘리브레이션이 바뀌면 이 테스트가 같이 따라간다.
 """
 
 import ast
+import importlib.util
 import json
 import pathlib
 
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-ARM_NODE = ROOT / "ros2_ws" / "src" / "grippers_arm" / "grippers_arm" / "arm_driver_node.py"
+ARM_PKG = ROOT / "ros2_ws" / "src" / "grippers_arm" / "grippers_arm"
+ARM_NODE = ARM_PKG / "arm_driver_node.py"
 CALIBRATION = ROOT / "host" / "vla" / "calibration" / "grippers_arm.json"
 
 #: 촬영 때 팔로워가 **실제로** 낸 닫힘 속도(정책 단위/초). 지령이 아니라
-#: state 다 — 우리가 재현해야 하는 것은 지령이 아니라 물리적 결과다.
+#: state 다 — 재현해야 하는 것은 지령이 아니라 물리적 결과다.
 DEMO_ACTUAL_MEAN_UNITS_S = 100.5
 DEMO_ACTUAL_PEAK_UNITS_S = 141.3
 
@@ -40,6 +45,17 @@ DEMO_CLOSING_TRAVEL_UNITS = 40.0
 
 #: 청크 하나의 길이(초). 100스텝 / 30fps.
 CHUNK_SEC = 100.0 / 30.0
+
+
+def _load(name):
+    """rclpy 없이 import 되는 패키지 내부 모듈을 그대로 불러온다."""
+    spec = importlib.util.spec_from_file_location(name, ARM_PKG / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+gm = _load("gripper_motion")
 
 
 def _tree():
@@ -74,6 +90,68 @@ def raw_per_unit():
     return span / 100.0
 
 
+# ── 규칙 자체를 실행해서 본다 ──────────────────────────────────────────────
+#
+# ⚠️ 여기부터는 AST 가 아니라 **진짜 호출**이다. 이 저장소는 도메인 테스트
+# 579개가 전부 통과하는 채로 병합 누락 6건을 놓친 적이 있다 — 코드의 존재를
+# 보는 검사와 결과를 보는 검사는 다른 물건이다.
+
+CLOSE, OPEN, LIMIT = -50, +50, 600
+
+
+def test_닫기_시작에_상한을_건다():
+    assert gm.gripper_speed_change(CLOSE, LIMIT, limited=False) == LIMIT
+
+
+def test_열기_시작에_무제한으로_되돌린다():
+    """열기까지 묶으면 턱이 다 벌어지기 전에 팔이 내려간다."""
+    assert gm.gripper_speed_change(OPEN, LIMIT, limited=True) == gm.UNLIMITED
+
+
+def test_같은_방향이_이어지면_아무것도_안_쓴다():
+    """방향이 바뀔 때만 써야 한다 — 매 스텝 쓰면 30Hz 재생에서 시리얼이 붐빈다."""
+    assert gm.gripper_speed_change(CLOSE, LIMIT, limited=True) is None
+    assert gm.gripper_speed_change(OPEN, LIMIT, limited=False) is None
+
+
+@pytest.mark.parametrize("move", [0, 1, -1, 3, -3])
+def test_데드밴드_안에서는_방향을_안_바꾼다(move):
+    """지령이 멈춘 구간에서 부호가 잡음으로 흔들려도 넘어가면 안 된다."""
+    assert gm.gripper_speed_change(move, LIMIT, limited=False) is None
+    assert gm.gripper_speed_change(move, LIMIT, limited=True) is None
+
+
+def test_데드밴드는_정상_이동보다_한참_작다():
+    """3 raw 가 정상 프레임 이동(15~25 raw)을 삼키면 방향 전환을 놓친다."""
+    assert 0 < gm.DIRECTION_DEADBAND_RAW < 15
+
+
+def test_0을_주면_아무것도_안_한다():
+    """되돌릴 수 있어야 A/B 로 원인을 가린다."""
+    for limited in (True, False):
+        assert gm.gripper_speed_change(CLOSE, 0, limited) is None
+        assert gm.gripper_speed_change(OPEN, 0, limited) is None
+
+
+def test_한_번_닫고_열고_닫는_동안_두_번만_바뀐다():
+    """실제 파지 한 번의 순서를 그대로 흘려 본다.
+
+    시작은 무제한(재생 시작 루프가 servo 6 에도 0 을 걸어 둔다)이고,
+    열림 -> 닫힘 -> 열림(놓기) 순으로 간다."""
+    moves = [+40] * 5 + [0, 1, -2] + [-40] * 5 + [0] * 3 + [+40] * 5
+    limited, writes = False, []
+    for move in moves:
+        new = gm.gripper_speed_change(move, LIMIT, limited)
+        if new is not None:
+            writes.append(new)
+            limited = new == LIMIT
+
+    assert writes == [LIMIT, gm.UNLIMITED], f"쓰기가 {writes} 입니다"
+
+
+# ── 값과 배선 ──────────────────────────────────────────────────────────────
+
+
 def test_그리퍼는_무제한이_아니다():
     """이 테스트 하나가 2026-09-06 고장 전체다 — 0 이면 상한이 없다."""
     assert _constants({"VLA_GRIPPER_SPEED_RAW"})["VLA_GRIPPER_SPEED_RAW"] > 0
@@ -85,6 +163,7 @@ def test_관절_1에서_5는_여전히_무제한이다():
     그때 align_to_idle 이 남긴 150 raw/s 때문에 정책이 shoulder_lift 를
     50도로 부르는데 팔은 12.1도/s 로만 갔다."""
     assert _constants({"VLA_SPEED_RAW"})["VLA_SPEED_RAW"] == 0
+    assert gm.UNLIMITED == 0
 
 
 def test_촬영_때_턱이_낸_속도_범위_안에_있다(raw_per_unit):
@@ -107,50 +186,15 @@ def test_닫힘_행정이_청크_안에서_끝난다(raw_per_unit):
     assert travel_raw / speed < CHUNK_SEC / 4.0
 
 
-def test_그리퍼_속도는_전체_루프_뒤에_쓴다():
-    """⚠️ 순서가 전부다.
-
-    `_execute_joint_chunk` 는 ALL_SERVO_IDS(1..6) 를 돌며 VLA_SPEED_RAW 를
-    건다. servo 6 지정을 그 **앞**에 두면 루프가 0 으로 덮어써서, 코드는
-    멀쩡해 보이는데 상한이 사라진다 — 로그에도 안 남는 종류의 고장이다."""
+def test_재생_루프가_그_규칙을_실제로_부른다():
+    """모듈만 맞고 노드가 안 부르면 아무 일도 안 일어난다."""
     fn = _function("_execute_joint_chunk")
-
-    loop_lines = [
-        node.lineno
+    called = {
+        node.func.id
         for node in ast.walk(fn)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "set_speed"
-        and any(isinstance(a, ast.Name) and a.id == "VLA_SPEED_RAW" for a in node.args)
-    ]
-    grip_lines = [
-        node.lineno
-        for node in ast.walk(fn)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "set_speed"
-        and any(isinstance(a, ast.Name) and a.id == "GRIPPER_SERVO_ID" for a in node.args)
-    ]
-
-    assert loop_lines, "전체 서보 속도 설정이 사라졌습니다"
-    assert grip_lines, "servo 6 속도 지정이 사라졌습니다"
-    assert min(grip_lines) > max(loop_lines), (
-        "servo 6 속도를 전체 루프보다 먼저 쓰면 루프가 무제한으로 덮어씁니다"
-    )
-
-
-def test_0을_주면_예전_동작으로_돌아갈_수_있다():
-    """실기에서 원인을 가르려면 되돌릴 수 있어야 한다 — A/B 없이는 못 고친다."""
-    fn = _function("_execute_joint_chunk")
-    guards = [
-        node
-        for node in ast.walk(fn)
-        if isinstance(node, ast.If)
-        and isinstance(node.test, ast.Compare)
-        and isinstance(node.test.left, ast.Name)
-        and node.test.left.id == "grip_speed"
-    ]
-    assert guards, "grip_speed > 0 가드가 없으면 0 이 그대로 서보에 써집니다"
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "gripper_speed_change" in called
 
 
 def test_런타임에_바꿀_수_있다():
