@@ -117,9 +117,23 @@ class Ros2ArmDriver(ArmDriver):
             return False
         return result.settled
 
+    #: 접기는 다른 서비스와 달리 **긴 물리 이동**이다. 기본 3초로는 못 잰다.
+    #:
+    #: ⚠️ 2026-09-06 실기: VLA 파지가 팔을 뻗은 채 끝난 뒤 이 호출이 매번
+    #: "응답 없음(3.0s 대기) — 실패로 처리" 로 떨어졌다. 접기 자체는 잘 되고
+    #: 있었는데 호출자가 먼저 포기한 것이다.
+    #:
+    #: 접기는 _auto_align_to_idle 에 위임되고 그쪽은 safe 를 거쳐 idle 로
+    #: 두 구간을 글라이드한다 — 구간마다 FLOOR_POSE_STEPS(30) x
+    #: FLOOR_POSE_STEP_SEC(0.07) = 2.1초에, 도달 폴링이 최대
+    #: FLOOR_POSE_ARRIVE_MAX_SEC(25초)까지 간다. 그 최악을 덮는 값이어야
+    #: "느려서 실패"와 "정말 걸려서 실패"가 구분된다.
+    FOLD_TIMEOUT_SEC = 30.0
+
     def fold_to_cradle(self) -> bool:
         """접었으면 True. 서비스가 없거나 응답이 없으면 **False**."""
-        res = call_service(self._node, self._fold_client, Trigger.Request(), label="fold_to_cradle")
+        res = call_service(self._node, self._fold_client, Trigger.Request(),
+                           label="fold_to_cradle", timeout_sec=self.FOLD_TIMEOUT_SEC)
         if res is None:
             return False
         return res.success

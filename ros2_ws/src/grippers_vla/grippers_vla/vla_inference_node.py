@@ -52,6 +52,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
+from grippers_vla.grasp_budget import MIN_CHUNKS, chunk_budget
 from grippers_vla.policy_runner import PolicyRunner
 from grippers_vla.remote_policy import RemotePolicyRunner
 
@@ -59,11 +60,8 @@ from grippers_vla.remote_policy import RemotePolicyRunner
 #: 학습 데이터에서 lift 는 -104 에서 시작해 뻗을 때 +99 까지 간다.
 EXTENDED_DEG = -50.0
 RETURNED_DEG = -95.0
-#: 완료 판정 전에 최소 이만큼은 돈다. 시작 자세가 이미 "접힘"이라
-#: 첫 청크에서 곧바로 끝난 것으로 읽히는 것을 막는다.
-MIN_CHUNKS = 2
-#: 안전 상한. 실측 최대가 7.1청크였다.
-MAX_CHUNKS = 10
+#: 예산 계산은 grasp_budget 에 있다 — rclpy 없이 import 되는 순수
+#: 모듈이라 규칙을 **실행해서** 시험할 수 있다.
 #: 프레임이 이보다 오래되면 안 쓴다. 청크가 3.3초이므로 1초면 충분히 신선하다.
 MAX_FRAME_AGE_S = 1.0
 
@@ -307,13 +305,31 @@ class VlaInferenceNode(Node):
         timeout_s = (float(request.timeout_s) if request.timeout_s > 0
                      else float(self.get_parameter("timeout_s").value))
 
+        # 청크 개수는 **청크 길이에서 계산한다** — ACT 는 10, DP 는 32.
+        # 개수를 고정하면 정책을 갈아 끼울 때 조용히 예산이 바뀐다
+        # (grasp_budget 의 2026-09-06 사례).
+        chunk_sec, max_chunks, budget_s = chunk_budget(
+            self._runner.n_action_steps,
+            float(self.get_parameter("fps").value),
+            timeout_s,
+        )
+        if budget_s > timeout_s:
+            # 조용히 끊기면 "정책이 중간에 멈췄다"로 보인다 — 반드시 알린다.
+            self.get_logger().warn(
+                f"timeout_s {timeout_s:.0f}s 로는 {max_chunks}청크(청크 {chunk_sec:.2f}s)를 "
+                f"다 못 씁니다 — {budget_s:.0f}s 로 늘립니다")
+        timeout_s = budget_s
+        self.get_logger().info(
+            f"파지 예산: 청크 {chunk_sec:.2f}s x 최대 {max_chunks}개 = "
+            f"{chunk_sec * max_chunks:.1f}s (시계 상한 {timeout_s:.0f}s)")
+
         started = time.monotonic()
         chunks = 0
         extended = False
         prev_frame = None      # 멈춘 카메라 판정용 — 직전 청크의 그림
         run_dir = self._start_recording(label)
         try:
-            while chunks < MAX_CHUNKS:
+            while chunks < max_chunks:
                 if goal_handle.is_cancel_requested:
                     goal_handle.canceled()
                     result.ok, result.chunks = False, chunks
@@ -403,7 +419,8 @@ class VlaInferenceNode(Node):
                     return result
 
             result.ok, result.chunks = False, chunks
-            result.message = f"{MAX_CHUNKS}청크를 다 썼는데 복귀를 못 봤습니다"
+            result.message = (f"{max_chunks}청크({chunk_sec * max_chunks:.1f}s)를 다 썼는데 "
+                              "복귀를 못 봤습니다")
             self.get_logger().warn(result.message)
             goal_handle.abort()
             return result
