@@ -41,24 +41,36 @@ UNLIMITED = 0
 DIRECTION_DEADBAND_RAW = 3
 
 
-def gripper_speed_change(move_raw: int, close_speed: int, limited: bool):
+def gripper_speed_change(move_raw: int, close_speed: int, current_speed: int,
+                         open_speed: int = UNLIMITED):
     """이번 스텝에서 servo 6 의 Goal_Velocity 를 바꿔야 하면 그 값을 돌려준다.
 
-    바꿀 필요가 없으면 ``None`` — 그래야 호출부가 **방향이 바뀔 때만**
-    레지스터를 쓴다. 매 스텝 쓰면 30Hz 재생에서 시리얼이 그만큼 붐빈다.
+    바꿀 필요가 없으면 ``None`` — 그래야 호출부가 **정말 바뀔 때만** 레지스터를
+    쓴다. 매 스텝 쓰면 30Hz 재생에서 시리얼이 그만큼 붐빈다.
 
     :param move_raw: 이번 스텝의 그리퍼 이동량(raw). **음수가 닫힘**이다 —
         gripper_calibration 의 표가 9.0mm -> 1150, 168.0mm -> 2000 이라
         raw 가 작을수록 닫힌 것이다.
-    :param close_speed: 닫을 때 걸 상한(raw/s). 0 이하면 아무것도 안 한다 —
-        예전(무제한) 동작으로 되돌리는 경로이고, A/B 로 원인을 가리려면
-        이 길이 있어야 한다.
-    :param limited: 지금 서보에 상한이 걸려 있는가.
+    :param close_speed: 닫을 때 걸 상한(raw/s). 0 이하면 무제한.
+    :param current_speed: 지금 서보에 걸려 있는 값. 돌려준 값을 호출부가
+        여기에 넣어 이어 간다.
+
+        ⚠️ 예전에는 `limited: bool` 이었다. 방향마다 값이 달라지면서 불리언으로는
+        "지금 얼마가 걸려 있는가"를 표현할 수 없게 됐다 — 그대로 두면 매 스텝
+        레지스터를 쓰게 되고, 그건 이 함수가 처음부터 피하려던 것이다.
+    :param open_speed: 열 때 걸 상한(raw/s). 0 이하면 무제한.
+
+    ⚠️ 2026-09-06 2차: 여는 쪽에도 손잡이가 필요해졌다. 실기에서 정책이 한
+    청크(1.07초)에 9.0mm -> 64.8mm 를 여는데(약 270 raw/s), 촬영 실측 열기
+    중앙값 450 raw/s 보다 오히려 느린데도 사용자에게는 "동작 속도에 비해 너무
+    빠르다"로 보였다. 원인은 그리퍼가 아니라 **주변이 느린 것**이다 — 추론
+    대기로 팔이 사이클의 27~45% 를 서 있어서 그리퍼만 홱 움직이는 것이
+    도드라진다. 기본은 무제한이라 안 주면 예전 동작 그대로다.
     """
-    if close_speed <= 0:
-        return None
-    if move_raw < -DIRECTION_DEADBAND_RAW and not limited:
-        return close_speed
-    if move_raw > DIRECTION_DEADBAND_RAW and limited:
-        return UNLIMITED
-    return None
+    if move_raw < -DIRECTION_DEADBAND_RAW:
+        want = close_speed if close_speed > 0 else UNLIMITED
+    elif move_raw > DIRECTION_DEADBAND_RAW:
+        want = open_speed if open_speed > 0 else UNLIMITED
+    else:
+        return None                      # 데드밴드 안 — 방향을 안 바꾼다
+    return None if want == current_speed else want

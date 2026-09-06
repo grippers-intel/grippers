@@ -232,6 +232,18 @@ VLA_ACCEL_RAW = 30
 #
 # 0 을 주면 예전처럼 무제한이 된다(런타임 파라미터 vla_gripper_speed_raw).
 VLA_GRIPPER_SPEED_RAW = 600
+# 여는 쪽 상한(raw/s). 0 = 무제한(2026-09-06 1차까지의 동작).
+#
+# 2차에서 열었다. 실기에서 정책이 한 청크(1.07초)에 9.0mm -> 64.8mm 를 여는데
+# (약 270 raw/s), 촬영 실측 열기 중앙값 450 raw/s 보다 오히려 느린데도
+# 사용자에게는 "동작 속도에 비해 너무 빠르다"로 보였다. 원인은 그리퍼가
+# 아니라 **주변이 느린 것**이다 — 추론 대기로 팔이 사이클의 27~45% 를 서 있어서
+# 그리퍼만 홱 움직이는 것이 도드라진다.
+#
+# 기본을 0(무제한)으로 두는 이유: 여는 것은 빈 공간에서 일어나 위험이 없고,
+# VLA 시작에서 턱이 다 벌어지기 전에 팔이 내려가면 그게 더 큰 사고다
+# (1차 커밋의 근거). 필요하면 런타임 파라미터로 켠다.
+VLA_GRIPPER_OPEN_SPEED_RAW = 0
 # 방향 판정과 데드밴드는 gripper_motion 에 있다 — rclpy 없이 import 되는
 # 순수 모듈이라 규칙을 **실행해서** 시험할 수 있다.
 # 스텝당 관절 이동 상한 기본값(도). rollout_policy.py 의 --max-rel 기본값과
@@ -375,6 +387,9 @@ class ArmDriverNode(Node):
         # ros2 param set /arm_driver_node vla_gripper_speed_raw 450
         # 처럼 노드를 안 내리고 바꿔 가며 물체가 밀리는지 볼 수 있다.
         self.declare_parameter("vla_gripper_speed_raw", VLA_GRIPPER_SPEED_RAW)
+        # 여는 쪽 상한. 0 이면 무제한 — 기본이 그것이다.
+        # ros2 param set /arm_driver_node vla_gripper_open_speed_raw 400
+        self.declare_parameter("vla_gripper_open_speed_raw", VLA_GRIPPER_OPEN_SPEED_RAW)
 
         arm_port = self.get_parameter("arm_port").value
         enable_torque_on_start = bool(self.get_parameter("enable_torque_on_start").value)
@@ -1021,7 +1036,9 @@ class ArmDriverNode(Node):
             # 걸어 뒀으니 지금 상태는 무제한이고, 아래 재생 루프가 지령의 방향을
             # 보고 필요할 때만 바꿔 쓴다.
             grip_close_speed = int(self.get_parameter("vla_gripper_speed_raw").value)
-            grip_limited = False
+            grip_open_speed = int(self.get_parameter("vla_gripper_open_speed_raw").value)
+            # 지금 서보에 걸려 있는 값. 위 루프가 방금 VLA_SPEED_RAW 를 썼다.
+            grip_speed_now = VLA_SPEED_RAW
 
             # 스텝 제한의 기준점은 처음 한 번만 실제로 읽고, 그 뒤로는 우리가
             # 보낸 목표를 이어 쓴다. 30Hz 재생 중에 매 스텝 서보 6개를 되읽으면
@@ -1074,11 +1091,12 @@ class ArmDriverNode(Node):
                 new_grip_speed = gripper_speed_change(
                     goal[GRIPPER_SERVO_ID] - last[GRIPPER_SERVO_ID],
                     grip_close_speed,
-                    grip_limited,
+                    grip_speed_now,
+                    grip_open_speed,
                 )
                 if new_grip_speed is not None:
                     backend.drv.set_speed(GRIPPER_SERVO_ID, new_grip_speed)
-                    grip_limited = new_grip_speed == grip_close_speed
+                    grip_speed_now = new_grip_speed
                 step_clamped = False
                 for servo_id in ALL_SERVO_IDS:
                     move = goal[servo_id] - last[servo_id]

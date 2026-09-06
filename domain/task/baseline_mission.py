@@ -694,6 +694,21 @@ class BaselineGraspState(State):
             return False
         ok = bool(ports.vla.run_grasp(self.label))
         if not ok:
+            # ⚠️ 접기 **전에** 활짝 연다. 2026-09-06 실기 사고 대응.
+            #
+            # fold_to_cradle 은 arm_driver 의 _close_gripper_before_folding 을
+            # 거치는데, 그 함수는 "폭이 AUTO_ALIGN_GRIPPER_CLOSE_ABOVE_MM
+            # (45mm)을 넘으면 아무것도 안 물고 있는 것"으로 보고 9.0mm 로
+            # 닫는다. 접힌 팔이 차체를 긁지 않게 하려는 조치이고 그 자체는
+            # 맞다.
+            #
+            # 그런데 정책이 실패로 끝나는 자리는 **그리퍼가 69mm 로 열린 채
+            # 물체 바로 위**다. 거기서 닫으면 물체를 그대로 문다 — 정책은
+            # 실패했는데 물건은 들려 있는 상태가 된다. 사용자가 "결국
+            # 동료 잡기 시퀀스가 잡았다"고 본 것이 정확히 이것이다.
+            #
+            # 실패는 깨끗한 실패여야 한다. 물체를 놓고 접는다.
+            ports.arm.set_gripper(gp.release_width_mm)
             # 정책이 실패하면 팔이 미등록 자세에 남는다. 여기서 접어 두지
             # 않으면 다음 시도도, 주행도 그 자세에서 시작한다.
             ports.arm.fold_to_cradle()

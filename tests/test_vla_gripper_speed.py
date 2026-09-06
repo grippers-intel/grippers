@@ -97,28 +97,38 @@ def raw_per_unit():
 # 보는 검사와 결과를 보는 검사는 다른 물건이다.
 
 CLOSE, OPEN, LIMIT = -50, +50, 600
+UNL = 0          # 무제한 = 지금 서보에 걸린 값이 0 이라는 뜻
 
 
 def test_닫기_시작에_상한을_건다():
-    assert gm.gripper_speed_change(CLOSE, LIMIT, limited=False) == LIMIT
+    assert gm.gripper_speed_change(CLOSE, LIMIT, current_speed=UNL) == LIMIT
 
 
 def test_열기_시작에_무제한으로_되돌린다():
-    """열기까지 묶으면 턱이 다 벌어지기 전에 팔이 내려간다."""
-    assert gm.gripper_speed_change(OPEN, LIMIT, limited=True) == gm.UNLIMITED
+    """기본은 여는 쪽 무제한 — 턱이 다 벌어지기 전에 팔이 내려가면 안 된다."""
+    assert gm.gripper_speed_change(OPEN, LIMIT, current_speed=LIMIT) == gm.UNLIMITED
+
+
+def test_여는_상한을_주면_그_값을_건다():
+    """2026-09-06 2차 — 여는 쪽도 손잡이가 필요해졌다."""
+    assert gm.gripper_speed_change(OPEN, LIMIT, current_speed=LIMIT, open_speed=400) == 400
+
+
+def test_여는_상한이_이미_걸려_있으면_안_쓴다():
+    assert gm.gripper_speed_change(OPEN, LIMIT, current_speed=400, open_speed=400) is None
 
 
 def test_같은_방향이_이어지면_아무것도_안_쓴다():
     """방향이 바뀔 때만 써야 한다 — 매 스텝 쓰면 30Hz 재생에서 시리얼이 붐빈다."""
-    assert gm.gripper_speed_change(CLOSE, LIMIT, limited=True) is None
-    assert gm.gripper_speed_change(OPEN, LIMIT, limited=False) is None
+    assert gm.gripper_speed_change(CLOSE, LIMIT, current_speed=LIMIT) is None
+    assert gm.gripper_speed_change(OPEN, LIMIT, current_speed=UNL) is None
 
 
 @pytest.mark.parametrize("move", [0, 1, -1, 3, -3])
 def test_데드밴드_안에서는_방향을_안_바꾼다(move):
     """지령이 멈춘 구간에서 부호가 잡음으로 흔들려도 넘어가면 안 된다."""
-    assert gm.gripper_speed_change(move, LIMIT, limited=False) is None
-    assert gm.gripper_speed_change(move, LIMIT, limited=True) is None
+    assert gm.gripper_speed_change(move, LIMIT, current_speed=UNL) is None
+    assert gm.gripper_speed_change(move, LIMIT, current_speed=LIMIT) is None
 
 
 def test_데드밴드는_정상_이동보다_한참_작다():
@@ -128,9 +138,8 @@ def test_데드밴드는_정상_이동보다_한참_작다():
 
 def test_0을_주면_아무것도_안_한다():
     """되돌릴 수 있어야 A/B 로 원인을 가린다."""
-    for limited in (True, False):
-        assert gm.gripper_speed_change(CLOSE, 0, limited) is None
-        assert gm.gripper_speed_change(OPEN, 0, limited) is None
+    assert gm.gripper_speed_change(CLOSE, 0, current_speed=UNL) is None
+    assert gm.gripper_speed_change(OPEN, 0, current_speed=UNL) is None
 
 
 def test_한_번_닫고_열고_닫는_동안_두_번만_바뀐다():
@@ -139,12 +148,12 @@ def test_한_번_닫고_열고_닫는_동안_두_번만_바뀐다():
     시작은 무제한(재생 시작 루프가 servo 6 에도 0 을 걸어 둔다)이고,
     열림 -> 닫힘 -> 열림(놓기) 순으로 간다."""
     moves = [+40] * 5 + [0, 1, -2] + [-40] * 5 + [0] * 3 + [+40] * 5
-    limited, writes = False, []
+    now, writes = UNL, []
     for move in moves:
-        new = gm.gripper_speed_change(move, LIMIT, limited)
+        new = gm.gripper_speed_change(move, LIMIT, now)
         if new is not None:
             writes.append(new)
-            limited = new == LIMIT
+            now = new
 
     assert writes == [LIMIT, gm.UNLIMITED], f"쓰기가 {writes} 입니다"
 
@@ -262,8 +271,8 @@ def test_재생_시작마다_그리퍼도_무제한으로_되돌린다():
     assert grip in eval(src, {"__builtins__": {"range": range}})
 
 
-def test_플래그_초기화는_리셋_뒤에_온다():
-    """순서가 뒤집히면 플래그가 레지스터보다 앞서 거짓말을 한다."""
+def test_추적값_초기화는_리셋_뒤에_온다():
+    """순서가 뒤집히면 추적값이 레지스터보다 앞서 거짓말을 한다."""
     fn = _function("_execute_joint_chunk")
 
     reset_line = max(
@@ -274,12 +283,13 @@ def test_플래그_초기화는_리셋_뒤에_온다():
         and node.func.attr == "set_speed"
         and any(isinstance(a, ast.Name) and a.id == "VLA_SPEED_RAW" for a in node.args)
     )
+    # 추적 변수는 "지금 서보에 걸린 값" 이고, 리셋 루프가 쓴 값과 같아야 한다.
     init_line = min(
         node.lineno
         for node in ast.walk(fn)
         if isinstance(node, ast.Assign)
-        and ast.unparse(node.targets[0]) == "grip_limited"
-        and ast.unparse(node.value) == "False"
+        and ast.unparse(node.targets[0]) == "grip_speed_now"
+        and ast.unparse(node.value) == "VLA_SPEED_RAW"
     )
     assert init_line > reset_line
 
@@ -290,4 +300,4 @@ def test_어긋나면_어떻게_되는지를_규칙_자체로_보인다():
     레지스터에는 상한이 남아 있는데 플래그만 False 인 상태를 흉내 내면,
     열기 지령이 와도 규칙은 **아무것도 안 쓴다.** 규칙의 결함이 아니라
     입력이 거짓이라 그런 것이고, 그래서 시작 리셋이 규칙의 전제다."""
-    assert gm.gripper_speed_change(OPEN, LIMIT, limited=False) is None
+    assert gm.gripper_speed_change(OPEN, LIMIT, current_speed=UNL) is None
