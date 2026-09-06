@@ -189,4 +189,21 @@ def test_교시_각도제한이_백업_파일과_같다():
     expected = {ids[n]: (r["Min_Position_Limit"], r["Max_Position_Limit"])
                 for n, r in data["motors"].items()}
 
+    # ⚠️ 2026-09-07: servo 6 하한만 백업(1140)에서 **일부러 벗어났다**
+    # (1090, 사용자 지시). 1140 이 기계적 한계가 아니라 소프트웨어 제한이고,
+    # 그 때문에 VLA 정책의 닫힘 지령(raw 1100)이 잘려 물체를 헐겁게 물었다는
+    # 것이 실측으로 확인됐다 — 토크를 끄고 손으로 누르니 1106 까지 닫혔다.
+    #
+    # 백업 JSON 은 **교시 순간의 기록**이므로 고치지 않는다. 대신 이탈을
+    # 여기에 적어 둔다 — 그래야 나머지 다섯 관절의 드리프트는 계속 잡히고,
+    # 이 하나는 "왜 다른지"가 코드에 남는다. 새 이탈이 생기면 반드시 여기에
+    # 근거와 함께 적을 것.
+    DELIBERATE = {6: ((1140, 2090), (1090, 2090))}   # {servo: (백업, 지금)}
+
+    for sid, (backup, now) in DELIBERATE.items():
+        assert expected[sid] == backup, (
+            f"servo {sid} 백업이 바뀌었다 — 이탈 기록을 다시 볼 것")
+        assert profiles.TAUGHT_POSITION_LIMITS[sid] == now
+        expected[sid] = now
+
     assert profiles.TAUGHT_POSITION_LIMITS == expected
