@@ -46,6 +46,7 @@ def launch_setup(context):
     policy_source = LaunchConfiguration("policy_source")
     policy_url = LaunchConfiguration("policy_url")
     policy_calibration_file = LaunchConfiguration("policy_calibration_file")
+    vla_gripper_speed_raw = LaunchConfiguration("vla_gripper_speed_raw")
     checkpoint = LaunchConfiguration("checkpoint")
     vla_record_dir = LaunchConfiguration("vla_record_dir")
     device = LaunchConfiguration("device")
@@ -143,6 +144,10 @@ def launch_setup(context):
                 # use_depth_gate 때와 같은 사고이고 원인도 같다 — 노드에만
                 # 파라미터를 두고 런치에 배선하지 않았다.
                 "auto_align_on_first_move": auto_align_on_first_move,
+                # VLA 재생 중 그리퍼 닫는 속도(raw/s). 0 = 무제한(2026-09-06 이전).
+                # 실기에서 흔들어 볼 값이라 런치까지 뺀다 — 위 두 주석의 사고가
+                # 전부 "노드에만 두고 배선을 안 한" 경우였다.
+                "vla_gripper_speed_raw": vla_gripper_speed_raw,
             }
         ],
     )
@@ -383,6 +388,12 @@ def generate_launch_description():
                 default_value="/grippers/host/vla/calibration/grippers_arm.json",
                 description="정책 좌표계 캘리브레이션. 빈 문자열이면 "
                 "ExecuteJointChunk(VLA 재생)만 거부되고 classic 경로는 그대로다",
+            ),
+            DeclareLaunchArgument(
+                "vla_gripper_speed_raw",
+                default_value="600",
+                description="VLA 재생 중 servo 6 Goal_Velocity(raw/s). "
+                "촬영 실측 469~660 사이 값이고 0 이면 무제한이다",
             ),
             DeclareLaunchArgument(
                 "gripper_cam_publish_hz",

@@ -197,6 +197,40 @@ STS3215_RESOLUTION_MINUS_1 = 4095
 # 다시 뒤처짐을 키운다. 그래서 재생 시작마다 명시적으로 다시 쓴다.
 VLA_SPEED_RAW = 0
 VLA_ACCEL_RAW = 30
+# ⚠️ servo 6 만은 예외로 묶는다 — 위 "0 = 무제한"이 그리퍼에는 해롭다.
+#
+# 2026-09-06 사용자 관찰: VLA 파지에서 턱이 물체를 치고 앞으로 밀어낸다.
+# 관절 1..5 와 달리 그리퍼는 **물체와 부딪히는 것이 일이라서**, 무제한 속도가
+# 곧 충격이 된다. 팔은 빈 공간을 지나가므로 같은 문제가 없다.
+#
+# 값은 촬영 데이터에서 나왔다(리눅스 세션이 v5_all 118회차에서 측정, 그리퍼
+# 지령이 60->20 으로 내려가는 주 구간). 이 노드의 raw 로 환산하면 —
+# 캘리브레이션(grippers_arm.json)의 gripper range 1960..2427 이 정책의
+# 0..100 이므로 1 unit = 4.67 raw 다.
+#
+#     촬영 지령 평균  112.5 unit/s = 525 raw/s
+#     촬영 실제 평균  100.5 unit/s = 469 raw/s   <- 턱이 실제로 낸 속도
+#     촬영 실제 최대  141.3 unit/s = 660 raw/s
+#
+# 반면 지금 재생 경로에는 속도 상한이 **없다**. 유일하게 남은 제약이
+# max_step_deg(5도 = 57 raw)뿐이라 30fps 에서 1710 raw/s 까지 열려 있다 —
+# 촬영 때 턱이 낸 속도의 3.6배다. 정책의 지령 자체는 그렇게 빠르지 않지만
+# (프레임당 3.3~5.4 unit), 속도가 무제한이면 서보가 매 프레임의 25 raw 를
+# 전속력으로 때리고 멈추기를 반복한다. 촬영 때 팔로워는 지령보다 19.5 unit
+# (91 raw) 뒤처져 있었고, 그 지연이 곧 완충이었다.
+#
+# 600 raw/s 는 촬영 실제 평균(469)과 최대(660) 사이이고, 마침 classic 경로가
+# 이미 쓰는 GRIPPER_SPEED_RAW 와 같은 값이다 — 두 경로가 같은 속도로 닫는다.
+#
+# 관절 1..5 를 묶으면 안 되는 이유는 VLA_SPEED_RAW 주석의 2026-09-02 사례
+# 참고. 그 고장은 **스텝 상한이 현재 위치 기준**이라 뒤처짐이 스스로를 키우는
+# 되먹임이었다. 지금 상한은 `last`(직전 **지령**) 기준이라 실제 위치를 읽지
+# 않으므로, 속도를 묶어도 지령 궤적은 흔들리지 않는다 — 도달이 늦어질 뿐이다.
+# 그리퍼의 실제 닫힘 행정은 187 raw 라 600 raw/s 로 0.31초, 청크 3.33초
+# 안에서 넉넉하다.
+#
+# 0 을 주면 예전처럼 무제한이 된다(런타임 파라미터 vla_gripper_speed_raw).
+VLA_GRIPPER_SPEED_RAW = 600
 # 스텝당 관절 이동 상한 기본값(도). rollout_policy.py 의 --max-rel 기본값과
 # 같은 자리다 — 정책이 분포 밖 입력에 튀어도 한 스텝에 갈 수 있는 거리를 묶는다.
 VLA_MAX_STEP_DEG_DEFAULT = 5.0
@@ -331,6 +365,13 @@ class ArmDriverNode(Node):
         # so_follower/grippers_arm.json 이고, Pi 에는 이 파일을 같이 배포해야
         # 한다. 정책을 다시 학습하면 그때 쓴 캘리브레이션으로 같이 바꿀 것.
         self.declare_parameter("policy_calibration_file", "")
+        # VLA 청크 재생 중 servo 6 의 Goal_Velocity(raw/s). 0 이면 무제한 —
+        # 즉 이 파라미터를 0 으로 두면 2026-09-06 이전 동작으로 돌아간다.
+        #
+        # 파라미터로 뺀 것은 값이 실기에서 정해질 성질이기 때문이다.
+        # ros2 param set /arm_driver_node vla_gripper_speed_raw 450
+        # 처럼 노드를 안 내리고 바꿔 가며 물체가 밀리는지 볼 수 있다.
+        self.declare_parameter("vla_gripper_speed_raw", VLA_GRIPPER_SPEED_RAW)
 
         arm_port = self.get_parameter("arm_port").value
         enable_torque_on_start = bool(self.get_parameter("enable_torque_on_start").value)
@@ -972,6 +1013,12 @@ class ArmDriverNode(Node):
             for servo_id in ALL_SERVO_IDS:
                 backend.drv.set_speed(servo_id, VLA_SPEED_RAW)
                 backend.drv.set_acceleration(servo_id, VLA_ACCEL_RAW)
+
+            # 그리퍼만 뒤에 덮어쓴다 — 위 루프가 servo 6 에도 무제한을 걸기
+            # 때문에 순서가 뒤바뀌면 안 된다(VLA_GRIPPER_SPEED_RAW 주석).
+            grip_speed = int(self.get_parameter("vla_gripper_speed_raw").value)
+            if grip_speed > 0:
+                backend.drv.set_speed(GRIPPER_SERVO_ID, grip_speed)
 
             # 스텝 제한의 기준점은 처음 한 번만 실제로 읽고, 그 뒤로는 우리가
             # 보낸 목표를 이어 쓴다. 30Hz 재생 중에 매 스텝 서보 6개를 되읽으면
