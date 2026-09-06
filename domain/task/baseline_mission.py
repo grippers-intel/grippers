@@ -745,6 +745,19 @@ class BaselineGraspState(State):
                     f"servo 1 좌우 보정 {wanted:+.1f}도는 학습 분포 밖"
                     f"(한계 ±{ga.VLA_PAN_LIMIT_DEG:.0f}도) — 보정 없이 진행한다")
         ok = bool(ports.vla.run_grasp(self.label, pan_bias_deg))
+        # ⚠️ 정책이 끝난 **직후** 한 번 재 둔다. 최종 판정은 CARRY 뒤에
+        # 하는데, 그것만으로는 "정책이 애초에 못 잡았다"와 "잡았다가 CARRY
+        # 로 옮기다 놓쳤다"를 구분할 수 없다 — 고칠 곳이 완전히 다른데도.
+        #
+        # 2026-09-06 실기: 사용자가 "파지를 성공했는데 드는 과정에서
+        # 놓쳤다"고 보고했고, CARRY 뒤 판정은 1147(빈 턱 기계정지)이었다.
+        # 그 한 숫자로는 어느 쪽인지 알 수가 없었다.
+        held_after_policy = ports.arm.gripper_position_raw()
+        ports.host.report(
+            Report.STATE, self.name,
+            f"정책 직후 그리퍼 {held_after_policy} "
+            f"({'물고 있음' if held_after_policy >= bc.GRIPPER_HELD_POSITION_RAW else '비었음'}"
+            f", 문턱 {bc.GRIPPER_HELD_POSITION_RAW})")
         if not ok:
             # ⚠️ 접기 **전에** 활짝 연다. 2026-09-06 실기 사고 대응.
             #
