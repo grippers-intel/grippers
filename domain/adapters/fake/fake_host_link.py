@@ -21,6 +21,14 @@ class FakeHostLink(HostLink):
         self._idx += 1
         return command
 
+    def last_command(self) -> HostCommand | None:
+        """소비하지 않는다 — 커서를 **안 움직인다**(HostLink.last_command)."""
+        if not self._script:
+            return None
+        # 이미 건네준 것이 있으면 그것을, 아직 없으면 다음에 건넬 것을 준다.
+        i = self._idx - 1 if self._idx else 0
+        return self._script[min(i, len(self._script) - 1)]
+
     def report(self, report: str, state: str, detail: str = "", fix=None) -> None:
         self.reports.append((report, state, detail, fix))
 

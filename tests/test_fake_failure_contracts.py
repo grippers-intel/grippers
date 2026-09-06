@@ -121,6 +121,16 @@ FAILURE_CONTRACTS = [
         "**None**",
     ),
     (
+        # 소비하지 않는 짝(2026-09-07). 실패값은 같은 None 이지만 뜻이
+        # 좁다 — "아직 한 번도 못 받았다"이지 "이번 사이클에 새것이
+        # 없다"가 아니다. 파지처럼 늦게 한 번 읽는 자리가 이것을 쓴다.
+        HostLink,
+        "last_command",
+        lambda: FakeHostLink([]).last_command(),
+        None,
+        "**None**",
+    ),
+    (
         # 라이다는 "모르면 실패"다 — 판정하지 않는 쪽이 INSERT를 막아 안전하다.
         Lidar,
         "basket_face",

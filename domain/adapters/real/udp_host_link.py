@@ -146,6 +146,11 @@ class UdpHostLink:
             self._fresh = False
             return self._latest
 
+    def last_command(self):
+        """마지막으로 받은 명령 — **소비하지 않는다**(HostLink.last_command)."""
+        with self._lock:
+            return self._latest
+
     # --- 송신 ---------------------------------------------------------
 
     def report(self, report: str, state: str, detail: str = "", fix=None) -> None:

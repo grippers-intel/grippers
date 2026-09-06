@@ -18,11 +18,19 @@
 
 턱이 물체에 막히면 닫힘 목표까지 못 가고, 그 잔차가 곧 물체 두께다.
 
-    빈 턱 기계정지    1144~1147
+    빈 턱 기계정지    1112        (2026-09-07 실측)
     닫힘 명령 목표    1150
     퀸(17mm)         1189 근처
 
-42 raw 차이다. 부하의 1/256 과 달리 헷갈릴 수가 없다.
+77 raw 차이다. 부하의 1/256 과 달리 헷갈릴 수가 없다.
+
+⚠️ 빈 턱 값은 2026-09-07 에 1147 -> 1112 로 내려갔다. servo 6 의
+Min_Angle_Limit 을 1140 -> 1090 으로 내렸기 때문이다 — 마모가 아니라 설정이다.
+
+⚠️ 이 문턱이 답하는 것은 "턱 사이에 무엇이 있는가"뿐이다. **제대로
+물었는가는 못 답한다** — 한쪽 턱에 걸린 물체도 턱을 그만큼 벌린다. 같은
+날 1181 을 성공으로 읽고 헛투하를 하러 간 것이 그 경우다. 그 뒤를 받는
+것이 투하 직전 재확인이다(test_insert_regrip_check.py).
 """
 
 import pytest
@@ -34,7 +42,7 @@ from domain.task import baseline_constants as bc
 from domain.task.baseline_mission import BaselinePorts
 
 #: 실측값. 이 시험의 근거이자, 문턱이 이 둘 사이에 있어야 한다는 제약이다.
-EMPTY_JAW_RAW = 1147
+EMPTY_JAW_RAW = bc.GRIPPER_EMPTY_POSITION_RAW   # 1112, 2026-09-07 실측
 QUEEN_HELD_RAW = 1189
 
 

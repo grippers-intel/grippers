@@ -43,6 +43,7 @@ GRASP와 INSERT만 "한 번의 execute에서 시퀀스 전체를 수행"한다. 
 """
 
 import math
+import time
 from dataclasses import dataclass, field
 
 from domain.ports.baseline_ports import MissionState, Report
@@ -651,7 +652,7 @@ class BaselineGraspState(State):
                 success = held_raw >= bc.GRIPPER_HELD_POSITION_RAW
                 reason = (f"그리퍼가 {held_raw} 까지 닫혔다 — 턱 사이가 비었다"
                           f" (물었으면 {bc.GRIPPER_HELD_POSITION_RAW} 이상,"
-                          f" 빈 턱은 1147 에서 멈춘다)")
+                          f" 빈 턱은 {bc.GRIPPER_EMPTY_POSITION_RAW} 에서 멈춘다)")
         else:
             vanished = ports.perception.confirm_grasp()
             success = vanished if load_unknown else (load_ok and vanished)
@@ -727,15 +728,30 @@ class BaselineGraspState(State):
         # 돌았어"였다. yaw_correction_deg 는 차량 좌표계, servo 1 의 +는 팔
         # 베이스 좌표계라 부호축이 반대다.
         #
-        # ⚠️ 한계를 넘으면 **보정을 포기하고 그대로 간다.** 학습 분포 밖으로
-        # 팔을 밀어 넣느니 안 밀어 넣는 편이 낫다 — 분포 밖은 그냥 실패다.
-        # 대신 보고에 남겨 Host 가 다음 기물부터 반영할 수 있게 한다.
-        command = ports.host.latest_command()
+        # ⚠️ 한계를 넘으면 **자른다 — 버리지 않는다.**
+        #
+        # 2026-09-07 실기에서 세 번 연속으로 pan_bias 가 0.0 으로 나갔다
+        # (로그: `vla.run_grasp args=('queen', 0.0)` x3). 예전 코드는 한계를
+        # 넘으면 보정을 **통째로** 버렸는데, 그 합에는 두 가지가 섞여
+        # 있다:
+        #
+        #   PIECE_AIM_YAW_TRIM_DEG  — 그리퍼·마커의 **고정** 장착 오차
+        #   차체 잔차                            — 이번 회차에서만 생긴 값
+        #
+        # 통째로 버리면 **항상 필요한 트림까지 같이 버려진다.** 그러면
+        # 조준이 차체가 우연히 멈춘 각도에 그대로 맡겨진다 — 주행 허용오차가
+        # ±8도이고 r=0.38m 이므로 좌우 ±5.3cm 가 **무작위로** 남는다. 사용자가
+        # 본 "어느 날은 좌편향, 어느 날은 우편향"이 정확히 이것이다.
+        #
+        # 자르면 분포 밖으로는 안 나가면서 방향은 맞는다. ±8도가 0도보다
+        # 항상 가깝다 — 보정이 모자란 것과 반대로 가는 것은 다르다.
+        command = ports.host.last_command()
         pan_bias_deg = 0.0
         if command is not None and command.yaw_correction_deg:
             wanted = -float(command.yaw_correction_deg)
-            if abs(wanted) <= ga.VLA_PAN_LIMIT_DEG:
-                pan_bias_deg = wanted
+            limit = ga.VLA_PAN_LIMIT_DEG
+            pan_bias_deg = max(-limit, min(limit, wanted))
+            if pan_bias_deg == wanted:
                 ports.host.report(
                     Report.STATE, self.name,
                     f"servo 1 좌우 보정 {pan_bias_deg:+.1f}도 (정책 pan 출력에 더한다)")
@@ -743,7 +759,7 @@ class BaselineGraspState(State):
                 ports.host.report(
                     Report.STATE, self.name,
                     f"servo 1 좌우 보정 {wanted:+.1f}도는 학습 분포 밖"
-                    f"(한계 ±{ga.VLA_PAN_LIMIT_DEG:.0f}도) — 보정 없이 진행한다")
+                    f"(한계 ±{limit:.0f}도) — {pan_bias_deg:+.1f}도로 잘라서 넣는다")
         ok = bool(ports.vla.run_grasp(self.label, pan_bias_deg))
         # ⚠️ 정책이 끝난 **직후** 한 번 재 둔다. 최종 판정은 CARRY 뒤에
         # 하는데, 그것만으로는 "정책이 애초에 못 잡았다"와 "잡았다가 CARRY
@@ -773,11 +789,63 @@ class BaselineGraspState(State):
             # 동료 잡기 시퀀스가 잡았다"고 본 것이 정확히 이것이다.
             #
             # 실패는 깨끗한 실패여야 한다. 물체를 놓고 접는다.
-            ports.arm.set_gripper(gp.release_width_mm)
-            # 정책이 실패하면 팔이 미등록 자세에 남는다. 여기서 접어 두지
-            # 않으면 다음 시도도, 주행도 그 자세에서 시작한다.
-            ports.arm.fold_to_cradle()
+            #
+            # ⚠️ **한 번만 시도하면 안 된다.** 2026-09-07 실기: 정책이
+            # "servo 6 write 실패 — step 63/63" 으로 끝났는데, 그 100ms 뒤에
+            # 부른 set_gripper 도 "servo 통신 실패", 이어진 fold_to_cradle 도
+            # "present position 읽기 실패"로 죽었다. 버스가 잠깐 나갔던 것뿐이라
+            # 4초 뒤에는 멀쩡했다(같은 로그에서 move_to_floor_pose 성공).
+            #
+            # 결과가 나빴다 — 그때 그리퍼에는 **별이 물려 있었고**, 놓기가
+            # 실패했으니 그대로 문 채 다음 물체를 잡으러 갔다. 사용자 보고:
+            # "실제로 파지도 되었는데 물건을 따로 놓으러가지는 않고 3번째
+            # 물건을 잡으러가는 행동을 취했어".
+            #
+            # 놓기는 한 번 실패해도 물러설 수 있는 동작이 아니다. 실패한
+            # 파지가 물건을 들고 가는 것보다는 몇 초 늦는 편이 낫다.
+            self._release_and_fold(ports, gp)
         return ok
+
+    #: 버스가 잠깐 나갔다 돌아오는 데 실기에서 4초쯤 걸렸다(2026-09-07).
+    #: 간격 x 횟수가 그보다 넉넉해야 한다. 도메인에서 유일하게 자는
+    #: 자리라 클래스 속성으로 뺐다 — 시험은 0 으로 두고 부른다.
+    RELEASE_RETRIES = 4
+    RELEASE_RETRY_SEC = 1.5
+
+    def _release_and_fold(self, ports, gp) -> bool:
+        """물체를 놓고 접는다. 통신이 잠깐 나가도 **끈질기게** 다시 시도한다.
+
+        놓기와 접기를 따로 센다 — 놓기는 됐는데 접기만 실패하는 경우가
+        있고(둘은 다른 서보를 건드린다), 그때 놓기를 또 부를 이유가 없다.
+
+        끝내 못 놓았으면 True 를 돌려주지 않는다. 호출하는 쪽이 그걸 보고
+        Host 에 알려야 한다 — 물건을 문 채 다음 기물로 가는 것이 최악이다."""
+        released = folded = False
+        for attempt in range(1, self.RELEASE_RETRIES + 1):
+            if not released:
+                # ⚠️ set_gripper 는 반환값이 없다 — 실패해도 조용하다.
+                # 그래서 명령이 아니라 **위치를 읽어** 확인한다
+                # (bc.GRIPPER_RELEASED_MIN_RAW 주석).
+                ports.arm.set_gripper(gp.release_width_mm)
+                released = (ports.arm.gripper_position_raw()
+                            >= bc.GRIPPER_RELEASED_MIN_RAW)
+            if released and not folded:
+                folded = bool(ports.arm.fold_to_cradle())
+            if released and folded:
+                if attempt > 1:
+                    ports.host.report(
+                        Report.STATE, self.name,
+                        f"놓기·접기 {attempt}회 만에 성공 — 통신이 잠깐 나갔다")
+                return True
+            if attempt < self.RELEASE_RETRIES:
+                time.sleep(self.RELEASE_RETRY_SEC)
+
+        ports.host.report(
+            Report.GRASP_BLOCKED, self.name,
+            f"{self.RELEASE_RETRIES}회 시도했는데 "
+            f"{'접지' if released else '놓지'} 못했다 — "
+            f"그리퍼에 물건이 남아 있을 수 있다")
+        return False
 
     def _failed(self, ports, detail):
         """파지 실패 — 팔을 붙잡고 APPROACH로 되돌아가 Host의 판단을 기다린다.
@@ -1043,6 +1111,31 @@ class BaselineInsertState(State):
         ports.host.report(Report.STATE, self.name)
         ports.base.stop()
         gp = plan_for_label(self.label)
+
+        # ── 아직 물고 있나 ────────────────────────────────────────────────
+        #
+        # 파지 성공 판정은 CARRY 로 접은 **직후** 한 번 한다. 그 뒤로 여기까지
+        # 오는 사이에 차가 바구니까지 주행한다 — 그 사이에 놓치면 아무도 안
+        # 본다. 2026-09-07 실기에서 그 일이 났다: 사용자 보고 "실제로는 잡지
+        # 못했는데 잡았다고 판단하여 물체를 놓으러 갔고".
+        #
+        # 그때 CARRY 판정값은 1181 로, 빈 턱(1112)보다 69 raw = 약 14mm 위였다
+        # — **판정 시점에는 턱 사이에 정말 뭔가 있었다.** 문턱이 틀린 게
+        # 아니라, 그 뒤에 흘린 것을 확인하는 자리가 없었던 것이다.
+        #
+        # 여기서 한 번 더 읽으면 헛투하를 안 한다. 못 읽으면(-1) 진행한다 —
+        # 모르는 것을 실패로 단정해 물건을 든 채 서 있는 것이 더 나쁘다.
+        held_raw = ports.arm.gripper_position_raw()
+        if 0 <= held_raw < bc.GRIPPER_HELD_POSITION_RAW:
+            ports.arm.move_to_floor_pose(gp.profile, "idle")
+            ports.host.report(
+                Report.INSERT_FAILED, self.name,
+                f"투하 직전 그리퍼가 비었다 — 위치 {held_raw} "
+                f"(물었으면 {bc.GRIPPER_HELD_POSITION_RAW} 이상, "
+                f"빈 턱은 {bc.GRIPPER_EMPTY_POSITION_RAW}). "
+                f"운반 도중 놓친 것으로 본다")
+            ports.host.report(Report.IDLE_DONE, MissionState.IDLE, "복귀 완료")
+            return BaselineIdleState()
 
         if not ports.arm.move_to_floor_pose(gp.profile, "drop"):
             ports.arm.hold_position()

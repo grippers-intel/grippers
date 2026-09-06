@@ -190,6 +190,24 @@ class HostLink(ABC):
         따로 봐야 한다(`baseline_mission`의 `LinkWatchdog`/`_link_ok` 참고)."""
 
     @abstractmethod
+    def last_command(self) -> HostCommand | None:
+        """마지막으로 받은 명령. **읽어도 소비되지 않는다.**
+
+        `latest_command()` 와 짝이되 계약이 다르다. 저쪽은 "아직 안 읽은 새
+        명령"이라 한 번 읽으면 다음 호출은 None 이다 — 주행 루프처럼 매
+        사이클 새 값을 받아야 하고, 값이 없으면 워치독이 서야 하는 자리에
+        맞는 계약이다.
+
+        여기는 "가장 최근에 알려진 값"이다. 파지처럼 **한참 뒤에 한 번만**
+        읽는 자리가 필요로 하는 것이 이쪽이다 — 2026-09-07 실기에서
+        `_grasp_vla` 가 latest_command() 로 servo 1 조준 보정을 읽었는데,
+        소비 계약 때문에 조용히 None 이 되어 보정이 0 으로 죽을 수 있었다.
+        조준 보정은 못 읽으면 멈춰야 하는 값이 아니라 마지막 값을 쓰면 되는
+        값이다(차체는 이미 그 자리에 서 있다).
+
+        아직 한 번도 못 받았으면 **None**."""
+
+    @abstractmethod
     def report(self, report: str, state: str, detail: str = "", fix=None) -> None:
         """Pi의 상태·판정 결과를 Host에 알린다.
 
