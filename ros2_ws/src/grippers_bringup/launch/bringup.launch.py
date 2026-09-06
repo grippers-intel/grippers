@@ -37,6 +37,7 @@ def launch_setup(context):
     use_fake_host = LaunchConfiguration("use_fake_host")
     host_ip = LaunchConfiguration("host_ip")
     scan_floor_enabled = LaunchConfiguration("scan_floor_enabled")
+    battery_alert = LaunchConfiguration("battery_alert")
     record_bag = LaunchConfiguration("record_bag")
     bag_output = LaunchConfiguration("bag_output")
     arm_port = LaunchConfiguration("arm_port")
@@ -201,22 +202,29 @@ def launch_setup(context):
                 }
             ],
         ),
-        # 2026-09-04 사용자 지시로 추가했다가, 2026-09-03 실기로 다시 껐다
-        # (사용자 지시) — WARN_MV=7800 문턱을 잡은 근거였던 "차가 안 움직인다"
-        # 증상이, 같은 날 다른 세션에서 회전 데드밴드/누적기 문제(순수
-        # 소프트웨어)로 확인됐다. domain/task/battery_alert.py 의
-        # docstring도 처음부터 "원인을 전압이라고 단정하지 않는다"고 못
-        # 박아 뒀던 잠정 경고라, 원인이 다른 곳으로 밝혀진 지금은 그대로
-        # 켜 두면 오히려 다음에 같은 오진(전압 문제로 오해)을 유발한다.
-        # 코드(domain/task/battery_alert.py, battery_buzzer_node.py)는
-        # 지우지 않고 여기서 노드만 뺐다 — 나중에 진짜 저전압 문턱을 다시
-        # 잡을 일이 생기면 재사용할 수 있다.
-        # Node(
-        #     package="grippers_mission",
-        #     executable="battery_buzzer_monitor",
-        #     output="screen",
-        #     condition=UnlessCondition(use_fake_base),
-        # ),
+        # ⚠️ 2026-09-06 밤에 **되살렸다.** 껐던 근거가 오늘 뒤집혔다.
+        #
+        # 껐을 때의 논리는 "차가 안 움직인다 증상이 회전 데드밴드/누적기
+        # (순수 소프트웨어) 문제로 확인됐으니 전압 경고는 오진을 유발한다"
+        # 였다. battery_alert.py 의 docstring 도 "정말 전압 때문이었는지는
+        # 끝내 확정하지 못했다"고 적어 두고 있었다.
+        #
+        # 오늘 확정됐다. 같은 증상이 다시 났고 이번엔 전압이 명확했다:
+        #
+        #     8030 mV   프로브에서 IMU 1.61 로 정상 회전
+        #     7900 mV   정상 주행
+        #     6290 mV   apply_velocity(0.15) 가 보드까지 가는데 바퀴가 안 돈다
+        #               (노드 전부 생존, 시리얼 양방향 정상, 워치독 0회)
+        #
+        # 그 사이에 "재부팅 + 배터리 재연결로 고쳤다"고 두 번 오진했다 —
+        # 고친 게 아니라 그때는 아직 전압이 있었던 것이다. WARN_MV(7800)가
+        # 켜져 있었으면 헤매기 전에 알았다.
+        Node(
+            package="grippers_mission",
+            executable="battery_buzzer_monitor",
+            output="screen",
+            condition=IfCondition(battery_alert),
+        ),
     ]
 
     return [
@@ -273,6 +281,13 @@ def generate_launch_description():
                 default_value="192.168.0.10",
                 description="보고를 보낼 Host 주소의 **초기값**. 첫 명령이 오면 "
                             "그 명령을 보낸 주소로 자동으로 바뀐다",
+            ),
+            DeclareLaunchArgument(
+                "battery_alert",
+                default_value="true",
+                description="저전압 부저 경고(WARN_MV 7800). 2026-09-06 실기에서 "
+                "6290mV 로 바퀴가 안 돌았고 노드는 전부 멀쩡했다 — 그 구간을 "
+                "미리 알리는 것이 목적이다",
             ),
             DeclareLaunchArgument(
                 "scan_floor_enabled",
