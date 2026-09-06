@@ -628,10 +628,30 @@ class BaselineGraspState(State):
             # 이미 감수한 거래다(BaselinePorts.use_depth_gate 주석). 물체
             # 모서리를 살짝 물었거나 턱끼리 문 경우도 통과하므로 사람이 눈으로
             # 지켜보는 시연에서만 쓸 것.
-            success = load_ok
-            reason = (f"부하를 못 읽었다 (뎁스 관문 꺼짐 — 판단 근거가 없다)"
-                      if load_unknown else
-                      f"부하 {carried:.4f} < 문턱 {bc.LOAD_THRESHOLD}")
+            # ⚠️ 2026-09-06 밤: 부하 대신 **그리퍼 위치**로 판정한다.
+            #
+            # 부하는 못 쓴다는 것이 실측으로 확정됐다 — 퀸을 실제로 물었을
+            # 때가 10/256 인데 문턱이 12/256 이다(GRIPPER_HELD_POSITION_RAW
+            # 주석의 표). 같은 날 한 판은 0.0000 으로 실패, 다음 판은
+            # 0.0469 로 성공이 나왔고 **둘 다 틀린 판정**이었다.
+            #
+            # 위치는 턱이 물체에 막힌 잔차라 물체 두께가 그대로 나온다.
+            # 빈 턱 1147 대 퀸 1189 — 42 raw 차이다.
+            held_raw = ports.arm.gripper_position_raw()
+            if held_raw < 0:
+                # 위치를 못 읽으면 부하로 물러선다. 좋은 신호는 아니지만
+                # 없는 것보다는 낫고, 읽기 실패는 시리얼 패킷 유실로 종종
+                # 일어난다.
+                success = load_ok
+                reason = (f"그리퍼 위치를 못 읽었고 부하도 못 읽었다"
+                          if load_unknown else
+                          f"그리퍼 위치를 못 읽어 부하로 판정 — "
+                          f"{carried:.4f} < 문턱 {bc.LOAD_THRESHOLD}")
+            else:
+                success = held_raw >= bc.GRIPPER_HELD_POSITION_RAW
+                reason = (f"그리퍼가 {held_raw} 까지 닫혔다 — 턱 사이가 비었다"
+                          f" (물었으면 {bc.GRIPPER_HELD_POSITION_RAW} 이상,"
+                          f" 빈 턱은 1147 에서 멈춘다)")
         else:
             vanished = ports.perception.confirm_grasp()
             success = vanished if load_unknown else (load_ok and vanished)

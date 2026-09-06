@@ -59,6 +59,14 @@ class FakeArm(ArmDriver):
     def set_gripper(self, width_mm: float) -> None:
         self.gripper_widths.append(width_mm)
 
+    #: 파지 성공 판정이 읽는 servo 6 위치(raw). 기본은 **물고 있는** 값이다 —
+    #: 기존 시험 대부분이 "성공한 파지"를 전제로 쓰이기 때문이다.
+    #: 빈 턱을 흉내 내려면 1147 로 낮춘다.
+    gripper_position_raw_value: int = 1200
+
+    def gripper_position_raw(self) -> int:
+        return self.gripper_position_raw_value
+
     def get_load(self) -> float:
         idx = min(self._load_call_count, len(self._load_ratios) - 1)
         self._load_call_count += 1

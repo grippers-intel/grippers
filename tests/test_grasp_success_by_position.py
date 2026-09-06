@@ -1,0 +1,119 @@
+"""파지 성공을 부하가 아니라 그리퍼 위치로 판정한다 (2026-09-06).
+
+## 부하가 왜 못 쓰는가 — 실측
+
+    퀸을 실제로 물었을 때   0.0391 = 10/256
+    빈손 닫힘               0.0352 =  9/256
+    빈 턱 기계정지          0.0274 =  7/256
+    LOAD_THRESHOLD          0.0469 = 12/256
+
+**물었을 때가 문턱보다 낮다.** 부하가 1/256 단위로 양자화되는데 물체 유무의
+차이가 딱 그 한 단위라, 판정이 사실상 동전 던지기다.
+
+같은 날 실기에서 한 판은 0.0000 으로 실패, 다음 판은 0.0469 로 성공이
+나왔다 — **둘 다 틀린 판정**이었다. 후자를 사용자가 이렇게 보고했다:
+"파지에 실패했는데 성공했다고 하고 그냥 못 집었는데 물체 놓으러 가고 있거든".
+
+## 위치는 왜 되는가
+
+턱이 물체에 막히면 닫힘 목표까지 못 가고, 그 잔차가 곧 물체 두께다.
+
+    빈 턱 기계정지    1144~1147
+    닫힘 명령 목표    1150
+    퀸(17mm)         1189 근처
+
+42 raw 차이다. 부하의 1/256 과 달리 헷갈릴 수가 없다.
+"""
+
+import pytest
+
+from domain.adapters.fake.fake_arm import FakeArm
+from domain.adapters.fake.fake_base import FakeBase
+from domain.adapters.fake.fake_host_link import FakeHostLink
+from domain.task import baseline_constants as bc
+from domain.task.baseline_mission import BaselinePorts
+
+#: 실측값. 이 시험의 근거이자, 문턱이 이 둘 사이에 있어야 한다는 제약이다.
+EMPTY_JAW_RAW = 1147
+QUEEN_HELD_RAW = 1189
+
+
+def _ports(position_raw, load):
+    arm = FakeArm()
+    arm.gripper_position_raw_value = position_raw
+    arm.load = load
+    return BaselinePorts(base=FakeBase(), arm=arm, perception=None,
+                         host=FakeHostLink(), lidar=None, estop=None,
+                         use_depth_gate=False)
+
+
+# ── 문턱 자체 ──────────────────────────────────────────────────────────────
+
+
+def test_문턱이_빈턱과_물린것_사이에_있다():
+    """이 시험이 깨지면 판정 자체가 무의미해진다."""
+    assert EMPTY_JAW_RAW < bc.GRIPPER_HELD_POSITION_RAW < QUEEN_HELD_RAW
+
+
+def test_문턱이_서보_데드밴드보다_충분히_떨어져_있다():
+    """위치 데드밴드가 약 5 raw 로 실측됐다(2026-09-06). 그 서너 배는 떨어져야
+    잡음으로 판정이 뒤집히지 않는다."""
+    assert bc.GRIPPER_HELD_POSITION_RAW - EMPTY_JAW_RAW >= 15
+
+
+def test_부하_문턱으로는_퀸을_못_잡아낸다():
+    """왜 부하를 버렸는지를 숫자로 남긴다 — 실측 0.0391 이 문턱 아래다."""
+    queen_load = 10.0 / 256.0
+    assert queen_load < bc.LOAD_THRESHOLD, (
+        "부하 문턱이 실측 파지값보다 높다 — 이 조건이 깨지면 부하 판정을 "
+        "다시 검토할 수 있다")
+
+
+# ── 판정 ───────────────────────────────────────────────────────────────────
+
+
+def test_빈_턱이면_실패다():
+    """⚠️ 이것이 2026-09-06 사고다 — 못 집었는데 놓으러 갔다."""
+    arm = _ports(EMPTY_JAW_RAW, load=bc.LOAD_THRESHOLD).arm
+    assert arm.gripper_position_raw() < bc.GRIPPER_HELD_POSITION_RAW
+
+
+def test_물었으면_성공이다():
+    arm = _ports(QUEEN_HELD_RAW, load=0.0).arm
+    assert arm.gripper_position_raw() >= bc.GRIPPER_HELD_POSITION_RAW
+
+
+def test_부하가_높아도_턱이_비었으면_실패다():
+    """부하는 이제 판정에 안 쓴다 — 그게 이 변경의 전부다.
+
+    실기에서 빈 턱이 12/256(문턱과 같은 값)을 낸 적이 있다."""
+    ports = _ports(EMPTY_JAW_RAW, load=bc.LOAD_THRESHOLD + 0.01)
+    assert ports.arm.gripper_position_raw() < bc.GRIPPER_HELD_POSITION_RAW
+
+
+def test_부하가_0이어도_물었으면_성공이다():
+    """반대 방향 — 실기에서 물었는데 0.0000 이 나온 적이 있다."""
+    ports = _ports(QUEEN_HELD_RAW, load=0.0)
+    assert ports.arm.gripper_position_raw() >= bc.GRIPPER_HELD_POSITION_RAW
+
+
+def test_위치를_못_읽으면_음수로_알린다():
+    """조용히 0 이나 기본값을 주면 '빈 턱'으로 오판한다 — 모르는 것과
+    비어 있는 것은 다르다."""
+    arm = FakeArm()
+    arm.gripper_position_raw_value = -1
+    assert arm.gripper_position_raw() < 0
+
+
+# ── 얇은 물체 한계 ─────────────────────────────────────────────────────────
+
+
+def test_문턱이_뜻하는_최소_물체_두께를_적어_둔다():
+    """이 문턱을 넘으려면 물체가 얼마나 두꺼워야 하는가.
+
+    지금 기물(퀸 17mm, 나이트 22mm)은 넉넉히 넘지만, 더 얇은 것을 넣으려면
+    여기가 한계가 된다."""
+    raw_per_mm = (1578 - 1150) / (96.0 - 9.0)          # 보정표 첫 구간
+    min_mm = 9.0 + (bc.GRIPPER_HELD_POSITION_RAW - 1150) / raw_per_mm
+    assert min_mm < 17.0, f"퀸(17mm)도 못 넘는다 — 문턱 {min_mm:.1f}mm"
+    assert min_mm > 9.0

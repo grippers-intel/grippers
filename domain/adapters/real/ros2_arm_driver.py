@@ -5,7 +5,7 @@ assert로 검사해서 런타임 AssertionError가 난다 — 여기서 필드�
 
 from geometry_msgs.msg import Point
 from grippers_interfaces.action import MoveToCartesian, MoveToFloorPose, ReorientArm
-from grippers_interfaces.srv import GetLoad, OffsetBaseYaw, SetGripper
+from grippers_interfaces.srv import GetArmState, GetLoad, OffsetBaseYaw, SetGripper
 from rclpy.action import ActionClient
 from std_srvs.srv import Trigger
 
@@ -51,6 +51,8 @@ class Ros2ArmDriver(ArmDriver):
         self._reorient_client = ActionClient(node, ReorientArm, "arm_driver/reorient")
         self._gripper_client = node.create_client(SetGripper, "arm_driver/set_gripper")
         self._load_client = node.create_client(GetLoad, "arm_driver/get_load")
+        self._state_client = node.create_client(
+            GetArmState, "arm_driver/get_arm_state")
         self._fold_client = node.create_client(Trigger, "arm_driver/fold_to_cradle")
         self._hold_client = node.create_client(Trigger, "arm_driver/hold_position")
         self._yaw_client = node.create_client(OffsetBaseYaw, "arm_driver/offset_base_yaw")
@@ -106,6 +108,33 @@ class Ros2ArmDriver(ArmDriver):
         if res is None:
             return LOAD_UNKNOWN
         return res.load_ratio
+
+    #: servo 6 은 6번, 배열 인덱스로는 5다.
+    _GRIPPER_INDEX = 5
+
+    def gripper_position_raw(self) -> int:
+        """servo 6 의 현재 위치(raw). 못 읽으면 **-1**.
+
+        파지 성공 판정에 쓴다 — 부하는 못 쓰기 때문이다. 2026-09-06 실측:
+
+            퀸을 실제로 물었을 때   0.0391 = 10/256
+            빈손 닫힘               0.0352 =  9/256
+            빈 턱 기계정지          0.0274 =  7/256
+            문턱 LOAD_THRESHOLD     0.0469 = 12/256
+
+        **물었을 때가 문턱보다 낮다.** 부하는 1/256 단위로 양자화되는데
+        물체 유무의 차이가 딱 그 한 단위라, 판정이 동전 던지기가 된다.
+        실제로 같은 날 한 판은 0.0000 으로 실패, 다음 판은 0.0469 로
+        성공이 나왔다 — 둘 다 틀린 판정이었다.
+
+        위치는 다르다. 턱이 물체에 막히면 닫힘 목표까지 못 가고 그 잔차가
+        곧 물체 두께다. 빈 턱은 1147 에서 기계적으로 멈추고, 퀸(17mm)을
+        물면 1189 근처에 선다 — 42 raw 차이라 헷갈릴 수가 없다."""
+        res = call_service(self._node, self._state_client, GetArmState.Request(),
+                           label="get_arm_state")
+        if res is None or not res.ok or len(res.position_raw) <= self._GRIPPER_INDEX:
+            return -1
+        return int(res.position_raw[self._GRIPPER_INDEX])
 
     def reorient(self, phi_rad: float) -> bool:
         """정착하면 True. 액션 서버가 없거나 결과가 오지 않으면 **False**
