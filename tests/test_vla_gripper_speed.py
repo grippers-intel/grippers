@@ -210,3 +210,84 @@ def test_런타임에_바꿀_수_있다():
         and isinstance(node.args[0], ast.Constant)
     }
     assert "vla_gripper_speed_raw" in declared
+
+
+# ── 플래그와 레지스터가 어긋나지 않는다 ────────────────────────────────────
+#
+# `Goal_Velocity` 는 RAM 레지스터라 서보 전원이 살아 있으면 노드를 재시작해도
+# 값이 남는다. 그래서 "지금 상한이 걸려 있는가"를 노드가 플래그로만 들고 있으면
+# 재시작 뒤 플래그(False)와 레지스터(600)가 어긋날 수 있다 — 그러면 열기가
+# 계속 묶인 채로 돌아, 고치려던 증상이 반대편에서 되살아난다.
+#
+# 지금 코드는 그 창이 없다. 재생 시작 루프가 **청크마다** ALL_SERVO_IDS(1..6)
+# 전부에 무제한을 다시 쓰고, `grip_limited = False` 는 그 **뒤에** 온다. 즉
+# 모든 청크가 알려진 상태에서 출발한다.
+#
+# 아래 두 시험이 그 가정을 못 박는다. 없으면 "그리퍼는 어차피 아래에서 관리하니
+# 이 루프에서 빼자"는 최적화 한 번으로 조용히 깨진다.
+
+
+def test_재생_시작마다_그리퍼도_무제한으로_되돌린다():
+    """servo 6 이 리셋 루프에서 빠지면 재시작 뒤 열기가 묶인 채로 돈다."""
+    fn = _function("_execute_joint_chunk")
+
+    resets = [
+        node
+        for node in ast.walk(fn)
+        if isinstance(node, ast.For)
+        and ast.unparse(node.iter) == "ALL_SERVO_IDS"
+        and any(
+            isinstance(c, ast.Call)
+            and isinstance(c.func, ast.Attribute)
+            and c.func.attr == "set_speed"
+            and any(isinstance(a, ast.Name) and a.id == "VLA_SPEED_RAW" for a in c.args)
+            for c in ast.walk(node)
+        )
+    ]
+    assert resets, (
+        "청크 시작에서 ALL_SERVO_IDS 전부를 VLA_SPEED_RAW 로 되돌리는 루프가 "
+        "없습니다 — servo 6 의 레지스터 잔류가 다음 재생으로 새어 나갑니다"
+    )
+
+    # ALL_SERVO_IDS 가 그리퍼를 포함해야 위 루프가 의미를 갖는다.
+    # `range(1, 7)` 은 literal_eval 로 못 읽으니 소스를 평가해서 본다.
+    src = next(
+        ast.unparse(n.value) for n in _tree().body
+        if isinstance(n, ast.Assign)
+        and len(n.targets) == 1
+        and ast.unparse(n.targets[0]) == "ALL_SERVO_IDS"
+    )
+    assert src.startswith("range("), f"예상 못 한 형태입니다: {src}"
+    grip = _constants({"GRIPPER_SERVO_ID"})["GRIPPER_SERVO_ID"]
+    assert grip in eval(src, {"__builtins__": {"range": range}})
+
+
+def test_플래그_초기화는_리셋_뒤에_온다():
+    """순서가 뒤집히면 플래그가 레지스터보다 앞서 거짓말을 한다."""
+    fn = _function("_execute_joint_chunk")
+
+    reset_line = max(
+        node.lineno
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "set_speed"
+        and any(isinstance(a, ast.Name) and a.id == "VLA_SPEED_RAW" for a in node.args)
+    )
+    init_line = min(
+        node.lineno
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Assign)
+        and ast.unparse(node.targets[0]) == "grip_limited"
+        and ast.unparse(node.value) == "False"
+    )
+    assert init_line > reset_line
+
+
+def test_어긋나면_어떻게_되는지를_규칙_자체로_보인다():
+    """왜 위 두 시험이 필요한가 — 어긋난 상태를 실제로 흘려 본다.
+
+    레지스터에는 상한이 남아 있는데 플래그만 False 인 상태를 흉내 내면,
+    열기 지령이 와도 규칙은 **아무것도 안 쓴다.** 규칙의 결함이 아니라
+    입력이 거짓이라 그런 것이고, 그래서 시작 리셋이 규칙의 전제다."""
+    assert gm.gripper_speed_change(OPEN, LIMIT, limited=False) is None
