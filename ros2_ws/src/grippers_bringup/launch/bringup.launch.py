@@ -306,7 +306,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "battery_alert",
                 default_value="true",
-                description="저전압 부저 경고(WARN_MV 7800). 2026-09-06 실기에서 "
+                description="저전압 부저 경고(WARN_MV 7200). 2026-09-06 실기에서 "
                 "6290mV 로 바퀴가 안 돌았고 노드는 전부 멀쩡했다 — 그 구간을 "
                 "미리 알리는 것이 목적이다",
             ),
@@ -328,11 +328,15 @@ def generate_launch_description():
             ),
             # ── VLA 파지 백엔드 ────────────────────────────────────────────
             #
-            # 기본이 false 인 이유는 두 가지다. (1) 미션 FSM 의 classic GRASP 가
-            # 여전히 기본 경로다. (2) policy_source 기본값이 remote 라, 켜면
-            # **노트북의 policy_server 가 떠 있어야** 노드가 기동한다 — 없으면
-            # health 에서 일찍 실패한다. 그 편이 파지 도중에 알게 되는 것보다 낫지만,
-            # 시연 기본값이 네트워크에 의존해서는 안 된다.
+            # 기본이 false 인 이유는 미션 FSM 의 classic GRASP 가 여전히 기본
+            # 경로이기 때문이다.
+            #
+            # ⚠️ 2026-09-07: 여기 "policy_source 기본값이 remote 라 노트북
+            # policy_server 가 떠 있어야 한다"고 적혀 있었는데 **틀렸다.**
+            # 기본값은 local 이고(아래 policy_source 선언과 그 밑 실측 주석),
+            # 노트북이 필요한 것은 remote 를 명시로 줬을 때뿐이다. 이 주석대로
+            # 믿으면 "노트북 없이는 못 돌린다"고 오해하게 된다 — 실제로는 ACT 가
+            # Pi 에서 듀티 14% 로 돈다.
             DeclareLaunchArgument(
                 "grasp_backend",
                 default_value="classic",
@@ -376,7 +380,8 @@ def generate_launch_description():
                 "use_vla",
                 default_value="false",
                 description="true면 vla_inference_node를 띄우고 그리퍼캠 발행을 켠다 "
-                "(policy_source 기본 remote — 노트북 policy_server가 필요하다)",
+                "(policy_source 기본 local — Pi 가 직접 추론한다. 노트북이 "
+                "필요한 것은 remote 를 명시로 줬을 때뿐이다)",
             ),
             # ⚠️ 기본이 local 인 이유는 **ACT 가 이 하드웨어에서 실시간이 되기
             # 때문**이다. 2026-09-05 실측(act_v5_all 120k, 180x320):
