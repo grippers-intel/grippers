@@ -692,7 +692,39 @@ class BaselineGraspState(State):
         if not ports.arm.fold_to_cradle():
             ports.host.report(Report.GRASP_BLOCKED, self.name, "VLA 시작 자세(IDLE) 실패")
             return False
-        ok = bool(ports.vla.run_grasp(self.label))
+        # ── 좌우 조준: 차체 대신 servo 1 로 흡수한다 ─────────────────────
+        #
+        # 사용자 지시(2026-09-06): "물체 앞에서 yaw 하는 부분이 있다면 1번
+        # 모터로 각을 맞춰주는 작업이 들어가는 게 낫겠다."
+        #
+        # 차체 yaw 로는 못 좁힌다. 주행 허용오차가 12도인데(회전이 bang-bang
+        # 이라 정지 명령 뒤 관성으로 약 10도를 더 돌아서 그보다 좁히면 헌팅이
+        # 난다), 그리퍼-기물 20cm 에서 12도면 좌우 42mm 다. VLA 허용치
+        # (grasp_alignment 의 1.5σ, 리치 294mm 기준 ±41mm)를 이미 넘는다.
+        #
+        # ⚠️ 부호를 뒤집는다. INSERT 의 safe_300 이 같은 필드로 이미 겪은
+        # 것이다 — 2026-09-05 실기에서 "servo1이 돌았는데 반대방향으로
+        # 돌았어"였다. yaw_correction_deg 는 차량 좌표계, servo 1 의 +는 팔
+        # 베이스 좌표계라 부호축이 반대다.
+        #
+        # ⚠️ 한계를 넘으면 **보정을 포기하고 그대로 간다.** 학습 분포 밖으로
+        # 팔을 밀어 넣느니 안 밀어 넣는 편이 낫다 — 분포 밖은 그냥 실패다.
+        # 대신 보고에 남겨 Host 가 다음 기물부터 반영할 수 있게 한다.
+        command = ports.host.latest_command()
+        pan_bias_deg = 0.0
+        if command is not None and command.yaw_correction_deg:
+            wanted = -float(command.yaw_correction_deg)
+            if abs(wanted) <= ga.VLA_PAN_LIMIT_DEG:
+                pan_bias_deg = wanted
+                ports.host.report(
+                    Report.STATE, self.name,
+                    f"servo 1 좌우 보정 {pan_bias_deg:+.1f}도 (정책 pan 출력에 더한다)")
+            else:
+                ports.host.report(
+                    Report.STATE, self.name,
+                    f"servo 1 좌우 보정 {wanted:+.1f}도는 학습 분포 밖"
+                    f"(한계 ±{ga.VLA_PAN_LIMIT_DEG:.0f}도) — 보정 없이 진행한다")
+        ok = bool(ports.vla.run_grasp(self.label, pan_bias_deg))
         if not ok:
             # ⚠️ 접기 **전에** 활짝 연다. 2026-09-06 실기 사고 대응.
             #

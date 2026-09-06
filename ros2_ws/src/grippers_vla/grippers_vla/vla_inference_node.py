@@ -397,7 +397,10 @@ class VlaInferenceNode(Node):
                 # 기록은 **바이어스 전** 값으로 남긴다 — 정책이 무엇을 냈는지가
                 # 진단의 근거이고, 우리가 얹은 보정과 섞이면 못 가린다.
                 self._record_chunk(run_dir, chunks + 1, frame, state, chunk)
-                pan_bias = float(self.get_parameter("pan_bias_deg").value)
+                # goal 이 준 값이 우선이고, 0 이면 파라미터로 물러선다 —
+                # 파라미터는 실기에서 손으로 흔들어 볼 때 쓰는 길이다.
+                pan_bias = (float(request.pan_bias_deg) if request.pan_bias_deg
+                            else float(self.get_parameter("pan_bias_deg").value))
                 if pan_bias:
                     # shoulder_pan 은 0번 열이다(JOINTS 순서, policy_runner).
                     chunk = np.array(chunk, dtype=np.float32, copy=True)

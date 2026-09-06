@@ -40,7 +40,7 @@ class Ros2VlaGrasp:
         self._node = node
         self._client = ActionClient(node, RunVlaGrasp, "vla_inference/run_grasp")
 
-    def run_grasp(self, label: str) -> bool:
+    def run_grasp(self, label: str, pan_bias_deg: float = 0.0) -> bool:
         """정책 루프를 끝까지 돌렸으면 True.
 
         ⚠️ True 가 "물체를 집었다"는 뜻이 **아니다.** 진짜 판정은 호출부가
@@ -48,7 +48,8 @@ class Ros2VlaGrasp:
         같은 경고 참고. 여기서 성공을 판정하면 정책이 자기 실패를 스스로
         판정하는 꼴이 된다.
         """
-        goal = RunVlaGrasp.Goal(label=label, timeout_s=float(VLA_GRASP_TIMEOUT_SEC))
+        goal = RunVlaGrasp.Goal(label=label, timeout_s=float(VLA_GRASP_TIMEOUT_SEC),
+                                pan_bias_deg=float(pan_bias_deg))
         result = call_action(
             self._node,
             self._client,
