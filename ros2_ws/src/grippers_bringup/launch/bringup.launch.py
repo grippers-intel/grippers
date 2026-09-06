@@ -54,6 +54,7 @@ def launch_setup(context):
     gripper_cam_publish_hz = LaunchConfiguration("gripper_cam_publish_hz")
     grasp_backend = LaunchConfiguration("grasp_backend")
     use_depth_gate = LaunchConfiguration("use_depth_gate")
+    use_depth_camera = LaunchConfiguration("use_depth_camera")
     default_grasp_label = LaunchConfiguration("default_grasp_label")
 
     # ⚠️ use_vla 를 끄면 그리퍼캠 발행도 **함께** 꺼져야 한다. perception_node 의
@@ -85,11 +86,26 @@ def launch_setup(context):
         ),
         condition=UnlessCondition(use_fake_base),
     )
+    # ⚠️ use_depth_camera 로 통째로 끌 수 있다 — 기본값은 켬이라 기존 사용에는
+    # 변화가 없다. 끄는 이유는 CPU 다(2026-09-07 실측, ACT 를 Pi 에서
+    # 로컬로 돌리기 시작하면서 드러났다):
+    #
+    #     perception_node       100%   <- 뎁스 스트림에 CPU YOLO 를 돌린다
+    #     depth_cam_rotate_node  82%
+    #     /gripper_cam/image_raw  0.4Hz  (설정은 10Hz)
+    #
+    # 그리퍼캠 발행이 perception_node **안에** 있어서, 그 노드가 뎁스 쪽 일로
+    # 포화하면 정책이 보는 프레임이 2.5초까지 낡는다. use_depth_gate=false 로
+    # 쓰는 구성에서는 그 CPU 가 전부 낭비다 — 뎁스 관문도 안 보고,
+    # remember_target 도 이미 응답 없음으로 실패하고 있었다.
     depth_camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(peripherals_package_path, "launch/depth_camera.launch.py")
         ),
-        condition=UnlessCondition(use_fake_perception),
+        condition=IfCondition(PythonExpression([
+            "'", use_depth_camera, "'.lower() in ('true', '1') and ",
+            "'", use_fake_perception, "'.lower() not in ('true', '1')",
+        ])),
     )
     lidar_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -125,7 +141,12 @@ def launch_setup(context):
         package="grippers_perception",
         executable="depth_cam_rotate_node",
         output="screen",
-        condition=UnlessCondition(use_fake_perception),
+        # 뎁스캠을 안 띄우면 이 노드는 구독할 것이 없다 — 같이 끈다
+        # (depth_camera_launch 주석 참고).
+        condition=IfCondition(PythonExpression([
+            "'", use_depth_camera, "'.lower() in ('true', '1') and ",
+            "'", use_fake_perception, "'.lower() not in ('true', '1')",
+        ])),
     )
     arm_driver_node = Node(
         package="grippers_arm",
@@ -317,6 +338,14 @@ def generate_launch_description():
                 default_value="classic",
                 description="파지 백엔드 classic|vla. vla 면 정책이 파지를 대신하고 "
                 "실패하면 그 자리에서 classic 으로 한 번 더 시도한다",
+            ),
+            DeclareLaunchArgument(
+                "use_depth_camera",
+                default_value="true",
+                description="뎁스캠(ascamera)과 회전 노드를 띄울지. false 면 "
+                "perception_node 가 뎁스 일에서 풀려나 그리퍼캠을 제 주기로 "
+                "발행한다 — use_depth_gate=false 로 쓰는 구성에서 켜 둘 이유가 "
+                "없다(2026-09-07 실측: 0.4Hz -> 설정값)",
             ),
             DeclareLaunchArgument(
                 "use_depth_gate",

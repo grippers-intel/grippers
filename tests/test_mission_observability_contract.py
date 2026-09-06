@@ -167,4 +167,14 @@ def test_launch_exposes_the_fake_switches_and_optional_rosbag():
     # perception_node는 회전 보정된 스트림만 구독하므로 없으면 뒤집힌
     # 프레임에서 YOLO가 매 프레임 오검출을 낸다).
     assert "depth_cam_rotate_node" in source
-    assert source.count("UnlessCondition(use_fake_perception)") == 4
+    # 네 노드 모두 use_fake_perception 으로 꺼져야 한다.
+    #
+    # ⚠️ 2026-09-07: 문자열 하나를 세던 것을 바꿨다. 뎁스캠 두 노드가
+    # use_depth_camera 와 **함께** 걸리면서 조건이 UnlessCondition 에서
+    # PythonExpression 으로 바뀌었는데, 그건 게이트가 사라진 게 아니라
+    # 게이트가 하나 늘어난 것이다. 세는 방식이 형태에 묶여 있으면 그 차이를
+    # 못 읽는다 — 지키려는 것은 "네 자리에 이 게이트가 있다"이지 "이 문장이
+    # 네 번 나온다"가 아니다.
+    gated = (source.count("UnlessCondition(use_fake_perception)")
+             + source.count("use_fake_perception, \"'.lower() not in"))
+    assert gated == 4, f"use_fake_perception 게이트가 {gated}곳뿐이다"
