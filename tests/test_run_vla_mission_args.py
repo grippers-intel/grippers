@@ -249,3 +249,35 @@ def test_뎁스는_기본으로_안_켜진다(name):
     remember_target 이 응답 없이 타임아웃한다."""
     assert _default_of(name) == "false", (
         f"{name} 기본값이 true 로 돌아갔다 — 그리퍼캠이 0.4Hz 로 굶는다")
+
+
+SERVER = ROOT / "tools" / "arm" / "policy_server.py"
+
+
+def test_정책서버_안내문이_스크립트와_같다():
+    """⚠️ 두 곳에 같은 명령이 적혀 있다 — 갈라지면 사람이 틀린 쪽을 친다.
+
+    run_vla_mission.sh 는 노트북 서버에 못 붙으면 "이렇게 띄우라"는 명령을
+    통째로 찍어 준다. policy_server.py 의 사용법 주석도 같은 명령을 적고 있다.
+    2026-09-08 에 실제로 갈라져 있었다 — 주석 쪽만 `--scheduler DDIM
+    --denoise 25` 로 남아 있었고, 정작 --scheduler 도움말은 "DDIM 을 쓰지
+    말 것"이라고 말하고 있었다.
+
+    셋 중 하나라도 어긋나면 실기에서 잘못된 인자로 서버가 뜬다."""
+    script = SCRIPT.read_text(encoding="utf-8")
+    server = SERVER.read_text(encoding="utf-8")
+
+    for token in ("--scheduler DDPM", "--denoise 10", "--n-action-steps 63"):
+        assert token in script, f"run_vla_mission.sh 안내문에 {token} 이 없다"
+        assert token in server, f"policy_server.py 사용법에 {token} 이 없다"
+    # 그 63 은 스크립트가 /health 로 되읽어 검사하는 값이기도 하다.
+    assert "EXPECT_N_ACTION_STEPS=63" in script
+    assert "DDIM --denoise 25" not in server, "옛 안내문이 남아 있다"
+
+
+def test_정책서버가_스크립트가_쓰는_인자를_전부_받는다():
+    """안내문이 같아도 파서가 안 받으면 소용없다 — 인자 이름을 직접 본다."""
+    server = SERVER.read_text(encoding="utf-8")
+    for flag in ("--ckpt", "--device", "--scheduler", "--denoise",
+                 "--n-action-steps", "--host"):
+        assert f'add_argument("{flag}"' in server, f"{flag} 를 안 받는다"
