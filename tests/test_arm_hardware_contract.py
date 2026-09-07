@@ -579,22 +579,6 @@ def test_glide_defaults_to_no_deferral():
     assert defaults["speed_raw"] == "FLOOR_POSE_SPEED_RAW"
 
 
-def test_domain_grasp_state_also_opens_before_descending():
-    """FSM도 도구와 같은 순서여야 한다 — safe로 올라간 뒤 그리퍼를 열고,
-    그다음에 grasp로 내려간다(사용자 지시, 2026-08-24). 도구만 고치고 FSM이
-    반대로 남아 있으면 자동 시연에서 같은 사고가 난다."""
-    source = DOMAIN_MISSION.read_text(encoding="utf-8")
-    grasp = source[source.index("class BaselineGraspState"):
-                   source.index("class BaselineCarryState")]
-
-    open_at = grasp.index("set_gripper(gp.preopen_width_mm)")
-    descend_at = grasp.index('move_to_floor_pose(gp.profile, "grasp")')
-    assert open_at < descend_at
-
-
-# --- 첫 이동 자동 IDLE 정렬 (2026-08-25 사용자 지시) -----------------------
-
-
 def test_auto_align_on_first_move_is_on_by_default():
     """사용자 지시: "맨처음 이동 게이트에서 최초 로봇암의 자세를 파악하고
     무조건 자동으로 align_idle을 할 수 있게". 기본값이 True여야 그 지시가

@@ -73,15 +73,14 @@ class _FlakyArm(FakeArm):
 
 
 def _state():
-    state = BaselineGraspState("queen", creep_m=0.0)
+    state = BaselineGraspState("queen")
     state.RELEASE_RETRY_SEC = 0.0        # 시험은 안 잔다
     return state
 
 
 def _ports(arm):
     return BaselinePorts(base=FakeBase(), arm=arm, perception=None,
-                         host=FakeHostLink(), lidar=None, estop=None,
-                         grasp_backend="vla")
+                         host=FakeHostLink(), lidar=None, estop=None)
 
 
 # ── 재시도 ─────────────────────────────────────────────────────────────────

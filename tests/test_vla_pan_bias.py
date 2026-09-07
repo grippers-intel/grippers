@@ -67,9 +67,8 @@ def _run(yaw_correction_deg, ok=True):
         state=MissionState.GRASP, yaw_correction_deg=yaw_correction_deg)])
     vla = _SpyVla(ok=ok)
     ports = BaselinePorts(base=FakeBase(), arm=FakeArm(), perception=None,
-                          host=host, lidar=None, estop=None,
-                          grasp_backend="vla", vla=vla)
-    state = BaselineGraspState("queen", creep_m=0.0)
+                          host=host, lidar=None, estop=None, vla=vla)
+    state = BaselineGraspState("queen")
     state._grasp_vla(ports, _Profile())
     assert vla.calls, "run_grasp 가 아예 안 불렸다"
     return vla.calls[0][1], " ".join(str(r) for r in host.reports)
@@ -142,9 +141,8 @@ def test_Host_명령이_없어도_안_죽는다():
     """파지 도중에 예외로 죽는 것이 최악이다."""
     vla = _SpyVla()
     ports = BaselinePorts(base=FakeBase(), arm=FakeArm(), perception=None,
-                          host=FakeHostLink(script=[]), lidar=None, estop=None,
-                          grasp_backend="vla", vla=vla)
-    BaselineGraspState("queen", creep_m=0.0)._grasp_vla(ports, _Profile())
+                          host=FakeHostLink(script=[]), lidar=None, estop=None, vla=vla)
+    BaselineGraspState("queen")._grasp_vla(ports, _Profile())
     assert vla.calls[0][1] == 0.0
 
 
@@ -157,9 +155,8 @@ def test_실패하면_물체를_놓고_접는다():
     vla = _SpyVla(ok=False)
     arm = FakeArm()
     ports = BaselinePorts(base=FakeBase(), arm=arm, perception=None,
-                          host=FakeHostLink(script=[]), lidar=None, estop=None,
-                          grasp_backend="vla", vla=vla)
-    BaselineGraspState("queen", creep_m=0.0)._grasp_vla(ports, _Profile())
+                          host=FakeHostLink(script=[]), lidar=None, estop=None, vla=vla)
+    BaselineGraspState("queen")._grasp_vla(ports, _Profile())
     assert arm.gripper_widths and arm.gripper_widths[-1] == pytest.approx(
         _Profile.release_width_mm), "실패 뒤 그리퍼를 release 폭으로 열어야 한다"
 
@@ -182,9 +179,8 @@ def test_다른_곳에서_먼저_읽어도_보정이_살아_있다():
 
     vla = _SpyVla()
     ports = BaselinePorts(base=FakeBase(), arm=FakeArm(), perception=None,
-                          host=host, lidar=None, estop=None,
-                          grasp_backend="vla", vla=vla)
-    BaselineGraspState("queen", creep_m=0.0)._grasp_vla(ports, _Profile())
+                          host=host, lidar=None, estop=None, vla=vla)
+    BaselineGraspState("queen")._grasp_vla(ports, _Profile())
 
     assert vla.calls[0][1] == -5.0
 

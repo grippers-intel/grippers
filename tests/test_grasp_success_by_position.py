@@ -188,9 +188,8 @@ def _run_vla_grasp(position_raw, blocked_raw):
     arm.jaw_blocked_raw = blocked_raw
     ports = BaselinePorts(base=FakeBase(), arm=arm,
                           perception=ScriptedPerception(), host=FakeHostLink(),
-                          lidar=None, estop=None, use_depth_gate=False,
-                          grasp_backend="vla", vla=_OkVla(), vla_only=True)
-    BaselineGraspState("queen", creep_m=0.0).execute(ports)
+                          lidar=None, estop=None, use_depth_gate=False, vla=_OkVla(), vla_only=True)
+    BaselineGraspState("queen").execute(ports)
     return arm, ports
 
 

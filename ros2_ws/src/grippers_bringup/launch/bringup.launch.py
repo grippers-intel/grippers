@@ -52,7 +52,6 @@ def launch_setup(context):
     vla_record_dir = LaunchConfiguration("vla_record_dir")
     device = LaunchConfiguration("device")
     gripper_cam_publish_hz = LaunchConfiguration("gripper_cam_publish_hz")
-    grasp_backend = LaunchConfiguration("grasp_backend")
     use_depth_gate = LaunchConfiguration("use_depth_gate")
     use_depth_camera = LaunchConfiguration("use_depth_camera")
     vla_only = LaunchConfiguration("vla_only")
@@ -218,7 +217,6 @@ def launch_setup(context):
                     # use_depth_gate:=false 를 줬는데 뎁스 관문이 그대로 켜져
                     # 있어서 GRASP_BLOCKED("물체가 전진 거리 밖이다")로 막혔다.
                     # ros2 launch 는 모르는 인자를 오류로 알리지 않는다.
-                    "grasp_backend": grasp_backend,
                     "use_depth_gate": use_depth_gate,
                     "vla_only": vla_only,
                     "default_grasp_label": default_grasp_label,
@@ -339,15 +337,6 @@ def generate_launch_description():
             # 노트북이 필요한 것은 remote 를 명시로 줬을 때뿐이다. 이 주석대로
             # 믿으면 "노트북 없이는 못 돌린다"고 오해하게 된다 — 실제로는 ACT 가
             # Pi 에서 듀티 14% 로 돈다.
-            DeclareLaunchArgument(
-                "grasp_backend",
-                default_value="classic",
-                description="파지 백엔드 classic|vla. vla 면 정책이 파지를 "
-                "통째로 대신한다 — ⚠️ 예전 설명에 '실패하면 그 자리에서 "
-                "classic 으로 한 번 더 시도한다'고 적혀 있었는데 그런 경로는 "
-                "코드에 없다(2026-09-07 확인). vla 실패는 그냥 실패이고, "
-                "재시도는 Host 가 상태를 리셋해 처음부터 다시 한다",
-            ),
             DeclareLaunchArgument(
                 "use_depth_camera",
                 default_value="true",

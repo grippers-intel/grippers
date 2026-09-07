@@ -25,8 +25,8 @@ WRAPPED_PORT_CLASSES = (
     "Ros2MecanumBase",
     "Ros2ArmDriver",
     "Ros2Perception",
-    # VLA 파지 백엔드(2026-09-06). grasp_backend=vla 일 때만 만들어지지만
-    # 감싸는 것은 똑같다 — 정책이 무엇을 돌려줬는지가 실기에서 제일 궁금하다.
+    # 파지 정책(2026-09-06). 파지 경로가 이것 하나뿐이라 항상 만들어진다 —
+    # 정책이 무엇을 돌려줬는지가 실기에서 제일 궁금하다.
     "Ros2VlaGrasp",
 )
 

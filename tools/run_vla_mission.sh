@@ -187,7 +187,7 @@ fi
 set -x
 setsid ros2 launch grippers_bringup bringup.launch.py \
   use_fake_base:=false use_fake_arm:=false use_fake_perception:=false \
-  use_vla:=true grasp_backend:=vla \
+  use_vla:=true \
   "${POLICY_ARGS[@]}" \
   use_depth_gate:=false use_depth_camera:=false \
   "vla_only:=$VLA_ONLY" \

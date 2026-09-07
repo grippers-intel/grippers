@@ -6,6 +6,7 @@ import pytest
 
 from domain.adapters.fake.fake_arm import FakeArm
 from domain.adapters.fake.fake_base import FakeBase
+from domain.adapters.fake.fake_vla import FakeVla
 from domain.adapters.fake.fake_host_link import FakeHostLink, FakeLidar
 from domain.adapters.fake.scripted_perception import ScriptedPerception
 from domain.task.baseline_mission import BaselineMission, BaselinePorts, LinkWatchdog
@@ -19,8 +20,12 @@ MAX_STEPS = 200
 @pytest.fixture
 def make_ports():
     def _make(base=None, arm=None, perception=None, host=None, lidar=None,
-              estop=None, watchdog=None):
+              estop=None, watchdog=None, vla=None):
         return BaselinePorts(
+            # 파지 경로가 정책 하나뿐이라(2026-09-07) 이 포트가 없으면 GRASP 가
+            # 그 자리에서 죽는다. 기본은 "정책이 루프를 끝까지 돌았다"이다 —
+            # 진짜 파지 성공은 FakeArm.jaw_blocked_raw 가 정한다.
+            vla=vla or FakeVla(),
             base=base or FakeBase(),
             arm=arm or FakeArm(),
             perception=perception or ScriptedPerception(),

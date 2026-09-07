@@ -7,7 +7,7 @@
 
 ## 무엇이 남아 있었나
 
-`grasp_backend=vla` 로 켜도 정책이 안 시킨 팔 동작이 셋 있었다.
+정책을 켜도 정책이 안 시킨 팔 동작이 셋 있었다.
 
     creep_m 관문     팀원 정렬 코드가 낸 전진 거리를 모르면 파지를 **시작도**
                      안 한다. 그런데 _grasp_vla 는 creep_forward 를 아예 안
@@ -29,8 +29,6 @@
 정면을 79% 가려 바구니를 못 본다(2026-08-26 실측). 진단 전용 스위치다.
 """
 
-import pytest
-
 from domain.adapters.fake.fake_arm import FakeArm
 from domain.adapters.fake.fake_base import FakeBase
 from domain.adapters.fake.fake_host_link import FakeHostLink
@@ -50,8 +48,7 @@ class _SpyVla:
 
 def _ports(vla_only, ok=True, arm=None):
     return BaselinePorts(base=FakeBase(), arm=arm or FakeArm(), host=FakeHostLink(),
-                         perception=ScriptedPerception(), lidar=None, estop=None,
-                         grasp_backend="vla", vla=_SpyVla(ok=ok),
+                         perception=ScriptedPerception(), lidar=None, estop=None, vla=_SpyVla(ok=ok),
                          use_depth_gate=False, vla_only=vla_only)
 
 
@@ -67,42 +64,18 @@ def test_전진거리를_몰라도_정책은_돈다():
     creep_forward 를 아예 안 하므로 이 값과 무관하다."""
     ports = _ports(vla_only=True)
 
-    BaselineGraspState("queen", creep_m=None).execute(ports)
+    BaselineGraspState("queen").execute(ports)
 
     assert ports.vla.calls, "정책이 안 불렸다"
-
-
-def test_평소에는_전진거리를_모르면_멈춘다():
-    """기본 동작은 안 바뀌어야 한다 — classic 경로가 실제로 그 값을 쓴다."""
-    ports = _ports(vla_only=False)
-
-    BaselineGraspState("queen", creep_m=None).execute(ports)
-
-    assert not ports.vla.calls
-    assert Report.GRASP_FAILED in ports.host.reported_kinds
-
-
-# ── 뎁스 관측 ──────────────────────────────────────────────────────────────
 
 
 def test_뎁스_관측을_안_한다():
     """실기에서 매번 3초 타임아웃으로 실패하던 호출이다."""
     ports = _ports(vla_only=True)
 
-    BaselineGraspState("queen", creep_m=0.0).execute(ports)
+    BaselineGraspState("queen").execute(ports)
 
     assert ports.perception.remember_target_calls == 0
-
-
-def test_평소에는_뎁스_관측을_한다():
-    ports = _ports(vla_only=False)
-
-    BaselineGraspState("queen", creep_m=0.0).execute(ports)
-
-    assert ports.perception.remembered_cls == "queen"
-
-
-# ── CARRY 전환 ─────────────────────────────────────────────────────────────
 
 
 def test_CARRY_로_안_옮긴다():
@@ -110,7 +83,7 @@ def test_CARRY_로_안_옮긴다():
     그 동작이다."""
     ports = _ports(vla_only=True)
 
-    BaselineGraspState("queen", creep_m=0.0).execute(ports)
+    BaselineGraspState("queen").execute(ports)
 
     assert "carry" not in _stages(ports)
 
@@ -119,7 +92,7 @@ def test_건너뛴_사실을_보고한다():
     """조용히 건너뛰면 왜 운반이 안 되는지 못 찾는다."""
     ports = _ports(vla_only=True)
 
-    BaselineGraspState("queen", creep_m=0.0).execute(ports)
+    BaselineGraspState("queen").execute(ports)
 
     assert "vla_only" in " ".join(d for _r, _s, d, _f in ports.host.reports)
 
@@ -127,7 +100,7 @@ def test_건너뛴_사실을_보고한다():
 def test_평소에는_CARRY_로_옮긴다():
     ports = _ports(vla_only=False)
 
-    BaselineGraspState("queen", creep_m=0.0).execute(ports)
+    BaselineGraspState("queen").execute(ports)
 
     assert "carry" in _stages(ports)
 
@@ -140,7 +113,7 @@ def test_시작_자세는_그대로_맞춘다():
     관측이 전부 IDLE 크래들이었다."""
     ports = _ports(vla_only=True)
 
-    BaselineGraspState("queen", creep_m=0.0).execute(ports)
+    BaselineGraspState("queen").execute(ports)
 
     assert ports.arm.fold_calls >= 1
 
@@ -149,7 +122,7 @@ def test_실패_판정은_그대로다():
     """정책이 실패로 끝나면 vla_only 여도 실패다 — 판정까지 끄는 게 아니다."""
     ports = _ports(vla_only=True, ok=False)
 
-    BaselineGraspState("queen", creep_m=0.0).execute(ports)
+    BaselineGraspState("queen").execute(ports)
 
     assert Report.GRASP_FAILED in ports.host.reported_kinds
 
@@ -170,11 +143,10 @@ def test_바이어스도_안_넣는다():
     host = FakeHostLink(script=[HostCommand(
         state=MissionState.GRASP, yaw_correction_deg=+5.0)])
     ports = BaselinePorts(base=FakeBase(), arm=FakeArm(), host=host,
-                          perception=ScriptedPerception(), lidar=None, estop=None,
-                          grasp_backend="vla", vla=_SpyVla(),
+                          perception=ScriptedPerception(), lidar=None, estop=None, vla=_SpyVla(),
                           use_depth_gate=False, vla_only=True)
 
-    BaselineGraspState("queen", creep_m=0.0).execute(ports)
+    BaselineGraspState("queen").execute(ports)
 
     assert ports.vla.calls[0][1] == 0.0
 
@@ -185,10 +157,9 @@ def test_평소에는_바이어스를_넣는다():
     host = FakeHostLink(script=[HostCommand(
         state=MissionState.GRASP, yaw_correction_deg=+5.0)])
     ports = BaselinePorts(base=FakeBase(), arm=FakeArm(), host=host,
-                          perception=ScriptedPerception(), lidar=None, estop=None,
-                          grasp_backend="vla", vla=_SpyVla(),
+                          perception=ScriptedPerception(), lidar=None, estop=None, vla=_SpyVla(),
                           use_depth_gate=False, vla_only=False)
 
-    BaselineGraspState("queen", creep_m=0.0).execute(ports)
+    BaselineGraspState("queen").execute(ports)
 
     assert ports.vla.calls[0][1] == -5.0

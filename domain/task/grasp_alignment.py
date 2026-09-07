@@ -136,6 +136,13 @@ def servo1_offset_for(lateral_error_m: float, reach_mm=None):
 
 
 def creep_distance_m(observation, max_creep_mm: float = bc.GRASP_CREEP_FORWARD_MM):
+    # ⚠️ 2026-09-07 부터 **미션은 이 함수를 안 부른다.** classic 파지
+    # 시퀀스의 미세 전진 거리를 내던 함수인데 그 시퀀스를 들어냈다
+    # (BaselineGraspState.execute 주석). 정책은 차체를 밀지 않는다.
+    #
+    # 지우지 않고 두는 이유는 이것이 동작이 아니라 순수 계산이고,
+    # "관측 거리에서 턱 선까지 얼마"라는 값은 진단·수동 도구
+    # (tools/demo_rook_run.py)가 여전히 쓸 수 있기 때문이다.
     """이번 파지에 실제로 필요한 미세 전진 거리. 모르면 **None**.
 
     고정 상수를 쓰지 않는 이유: 전진의 목적은 "물체를 턱 선까지 데려오는

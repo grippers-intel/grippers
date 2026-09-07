@@ -26,6 +26,7 @@ import pytest
 
 from domain.adapters.fake.fake_arm import FakeArm
 from domain.adapters.fake.fake_base import FakeBase
+from domain.adapters.fake.fake_vla import FakeVla
 from domain.adapters.fake.fake_host_link import FakeHostLink, FakeLidar
 from domain.adapters.fake.scripted_perception import ScriptedPerception
 from domain.ports.baseline_ports import (
@@ -261,13 +262,10 @@ def test_주행_명령이_합의_속도로_바퀴까지_간다(run_through):
         assert abs(linear_x) <= AGREED_LINEAR_MPS + 1e-9
         assert abs(linear_y) <= AGREED_LINEAR_MPS + 1e-9
         assert abs(angular_z) <= AGREED_ROTATION_RAD_S + 1e-9
-    # 파지 전진은 2026-09-02부터 관측 거리가 아니라 고정된 시간·속도
-    # 개방루프다(baseline_constants.GRASP_CREEP_OPEN_LOOP_*) — creep_forward
-    # 가 아니라 creep_forward_timed 가 그 값 그대로 불린다.
-    assert ports.base.creep_forward_timed_calls
-    for speed_mps, duration_s in ports.base.creep_forward_timed_calls:
-        assert speed_mps == pytest.approx(bc.GRASP_CREEP_OPEN_LOOP_SPEED_MPS)
-        assert duration_s == pytest.approx(bc.GRASP_CREEP_OPEN_LOOP_SEC)
+    # ⚠️ 여기 "파지 미세 전진(creep_forward_timed)이 고정 시간·속도로
+    # 불린다"는 단언이 있었는데 지웠다(2026-09-07). 파지 중 차체를 미는
+    # 것은 들어낸 classic 시퀀스의 동작이다 — 정책은 차체를 세워 둔 채
+    # 스스로 뻗는다(BaselineGraspState._grasp_vla 주석).
 
 
 def test_파지_성공은_부하와_뎁스가_모두_있어야_한다(run_through):

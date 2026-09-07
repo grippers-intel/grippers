@@ -203,18 +203,16 @@ class BaselinePorts:
     # 상태 객체는 전이마다 새로 만들어지므로 상태를 들고 있을 수 없다.
     base_liveness: LivenessLatch = field(default_factory=LivenessLatch)
 
-    # ── 파지 백엔드 ────────────────────────────────────────────────────────
-    #
-    # "classic" 이 기본이다. 여러 번 실기 검증된 경로다. 시연에서 켤 때만
-    # 파라미터로 "vla" 를 준다.
-    #
-    # VLA 가 대체하는 것은 **파지 동작뿐**이다 — 정렬 판정(APPROACH), CARRY
-    # 전환, 성공 판정(부하 + 뎁스)은 양쪽이 똑같이 쓴다. 성공 판정을 공유하는
-    # 것이 핵심이다: 정책이 헛손질해도 이미 실기로 검증된 두 신호가 잡아낸다.
     # 팔이 접혀 있는가. 안 접혔으면 _drive 가 주행을 거부한다.
     arm_parked: ArmParkLatch = field(default_factory=ArmParkLatch)
-    grasp_backend: str = "classic"
-    # VLA 백엔드가 쓰는 포트. classic 에서는 None 이어도 된다.
+
+    # ── 파지 포트 ──────────────────────────────────────────────────────────
+    #
+    # 파지는 **정책이 통째로 한다.** 예전에는 grasp_backend 로 classic/vla 를
+    # 골랐지만, classic 쪽은 팀원 브랜치(kica927)에서 온 임시 구현이었고
+    # 2026-09-07 사용자 지시로 들어냈다 — 파지는 사용자가 직접 만들 부분이다.
+    #
+    # 그래서 이 포트는 **필수**다. None 이면 GRASP 가 바로 실패한다.
     vla: object = None
 
     # ── 정책만 돌려 본다 (2026-09-07 사용자 지시) ─────────────────────────
@@ -222,16 +220,12 @@ class BaselinePorts:
     # "파지 시퀀스에 팀원의 하드코딩 부분이 계속 들어가는 거 같은데 우선 잠시
     # 배제해줘 — 그냥 vla 로만 동작하는 것을 확인하고 싶어."
     #
-    # grasp_backend=vla 여도 정책이 **안 시킨 팔 동작**이 셋 남아 있다:
+    # 그때 정책이 **안 시킨 팔 동작**이 셋 남아 있었다: creep 거리 관문,
+    # remember_target(뎁스 관측), CARRY 전환. 앞의 둘은 classic 파지 시퀀스와
+    # 함께 아예 지웠으므로(2026-09-07), 이 스위치에 남은 것은 CARRY 전환
+    # 하나뿐이다 — 정책이 끝낸 자세에서 손목만 올리는 별도 동작이다.
     #
-    #   creep_m 관문     팀원 정렬 코드가 낸 전진 거리를 모르면 파지를 시작도
-    #                    안 한다. 그런데 _grasp_vla 는 creep_forward 를 아예
-    #                    안 한다 — 정책과 무관한 값이 정책을 막고 있었다.
-    #   remember_target  뎁스 관측. use_depth_gate=false 구성에서는 판정에
-    #                    안 쓰이고, 실기에서 매번 3초 타임아웃으로 실패했다.
-    #   CARRY 전환       정책이 끝낸 자세에서 손목만 올리는 별도 동작.
-    #
-    # True 면 셋 다 건너뛴다. ⚠️ **켜면 운반·투하가 깨진다** — 물체를 문 채
+    # True 면 그 전환을 건너뛴다. ⚠️ **켜면 운반·투하가 깨진다** — 물체를 문 채
     # IDLE 에 있으면 그리퍼가 라이다 정면을 79% 가려 바구니를 못 본다
     # (2026-08-26 실측, floor_grasp_profiles.CARRY_RAW 주석). 파지 하나만
     # 눈으로 확인하려는 진단용이다.
@@ -435,14 +429,11 @@ class BaselineApproachState(State):
             # "물체가 팔 앞에 있다"는 판단을 탑뷰를 보는 Host 가 이미 했고,
             # 그 판단으로 GRASP 명령을 보낸 것이기 때문이다.
             #
-            # creep 거리는 0 이다. VLA 경로는 차체를 밀지 않고 정책이 스스로
-            # 뻗는다(_grasp_vla 주석). classic 백엔드로 이 모드를 쓰면 미세
-            # 전진 없이 교시 자세로만 집게 되므로 성공률이 떨어진다.
             label = ports.default_grasp_label
             ports.host.report(
                 Report.GRASP_READY, self.name,
                 f"{label} 뎁스 관문 꺼짐 — 정렬 판정 없이 진행")
-            return BaselineGraspState(label, 0.0, self.retries)
+            return BaselineGraspState(label, self.retries)
 
         observation = ports.perception.identify_target()
         label = observation.label if observation is not None else None
@@ -484,19 +475,15 @@ class BaselineApproachState(State):
         verdict = ga.judge(observation, object_width_mm(label))
 
         if verdict.action == ga.READY or (force and verdict.action == ga.HOST_CORRECTION):
-            # creep_m 자체는 이제 미는 양을 정하지 않는다(2026-09-02, 아래
-            # BaselineGraspState.execute 참고) — 여기서는 "정면에서 유효한
-            # 관측이 있었는가"만 본다. None이면 물체가 이미 턱 선 안쪽이라
-            # 전진 자체가 필요 없다는 뜻이거나 관측 실패다.
-            creep_m = ga.creep_distance_m(observation)
+            # ⚠️ 여기서 전진 거리(ga.creep_distance_m)를 내던 것을 지웠다
+            # (2026-09-07). 그 값은 classic 파지 시퀀스의 미세 전진에만
+            # 쓰였는데 그 시퀀스가 없어졌다 — 정책은 차체를 밀지 않고
+            # 스스로 뻗는다(_grasp_vla 주석).
             reason = (verdict.reason if verdict.action == ga.READY
                       else f"Host 지시로 강제 진행 — {verdict.reason}")
-            detail = (f"{label} {reason} · 전진 "
-                      f"{bc.GRASP_CREEP_OPEN_LOOP_SEC:.1f}s@"
-                      f"{bc.GRASP_CREEP_OPEN_LOOP_SPEED_MPS:.2f}m/s"
-                      if creep_m is not None else f"{label} {reason}")
-            ports.host.report(Report.GRASP_READY, self.name, detail)
-            return BaselineGraspState(label, creep_m, self.retries)
+            ports.host.report(Report.GRASP_READY, self.name,
+                              f"{label} {reason}")
+            return BaselineGraspState(label, self.retries)
 
         ports.host.report(Report.GRASP_BLOCKED, self.name, verdict.reason,
                           corrections.from_alignment(verdict))
@@ -553,9 +540,8 @@ class BaselineGraspState(State):
 
     name = MissionState.GRASP
 
-    def __init__(self, label, creep_m, retries: int = 0):
+    def __init__(self, label, retries: int = 0):
         self.label = label
-        self.creep_m = creep_m
         self.retries = retries
 
     def execute(self, ports):
@@ -563,95 +549,30 @@ class BaselineGraspState(State):
         gp = plan_for_label(self.label)
         ports.base.stop()
 
-        # 전진 거리는 관측에서 나온다 — 상수를 그대로 밀면 이미 가까운 물체를
-        # 턱 안쪽으로 처박는다(grasp_alignment.creep_distance_m 참고).
+        # ── 파지는 정책이 통째로 한다 ──────────────────────────────────
         #
-        # 거리를 **팔을 내리기 전에** 확인한다. 모르는 채로 내려가 봐야 그
-        # 자리에서 실패하고 팔만 바닥에 남는다.
-        # ⚠️ vla_only 면 이 관문을 건너뛴다. _grasp_vla 는 creep_forward 를
-        # 아예 안 하므로(그 함수 주석) 이 값은 정책과 무관한데, 못 구하면
-        # 정책을 시작도 못 하게 막고 있었다(BaselinePorts.vla_only 주석).
-        if self.creep_m is None and not ports.vla_only:
-            return self._failed(ports, "전진 거리를 모른다 — 관측 실패")
-
-        # 정면을 볼 수 있는 마지막 순간이다 — grasp 자세로 내려가면 팔이
-        # 뎁스 카메라를 가린다(tools/demo_rook_run.py 2단계와 같은 이유).
-        if not ports.vla_only:
+        # ⚠️ 2026-09-07 사용자 지시로 classic 파지 시퀀스를 **들어냈다**.
+        # 그 코드는 팀원 브랜치(kica927)에서 온 임시 구현이었고, 파지는
+        # 사용자가 직접 만들 부분이다 — 남겨 두면 어느 쪽이 도는지 계속
+        # 헷갈린다.
+        #
+        # 지운 것: safe 자세 -> 벌리기 -> grasp 자세 -> 미세 전진 ->
+        # 닫기 -> midpoint 들어올리기 -> safe 복귀. 그리고 그 앞의
+        # creep 거리 관문도 같이 지웠다 — 그 시퀀스의 미세 전진에만 쓰던
+        # 값이다.
+        #
+        # ⚠️ remember_target 은 **안 지웠다.** 저것은 파지 동작이 아니라
+        # 뎁스 관문의 준비다 — 아래 성공 판정의 confirm_grasp() 가 여기서
+        # 잡아 둔 기준 프레임과 비교한다. 지우면 use_depth_gate=true 구성이
+        # 통째로 못 쓰게 된다(실기 기본 구성은 false 라 안 부른다).
+        if ports.use_depth_gate:
+            # 정면을 볼 수 있는 마지막 순간이다 — 정책이 팔을 내리면
+            # 뎁스 카메라를 가린다(tools/demo_rook_run.py 2단계와 같은 이유).
             ports.perception.remember_target(self.label)
-        # ── 파지 백엔드 분기 ────────────────────────────────────────────
-        #
-        # VLA 가 대체하는 것은 **파지 동작뿐**이다. 아래 CARRY 전환과 성공
-        # 판정(부하 + 뎁스)은 양쪽이 똑같이 쓴다 — 그 판정이 여러 번 실기
-        # 사고를 겪으며 다듬어진 부분이라, 정책이 헛손질해도 거기서 잡힌다.
-        if getattr(ports, "grasp_backend", "classic") == "vla":
-            if not self._grasp_vla(ports, gp):
-                return self._failed(ports, "VLA 파지 루프 실패")
-        else:
-            if not ports.arm.move_to_floor_pose(gp.profile, "safe"):
-                return self._failed(ports, "safe 자세 실패")
-            # 내려가기 전에 연다 — 닫힌 손가락이 물체가 있는 공간을 통과해
-            # 내려가면 물체를 밀어낸다(사용자 지시 2026-08-24).
-            ports.arm.set_gripper(gp.preopen_width_mm)
-            if not ports.arm.move_to_floor_pose(gp.profile, "grasp"):
-                return self._failed(ports, "grasp 자세 실패")
 
-            # ⚠️ 전진은 **팔이 내려가 그리퍼가 열린 뒤**다 (사용자 지시 2026-08-24,
-            # 재확인 2026-08-29). 이 전진의 목적은 "물체 가까이 가는 것"이 아니라
-            # **물체를 벌어진 턱 사이로 밀어 넣는 것**이고, 그래야 평행 턱의 넓은
-            # 목이 좌우 자기정렬 효과를 낸다(grasp_alignment 모듈 docstring).
-            #
-            # 2026-08-29까지 이 호출이 `safe` 앞에 있었다 — 차체가 먼저 가고 팔이
-            # 나중에 내려오는 순서라, 밀어 넣는 것이 아니라 물체 위로 내려가
-            # 감싸는 동작이었고 자기정렬 효과가 없었다. 최초 커밋(241003a) 이후
-            # 아무도 안 건드린 자리인데, 실기로 검증된 tools/demo_rook_run.py 는
-            # 처음부터 이 순서였다(2단계 팔 내리기 -> 3단계 미세 전진).
-            #
-            # ⚠️ 이 구간에서는 **회전이 절대 금지**다. 그리퍼가 바닥에서 2.6cm
-            # 위에 열린 채 떠 있어서, 제자리 회전은 그것을 바닥과 물체를 가로질러
-            # 옆으로 쓴다. `creep_forward_timed` 도 직진만 내므로 계약상
-            # 지켜진다 — 여기에 회전을 섞는 구현으로 바꾸면 안 된다
-            # (demo_rook_run.py 의 CREEP_KEYMAP 이 회전 키를 일부러 뺀 것과
-            # 같은 이유).
-            #
-            # 2026-09-02: 관측 거리(self.creep_m, ga.creep_distance_m)로 미는
-            # 양을 계산하던 방식을 버렸다 — 300→500mm 상한, +300mm 보너스까지
-            # 조정해도 실기에서 16~70mm 수준의 미세 전진만 나왔고(원인은 이
-            # 계산 자체가 아니라 배포 지연이었던 것으로 나중에 드러났지만),
-            # 사용자가 신뢰성이 불투명한 관측 기반 계산 대신 결정론적인
-            # 시간·속도 개방루프를 지시했다("거리 단위가 아니라 1.5초간 0.1의
-            # 속도로 전진"). `self.creep_m is None` 게이트(위)는 그대로 둔다 —
-            # 그건 "전진량이 얼마인가"가 아니라 "물체가 애초에 유효하게 관측
-            # 됐는가"를 보는 것이라 여기와 무관하다.
-            if not ports.base.creep_forward_timed(bc.GRASP_CREEP_OPEN_LOOP_SPEED_MPS,
-                                                  bc.GRASP_CREEP_OPEN_LOOP_SEC):
-                return self._failed(ports, "미세 전진 실패")
+        if not self._grasp_vla(ports, gp):
+            return self._failed(ports, "VLA 파지 루프 실패")
 
-            ports.arm.set_gripper(gp.close_width_mm)
-            # ⚠️ 2026-09-03 실기(box) — 여기서 부하를 미리 재서 문턱을 넘겨야만
-            # 들어올리기를 시도하던 게이트를 없앴다. 3번째 시도는 첫 판독
-            # 0.2502(문턱을 훌쩍 넘김)로 세게 물었는데, midpoint 이동 뒤 다시
-            # 잰 값(0.03대)이 떨어져 실패 처리됐다. 그런데 **정지 뒤 사용자가
-            # 직접 확인하니 그리퍼가 그때까지도 박스를 꽉 물고 있어서 힘으로
-            # 빼냈다** — 그립은 그대로였는데 부하 판독만 낮게 나온 것이었다.
-            # 서보가 목표 자세에 도달해 정착하면 실제로 물고 있어도 능동으로
-            # 토크를 더 내지 않아 부하가 실제보다 낮게 읽히는 것으로 보인다
-            # (부하는 "지금 얼마나 힘주고 있는가"이지 "지금 뭔가를 물고
-            # 있는가"가 아니다). 09-02 10:41도 같은 종류의 오탐이었다 — 정착된
-            # 자세에서 부하를 다시 재는 방식 자체가 신뢰할 수 없다는 뜻이다.
-            #
-            # 그래서 부하로 미리 거르지 않는다 — **판정은 팔이 물리적으로
-            # 끝까지 움직였는가(move_to_floor_pose의 reached, 서보 위치 확인
-            # 이라 신뢰할 수 있다)와, CARRY 자세에 도달한 뒤 딱 한 번 하는
-            # 최종 판정(아래)에 맡긴다**(사용자 지시 2026-09-03: "CARRY에서
-            # 최종 판정이 맞다"). 이렇게 하면 이번처럼 중간에 부하가 잘못
-            # 낮게 읽혀도 도중에 실패로 확정되지 않고 CARRY까지 간다 — 다만
-            # 그 최종 판정 자체는 AND다(부하와 뎁스 둘 다 있어야 성공, 아래
-            # 판정부 코멘트 참고) — star/box에서 부하 판독 하나만 믿을 수
-            # 없다고 해서 남은 신호(뎁스) 하나로 성공을 만들어주지는 않는다.
-            if not ports.arm.move_to_floor_pose(gp.profile, "midpoint"):
-                return self._failed(ports, "들어올리기(midpoint) 실패")
-            if not ports.arm.move_to_floor_pose(gp.profile, "safe"):
-                return self._failed(ports, "safe 복귀 실패")
         # ⚠️ vla_only 면 CARRY 로 안 옮긴다 — 정책이 끝낸 자세 그대로 둔다
         # (BaselinePorts.vla_only 주석). 그 대가로 운반·투하가 깨진다.
         if ports.vla_only:
@@ -722,10 +643,9 @@ class BaselineGraspState(State):
         # 멈춘다(bc.empty_stop_raw 주석). 옛 절대 문턱 1165 로는 그게
         # "물었음"으로 읽혔다.
         #
-        # VLA 는 정책이 그리퍼를 직접 몬다 — 프로파일의 close_width_mm 를
-        # 안 쓴다. 실기 관측상 끝까지 닫으므로(빈 턱 1097~1134) 0mm 기준을
-        # 쓴다.
-        close_w = 0.0 if getattr(ports, "grasp_backend", "classic") == "vla"             else gp.close_width_mm
+        # 정책이 그리퍼를 직접 몬다 — 프로파일의 close_width_mm 를 안 쓴다.
+        # 실기 관측상 끝까지 닫으므로(빈 턱 1097~1134) 0mm 기준을 쓴다.
+        close_w = 0.0
 
         # ── 읽기 전에 **확실히 닫으라고 명령한다** ────────────────────────
         #
@@ -791,11 +711,11 @@ class BaselineGraspState(State):
     def _grasp_vla(self, ports, gp) -> bool:
         """정책이 파지를 대신한다. 성공했다고 **주장**하면 True.
 
-        진짜 성공 판정은 여기서 하지 않는다 — `execute` 꼬리의 부하 + 뎁스
-        두 신호가 classic 과 똑같이 판정한다. 이 함수는 "정책 루프가
-        끝까지 돌았는가"만 본다.
+        진짜 성공 판정은 여기서 하지 않는다 — `execute` 꼬리가 그리퍼 위치
+        (와 구성에 따라 뎁스)로 판정한다. 이 함수는 "정책 루프가 끝까지
+        돌았는가"만 본다.
 
-        ⚠️ classic 과 달리 `creep_forward` 를 하지 않는다. 학습 때 차체는
+        ⚠️ `creep_forward` 로 차체를 밀지 않는다. 학습 때 차체는
         **정지해 있었고** 정책이 스스로 뻗어서 물체를 집었다. 여기서 차체를
         밀면 정책이 본 적 없는 조건이 된다.
 
@@ -806,7 +726,7 @@ class BaselineGraspState(State):
         """
         if ports.vla is None:
             ports.host.report(Report.GRASP_BLOCKED, self.name,
-                              "grasp_backend=vla 인데 VLA 포트가 없다")
+                              "VLA 포트가 없다 — 파지는 정책이 한다")
             return False
         # ⚠️ move_to_floor_pose(idle) 를 쓰면 안 된다. 그 경로는 **등록된
         # 자세에서 출발할 때만** 허용된다(safe/drop/carry). 정책은 학습한 대로
@@ -1239,9 +1159,8 @@ class BaselineInsertState(State):
         #
         # 여기서 한 번 더 읽으면 헛투하를 안 한다. 못 읽으면(-1) 진행한다 —
         # 모르는 것을 실패로 단정해 물건을 든 채 서 있는 것이 더 나쁘다.
-        # 문턱은 파지 때와 같은 기준이어야 한다 — box·star 는 20mm 까지만
-        # 닫아서 빈 턱도 1216 이다(bc.empty_stop_raw 주석).
-        close_w = 0.0 if getattr(ports, "grasp_backend", "classic") == "vla"             else gp.close_width_mm
+        # 문턱은 파지 때와 같은 기준(0mm 로 닫은 빈 턱)이어야 한다.
+        close_w = 0.0
         held_min = bc.held_threshold_raw(close_w)
         held_raw = ports.arm.gripper_position_raw()
         if 0 <= held_raw < held_min:

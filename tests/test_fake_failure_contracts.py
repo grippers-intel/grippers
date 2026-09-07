@@ -24,6 +24,7 @@ import pytest
 
 from domain.adapters.fake.fake_arm import FakeArm
 from domain.adapters.fake.fake_base import FakeBase
+from domain.adapters.fake.fake_vla import FakeVla
 from domain.adapters.fake.fake_host_link import FakeHostLink, FakeLidar
 from domain.adapters.fake.scripted_interpreter import ScriptedInterpreter
 from domain.adapters.fake.scripted_perception import ScriptedPerception
@@ -243,7 +244,7 @@ def test_라이다_관측_실패는_INSERT를_막는다(monkeypatch):
 
     monkeypatch.setattr(bc, "LIDAR_INSERT_CHECK_ENABLED", True)
     host = _Host([HostCommand(MissionState.INSERT, stop=True)])
-    ports = BaselinePorts(
+    ports = BaselinePorts(vla=FakeVla(),
         base=FakeBase(), arm=FakeArm(load_ratio=0.14),
         perception=ScriptedPerception(), host=host, lidar=FakeLidar(),
         estop=threading.Event(), watchdog=LinkWatchdog(),
@@ -268,7 +269,7 @@ def test_목표_식별_실패는_GRASP를_막는다():
     )
 
     host = _Host([HostCommand(MissionState.GRASP, stop=True)])
-    ports = BaselinePorts(
+    ports = BaselinePorts(vla=FakeVla(),
         base=FakeBase(), arm=FakeArm(load_ratio=0.03),
         perception=ScriptedPerception(label=None), host=host, lidar=FakeLidar(),
         estop=threading.Event(), watchdog=LinkWatchdog(),
@@ -278,49 +279,6 @@ def test_목표_식별_실패는_GRASP를_막는다():
 
     assert Report.GRASP_BLOCKED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
-
-
-def test_미세_전진_실패는_파지를_중단시킨다():
-    """`creep_forward()`의 False를 무시하면 물체가 턱 사이에 없는 채로 닫는다.
-
-    ⚠️ 2026-08-29 순서 변경 전에는 여기서 `arm.floor_pose_calls == []`를
-    확인했다 — 전진이 팔보다 먼저였으므로 전진이 실패하면 팔은 한 번도 안
-    움직였다. 이제 전진은 **팔이 내려가 그리퍼가 열린 뒤**라, 전진이
-    실패하는 시점에 팔은 이미 grasp 자세에 있다. 확인해야 할 것은 "팔이 안
-    움직였다"가 아니라 **"닫지 않고 멈췄다"**로 바뀐다."""
-    import threading
-
-    from domain.adapters.fake.fake_host_link import FakeHostLink as _Host
-    from domain.ports.baseline_ports import Report
-    from domain.task.baseline_mission import (
-        BaselineApproachState,
-        BaselineGraspState,
-        BaselinePorts,
-        LinkWatchdog,
-    )
-
-    host = _Host()
-    arm = FakeArm(load_ratio=0.03)
-    ports = BaselinePorts(
-        base=FakeBase(creep_ok=False), arm=arm,
-        perception=ScriptedPerception(), host=host, lidar=FakeLidar(),
-        estop=threading.Event(), watchdog=LinkWatchdog(),
-    )
-
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
-
-    assert Report.GRASP_FAILED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
-
-    stages = [stage for _profile, stage in arm.floor_pose_calls]
-    assert stages == ["safe", "grasp", "recover_idle"], (
-        f"전진 실패 뒤의 경로가 틀렸다: {stages}\n"
-        "  · midpoint/carry 로 가면 안 된다(물체가 턱 사이에 없다)\n"
-        "  · 팔을 바닥에 둔 채 끝내도 안 된다(Host 가 곧 주행을 지시한다)")
-    # 물체가 턱 사이에 안 들어왔으므로 닫으면 안 된다. 여는 폭은 내려가기
-    # 전에 이미 나갔으므로 그 한 번만 있어야 한다.
-    assert len(arm.gripper_widths) == 1, (
-        f"전진이 실패했는데 그리퍼를 또 움직였다: {arm.gripper_widths}")
 
 
 def test_파지_실패는_팔을_바닥에_두고_끝내지_않는다():
@@ -349,14 +307,14 @@ def test_파지_실패는_팔을_바닥에_두고_끝내지_않는다():
     # 재현하려면 뎁스도 같이 "그대로 있다"여야 한다 — 안 그러면
     # 뎁스만으로 성공 처리된다.
     arm = FakeArm(load_ratio=0.03)
-    ports = BaselinePorts(
+    ports = BaselinePorts(vla=FakeVla(),
         base=FakeBase(), arm=arm,
         perception=ScriptedPerception(grasp_confirmed=False),
         host=host, lidar=FakeLidar(), estop=threading.Event(),
         watchdog=LinkWatchdog(),
     )
 
-    nxt = BaselineGraspState("queen", 0.030).execute(ports)
+    nxt = BaselineGraspState("queen").execute(ports)
 
     assert Report.GRASP_FAILED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
@@ -397,14 +355,14 @@ def test_복구도_실패하면_붙잡고_사람에게_알린다():
     # 2026-09-03 실기(box) 이후로 부하만으로는 미리 안 거르므로, 뎁스도
     # 같이 "그대로 있다"여야 진짜 실패가 재현된다 — 위 test 참고.
     arm = StuckArm(load_ratio=0.03)
-    ports = BaselinePorts(
+    ports = BaselinePorts(vla=FakeVla(),
         base=FakeBase(), arm=arm,
         perception=ScriptedPerception(grasp_confirmed=False),
         host=host, lidar=FakeLidar(), estop=threading.Event(),
         watchdog=LinkWatchdog(),
     )
 
-    BaselineGraspState("queen", 0.030).execute(ports)
+    BaselineGraspState("queen").execute(ports)
 
     assert arm.hold_calls > 0, "복구에 실패했으면 최소한 붙잡아야 한다"
     failed = [detail for kind, _s, detail, _f in host.reports

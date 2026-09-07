@@ -71,39 +71,35 @@ class MissionOrchestratorNode(Node):
         self.declare_parameter("use_fake_perception", False)
         self.declare_parameter("use_fake_host", False)
         self.declare_parameter("host_ip", "192.168.0.10")
-        # 파지 백엔드. 기본은 "classic" — 여러 번 실기 검증된 경로다.
-        # "vla" 로 켜면 정책이 파지를 대신하고, 실패하면 그 자리에서 classic
-        # 으로 한 번 더 시도한다(BaselineGraspState 참고).
-        self.declare_parameter("grasp_backend", "classic")
+        # ⚠️ grasp_backend 파라미터를 지웠다(2026-09-07 사용자 지시). 파지는
+        # 이제 정책 하나뿐이다 — classic 쪽은 팀원 브랜치(kica927)에서 온
+        # 임시 구현이었고 사용자가 직접 만들 부분이라 들어냈다. 정책 노드를
+        # 띄울지는 launch 의 use_vla 가 정한다.
         # 뎁스 관문. 끄면 뎁스캠을 한 번도 안 본다 — 물체 식별·정렬 판정·
         # 파지 성공의 두 번째 신호가 빠지고, 주행(탑뷰)이 세운 자리에서
         # 곧장 파지한다. 잃는 것은 BaselinePorts.use_depth_gate 주석 참고.
         self.declare_parameter("use_depth_gate", True)
         self.declare_parameter("default_grasp_label", "queen")
-        # 정책만 돌려 본다 — 정책이 안 시킨 팔 동작(creep 관문, 뎁스 관측,
-        # CARRY 전환)을 전부 건너뛴다. 자세한 것은 BaselinePorts.vla_only.
+        # 정책만 돌려 본다 — 정책이 안 시킨 CARRY 전환을 건너뛴다.
+        # 자세한 것은 BaselinePorts.vla_only.
         self.declare_parameter("vla_only", False)
 
         use_fake_base = self.get_parameter("use_fake_base").value
         use_fake_arm = self.get_parameter("use_fake_arm").value
         use_fake_perception = self.get_parameter("use_fake_perception").value
         use_fake_host = self.get_parameter("use_fake_host").value
-        grasp_backend = str(self.get_parameter("grasp_backend").value or "classic")
         use_depth_gate = bool(self.get_parameter("use_depth_gate").value)
         default_grasp_label = str(self.get_parameter("default_grasp_label").value or "queen")
         vla_only = bool(self.get_parameter("vla_only").value)
         if vla_only:
             self.get_logger().warn(
-                "vla_only=true — 정책이 안 시킨 팔 동작을 전부 건너뜁니다"
-                "(creep 관문·뎁스 관측·CARRY 전환). 파지 확인 전용이며 "
+                "vla_only=true — 정책이 안 시킨 CARRY 전환을 건너뜁니다. "
+                "파지 확인 전용이며 "
                 "운반·투하는 동작하지 않습니다")
         if not use_depth_gate:
             self.get_logger().warn(
                 "use_depth_gate=false — 뎁스캠을 안 봅니다. 파지 성공 판정이 "
                 f"서보 부하 하나로 줄고, 파지 대상은 '{default_grasp_label}' 로 고정됩니다")
-        if grasp_backend not in ("classic", "vla"):
-            raise ValueError(f"grasp_backend 는 classic 또는 vla 여야 합니다: {grasp_backend}")
-        self.get_logger().info(f"파지 백엔드: {grasp_backend}")
 
         self._estop = threading.Event()
         self._host = (FakeHostLink() if use_fake_host
@@ -130,14 +126,14 @@ class MissionOrchestratorNode(Node):
             host=self._host,
             lidar=(FakeLidar() if use_fake_perception else Ros2Lidar(self)),
             estop=self._estop,
-            grasp_backend=grasp_backend,
             use_depth_gate=use_depth_gate,
             default_grasp_label=default_grasp_label,
             vla_only=vla_only,
-            # VLA 포트는 백엔드를 켤 때만 만든다. classic 만 쓸 때 정책
-            # 노드를 기다리거나 토치를 부르지 않게 하려는 것이다.
-            vla=(LoggedPort("vla", Ros2VlaGrasp(self), self.get_logger())
-                 if grasp_backend == "vla" else None),
+            # 파지 포트는 항상 만든다 — 파지 경로가 이것 하나뿐이다.
+            # 만드는 비용은 ActionClient 하나이고 토치는 이 프로세스에
+            # 없다(Ros2VlaGrasp 모듈 주석). 정책 노드가 안 떠 있으면
+            # (use_vla:=false) 첫 호출에서 실패로 나온다.
+            vla=LoggedPort("vla", Ros2VlaGrasp(self), self.get_logger()),
         )
 
         self._started = 0.0

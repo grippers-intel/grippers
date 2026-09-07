@@ -54,7 +54,6 @@ def test_사고났던_인자는_반드시_넘긴다():
 @pytest.mark.parametrize("name, why", [
     ("use_depth_gate", "뎁스캠이 이 구성에 없다 — 켜면 파지 판정이 영영 막힌다"),
     ("use_depth_camera", "켜 두면 그리퍼캠이 0.4Hz 로 굶는다(2026-09-07 실측)"),
-    ("grasp_backend", "vla 가 아니면 정책이 아니라 classic 파지가 돈다"),
     ("use_vla", "false 면 그리퍼캠 발행까지 함께 꺼진다"),
 ])
 def test_실기에서_필요했던_인자를_빠뜨리지_않는다(name, why):

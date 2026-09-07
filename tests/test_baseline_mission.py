@@ -13,6 +13,7 @@ import pytest
 
 from domain.adapters.fake.fake_arm import LOAD_READ_FAILED, FakeArm
 from domain.adapters.fake.fake_base import FakeBase
+from domain.adapters.fake.fake_vla import FakeVla
 from domain.adapters.fake.fake_host_link import FakeHostLink, FakeLidar
 from domain.adapters.fake.scripted_perception import ScriptedPerception
 from domain.ports.baseline_ports import BasketFace, HostCommand, MissionState, Report
@@ -64,7 +65,7 @@ def _centered(label="queen"):
 
 
 def _ports(host=None, base=None, arm=None, perception=None, lidar=None, estop=None):
-    return BaselinePorts(
+    return BaselinePorts(vla=FakeVla(),
         base=base or FakeBase(),
         arm=arm or FakeArm(load_ratio=EMPTY_LOAD),
         perception=perception or ScriptedPerception(),
@@ -325,8 +326,6 @@ def test_조건이_충족되면_GRASP_READY를_보고하고_넘어간다():
     assert Report.GRASP_READY in host.reported_kinds
     assert isinstance(nxt, BaselineGraspState)
     assert nxt.label == "queen"
-    # 관측 전방거리 - 턱 선 + GRASP_CREEP_EXTRA_MM(2026-09-02 사용자 지시)
-    assert nxt.creep_m == pytest.approx(0.02 + bc.GRASP_CREEP_EXTRA_MM / 1000.0)
 
 
 def test_그리퍼가_비어있지_않으면_GRASP를_막고_제자리에_머문다():
@@ -378,7 +377,7 @@ def test_파지에_성공하면_CARRY로_가고_완료를_보고한다():
     arm = FakeArm(load_ratio=HOLDING_LOAD)
     ports = _ports(host=host, arm=arm)
 
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+    nxt = BaselineGraspState("queen").execute(ports)
 
     assert Report.GRASP_DONE in host.reported_kinds
     assert isinstance(nxt, BaselineCarryState)
@@ -389,7 +388,7 @@ def test_파지_후_IDLE이_아니라_CARRY로_접는다():
     arm = FakeArm(load_ratio=HOLDING_LOAD)
     ports = _ports(arm=arm)
 
-    BaselineGraspState("queen", 0.02).execute(ports)
+    BaselineGraspState("queen").execute(ports)
 
     stages = [stage for _profile, stage in arm.floor_pose_calls]
     assert "carry" in stages
@@ -406,7 +405,7 @@ def test_파지에_실패하면_APPROACH로_돌아가고_스스로_재시도하�
         perception=ScriptedPerception(grasp_confirmed=False),
     )
 
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+    nxt = BaselineGraspState("queen").execute(ports)
 
     assert Report.GRASP_FAILED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
@@ -436,7 +435,7 @@ def test_부하_판독이_흔들려도_CARRY_최종_판정만으로_성공한다
     arm = FakeArm(load_ratio=HOLDING_LOAD)  # CARRY 도달 후 딱 한 번만 읽는다
     ports = _ports(host=host, arm=arm)
 
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+    nxt = BaselineGraspState("queen").execute(ports)
 
     assert Report.GRASP_DONE in host.reported_kinds
     assert isinstance(nxt, BaselineCarryState)
@@ -965,7 +964,7 @@ def test_부하와_뎁스가_모두_있으면_성공이다():
     ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+    nxt = BaselineGraspState("queen").execute(ports)
 
     assert Report.GRASP_DONE in host.reported_kinds
     assert "뎁스 사라짐 True" in host.reports[-1][2]
@@ -980,7 +979,7 @@ def test_부하는_있는데_뎁스가_안_사라지면_AND라서_실패한다()
     ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD),
                    perception=ScriptedPerception(grasp_confirmed=False))
 
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+    nxt = BaselineGraspState("queen").execute(ports)
 
     assert Report.GRASP_FAILED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
@@ -997,7 +996,7 @@ def test_턱이_비었으면_뎁스만으로_구제되지_않는다():
     ports = _ports(host=host, arm=_empty_jaw_arm(0.0),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+    nxt = BaselineGraspState("queen").execute(ports)
 
     assert Report.GRASP_FAILED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
@@ -1012,7 +1011,7 @@ def test_위치_읽기_실패면_뎁스_신호_단독으로_성공을_인정한�
     ports = _ports(host=host, arm=_unreadable_jaw_arm(),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+    nxt = BaselineGraspState("queen").execute(ports)
 
     assert Report.GRASP_DONE in host.reported_kinds
     assert "그리퍼 위치를 못 읽어 뎁스만 봤다" in host.reports[-1][2]
@@ -1026,7 +1025,7 @@ def test_위치_읽기_실패에_뎁스도_그대로면_실패한다():
     ports = _ports(host=host, arm=_unreadable_jaw_arm(),
                    perception=ScriptedPerception(grasp_confirmed=False))
 
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+    nxt = BaselineGraspState("queen").execute(ports)
 
     assert Report.GRASP_FAILED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
@@ -1037,7 +1036,7 @@ def test_둘_다_실패면_그래도_실패한다():
     ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD),
                    perception=ScriptedPerception(grasp_confirmed=False))
 
-    nxt = BaselineGraspState("queen", 0.02).execute(ports)
+    nxt = BaselineGraspState("queen").execute(ports)
 
     assert Report.GRASP_FAILED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
@@ -1053,7 +1052,7 @@ def test_box도_다른_라벨과_같은_AND_통신실패_규칙을_받는다():
     ports = _ports(host=host, arm=_empty_jaw_arm(EMPTY_LOAD),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
-    nxt = BaselineGraspState("box", 0.02).execute(ports)
+    nxt = BaselineGraspState("box").execute(ports)
 
     assert Report.GRASP_FAILED in host.reported_kinds
     assert isinstance(nxt, BaselineApproachState)
@@ -1064,7 +1063,7 @@ def test_box도_위치_읽기_실패면_뎁스_단독으로_구제된다():
     ports = _ports(host=host, arm=_unreadable_jaw_arm(),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
-    nxt = BaselineGraspState("box", 0.02).execute(ports)
+    nxt = BaselineGraspState("box").execute(ports)
 
     assert Report.GRASP_DONE in host.reported_kinds
     assert isinstance(nxt, BaselineCarryState)
@@ -1101,7 +1100,8 @@ class _OrderSpy:
 
         def recorded(*args, **kwargs):
             if method in ("move_to_floor_pose", "set_gripper",
-                          "creep_forward_timed", "remember_target"):
+                          "creep_forward_timed", "remember_target",
+                          "run_grasp"):
                 detail = args[1] if method == "move_to_floor_pose" else None
                 self._log.append(f"{method}:{detail}" if detail else method)
             return attribute(*args, **kwargs)
@@ -1117,46 +1117,28 @@ def _grasp_call_order():
     base = FakeBase()
     perception = ScriptedPerception()
     ports = BaselinePorts(
+        # 파지 하강은 이제 정책 안에서 일어난다 — 순서를 보려면 정책 호출도
+        # 같은 기록에 실려야 한다(2026-09-07 classic 시퀀스 제거).
+        vla=_OrderSpy(FakeVla(), "vla", log),
         base=_OrderSpy(base, "base", log),
         arm=_OrderSpy(arm, "arm", log),
         perception=_OrderSpy(perception, "perception", log),
         host=FakeHostLink(), lidar=FakeLidar(), estop=threading.Event(),
     )
-    BaselineGraspState("queen", 0.030).execute(ports)
+    BaselineGraspState("queen").execute(ports)
     return log
 
 
-def test_미세_전진은_팔이_내려가_그리퍼가_열린_뒤에_일어난다():
-    """전진이 grasp 자세 도달 **뒤**여야 물체가 턱 사이로 들어온다."""
-    order = _grasp_call_order()
-
-    assert "creep_forward_timed" in order, "미세 전진이 아예 안 일어났다"
-    creep = order.index("creep_forward_timed")
-    descended = order.index("move_to_floor_pose:grasp")
-    opened = order.index("set_gripper")
-
-    assert opened < descended, "내려가기 전에 열어야 한다(사용자 지시 2026-08-24)"
-    assert descended < creep, (
-        f"전진이 하강보다 먼저다 — 밀어 넣는 것이 아니라 감싸는 동작이 된다\n"
-        f"실제 순서: {order}")
-
-
-def test_전진은_그리퍼를_닫기_전에_끝난다():
-    """턱 사이에 물체가 들어오기 전에 닫으면 빈손으로 물거나 물체를 친다."""
-    order = _grasp_call_order()
-
-    creep = order.index("creep_forward_timed")
-    closes = [i for i, call in enumerate(order) if call == "set_gripper"]
-    assert len(closes) >= 2, f"열기/닫기가 둘 다 있어야 한다: {order}"
-    assert creep < closes[1], f"닫은 뒤에 전진했다: {order}"
-
-
 def test_기준_프레임은_팔이_카메라를_가리기_전에_뜬다():
-    """grasp 자세로 내려가면 팔이 뎁스 카메라를 가린다 — confirm_grasp 의
-    기준 관측은 그 전에 떠야 한다(tools/demo_rook_run.py 2단계와 같은 이유)."""
+    """정책이 팔을 내리면 뎁스 카메라를 가린다 — confirm_grasp 의 기준
+    관측은 정책을 돌리기 **전에** 떠야 한다.
+
+    2026-09-07 에 classic 파지 시퀀스를 들어내면서 기준점이 바뀌었다:
+    예전에는 "move_to_floor_pose:grasp 보다 먼저"였는데, 그 하강이 이제
+    정책 안에서 일어나므로 run_grasp 보다 먼저인지를 본다."""
     order = _grasp_call_order()
 
-    assert order.index("remember_target") < order.index("move_to_floor_pose:grasp")
+    assert order.index("remember_target") < order.index("run_grasp")
 
 
 def test_전진_구간에_회전이_섞이지_않는다():
@@ -1167,11 +1149,11 @@ def test_전진_구간에_회전이_섞이지_않는다():
 
     arm = FakeArm(load_ratio=HOLDING_LOAD)
     base = FakeBase()
-    ports = BaselinePorts(
+    ports = BaselinePorts(vla=FakeVla(),
         base=base, arm=arm, perception=ScriptedPerception(),
         host=FakeHostLink(), lidar=FakeLidar(), estop=threading.Event(),
     )
-    BaselineGraspState("queen", 0.030).execute(ports)
+    BaselineGraspState("queen").execute(ports)
 
     for linear_x, linear_y, angular_z in base.velocity_calls:
         assert angular_z == 0.0, f"파지 중 회전 명령이 나갔다: {base.velocity_calls}"
