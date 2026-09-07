@@ -342,8 +342,11 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "grasp_backend",
                 default_value="classic",
-                description="파지 백엔드 classic|vla. vla 면 정책이 파지를 대신하고 "
-                "실패하면 그 자리에서 classic 으로 한 번 더 시도한다",
+                description="파지 백엔드 classic|vla. vla 면 정책이 파지를 "
+                "통째로 대신한다 — ⚠️ 예전 설명에 '실패하면 그 자리에서 "
+                "classic 으로 한 번 더 시도한다'고 적혀 있었는데 그런 경로는 "
+                "코드에 없다(2026-09-07 확인). vla 실패는 그냥 실패이고, "
+                "재시도는 Host 가 상태를 리셋해 처음부터 다시 한다",
             ),
             DeclareLaunchArgument(
                 "use_depth_camera",
