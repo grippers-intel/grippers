@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
 # VLA 파지 미션 — 실기로 검증된 인자 묶음 하나. 컨테이너 안에서 실행한다.
 #
-#   ./run_vla_mission.sh              ACT 120k, Pi 로컬 추론 (노트북 불필요)
-#   ./run_vla_mission.sh --dp         DP, 노트북 policy_server 원격 추론
+#   ./run_vla_mission.sh              DP, 노트북 policy_server 원격 추론 (기본)
+#   ./run_vla_mission.sh --act        ACT 120k, Pi 로컬 추론 (노트북 불필요)
 #   ./run_vla_mission.sh --host-ip 192.168.0.5
 #   ./run_vla_mission.sh --force      이미 떠 있는 노드를 정리하고 띄운다
+#
+# ⚠️ 기본이 DP 인 것은 **지금 무엇을 재고 있느냐**에 달린 선택이다(2026-09-07
+# 사용자 지시). 지금까지 실기에서 파지→운반→투하를 끝까지 완주한 유일한
+# 기록이 DP 쪽이고(2026-09-07 06:00 판, 5회 중 1회), ACT 는 아직 파지 성공
+# 기록이 없다. 나중에 RTC(추론과 재생을 겹쳐 팔이 안 서게 하는 기법)를
+# 붙일 수 있는 것도 DP 뿐이다 — 반복 샘플러가 있어야 하는데 ACT 는 순전파
+# 한 번이다.
+#
+# ⚠️ 대신 DP 는 **노트북이 떠 있어야 Pi 가 기동한다.** vla_inference_node 가
+# 시작할 때 health 로 부딪혀 보고 없으면 일부러 죽는다(파지 도중에 아는
+# 것보다 낫다). 노트북 없이 굴려야 하면 --act 를 쓸 것.
 #
 # ⚠️ 이 스크립트가 있는 이유는 **인자를 손으로 치면 빠뜨리기 때문**이다. 이
 # 저장소는 같은 사고를 두 번 겪었다:
@@ -27,11 +38,14 @@
 #                         그 전에 나가는 보고는 이 값으로 간다.
 set -uo pipefail
 
-BACKEND=act
+BACKEND=dp
 HOST_IP=192.168.0.2
 POLICY_URL=http://192.168.0.2:8770
 #: /shared 에 둔다 — 저장소 안에 두면 git stash -u 에 휩쓸린다(2026-09-05).
 CHECKPOINT=/shared/act_v5_all_180_120k_120000
+#: DP 서버가 이 값으로 떠 있어야 한다. 체크포인트 config 기본값은 32 인데
+#: 그러면 재생이 1.07초라 추론 542ms 대비 여유가 절반이다(2026-09-07 실측).
+EXPECT_N_ACTION_STEPS=63
 FORCE=""
 LOG=/tmp/bringup.log
 
@@ -81,8 +95,46 @@ if [ "$BACKEND" = "act" ]; then
   POLICY_ARGS=(policy_source:=local "checkpoint:=$CHECKPOINT" device:=cpu)
   echo "[run] ACT — Pi 로컬 추론, 체크포인트 $CHECKPOINT"
 else
+  # ── 서버부터 두드려 본다 ────────────────────────────────────────────
+  #
+  # 없으면 vla_inference_node 가 기동에서 죽는데, 그 실패는 ROS 로그 깊숙이
+  # 묻혀서 "왜 안 뜨지"로 몇 분을 태운다. 여기서 먼저 물어보면 한 줄로 끝난다.
+  #
+  # 겸사겸사 n_action_steps 를 확인한다. **이 값은 서버가 정한다** — 체크포인트
+  # config 기본값은 32(재생 1.07초)인데, 그러면 추론 542ms 대비 여유가 2배로
+  # 줄어 팔 정지 비율이 커진다. 63(재생 2.10초)으로 띄우기로 한 이유다.
+  echo "[run] DP — 원격 추론 $POLICY_URL 확인 중..."
+  HEALTH=$(python3 - "$POLICY_URL" <<'PYEOF' 2>/dev/null
+import json, sys, urllib.request
+try:
+    with urllib.request.urlopen(sys.argv[1] + "/health", timeout=5) as r:
+        info = json.load(r)
+except Exception:
+    sys.exit(1)
+print(f"{info.get('ckpt')}|{info.get('n_action_steps')}|{info.get('policy_hw')}")
+PYEOF
+  )
+  if [ -z "$HEALTH" ]; then
+    echo "" >&2
+    echo "  노트북 policy_server 에 못 붙었다: $POLICY_URL" >&2
+    echo "  노트북에서 먼저 띄울 것 (.venv-dp 여야 한다 — ACT 용 .venv 로는" >&2
+    echo "  이 체크포인트가 안 읽힌다):" >&2
+    echo "" >&2
+    echo "    .venv-dp\Scripts\python.exe grippers\tools\arm\policy_server.py \\" >&2
+    echo "      --ckpt ckpt_dp_v5_all\dp_v5_all_180_60k_060000 \\" >&2
+    echo "      --device cuda --scheduler DDPM --denoise 10 --n-action-steps 63 --host 0.0.0.0" >&2
+    echo "" >&2
+    echo "  노트북 없이 굴리려면 --act 를 쓸 것." >&2
+    exit 1
+  fi
+  SRV_CKPT=${HEALTH%%|*}; REST=${HEALTH#*|}; SRV_STEPS=${REST%%|*}; SRV_HW=${REST#*|}
+  echo "[run] 서버 응답 — $SRV_CKPT / n_action_steps $SRV_STEPS / 입력 $SRV_HW"
+  if [ "$SRV_STEPS" != "$EXPECT_N_ACTION_STEPS" ]; then
+    echo "[run] ⚠️ n_action_steps 가 $SRV_STEPS 다 (기대 $EXPECT_N_ACTION_STEPS)." >&2
+    echo "        재생 길이가 달라져 팔 정지 비율이 바뀐다 — 서버를" >&2
+    echo "        --n-action-steps $EXPECT_N_ACTION_STEPS 로 다시 띄우는 것이 맞다." >&2
+  fi
   POLICY_ARGS=(policy_source:=remote "policy_url:=$POLICY_URL")
-  echo "[run] DP — 원격 추론 $POLICY_URL (노트북 policy_server 가 떠 있어야 한다)"
 fi
 
 set -x

@@ -86,3 +86,55 @@ def test_런치_기본_체크포인트와_같은_것을_쓴다():
         r'"checkpoint",\s*\n\s*default_value="([^"]*)"',
         LAUNCH.read_text(encoding="utf-8")).group(1)
     assert script_ckpt == launch_ckpt
+
+
+# ── 기본 백엔드와 사전 점검 (2026-09-07) ─────────────────────────────────
+#
+# 기본을 DP 로 돌린 것은 지금 무엇을 재고 있느냐에 따른 선택이다 — 실기에서
+# 파지→운반→투하를 완주한 유일한 기록이 DP 쪽이고(06:00 판), RTC 를 붙일 수
+# 있는 것도 DP 뿐이다. 대신 노트북 의존이 생기므로 그 대가를 시험으로 못 박는다.
+
+
+def _var(name):
+    m = re.search(rf'^{name}=(\S+)', SCRIPT.read_text(encoding="utf-8"), re.M)
+    return m.group(1) if m else None
+
+
+def test_기본_백엔드가_DP_다():
+    assert _var("BACKEND") == "dp"
+
+
+def test_ACT_로_되돌릴_길이_남아_있다():
+    """노트북 없이 굴려야 할 때가 있다 — 그 길을 막으면 안 된다."""
+    assert "--act)" in SCRIPT.read_text(encoding="utf-8")
+
+
+def test_DP_는_띄우기_전에_서버를_두드린다():
+    """⚠️ 없으면 vla_inference_node 가 기동에서 죽는데, 그 실패는 ROS 로그
+    깊숙이 묻힌다. 먼저 물어보면 한 줄로 끝난다."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "/health" in text
+    # 점검이 실제 실행문 **앞**에 있어야 의미가 있다.
+    # ⚠️ "ros2 launch" 로 찾으면 안 된다 — 머리말 주석이 그 문구를 먼저 쓴다.
+    assert text.index("/health") < text.index("exec ros2 launch")
+
+
+def test_서버가_없으면_띄우지_않고_안내한다():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "exit 1" in text
+    assert "policy_server.py" in text, "띄우는 명령을 알려줘야 한다"
+    assert ".venv-dp" in text, "ACT 용 .venv 로는 이 체크포인트가 안 읽힌다"
+
+
+def test_기대하는_n_action_steps_가_63_이다():
+    """서버가 정하는 값이다. 체크포인트 config 기본값 32 로 뜨면 재생이
+    1.07초라 추론 542ms 대비 여유가 절반이 된다(2026-09-07 실측)."""
+    assert _var("EXPECT_N_ACTION_STEPS") == "63"
+
+
+def test_서버의_n_action_steps_가_다르면_경고한다():
+    """조용히 다른 청크 길이로 도는 것이 가장 나쁘다 — 실기 수치를 비교할 수
+    없게 된다."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "$EXPECT_N_ACTION_STEPS" in text
+    assert "SRV_STEPS" in text
