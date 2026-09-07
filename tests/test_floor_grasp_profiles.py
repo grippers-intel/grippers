@@ -324,3 +324,51 @@ def test_close_width_clamps_at_the_grasp_floor_not_the_empty_closed_width():
 
     assert profiles._close_width(10.0) == profiles.GRIPPER_GRASP_MIN_MM
     assert profiles.GRIPPER_GRASP_MIN_MM < 9.0
+
+
+# ── 운반 자세는 파지 때 그리퍼 각도를 유지한다 (2026-09-07) ───────────────
+
+
+def _pitch_deg(lift_raw, elbow_raw, wrist_raw):
+    """그리퍼 피치 = lift + elbow + wrist. driver_sdk 의 환산과 같다
+    (POS_CENTER 2048, 4095 카운트 = 360도)."""
+    to_deg = lambda raw: (raw - 2048) / 4095.0 * 360.0
+    return to_deg(lift_raw) + to_deg(elbow_raw) + to_deg(wrist_raw)
+
+
+def test_교시_수평_파지는_전부_같은_피치다():
+    """이 규칙(lift+elbow+wrist)이 성립해야 아래 시험이 뜻을 갖는다."""
+    module = _load_profiles()
+    for name in ("HORIZONTAL_CHESS_QUEEN_50_DEG", "HORIZONTAL_CHESS_ROOK_45_DEG",
+                 "HORIZONTAL_CHESS_KNIGHT_60_DEG"):
+        _pan, lift, elbow, wrist, _roll = getattr(module, name)
+        assert abs((lift + elbow + wrist) - (-0.51)) < 0.05, name
+
+
+def test_운반_자세_피치가_파지_피치와_같다():
+    """⚠️ 2026-09-07 사용자 보고: "기본주행 자세에서 그리퍼의 각도가 달라서
+    자꾸 기물을 떨어뜨리고 있어."
+
+    턱 사이에서 물체를 붙잡는 것은 마찰뿐이라, 파지 때와 각도가 달라지면
+    중력이 턱 면을 따라 미끄러지는 성분을 갖는다. 예전 CARRY(servo4 2514)는
+    파지보다 26도 들려 있었다."""
+    module = _load_profiles()
+    _pan, lift, elbow, wrist, _roll = module.CARRY_RAW
+
+    carry_pitch = _pitch_deg(lift, elbow, wrist)
+    grasp_pitch = -0.51        # 교시 수평 파지 셋의 공통 피치(위 시험)
+
+    assert abs(carry_pitch - grasp_pitch) < 1.5, (
+        f"운반 피치 {carry_pitch:+.1f}도가 파지 {grasp_pitch:+.1f}도와 다르다 "
+        f"— 물체가 미끄러진다")
+
+
+def test_운반_손목은_IDLE보다_더_들려_있다():
+    """라이다 가림 때문에 올린 것이라(CARRY_RAW 주석) 방향이 뒤집히면 안 된다.
+    servo 4 는 raw 가 작아지는 쪽이 '들리는' 쪽이다."""
+    module = _load_profiles()
+
+    assert module.CARRY_RAW[3] < module.IDLE_CRADLE_RAW[3]
+    # 가동범위 안이어야 한다.
+    low, high = module.TAUGHT_POSITION_LIMITS[4]
+    assert low < module.CARRY_RAW[3] < high
