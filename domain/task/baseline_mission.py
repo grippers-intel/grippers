@@ -52,8 +52,6 @@ from domain.task import corrections
 from domain.task import grasp_alignment as ga
 from domain.task import preconditions as pc
 from domain.task.floor_grasp_policy import (
-    GRIPPER_GRASP_MIN_MM,
-    GRIPPER_MAX_SAFE_OPEN_MM,
     HorizontalGraspPlan,
     _release_width,
 )
@@ -71,9 +69,9 @@ CLOSED_MM = 9.0
 # **Pi가 자기 카메라로 확인한다** — 내려가는 것이 이 팔이므로 자기 눈으로 본
 # 것에 맞춰 자세를 고른다. 이것이 Pi가 자기 YOLO를 계속 쓰는 유일한 이유다.
 #
-# 폭 값은 `floor_grasp_policy`의 실측 공식에서 유도한다. 여기에 숫자를 직접
-# 적으면 ros2 프로필과 갈라진다 — 2026-08-26에 실제로 갈라져서 파지가 헐거워진
-# 사고가 있었다(도메인 13.0 vs ros2 7.0).
+# 폭은 더 이상 여기서 안 정한다 — 파지 폭 정책은 2026-09-07 에 들어냈고
+# (floor_grasp_policy 의 그 주석), 남은 것은 투하 때 여는 폭뿐이다.
+# 물체 폭은 정렬 판정(grasp_alignment.judge)이 아직 쓴다.
 _OBJECT_WIDTH_MM = {
     "queen": ("chess_queen", 17.0),
     "knight": ("chess_knight", 22.0),
@@ -83,45 +81,8 @@ _OBJECT_WIDTH_MM = {
     "soccer": ("soccer_polyhedron", 46.0),
 }
 
-# 모든 라벨의 파지 폭을 GRIPPER_GRASP_MIN_MM까지 강제로 좁힌다(2026-09-02
-# 사용자 지시 — 기어 사이에 이격(백래시)이 있어 서보 한계까지 밀어붙여야
-# 한다).
-#
-# 2026-09-02 이전에는 물체 폭에서 GRIPPER_SQUEEZE_MM(15.0)만 뺀 값을
-# 썼다(_close_width) — rook만 예외적으로 이 하한을 직접 썼다(09-02 실기:
-# _close_width(24.5)=9.5가 이미 하한(당시 7.0)보다 위라 08-25의 "최대한
-# 세게 잡자" 조정 혜택을 못 받고 8회 연속 "들어 올리지 못함"이 났다).
-#
-# 물체가 턱 사이에 있으면 그 물체가 턱을 멈춰 주므로, 하한까지 명령해도
-# 서보가 갈아 먹는 게 아니라 위치 오차(=힘)만 커진다(GRIPPER_GRASP_MIN_MM
-# 주석 참고) — 그래서 라벨마다 다르게 좁힐 이유가 없었다.
-#
-# ⚠️ 2026-09-03 사용자 지시로 box/star는 예외를 둔다 — 부피가 큰 물체라
-# 0.0mm까지 완전히 짓누르지 않고 7.0mm(2026-09-02 이전 하한)를 유지한다.
-# soccer는 언급되지 않아 그대로 0.0mm다. box/star가 부하 읽기 실패로
-# 의심되는 0에 가까운 값을 반복해 보인 것(위 confirm_grasp AND 복귀
-# 코멘트 참고)과 무관하지 않을 수 있다 — 서보가 한계까지 밀어붙여져
-# 있으면 그 자체로 읽기가 더 불안정해질 수 있다는 심증이다(확인된 인과는
-# 아니다).
-#
-# 2026-09-05 실기(grasp_test_console.py --raw-cls box)에서 7.0mm·12.0mm
-# 둘 다 servo 6(그리퍼) 통신 실패("SO-ARM101 servo 통신 실패 — servo
-# IDs: [6]")가 재현됐다. rook(자세 45mm)으로 박스를 쥐게 해봐도 같은
-# 실패가 났고, 반대로 rook 자세로 룩(가는 물체)을 쥐면 닫힘 load_ratio가
-# 낮고 성공했다 — 자세가 아니라 **닫힘 load_ratio(부하)**가 실패를
-# 예측했다(servo 6에 토크 제한이 없어, 목표 폭이 실제 물체 폭보다 한참
-# 좁으면 서보가 계속 밀어붙이며 스톨 부하로 오래 버틴다). box(실측
-# 40mm)/star(45mm)를 20.0mm까지 늘려 스톨 부하 자체를 줄여 본다(사용자
-# 지시 — "20mm로, 안 잡힐 수도 있지만"). ros2_ws/.../floor_grasp_profiles.py
-# 의 같은 자리와 반드시 같이 맞출 것.
-_CLOSE_WIDTH_OVERRIDE_MM = {"box": 20.0, "star": 20.0}
-
-
 _PROFILE_BY_LABEL = {
-    label: HorizontalGraspPlan(
-        profile, GRIPPER_MAX_SAFE_OPEN_MM,
-        _CLOSE_WIDTH_OVERRIDE_MM.get(label, GRIPPER_GRASP_MIN_MM),
-        _release_width(width_mm))
+    label: HorizontalGraspPlan(profile, _release_width(width_mm))
     for label, (profile, width_mm) in _OBJECT_WIDTH_MM.items()
 }
 
@@ -497,6 +458,11 @@ class BaselineApproachState(State):
 #: VLA_GRIPPER_SPEED_RAW(600 raw/s)로 최대 900 raw 를 움직여야 1.5초다.
 GRIP_SETTLE_SEC = 1.5
 
+#: 성공 판정 직전에 "확실히 닫아라"로 보내는 폭(mm). 파지 폭 정책을 들어낸
+#: 뒤, 미션에서 그리퍼 폭을 정하는 자리는 여기 하나뿐이다 —
+#: 파지 자체는 정책이 하고, 이 값은 **판정의 전제**를 세우기 위한 것이다.
+JUDGE_CLOSE_WIDTH_MM = 0.0
+
 RELEASE_RETRIES = 4
 RELEASE_RETRY_SEC = 1.5
 
@@ -638,14 +604,15 @@ class BaselineGraspState(State):
         load_unknown = carried < 0.0
         load_ok = (not load_unknown) and carried >= bc.LOAD_THRESHOLD
 
-        # ⚠️ 문턱은 **닫기 명령에 따라 달라진다.** 절대값 하나로는 안 된다 —
-        # box·star 프로파일은 20mm 까지만 닫아서, 빈 턱이어도 1216 에서
-        # 멈춘다(bc.empty_stop_raw 주석). 옛 절대 문턱 1165 로는 그게
-        # "물었음"으로 읽혔다.
+        # 판정에 쓰는 닫기 폭. **프로파일에서 안 온다** — 파지 폭 정책을
+        # 들어냈으므로(floor_grasp_policy 주석) 여기서 정하는 상수 하나다.
         #
-        # 정책이 그리퍼를 직접 몬다 — 프로파일의 close_width_mm 를 안 쓴다.
-        # 실기 관측상 끝까지 닫으므로(빈 턱 1097~1134) 0mm 기준을 쓴다.
-        close_w = 0.0
+        # 0.0mm 인 이유: 정책이 그리퍼를 직접 몰고 실기 관측상 끝까지
+        # 닫으므로(빈 턱 1097~1134), 판정 기준도 "끝까지 닫았을 때"여야
+        # 전제가 맞는다. 한때 라벨마다 다른 폭(box·star 는 20mm)을 썼는데,
+        # 그러면 빈 턱이 1216 에서 멈춰 옛 절대 문턱 1165 를 넘어 "물었음"
+        # 으로 읽혔다(bc.empty_stop_raw 주석).
+        close_w = JUDGE_CLOSE_WIDTH_MM
 
         # ── 읽기 전에 **확실히 닫으라고 명령한다** ────────────────────────
         #
@@ -1160,7 +1127,7 @@ class BaselineInsertState(State):
         # 여기서 한 번 더 읽으면 헛투하를 안 한다. 못 읽으면(-1) 진행한다 —
         # 모르는 것을 실패로 단정해 물건을 든 채 서 있는 것이 더 나쁘다.
         # 문턱은 파지 때와 같은 기준(0mm 로 닫은 빈 턱)이어야 한다.
-        close_w = 0.0
+        close_w = JUDGE_CLOSE_WIDTH_MM
         held_min = bc.held_threshold_raw(close_w)
         held_raw = ports.arm.gripper_position_raw()
         if 0 <= held_raw < held_min:

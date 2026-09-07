@@ -30,7 +30,6 @@ from domain.task.baseline_mission import (
     LinkWatchdog,
     plan_for_label,
 )
-from domain.task.floor_grasp_policy import GRIPPER_GRASP_MIN_MM
 from domain.task.motion import AGREED_LINEAR_MPS, AGREED_ROTATION_RAD_S
 from domain.values import TargetObservation
 
@@ -441,33 +440,6 @@ def test_부하_판독이_흔들려도_CARRY_최종_판정만으로_성공한다
     assert isinstance(nxt, BaselineCarryState)
     # 들어올리는 과정에서는 부하를 안 읽는다 — CARRY 도달 후 딱 1번뿐.
     assert arm._load_call_count == 1
-
-
-def test_파지_명령_폭은_ros2_프로파일_공식에서_나온다():
-    """도메인과 ros2 프로파일이 갈라져 파지가 헐거워진 2026-08-26 사고 방지.
-
-    2026-09-02 사용자 지시(기어 백래시 — 서보 한계까지 밀어붙여야 한다)로
-    모든 라벨이 물체 폭과 무관하게 GRIPPER_GRASP_MIN_MM을 직접 쓰게
-    됐었다 — rook 하나만 덮어쓰던 09-02 이전 방식(_CLOSE_WIDTH_OVERRIDE_MM)
-    을 없앴었다. queen/rook/soccer처럼 override가 없는 라벨은 지금도 이
-    하한을 그대로 쓴다."""
-    assert plan_for_label("queen").close_width_mm == GRIPPER_GRASP_MIN_MM
-    assert plan_for_label("rook").close_width_mm == GRIPPER_GRASP_MIN_MM
-    assert plan_for_label("soccer").close_width_mm == GRIPPER_GRASP_MIN_MM
-
-
-def test_부피가_큰_box_star는_완전히_짓누르지_않는다():
-    """2026-09-03 사용자 지시로 _CLOSE_WIDTH_OVERRIDE_MM이 되살아났다 —
-    box/star는 부피가 커서 0.0mm(서보 한계)까지 밀어붙이지 않고
-    2026-09-02 이전 하한이던 7.0mm를 유지한다. soccer는 언급되지 않아
-    여전히 GRIPPER_GRASP_MIN_MM(0.0mm) 그대로다(위 테스트가 이미 덮음).
-
-    2026-09-05 실기에서 7.0mm·12.0mm 둘 다 servo 6 통신 실패가 재현됐고,
-    닫힘 load_ratio(부하)가 자세와 무관하게 실패를 예측한다는 게
-    드러났다 — 스톨 부하를 줄이려 물체 실측 폭에 더 가까운 20.0mm로
-    늘렸다(사용자 지시 — "안 잡힐 수도 있지만")."""
-    assert plan_for_label("box").close_width_mm == 20.0
-    assert plan_for_label("star").close_width_mm == 20.0
 
 
 # ── 임무 4번: INSERT 조건 판정과 수행 ──────────────────────────────────────
@@ -1158,3 +1130,33 @@ def test_전진_구간에_회전이_섞이지_않는다():
     for linear_x, linear_y, angular_z in base.velocity_calls:
         assert angular_z == 0.0, f"파지 중 회전 명령이 나갔다: {base.velocity_calls}"
         assert linear_y == 0.0, f"파지 중 횡이동 명령이 나갔다: {base.velocity_calls}"
+
+
+# ── 파지 폭 정책을 들어낸 뒤의 계약 ────────────────────────────────────────
+
+
+def test_파지_계획은_파지_폭을_안_들고_있다():
+    """2026-09-07 사용자 지시로 kica927 파지 폭 정책을 통째로 지웠다 —
+    라벨별 하한, box/star 20mm 예외, 백래시 0.0mm 밀어붙임 전부.
+
+    남으면 "여기가 파지 폭을 정하는 곳"으로 읽힌다. 파지에서 그리퍼를 모는
+    것은 정책 하나뿐이어야 한다."""
+    plan = plan_for_label("queen")
+
+    assert not hasattr(plan, "close_width_mm")
+    assert not hasattr(plan, "preopen_width_mm")
+    # 남는 것은 자세 프로파일과 투하 폭뿐이다 — 투하는 파지가 아니다.
+    assert plan.profile == "chess_queen"
+    assert plan.release_width_mm == 168.0
+
+
+def test_미션이_그리퍼_폭을_정하는_자리는_하나다():
+    """판정 직전의 "확실히 닫아라" 한 번뿐이고, 그 값은 프로파일이 아니라
+    상수다. 라벨마다 달라지면 빈 턱 위치도 같이 달라져 판정 문턱의 전제가
+    깨진다(2026-09-07, box·star 가 20mm 로 닫혀 빈 턱 1216 이 옛 문턱
+    1165 를 넘던 사고)."""
+    from domain.task.baseline_mission import JUDGE_CLOSE_WIDTH_MM
+
+    assert JUDGE_CLOSE_WIDTH_MM == 0.0
+    for label in ("queen", "box", "star", "soccer"):
+        assert not hasattr(plan_for_label(label), "close_width_mm"), label

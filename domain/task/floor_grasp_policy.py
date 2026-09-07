@@ -32,33 +32,24 @@ GRIPPER_MAX_SAFE_OPEN_MM = 168.0
 GRIPPER_RELEASE_MM = 15.0
 
 
-# ros2_ws 쪽 GRIPPER_SQUEEZE_MM · GRIPPER_GRASP_MIN_MM와 같은 수를 계층 분리
-# 때문에 복제해 둔다 — 한쪽을 바꾸면 다른 쪽도 바꿔야 한다.
+# ⚠️ 2026-09-07 사용자 지시로 **파지 폭 정책을 통째로 들어냈다.**
 #
-# ⚠️ 2026-08-26: 실제로 그 동기화가 깨져 있었다. 이 파일이 파지 폭을
-# 13.0/13.0/15.0/30.0/35.0으로 **하드코딩**하고 있었는데, ros2 쪽은
-# _close_width(물체폭 - 15.0, 하한 7.0)로 7.0/7.0/9.5/25.0/31.0을 낸다.
-# 미션이 실제로 쓰는 것은 이 파일 값이라, 08-25에 하한을 9.0 -> 7.0으로
-# 내리며 "최대한 세게 잡자"고 한 사용자 지시가 도메인 경로에는 반영되지
-# 않은 채였다. 계산식을 옮겨 와 다시는 어긋나지 않게 한다.
-GRIPPER_SQUEEZE_MM = 15.0
-
-# 2026-08-25 실측(gripper_calibration.GRIPPER_GRASP_MIN_MM 주석)으로는
-# 7.0에서 부하가 포화해 더 좁혀도 얻는 게 없다고 결론지었다. 그런데
-# 2026-09-02 사용자 지시: 기어 사이에 이격(백래시)이 있어 서보 한계까지
-# 밀어붙여야 한다 — 부하 판독(모터 축 기준)이 포화해 보여도 백래시를
-# 다 흡수하는 지점까지는 핑거 끝의 실제 조임이 계속 세질 수 있다는 것이다.
-# 그래서 하한을 0.0으로 더 내린다. 물체가 턱을 멈춰 주므로(위 _close_width
-# 주석) 이렇게 좁게 명령해도 서보가 갈아 먹는 게 아니라 위치 오차만 커진다.
-GRIPPER_GRASP_MIN_MM = 0.0
-
-
-def _close_width(object_width_mm: float) -> float:
-    """물체 폭에서 GRIPPER_SQUEEZE_MM만큼 더 좁힌 목표 폭.
-
-    빈 닫힘 폭이 아니라 **파지 전용** 하한으로 clamp한다 — 물체가 턱을 멈춰
-    주므로 파지 때는 더 좁게 명령해 위치 오차(=힘)를 키울 수 있다."""
-    return max(GRIPPER_GRASP_MIN_MM, round(object_width_mm - GRIPPER_SQUEEZE_MM, 1))
+#   "kica927에서 가져온 파지 정책 제거해줘. 파지는 내 역할이니까."
+#
+# 지운 것: GRIPPER_SQUEEZE_MM, GRIPPER_GRASP_MIN_MM, _close_width(),
+# 그리고 HorizontalGraspPlan 의 preopen_width_mm / close_width_mm.
+#
+# 저 값들이 "얼마나 벌리고 얼마나 조일 것인가"를 정하던 자리다 —
+# 라벨마다 다른 하한, box/star 예외(20mm), 백래시를 감안한 0.0mm 밀어붙임.
+# 전부 팀원 브랜치에서 온 실기 튜닝이었고, 사용자가 직접 만들 부분이다.
+#
+# 지금 파지에서 그리퍼를 모는 것은 **정책 하나뿐**이다. 미션은 판정 직전에
+# 한 번 확실히 닫으라고만 하고(baseline_mission 의 그 주석), 그때 쓰는 폭은
+# 프로파일이 아니라 0.0mm 상수다. 그래서 이 값들은 이미 아무도 안 읽고
+# 있었다 — 남겨 두면 "여기가 파지 폭을 정하는 곳"으로 읽힌다.
+#
+# 남긴 것은 투하(INSERT)에 쓰는 _release_width 뿐이다. 그것은 파지가 아니라
+# 놓기다.
 
 
 def _release_width(object_width_mm: float) -> float:
@@ -76,6 +67,4 @@ def _release_width(object_width_mm: float) -> float:
 @dataclass(frozen=True)
 class HorizontalGraspPlan:
     profile: str
-    preopen_width_mm: float
-    close_width_mm: float
     release_width_mm: float

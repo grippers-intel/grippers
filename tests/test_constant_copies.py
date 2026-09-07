@@ -177,8 +177,16 @@ def test_파지_전제_배치가_같다(sources):
 
 
 def test_그리퍼_여닫이_폭_사본이_같다(sources):
-    assert sources["floor_profiles"]["GRIPPER_SQUEEZE_MM"] == policy.GRIPPER_SQUEEZE_MM
+    """⚠️ 2026-09-07: GRIPPER_SQUEEZE_MM 짝은 사라졌다.
+
+    도메인 쪽 사본은 파지 폭 정책과 함께 들어냈다(floor_grasp_policy 의
+    그 주석) — 미션이 파지 폭을 안 정하니 맞출 상대가 없다. ros2 쪽
+    상수는 tools/ 의 수동 파지 도구들이 아직 쓰므로 그대로 둔다.
+
+    투하 폭(GRIPPER_RELEASE_MM)은 양쪽에 남아 있으므로 계속 본다."""
     assert sources["floor_profiles"]["GRIPPER_RELEASE_MM"] == policy.GRIPPER_RELEASE_MM
+    assert not hasattr(policy, "GRIPPER_SQUEEZE_MM"), (
+        "파지 폭 정책이 도메인에 되살아났다 — 파지는 정책이 한다")
 
 
 def test_라이다_기하_사본이_같다(sources):

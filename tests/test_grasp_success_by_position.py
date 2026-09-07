@@ -149,11 +149,18 @@ def test_20mm로_닫는_프로파일은_문턱이_올라간다():
     assert bc.held_threshold_raw(20.0) > empty_at_20
 
 
-def test_box와_star가_실제로_20mm로_닫는다():
-    """이 값이 바뀌면 위 두 시험의 근거가 사라진다 — 프로파일과 같이 본다."""
-    from domain.task.baseline_mission import plan_for_label
-    for label in ("box", "star"):
-        assert plan_for_label(label).close_width_mm == 20.0
+def test_미션은_어떤_라벨에도_20mm를_안_쓴다():
+    """위 시험이 지키는 구멍은 **원리**로 남기고, 그 구멍을 실제로 밟던
+    프로파일 값은 없앴다(2026-09-07).
+
+    box·star 를 20mm 로 닫던 것이 kica927 파지 폭 정책이었고 사용자 지시로
+    통째로 지웠다. 이제 미션이 닫으라고 하는 폭은 JUDGE_CLOSE_WIDTH_MM
+    하나뿐이라, 빈 턱 위치가 라벨에 따라 달라지지 않는다."""
+    from domain.task.baseline_mission import JUDGE_CLOSE_WIDTH_MM, plan_for_label
+
+    assert JUDGE_CLOSE_WIDTH_MM == 0.0
+    for label in ("box", "star", "queen"):
+        assert not hasattr(plan_for_label(label), "close_width_mm"), label
 
 
 def test_빈_턱은_어떤_폭에서도_문턱을_못_넘는다():
