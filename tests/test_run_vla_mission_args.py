@@ -194,3 +194,26 @@ def test_팀_정지_도구가_끌_수_있게_PGID_를_남긴다():
     assert "/tmp/bringup.pgid" in body, "팀 도구가 읽는 경로여야 한다"
     # PID 기록이 기동 **뒤**에 와야 $! 가 그 launch 를 가리킨다.
     assert body.index("setsid ros2 launch") < body.index('echo "$!"')
+
+
+def test_부팅_자동_실행_컨트롤러를_먼저_치운다():
+    """⚠️ 2026-09-07: 이것 때문에 몇 시간을 태웠다.
+
+    Pi 는 부팅하면 ros_robot_controller 를 자동으로 띄운다. bringup 도 자체
+    컨트롤러를 띄우므로 그대로 두면 **두 프로세스가 같은 시리얼 포트를 문다.**
+
+    증상이 고약하다 — 소프트웨어는 끝까지 정상으로 보인다. 노드도 다 뜨고,
+    cmd_vel 도 나가고, set_motor 도 정상값이 찍히는데 바퀴만 안 돈다.
+    /odom_raw 는 명령을 되읽는 추측항법이라 오히려 "돌고 있다"고 말한다.
+    재부팅 뒤 중복을 없애자마자 바퀴가 돌았다.
+
+    정리는 **bringup 을 띄우기 전**이어야 하고, bringup 이 이미 떠 있을 때는
+    건드리면 안 된다(그건 자동 실행분이 아니라 그 bringup 의 컨트롤러다)."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    body = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+    assert "ros_robot_controller" in body, "자동 실행분을 정리하는 코드가 없다"
+    # bringup 이 안 떠 있을 때만 치운다는 조건이 있어야 한다.
+    guard = body.index('pgrep -f "bringup.launch"')
+    kill = body.index('pkill -9 -f "ros_robot_controller"')
+    assert guard < kill, "bringup 유무를 먼저 확인해야 한다"
+    assert kill < body.index("setsid ros2 launch"), "띄우기 전에 치워야 한다"

@@ -67,6 +67,28 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# ── 부팅 때 자동 실행된 컨트롤러부터 치운다 ──────────────────────────────
+#
+# Pi 는 부팅하면 ros_robot_controller 를 자동으로 띄운다. bringup 도 자체
+# 컨트롤러를 띄우므로(controller/odom_publisher.launch.py 가 포함한다),
+# 그대로 두면 **두 프로세스가 같은 시리얼 포트를 문다.**
+#
+# ⚠️ 그 상태의 증상이 고약하다 — 소프트웨어는 끝까지 정상으로 보인다.
+# 노드도 다 뜨고, cmd_vel 도 나가고, set_motor 도 정상값(0.3445 rps)이
+# 찍히는데 **바퀴만 안 돈다.** /odom_raw 는 명령을 되읽는 추측항법이라
+# 오히려 '돌고 있다'고 말한다(drive_stall.py 주석). 2026-09-07 에 이걸로
+# 몇 시간을 태웠고, 재부팅 뒤 중복을 없애자마자 바퀴가 돌았다.
+#
+# bringup 이 안 떠 있는데 컨트롤러만 있으면 그건 자동 실행분이다.
+if ! pgrep -f "bringup.launch" >/dev/null 2>&1; then
+  STRAY=$(pgrep -f "ros_robot_controller" || true)
+  if [ -n "$STRAY" ]; then
+    echo "[run] 부팅 자동 실행 ros_robot_controller 정리 — 시리얼 포트 중복 방지"
+    pkill -9 -f "ros_robot_controller" 2>/dev/null
+    sleep 3
+  fi
+fi
+
 # ── 이미 떠 있으면 멈춘다 ────────────────────────────────────────────────
 #
 # 두 벌이 겹쳐 뜨면 같은 시리얼 포트를 두 번 열고, 죽일 때 서로의 자식을
