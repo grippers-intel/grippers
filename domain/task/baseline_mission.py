@@ -598,7 +598,29 @@ class BaselineGraspState(State):
                 "vla_only — CARRY 전환을 건너뛴다. 정책이 끝낸 자세 그대로다 "
                 "(물체를 물었으면 라이다가 가려 바구니를 못 찾는다)")
         elif not ports.arm.move_to_floor_pose(gp.profile, "carry"):
-            return self._failed(ports, "CARRY 전환 실패")
+            # ── 여기서 실패로 접지 않는다 ────────────────────────────────
+            #
+            # 사용자 지시(2026-09-08): "vla 동작 후에 아예 성공 실패를
+            # 따지지 말고 바로 바구니쪽으로 가는 것으로 간단하게 수정해줘."
+            #
+            # 시연에서 본 "다시 파지 종료 동작으로 이어지던" 것이 정확히
+            # 이 자리였다 — 로그에 `파지 실패 — CARRY 전환 실패` 로 찍히고
+            # _failed 가 recover_idle 을 돌린 뒤 APPROACH 로 돌아갔다.
+            #
+            # 운반 자세를 못 잡은 것은 **파지의 성패와 무관**하다. 정책은
+            # 이미 끝났고, 물었으면 문 채다. 되돌릴 이유가 없다.
+            #
+            # 대신 팔은 어떻게든 안전한 자세로 두려고 한 번 더 시도한다.
+            # 그것마저 실패하면 arm_parked 가 주행을 거부하므로(그 래치의
+            # 원래 역할) 팔을 끌고 다니는 일은 안 생긴다.
+            ports.host.report(
+                Report.STATE, self.name,
+                "CARRY 자세를 못 잡았다 — 그래도 바구니로 간다(파지와 무관)")
+            if not ports.arm.fold_to_cradle():
+                ports.arm_parked.mark_unparked("CARRY·접기 둘 다 실패")
+                ports.host.report(
+                    Report.STATE, self.name,
+                    "접기도 실패 — 팔이 알려진 자세에 없어 주행이 막힌다")
 
         # ── 파지 성공/실패 판정은 하지 않는다 ──────────────────────────
         #

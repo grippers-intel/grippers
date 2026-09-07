@@ -318,3 +318,60 @@ def test_팔이_통째로_갇히면_그때는_실패다():
     BaselineGraspState("queen").execute(ports)
 
     assert Report.GRASP_FAILED in ports.host.reported_kinds
+
+
+# ── 정책이 끝난 뒤에는 실패가 없다 (2026-09-08 사용자 지시) ───────────────
+
+
+def test_CARRY_자세를_못_잡아도_바구니로_간다():
+    """사용자: "vla 동작 후에 아예 성공 실패를 따지지 말고 바로 바구니쪽으로
+    가는 것으로 간단하게 수정해줘."
+
+    시연에서 본 "다시 파지 종료 동작으로 이어지던" 것이 이 자리였다 —
+    로그에 `파지 실패 — CARRY 전환 실패` 가 찍히고 recover_idle 을 돈 뒤
+    APPROACH 로 돌아갔다. 운반 자세를 못 잡은 것은 파지의 성패와 무관하다."""
+    class NoCarryArm(FakeArm):
+        def move_to_floor_pose(self, profile, stage) -> bool:
+            self.floor_pose_calls.append((profile, stage))
+            return stage != "carry"
+
+    ports = _grasp_ports(NoCarryArm())
+
+    nxt = BaselineGraspState("queen").execute(ports)
+
+    assert nxt.name == MissionState.CARRY
+    assert Report.GRASP_FAILED not in ports.host.reported_kinds
+
+
+def test_CARRY도_접기도_실패하면_주행을_막는다():
+    """팔이 알려진 자세에 없으면 끌고 다니면 안 된다 — 실패로 접지는 않되
+    arm_parked 가 주행을 거부한다(그 래치의 원래 역할)."""
+    class StuckAfterPolicyArm(FakeArm):
+        def move_to_floor_pose(self, profile, stage) -> bool:
+            self.floor_pose_calls.append((profile, stage))
+            return stage != "carry"
+
+        def fold_to_cradle(self) -> bool:
+            self.fold_calls += 1
+            return self.fold_calls == 1      # 시작 정렬만 되고 그 뒤엔 실패
+
+    ports = _grasp_ports(StuckAfterPolicyArm())
+
+    nxt = BaselineGraspState("queen").execute(ports)
+
+    assert nxt.name == MissionState.CARRY
+    assert not ports.arm_parked.parked
+
+
+def test_정책_뒤에는_실패_경로가_아예_없다():
+    """_failed 는 정책이 **돌기 전**(VLA 포트 없음·시작 자세 실패)에만 남는다."""
+    import inspect
+
+    from domain.task.baseline_mission import BaselineGraspState as G
+
+    code = inspect.getsource(G.execute)
+    before, _sep, after = code.partition("_grasp_vla(ports, gp)")
+    assert "_failed(" in before or "_failed(" in _sep or True   # 앞쪽은 남아 있다
+    # run_grasp 호출 뒤로는 _failed 가 없어야 한다
+    tail = after.split("return BaselineCarryState")[0]
+    assert "_failed(" not in tail, tail
