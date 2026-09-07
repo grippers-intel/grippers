@@ -89,10 +89,19 @@ fi
 #
 # 하나라도 빠지면 인터페이스나 실행파일을 못 찾는다. need_compile=False 는
 # 팀원 스택이 기동 때 재빌드를 시도하지 않게 하는 스위치다.
+# ⚠️ source 동안만 set -u 를 끈다. ROS 의 setup.bash 는 AMENT_TRACE_SETUP_FILES
+# 같은 미정의 변수를 참조하는데, set -u 아래서는 그게 즉시 오류다:
+#
+#     /opt/ros/humble/setup.bash: line 8: AMENT_TRACE_SETUP_FILES: unbound variable
+#
+# 2026-09-07 첫 실행이 여기서 죽었다. 우리 스크립트의 오타는 계속 잡고 싶으니
+# 끄는 것은 이 네 줄 동안뿐이다.
+set +u
 source /opt/ros/humble/setup.bash
 source /home/ubuntu/ros2_ws/install/setup.bash
 source /home/ubuntu/third_party_ros2/third_party_ws/install/setup.bash
 source /ros2_ws/install/setup.bash
+set -u
 export ROS_DOMAIN_ID=21 need_compile=False DEPTH_CAMERA_TYPE=ascamera
 
 if [ "$BACKEND" = "act" ]; then

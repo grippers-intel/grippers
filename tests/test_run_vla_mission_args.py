@@ -138,3 +138,21 @@ def test_서버의_n_action_steps_가_다르면_경고한다():
     text = SCRIPT.read_text(encoding="utf-8")
     assert "$EXPECT_N_ACTION_STEPS" in text
     assert "SRV_STEPS" in text
+
+
+def test_ROS_setup_을_source_할_때는_set_u_를_끈다():
+    """⚠️ 2026-09-07 첫 실행이 여기서 죽었다:
+
+        /opt/ros/humble/setup.bash: line 8: AMENT_TRACE_SETUP_FILES: unbound variable
+
+    ROS 의 setup.bash 가 미정의 변수를 참조하는데 `set -u` 아래서는 그게 즉시
+    오류다. source 구간에서만 끄고 바로 되돌려야 우리 스크립트의 오타는 계속
+    잡힌다."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "set -u" in text, "오타 검출을 위해 set -u 자체는 유지해야 한다"
+    off = text.index("set +u")
+    src = text.index("source /opt/ros/humble/setup.bash")
+    back = text.index("set -u", off)
+    last = text.index("source /ros2_ws/install/setup.bash")
+    assert off < src, "source 앞에서 꺼야 한다"
+    assert last < back, "마지막 source 뒤에 되돌려야 한다"
