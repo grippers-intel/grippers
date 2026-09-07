@@ -217,6 +217,30 @@ class BaselinePorts:
     # VLA 백엔드가 쓰는 포트. classic 에서는 None 이어도 된다.
     vla: object = None
 
+    # ── 정책만 돌려 본다 (2026-09-07 사용자 지시) ─────────────────────────
+    #
+    # "파지 시퀀스에 팀원의 하드코딩 부분이 계속 들어가는 거 같은데 우선 잠시
+    # 배제해줘 — 그냥 vla 로만 동작하는 것을 확인하고 싶어."
+    #
+    # grasp_backend=vla 여도 정책이 **안 시킨 팔 동작**이 셋 남아 있다:
+    #
+    #   creep_m 관문     팀원 정렬 코드가 낸 전진 거리를 모르면 파지를 시작도
+    #                    안 한다. 그런데 _grasp_vla 는 creep_forward 를 아예
+    #                    안 한다 — 정책과 무관한 값이 정책을 막고 있었다.
+    #   remember_target  뎁스 관측. use_depth_gate=false 구성에서는 판정에
+    #                    안 쓰이고, 실기에서 매번 3초 타임아웃으로 실패했다.
+    #   CARRY 전환       정책이 끝낸 자세에서 손목만 올리는 별도 동작.
+    #
+    # True 면 셋 다 건너뛴다. ⚠️ **켜면 운반·투하가 깨진다** — 물체를 문 채
+    # IDLE 에 있으면 그리퍼가 라이다 정면을 79% 가려 바구니를 못 본다
+    # (2026-08-26 실측, floor_grasp_profiles.CARRY_RAW 주석). 파지 하나만
+    # 눈으로 확인하려는 진단용이다.
+    #
+    # 시작 자세(fold_to_cradle)는 **안 건드린다** — 학습 회차 118개의 첫
+    # 관측이 전부 IDLE 크래들이었다. 그것까지 빼면 정책이 분포 밖에서
+    # 시작하므로, 이건 팀원 하드코딩이 아니라 정책을 돌리기 위한 조건이다.
+    vla_only: bool = False
+
     # ── 뎁스 관문 ──────────────────────────────────────────────────────────
     #
     # 기본은 켜짐이다. 끄면 **뎁스 카메라를 한 번도 안 본다** — 물체 식별,
@@ -540,12 +564,16 @@ class BaselineGraspState(State):
         #
         # 거리를 **팔을 내리기 전에** 확인한다. 모르는 채로 내려가 봐야 그
         # 자리에서 실패하고 팔만 바닥에 남는다.
-        if self.creep_m is None:
+        # ⚠️ vla_only 면 이 관문을 건너뛴다. _grasp_vla 는 creep_forward 를
+        # 아예 안 하므로(그 함수 주석) 이 값은 정책과 무관한데, 못 구하면
+        # 정책을 시작도 못 하게 막고 있었다(BaselinePorts.vla_only 주석).
+        if self.creep_m is None and not ports.vla_only:
             return self._failed(ports, "전진 거리를 모른다 — 관측 실패")
 
         # 정면을 볼 수 있는 마지막 순간이다 — grasp 자세로 내려가면 팔이
         # 뎁스 카메라를 가린다(tools/demo_rook_run.py 2단계와 같은 이유).
-        ports.perception.remember_target(self.label)
+        if not ports.vla_only:
+            ports.perception.remember_target(self.label)
         # ── 파지 백엔드 분기 ────────────────────────────────────────────
         #
         # VLA 가 대체하는 것은 **파지 동작뿐**이다. 아래 CARRY 전환과 성공
@@ -620,7 +648,14 @@ class BaselineGraspState(State):
                 return self._failed(ports, "들어올리기(midpoint) 실패")
             if not ports.arm.move_to_floor_pose(gp.profile, "safe"):
                 return self._failed(ports, "safe 복귀 실패")
-        if not ports.arm.move_to_floor_pose(gp.profile, "carry"):
+        # ⚠️ vla_only 면 CARRY 로 안 옮긴다 — 정책이 끝낸 자세 그대로 둔다
+        # (BaselinePorts.vla_only 주석). 그 대가로 운반·투하가 깨진다.
+        if ports.vla_only:
+            ports.host.report(
+                Report.STATE, self.name,
+                "vla_only — CARRY 전환을 건너뛴다. 정책이 끝낸 자세 그대로다 "
+                "(물체를 물었으면 라이다가 가려 바구니를 못 찾는다)")
+        elif not ports.arm.move_to_floor_pose(gp.profile, "carry"):
             return self._failed(ports, "CARRY 전환 실패")
 
         # 파지 성공 판정 — 부하와 뎁스(사라짐) 두 신호. 이 판정은 벌써 여러

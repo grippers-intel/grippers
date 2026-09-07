@@ -80,6 +80,9 @@ class MissionOrchestratorNode(Node):
         # 곧장 파지한다. 잃는 것은 BaselinePorts.use_depth_gate 주석 참고.
         self.declare_parameter("use_depth_gate", True)
         self.declare_parameter("default_grasp_label", "queen")
+        # 정책만 돌려 본다 — 정책이 안 시킨 팔 동작(creep 관문, 뎁스 관측,
+        # CARRY 전환)을 전부 건너뛴다. 자세한 것은 BaselinePorts.vla_only.
+        self.declare_parameter("vla_only", False)
 
         use_fake_base = self.get_parameter("use_fake_base").value
         use_fake_arm = self.get_parameter("use_fake_arm").value
@@ -88,6 +91,12 @@ class MissionOrchestratorNode(Node):
         grasp_backend = str(self.get_parameter("grasp_backend").value or "classic")
         use_depth_gate = bool(self.get_parameter("use_depth_gate").value)
         default_grasp_label = str(self.get_parameter("default_grasp_label").value or "queen")
+        vla_only = bool(self.get_parameter("vla_only").value)
+        if vla_only:
+            self.get_logger().warn(
+                "vla_only=true — 정책이 안 시킨 팔 동작을 전부 건너뜁니다"
+                "(creep 관문·뎁스 관측·CARRY 전환). 파지 확인 전용이며 "
+                "운반·투하는 동작하지 않습니다")
         if not use_depth_gate:
             self.get_logger().warn(
                 "use_depth_gate=false — 뎁스캠을 안 봅니다. 파지 성공 판정이 "
@@ -124,6 +133,7 @@ class MissionOrchestratorNode(Node):
             grasp_backend=grasp_backend,
             use_depth_gate=use_depth_gate,
             default_grasp_label=default_grasp_label,
+            vla_only=vla_only,
             # VLA 포트는 백엔드를 켤 때만 만든다. classic 만 쓸 때 정책
             # 노드를 기다리거나 토치를 부르지 않게 하려는 것이다.
             vla=(LoggedPort("vla", Ros2VlaGrasp(self), self.get_logger())

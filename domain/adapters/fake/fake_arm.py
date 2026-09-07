@@ -96,7 +96,12 @@ class FakeArm(ArmDriver):
     def reorient(self, phi_rad: float) -> bool:
         return self._reorient_ok
 
+    #: 접기를 몇 번 요청받았는지. VLA 시작 자세가 실제로 맞춰졌는지를
+    #: 보는 시험이 쓴다(test_vla_only.py) — 안 세면 "불렀다"를 확인할 길이 없다.
+    fold_calls: int = 0
+
     def fold_to_cradle(self) -> bool:
+        self.fold_calls += 1
         return self._fold_ok
 
     def offset_base_yaw(self, offset_rad: float) -> bool:

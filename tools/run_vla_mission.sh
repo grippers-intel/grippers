@@ -5,6 +5,8 @@
 #   ./run_vla_mission.sh --act        ACT 120k, Pi 로컬 추론 (노트북 불필요)
 #   ./run_vla_mission.sh --host-ip 192.168.0.5
 #   ./run_vla_mission.sh --force      이미 떠 있는 노드를 정리하고 띄운다
+#   ./run_vla_mission.sh --vla-only   정책이 안 시킨 팔 동작을 전부 뺀다
+#                                     (진단용 — 운반·투하는 동작하지 않는다)
 #
 # ⚠️ 기본이 DP 인 것은 **지금 무엇을 재고 있느냐**에 달린 선택이다(2026-09-07
 # 사용자 지시). 지금까지 실기에서 파지→운반→투하를 끝까지 완주한 유일한
@@ -47,6 +49,7 @@ CHECKPOINT=/shared/act_v5_all_180_120k_120000
 #: 그러면 재생이 1.07초라 추론 542ms 대비 여유가 절반이다(2026-09-07 실측).
 EXPECT_N_ACTION_STEPS=63
 FORCE=""
+VLA_ONLY=false
 LOG=/tmp/bringup.log
 
 while [ $# -gt 0 ]; do
@@ -57,6 +60,7 @@ while [ $# -gt 0 ]; do
     --policy-url) POLICY_URL="$2"; shift 2 ;;
     --checkpoint) CHECKPOINT="$2"; shift 2 ;;
     --force)      FORCE=1; shift ;;
+    --vla-only)   VLA_ONLY=true; shift ;;
     --log)        LOG="$2"; shift 2 ;;
     -h|--help)    sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "모르는 인자: $1" >&2; exit 2 ;;

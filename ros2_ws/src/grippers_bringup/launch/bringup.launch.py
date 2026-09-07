@@ -55,6 +55,7 @@ def launch_setup(context):
     grasp_backend = LaunchConfiguration("grasp_backend")
     use_depth_gate = LaunchConfiguration("use_depth_gate")
     use_depth_camera = LaunchConfiguration("use_depth_camera")
+    vla_only = LaunchConfiguration("vla_only")
     default_grasp_label = LaunchConfiguration("default_grasp_label")
 
     # ⚠️ use_vla 를 끄면 그리퍼캠 발행도 **함께** 꺼져야 한다. perception_node 의
@@ -219,6 +220,7 @@ def launch_setup(context):
                     # ros2 launch 는 모르는 인자를 오류로 알리지 않는다.
                     "grasp_backend": grasp_backend,
                     "use_depth_gate": use_depth_gate,
+                    "vla_only": vla_only,
                     "default_grasp_label": default_grasp_label,
                 }
             ],
@@ -350,6 +352,13 @@ def generate_launch_description():
                 "perception_node 가 뎁스 일에서 풀려나 그리퍼캠을 제 주기로 "
                 "발행한다 — use_depth_gate=false 로 쓰는 구성에서 켜 둘 이유가 "
                 "없다(2026-09-07 실측: 0.4Hz -> 설정값)",
+            ),
+            DeclareLaunchArgument(
+                "vla_only",
+                default_value="false",
+                description="true 면 정책이 안 시킨 팔 동작을 전부 건너뛴다 "
+                "(creep 관문·뎁스 관측·CARRY 전환). 파지만 눈으로 확인하는 "
+                "진단용 — 운반·투하는 동작하지 않는다",
             ),
             DeclareLaunchArgument(
                 "use_depth_gate",
