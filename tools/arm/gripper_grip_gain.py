@@ -150,6 +150,11 @@ TELEOP_HOMING_OFFSET = 390
 #: 멀쩡히 돈 것은 이 500 이 전류를 먼저 잘라 줬기 때문이다.
 TELEOP_MAX_TORQUE = 500
 
+#: 검증되지 않은 영역의 시작. 500 은 텔레옵이 몇 달 쓴 값이고, 1000 은
+#: 2026-09-07 에 과전류로 servo 6 을 버스에서 떨어뜨린 값이다. 그 사이는
+#: 아무도 안 재 봤다 — 올리려면 --probe 로 전류·온도를 보면서 할 것.
+TORQUE_CAP_MAX = 1000
+
 #: 되돌릴 하한. 지금 프레임으로 옮긴 값은 실행 시점의 Homing_Offset 으로
 #: 계산한다 — 상수로 박아 두면 오프셋이 바뀐 팔에서 조용히 틀린다.
 #: (2026-09-07 실측 오프셋 1343 에서는 1007 이 나온다.)
@@ -274,11 +279,15 @@ def show(link: Link) -> None:
         else:
             print(f"  지금 하한은 {low} — 텔레옵과 같거나 더 깊다.")
             cap = link.read(ADDR_MAX_TORQUE_LIMIT, 2)
-            if cap is not None and cap > TELEOP_MAX_TORQUE:
-                print(f"  ⚠️ 그런데 Max_Torque_Limit 이 {cap} 다(텔레옵 "
-                      f"{TELEOP_MAX_TORQUE}). 깊은 하한에 뚜껑이 없으면 "
-                      f"전류가 과전류 보호까지 올라가 servo 6 이 버스에서 "
-                      f"떨어진다 — --restore-teleop-grip 으로 짝을 맞출 것.")
+            if cap is not None and cap >= TORQUE_CAP_MAX:
+                print(f"  ⚠️ 그런데 Max_Torque_Limit 이 {cap} 다 — 뚜껑이 사실상 "
+                      f"없다. 2026-09-07 에 이 조합(깊은 하한 + 1000)이 "
+                      f"과전류로 servo 6 을 버스에서 떨어뜨렸다. "
+                      f"--restore-teleop-grip 으로 짝을 맞출 것.")
+            elif cap is not None and cap > TELEOP_MAX_TORQUE:
+                print(f"  Max_Torque_Limit {cap} — 텔레옵({TELEOP_MAX_TORQUE})보다 "
+                      f"세게 잡은 값이다. 검증 구간 밖이니 파지 뒤 --probe 로 "
+                      f"전류·온도를 확인할 것.")
 
 
 def teleop_min_limit(link: Link):
@@ -425,19 +434,29 @@ def set_max_torque(link: Link, value: int) -> int:
     return 0
 
 
-def restore_teleop_grip(link: Link) -> int:
-    """하한과 토크 상한을 **함께** 텔레옵 값으로 되돌린다.
+def restore_teleop_grip(link: Link, torque: int = TELEOP_MAX_TORQUE) -> int:
+    """하한과 토크 상한을 **함께** 건다.
 
     둘은 짝이다 — 하나만 바꾸면 안 된다. 깊은 하한만 주면 과전류로 서보가
-    떨어지고, 상한만 주면 힘이 안 는다.
+    떨어지고, 상한만 주면 힘이 안 는다. 그래서 순서도 정해져 있다:
+    **뚜껑을 먼저 씌우고 하한을 내린다.** 뒤집으면 하한만 깊은 창이 열리고,
+    그 사이에 정책이 조이면 같은 사고가 난다.
+
+    `torque` 는 뚜껑 값이다. 기본은 텔레옵이 쓰던 500 이고, 더 올리려면
+    검증되지 않은 영역이라는 것을 알고 올려야 한다(TORQUE_CAP_MAX 주석).
     """
     floor, homing = teleop_min_limit(link)
     if floor is None:
         print("Homing_Offset 을 못 읽었다")
         return 1
     print(f"Homing_Offset = {homing} — 텔레옵 하한은 지금 프레임으로 {floor}")
+    if torque > TELEOP_MAX_TORQUE:
+        print(f"⚠️ 뚜껑 {torque} 는 텔레옵의 {TELEOP_MAX_TORQUE} 보다 높다 — "
+              f"검증된 적 없는 영역이다.")
+        print(f"   1000 에서는 과전류로 servo 6 이 버스에서 떨어졌다. "
+              f"파지 뒤 --probe 로 전류·온도를 확인할 것.")
     print("")
-    rc = set_max_torque(link, TELEOP_MAX_TORQUE)   # 뚜껑을 먼저 씌운다
+    rc = set_max_torque(link, torque)   # 뚜껑을 먼저 씌운다
     if rc:
         return rc
     print()
@@ -517,8 +536,11 @@ def main() -> int:
         description="그리퍼(servo 6)의 무는 힘 관련 레지스터를 읽고 P 를 바꾼다")
     parser.add_argument("--port", default=DEFAULT_PORT)
     parser.add_argument("--restore-teleop-grip", action="store_true",
-                        help="하한과 토크 상한을 함께 텔레옵 값으로 되돌린다 "
-                             "(둘은 짝이다 — 이것을 쓸 것)")
+                        help="하한과 토크 상한을 함께 건다 (둘은 짝이다 — 이것을 쓸 것)")
+    parser.add_argument("--torque", type=int, metavar="RAW",
+                        default=TELEOP_MAX_TORQUE,
+                        help=f"--restore-teleop-grip 이 씌울 뚜껑 "
+                             f"(기본 {TELEOP_MAX_TORQUE} = 텔레옵, 최대 {TORQUE_CAP_MAX})")
     parser.add_argument("--restore-teleop-limit", action="store_true",
                         help="하한만 되돌린다. ⚠️ 토크 상한이 1000 이면 "
                              "과전류로 servo 6 이 버스에서 떨어진다")
@@ -540,7 +562,7 @@ def main() -> int:
     link = Link(args.port)
     try:
         if args.restore_teleop_grip:
-            return restore_teleop_grip(link)
+            return restore_teleop_grip(link, args.torque)
         if args.set_temp_limit is not None:
             return set_temp_limit(link, args.set_temp_limit)
         if args.set_max_torque is not None:

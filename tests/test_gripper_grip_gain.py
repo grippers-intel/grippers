@@ -229,3 +229,36 @@ def test_온도_상한은_힘_레지스터가_아니다():
     assert link.registers[ggg.ADDR_MIN_POSITION_LIMIT] == 1090
     assert link.registers[ggg.ADDR_MAX_TORQUE_LIMIT] == 1000
     assert link.registers[ggg.ADDR_POSITION_P] == 16
+
+
+# ── 뚜껑 값을 골라 걸 수 있다 (2026-09-07 사용자 지시: 최대의 70%) ─────────
+
+
+def test_뚜껑_값을_골라도_짝과_순서는_그대로다():
+    """텔레옵의 500 이 아니라 700 을 걸어도, 하한과 함께 가고 뚜껑이 먼저다.
+    순서가 뒤집히면 하한만 깊은 창이 열린다."""
+    link = _FakeLink(min_limit=1090, max_torque=1000)
+
+    assert ggg.restore_teleop_grip(link, 700) == 0
+
+    assert link.registers[ggg.ADDR_MAX_TORQUE_LIMIT] == 700
+    assert link.registers[ggg.ADDR_MIN_POSITION_LIMIT] == 1007
+    addrs = [addr for addr, _v in link.writes]
+    assert addrs.index(ggg.ADDR_MAX_TORQUE_LIMIT) < addrs.index(ggg.ADDR_MIN_POSITION_LIMIT)
+
+
+def test_뚜껑_기본값은_텔레옵_값이다():
+    """인자를 안 주면 검증된 값으로 간다 — 모르는 값이 기본이면 안 된다."""
+    link = _FakeLink(min_limit=1090, max_torque=1000)
+
+    ggg.restore_teleop_grip(link)
+
+    assert link.registers[ggg.ADDR_MAX_TORQUE_LIMIT] == ggg.TELEOP_MAX_TORQUE
+
+
+def test_뚜껑은_1000을_못_넘는다():
+    link = _FakeLink(min_limit=1090, max_torque=500)
+
+    assert ggg.restore_teleop_grip(link, 1200) == 1
+
+    assert link.registers[ggg.ADDR_MIN_POSITION_LIMIT] == 1090, "하한은 안 건드린다"
