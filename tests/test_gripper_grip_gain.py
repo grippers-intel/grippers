@@ -20,7 +20,7 @@ class _FakeLink:
     """레지스터 몇 개짜리 서보. 쓰기 실패를 주소별로 주입한다."""
 
     def __init__(self, gain=16, fail_on=(), min_limit=1090, max_limit=2090,
-                 homing=1343, max_torque=1000):
+                 homing=1343, max_torque=1000, temp_limit=70, temp_now=43):
         self.registers = {
             ggg.ADDR_POSITION_P: gain,
             ggg.ADDR_LOCK: 1,
@@ -29,6 +29,8 @@ class _FakeLink:
             ggg.ADDR_HOMING_OFFSET: homing,
             ggg.ADDR_MAX_TORQUE_LIMIT: max_torque,
             48: max_torque,
+            ggg.ADDR_MAX_TEMPERATURE_LIMIT: temp_limit,
+            ggg.ADDR_PRESENT_TEMPERATURE: temp_now,
         }
         self.fail_on = set(fail_on)
         self.writes = []
@@ -184,3 +186,46 @@ def test_토크_상한은_0에서_1000_밖을_거부한다():
 
     assert ggg.set_max_torque(link, 1001) == 1
     assert link.writes == []
+
+
+# ── 온도 상한 ──────────────────────────────────────────────────────────────
+
+
+def test_온도_상한을_올린다():
+    link = _FakeLink(temp_limit=70)
+
+    assert ggg.set_temp_limit(link, 80) == 0
+
+    assert link.registers[ggg.ADDR_MAX_TEMPERATURE_LIMIT] == 80
+    assert _lock_writes(link) == [0, 1]
+
+
+def test_상한_최대치_위는_거부한다():
+    """코일 절연·플라스틱 기어가 감당하는 범위 밖이다. 상한을 올린다고
+    서보가 더 잘 견디는 것이 아니라 보호가 늦게 켜질 뿐이다."""
+    link = _FakeLink(temp_limit=70)
+
+    assert ggg.set_temp_limit(link, 100) == 1
+
+    assert link.writes == []
+    assert link.registers[ggg.ADDR_MAX_TEMPERATURE_LIMIT] == 70
+
+
+def test_온도_상한_쓰기가_실패해도_다시_잠근다():
+    link = _FakeLink(temp_limit=70, fail_on={ggg.ADDR_MAX_TEMPERATURE_LIMIT})
+
+    assert ggg.set_temp_limit(link, 80) == 1
+
+    assert link.registers[ggg.ADDR_LOCK] == 1
+    assert _lock_writes(link) == [0, 1]
+
+
+def test_온도_상한은_힘_레지스터가_아니다():
+    """올려도 하한·토크 상한·P 는 그대로여야 한다 — 파지력과 무관한 자리다."""
+    link = _FakeLink(min_limit=1090, max_torque=1000, gain=16, temp_limit=70)
+
+    ggg.set_temp_limit(link, 80)
+
+    assert link.registers[ggg.ADDR_MIN_POSITION_LIMIT] == 1090
+    assert link.registers[ggg.ADDR_MAX_TORQUE_LIMIT] == 1000
+    assert link.registers[ggg.ADDR_POSITION_P] == 16

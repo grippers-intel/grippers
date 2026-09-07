@@ -123,6 +123,7 @@ FULL_CLOSE_RAW = 1106
 #: (주소, 이름, 바이트수, 설명)
 REGISTERS = (
     (9,  "Min_Angle_Limit", 2, "목표 위치의 하한 — 이보다 깊이는 명령해도 잘린다"),
+    (13, "Max_Temp_Limit",  1, "이 온도를 넘으면 서보가 스스로 출력을 내린다(°C)"),
     (11, "Max_Angle_Limit", 2, "목표 위치의 상한"),
     (16, "Max_Torque",      2, "토크 상한 (1000 = 100%)"),
     (21, "Position_P",      1, "* 무는 힘의 배율. 오차 1 raw 당 출력"),
@@ -157,6 +158,15 @@ TELEOP_MAX_TORQUE = 500
 #: 그 아래는 검증된 적이 없고, 빈 턱이 스토퍼를 미는 힘만 커진다.
 MIN_LIMIT_FLOOR_MARGIN_RAW = 0
 
+#: STS3215 의 공장 기본 온도 상한(°C). 데이터시트 동작 범위 상단과 같다.
+TEMP_LIMIT_DEFAULT_C = 70
+
+#: 올려도 여기까지. 그 위는 코일 절연과 플라스틱 기어가 감당하는 범위를
+#: 벗어난다 — 상한을 올린다고 서보가 더 잘 견디는 것이 아니라, 서보가
+#: **스스로를 지키는 자리를 치우는** 것뿐이다.
+TEMP_LIMIT_MAX_C = 80
+
+ADDR_MAX_TEMPERATURE_LIMIT = 13
 ADDR_POSITION_P = 21
 ADDR_MIN_POSITION_LIMIT = 9
 ADDR_MAX_TORQUE_LIMIT = 16
@@ -330,6 +340,55 @@ def set_min_limit(link: Link, value: int) -> int:
     return 0
 
 
+def set_temp_limit(link: Link, value: int) -> int:
+    """Max_Temperature_Limit(13) 을 쓴다.
+
+    ⚠️ 이 레지스터는 **힘과 아무 상관이 없다.** 서보가 자기 온도를 보고
+    "여기부터는 출력을 내린다"고 정해 둔 자리이고, 올린다는 것은 그 보호가
+    더 늦게 켜진다는 뜻이다. 실제로 견디는 온도가 올라가지는 않는다.
+
+    2026-09-07 실측: servo 6 은 파지 뒤 41~43°C, 나머지 관절은 32~35°C 다.
+    기본 상한 70°C 까지 27°C 가 남아 있어, 지금 무엇도 온도로 막히고 있지
+    않다. 로그에도 온도 관련 오류가 없다.
+    """
+    if not 0 <= value <= TEMP_LIMIT_MAX_C:
+        print(f"온도 상한은 0~{TEMP_LIMIT_MAX_C}°C 여야 한다: {value}")
+        print(f"그 위는 코일 절연과 플라스틱 기어가 감당하는 범위 밖이다 — "
+              f"상한을 올려도 서보가 더 잘 견디지는 않는다.")
+        return 1
+
+    before = link.read(ADDR_MAX_TEMPERATURE_LIMIT, 1)
+    now = link.read(ADDR_PRESENT_TEMPERATURE, 1)
+    print(f"Max_Temperature_Limit: {before}°C -> {value}°C   (지금 온도 {now}°C)")
+    if now is not None and before is not None and now < before - 15:
+        print(f"⚠️ 지금 {now}°C 로 상한({before}°C)까지 {before - now}°C 남아 있다 "
+              f"— 온도로 막히고 있는 상태가 아니다. 파지가 약하거나 서보가 "
+              f"떨어지는 문제라면 원인이 여기가 아니다(--show 참고).")
+    if before == value:
+        print("이미 그 값이다 — 아무것도 안 한다.")
+        return 0
+
+    if not link.write(ADDR_LOCK, 1, 0):
+        print("EEPROM 잠금 해제 실패")
+        return 1
+    try:
+        ok = link.write(ADDR_MAX_TEMPERATURE_LIMIT, 1, value)
+    finally:
+        if not link.write(ADDR_LOCK, 1, 1):
+            print("⚠️ EEPROM 을 다시 잠그지 못했다 — 전원을 껐다 켤 것")
+
+    if not ok:
+        print("쓰기 실패")
+        return 1
+    after = link.read(ADDR_MAX_TEMPERATURE_LIMIT, 1)
+    if after != value:
+        print(f"⚠️ 확인 실패 — 다시 읽으니 {after} 다")
+        return 1
+    print(f"확인: Max_Temperature_Limit = {after}°C")
+    print(f"되돌리려면: --set-temp-limit {before}")
+    return 0
+
+
 def set_max_torque(link: Link, value: int) -> int:
     """Max_Torque_Limit(16) 을 쓴다 — 깊은 하한과 짝이 되는 전류 뚜껑."""
     if not 0 <= value <= 1000:
@@ -463,6 +522,9 @@ def main() -> int:
     parser.add_argument("--restore-teleop-limit", action="store_true",
                         help="하한만 되돌린다. ⚠️ 토크 상한이 1000 이면 "
                              "과전류로 servo 6 이 버스에서 떨어진다")
+    parser.add_argument("--set-temp-limit", type=int, metavar="C",
+                        help=f"Max_Temperature_Limit 을 쓴다 (기본 "
+                             f"{TEMP_LIMIT_DEFAULT_C}, 최대 {TEMP_LIMIT_MAX_C})")
     parser.add_argument("--set-max-torque", type=int, metavar="RAW",
                         help="Max_Torque_Limit 을 직접 쓴다 (텔레옵 500, 되돌리기 1000)")
     parser.add_argument("--set-min-limit", type=int, metavar="RAW",
@@ -479,6 +541,8 @@ def main() -> int:
     try:
         if args.restore_teleop_grip:
             return restore_teleop_grip(link)
+        if args.set_temp_limit is not None:
+            return set_temp_limit(link, args.set_temp_limit)
         if args.set_max_torque is not None:
             return set_max_torque(link, args.set_max_torque)
         if args.restore_teleop_limit:
