@@ -57,26 +57,6 @@ def _details(ports):
 # ── 빈 채로 왔을 때 ────────────────────────────────────────────────────────
 
 
-def test_투하_직전_턱이_비었으면_열지_않는다():
-    """⚠️ 이것이 2026-09-07 사고다 — 예전에는 그대로 열고 성공 보고를 했다."""
-    ports = _ports(bc.GRIPPER_EMPTY_POSITION_RAW)
-
-    nxt = BaselineInsertState("queen").execute(ports)
-
-    assert Report.INSERT_FAILED in ports.host.reported_kinds
-    assert Report.INSERT_DONE not in ports.host.reported_kinds
-    assert isinstance(nxt, BaselineIdleState)
-
-
-def test_빈_채로_왔으면_투하_자세로_전개하지도_않는다():
-    """헛투하 동작 자체를 안 한다 — 시연에서 눈에 보이는 부분이다."""
-    ports = _ports(bc.GRIPPER_EMPTY_POSITION_RAW)
-
-    BaselineInsertState("queen").execute(ports)
-
-    assert "drop" not in [stage for _profile, stage in ports.arm.floor_pose_calls]
-
-
 def test_실패해도_팔은_접는다():
     """팔을 전개한 채 두는 편이 더 위험하다 — 다른 실패 경로와 같은 원칙."""
     ports = _ports(bc.GRIPPER_EMPTY_POSITION_RAW)
@@ -85,19 +65,6 @@ def test_실패해도_팔은_접는다():
 
     assert PROFILE_IDLE in ports.arm.floor_pose_calls
     assert Report.IDLE_DONE in ports.host.reported_kinds
-
-
-def test_보고에_읽은_값과_문턱이_같이_남는다():
-    """숫자가 없으면 다음에 또 원인을 못 찾는다."""
-    ports = _ports(1050)
-
-    BaselineInsertState("queen").execute(ports)
-
-    detail = _details(ports)
-    assert "1050" in detail
-    # ⚠️ 문턱은 절대 상수가 아니라 닫기 명령에서 계산된다(2026-09-07) —
-    # queen 은 0mm 로 닫으므로 held_threshold_raw(0.0) 이다.
-    assert str(bc.held_threshold_raw(0.0)) in detail
 
 
 # ── 물고 있을 때 ───────────────────────────────────────────────────────────
@@ -133,3 +100,28 @@ def test_위치를_못_읽으면_투하를_진행한다():
 
     assert PROFILE_DROP in ports.arm.floor_pose_calls
     assert "비었다" not in _details(ports)
+
+
+def test_투하_직전에_턱을_다시_안_읽는다():
+    """⚠️ 2026-09-08 사용자 지시로 이 파일의 계약이 통째로 사라졌다:
+
+        "진짜 쥐었는지 확인하는 단계와 로봇과 노트북이 집은 것과 못 집은
+         것에 대해 양방향 소통하는 것이 필요없는 거 같아"
+
+    막으려던 것은 "빈 그리퍼로 투하 동작을 하는 것"인데 그건 무해하고,
+    물체가 아직 바닥에 있는지는 탑뷰가 이미 안다. Pi 가 서보 위치로 추측하면
+    틀릴 기회만 는다 — 2026-09-07 하루에 세 번 틀려 성공한 파지를 버렸다."""
+    import inspect
+
+    from domain.task.baseline_mission import BaselineInsertState
+
+    code = chr(10).join(line for line in inspect.getsource(
+        BaselineInsertState.execute).splitlines()
+        if not line.strip().startswith("#"))
+
+    # 투하 직전 "물었나" 판정에 쓰던 것들이 사라졌는지만 본다.
+    # INSERT_FAILED 자체는 남아 있다 — 투하 자세 실패·놓기 실패처럼
+    # **동작이 실패한** 경우에는 여전히 알려야 한다.
+    assert "held_threshold_raw" not in code
+    assert "empty_stop_raw" not in code
+    assert "투하 직전 그리퍼가 비었다" not in code

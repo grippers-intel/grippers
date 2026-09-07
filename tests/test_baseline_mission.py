@@ -82,14 +82,13 @@ def _good_face(distance_m=None):
                       lateral_offset_m=0.0, lateral_known=False)
 
 
-def _carry_with_previous(label="queen", face=None, load=HOLDING_LOAD,
-                          grasp_confirmed=True):
+def _carry_with_previous(label="queen", face=None, load=HOLDING_LOAD):
     """직전 사이클 표본을 이미 들고 있는 CARRY 상태.
 
     안정성 검사가 표본 비교라, 한 사이클만 돌리는 테스트는 이걸 써야
     "직전 판독이 없다"에 걸리지 않는다."""
     return BaselineCarryState(label, MissionState.CARRY,
-                              (face or _good_face(), load), grasp_confirmed)
+                              (face or _good_face(), load))
 
 
 # ── 명령 실행 ──────────────────────────────────────────────────────────────
@@ -155,7 +154,7 @@ def test_회전과_병진이_섞인_명령은_거부하고_되돌려준다():
 
 def test_DEBUG_FORCE_CARRY는_실제_파지_없이_CARRY로_바로_들어간다():
     """manual_insert_probe.py 전용 — IDLE에서 이 상태를 받으면 GRASP를
-    아예 안 거치고 grasp_confirmed=True인 CARRY로 간다."""
+    아예 안 거치고 CARRY로 간다."""
     host = FakeHostLink([HostCommand(MissionState.DEBUG_FORCE_CARRY, stop=True)])
     ports = _ports(host=host)
 
@@ -163,7 +162,6 @@ def test_DEBUG_FORCE_CARRY는_실제_파지_없이_CARRY로_바로_들어간다(
 
     assert isinstance(nxt, BaselineCarryState)
     assert nxt.label == DEBUG_FORCE_CARRY_LABEL
-    assert nxt.grasp_confirmed is True
     assert plan_for_label(DEBUG_FORCE_CARRY_LABEL) is not None, (
         "DEBUG_FORCE_CARRY_LABEL이 모르는 라벨이면 INSERT의 plan_for_label이 "
         "None을 돌려줘 드랍 자세를 못 낸다")
@@ -470,32 +468,6 @@ def test_바구니가_절벽보다_가까우면_INSERT를_막는다(monkeypatch)
 
     assert Report.INSERT_BLOCKED in host.reported_kinds
     assert isinstance(nxt, BaselineCarryState)
-
-
-def test_빈손이면_INSERT를_막는다():
-    """2026-09-03부터: raw 부하가 아니라 CARRY 진입 때 이미 끝난 판정
-    (grasp_confirmed)으로 막는다 — box처럼 파지에 성공해도 부하가 낮게
-    읽히는 물체가 있어, 여기서 낮은 load만으로는 더 이상 "비었다"를
-    판정할 수 없다(preconditions.InsertInputs.grasp_confirmed 주석 참고)."""
-    host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
-    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0), lidar=FakeLidar([_good_face()]))
-
-    nxt = _carry_with_previous(load=0.0, grasp_confirmed=False).execute(ports)
-
-    assert Report.INSERT_BLOCKED in host.reported_kinds
-
-
-def test_부하가_낮아도_파지가_확인됐으면_INSERT를_막지_않는다():
-    """box 회귀 테스트 — grasp_confirmed=True면 부하 0이어도 이 게이트는
-    통과한다(다른 조건은 별개로 여전히 본다)."""
-    host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
-    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0), lidar=FakeLidar([_good_face()]))
-
-    nxt = _carry_with_previous(load=0.0, grasp_confirmed=True).execute(ports)
-
-    details = [detail for report, _state, detail, _fix in host.reports
-               if report == Report.INSERT_BLOCKED]
-    assert not any("비어 있다" in detail for detail in details)
 
 
 def test_직전_표본이_읽기_실패였으면_부하_안정성_검사를_건너뛴다():
@@ -1045,3 +1017,24 @@ def test_미션이_그리퍼_폭을_정하는_자리는_하나다():
     assert JUDGE_CLOSE_WIDTH_MM == 0.0
     for label in ("queen", "box", "star", "soccer"):
         assert not hasattr(plan_for_label(label), "close_width_mm"), label
+
+
+def test_빈손이어도_INSERT를_막지_않는다():
+    """⚠️ 2026-09-08 사용자 지시로 "쥐었는지" 게이트를 통째로 지웠다:
+
+        "진짜 쥐었는지 확인하는 단계와 로봇과 노트북이 집은 것과 못 집은
+         것에 대해 양방향 소통하는 것이 필요없는 거 같아"
+
+    빈손으로 투하 자세를 펴는 것은 무해하고, 물체가 아직 바닥에 있는지는
+    탑뷰가 이미 안다 — 다음 사이클의 SEARCH_TARGET 이 다시 찾는다.
+    Pi 가 서보 위치로 추측해 봐야 틀릴 기회만 는다(2026-09-07 하루에 세 번
+    틀려 성공한 파지를 버렸다)."""
+    host = FakeHostLink([HostCommand(MissionState.INSERT, stop=True)])
+    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0),
+                   lidar=FakeLidar([_good_face()]))
+
+    _carry_with_previous(load=0.0).execute(ports)
+
+    details = [detail for report, _state, detail, _fix in host.reports
+               if report == Report.INSERT_BLOCKED]
+    assert not any("비어 있다" in d for d in details), details

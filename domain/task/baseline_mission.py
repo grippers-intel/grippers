@@ -323,10 +323,10 @@ class BaselineIdleState(State):
             return BaselineApproachState()
         if command.state == MissionState.DEBUG_FORCE_CARRY:
             # 테스트 전용 우회로 — MissionState.DEBUG_FORCE_CARRY 정의 참고.
-            # 실제 파지 없이 grasp_confirmed=True로 CARRY에 바로 들어간다.
+            # 실제 파지 없이 CARRY 에 바로 들어간다.
             ports.host.report(Report.STATE, MissionState.CARRY,
                                "DEBUG_FORCE_CARRY — 실제 파지 아님, 시험 전용")
-            return BaselineCarryState(DEBUG_FORCE_CARRY_LABEL, grasp_confirmed=True)
+            return BaselineCarryState(DEBUG_FORCE_CARRY_LABEL)
         if command.state == MissionState.DONE:
             return BaselineDoneState()
         return self
@@ -584,7 +584,7 @@ class BaselineGraspState(State):
                         Report.GRASP_DONE, MissionState.CARRY,
                         f"{self.label} servo 6 고장으로 상자행 — 그리퍼 상태는 "
                         f"모른다(투하 직전에 다시 확인한다)")
-                    return BaselineCarryState(self.label, grasp_confirmed=True)
+                    return BaselineCarryState(self.label)
                 ports.host.report(
                     Report.STATE, self.name,
                     "CARRY 전환도 실패했다 — 팔이 갇혔다")
@@ -634,7 +634,7 @@ class BaselineGraspState(State):
             Report.GRASP_DONE, MissionState.CARRY,
             f"{self.label} 파지 완료 — 그리퍼 {held_raw} · 부하 {carried:.4f} "
             f"(기록용, 판정에는 안 씀)")
-        return BaselineCarryState(self.label, grasp_confirmed=True)
+        return BaselineCarryState(self.label)
 
 
     def _grasp_vla(self, ports, gp) -> bool:
@@ -845,7 +845,7 @@ class BaselineCarryState(State):
     name = MissionState.CARRY
 
     def __init__(self, label, reported_as: str = MissionState.CARRY,
-                 previous=None, grasp_confirmed: bool = True):
+                 previous=None):
         self.label = label
         self.reported_as = reported_as
         # 직전 사이클의 (라이다 거리, 그리퍼 부하). INSERT 판정의 "흔들리지
@@ -858,7 +858,6 @@ class BaselineCarryState(State):
         # 이 값을 쓰고, 매 사이클 다시 잰 raw 부하로 "비어 있다"를 재판정하지
         # 않는다(box처럼 부하가 계속 낮게 읽히는 물체에서 그 재판정이 영원히
         # 막히는 문제가 있었다).
-        self.grasp_confirmed = grasp_confirmed
 
     def execute(self, ports):
         command = ports.host.latest_command()
@@ -886,7 +885,7 @@ class BaselineCarryState(State):
             # 곧장 투하로 들어간다(DEBUG_FORCE_INSERT 정의부 주석 참고).
             ports.host.report(Report.STATE, MissionState.INSERT,
                               "DEBUG_FORCE_INSERT — 라이다 게이트 우회, 시험 전용")
-            return BaselineInsertState(self.label, self.grasp_confirmed)
+            return BaselineInsertState(self.label)
 
         if command.state == MissionState.INSERT:
             return self._judge_insert(ports, command, face)
@@ -907,8 +906,7 @@ class BaselineCarryState(State):
                     f"라이다 판독이 하한보다 가깝다 ({face.distance_m:.3f}m < "
                     f"{bc.BASKET_MIN_LIDAR_M:.3f}m) — 접근 중 감지, 더 밀지 않는다",
                     too_close)
-                return BaselineCarryState(self.label, self.reported_as, self.sample,
-                                          self.grasp_confirmed)
+                return BaselineCarryState(self.label, self.reported_as, self.sample)
             if corrections.within_stop_window(face.distance_m):
                 # 이미 알맞은 거리다 — 계획한 거리를 마저 채우면 창을 넘겨
                 # 버린다. 요·좌우·안정성·부하는 아직 안 본다 — PLACE에서
@@ -917,14 +915,12 @@ class BaselineCarryState(State):
                 ports.host.report(
                     Report.APPROACH_BOX_READY, self.reported_as,
                     f"라이다 {face.distance_m:.3f}m — 목표창 안, 그만 밀어도 된다")
-                return BaselineCarryState(self.label, self.reported_as, self.sample,
-                                          self.grasp_confirmed)
+                return BaselineCarryState(self.label, self.reported_as, self.sample)
 
         if not _drive(ports, command, self.reported_as):
             return self
         if command.state in (MissionState.CARRY, MissionState.APPROACH_BOX):
-            return BaselineCarryState(self.label, self.reported_as, self.sample,
-                                      self.grasp_confirmed)
+            return BaselineCarryState(self.label, self.reported_as, self.sample)
         if command.state == MissionState.DONE:
             return BaselineDoneState()
         if command.state == MissionState.IDLE:
@@ -971,7 +967,6 @@ class BaselineCarryState(State):
             estop_set=ports.estop.is_set(),
             base_stopped=_base_stopped(ports, command),
             gripper_load=load,
-            grasp_confirmed=self.grasp_confirmed,
             face_ok=face.ok,
             face_distance_m=face.distance_m,
             face_yaw_error_rad=face.yaw_error_rad,
@@ -990,15 +985,14 @@ class BaselineCarryState(State):
             # 지어낸 보정을 주면 Host가 엉뚱하게 움직인다.
             ports.host.report(Report.INSERT_BLOCKED, self.reported_as, report.detail,
                               corrections.from_insert(insert_inputs))
-            return BaselineCarryState(self.label, self.reported_as, self.sample,
-                                      self.grasp_confirmed)
+            return BaselineCarryState(self.label, self.reported_as, self.sample)
         ports.host.report(
             Report.INSERT_READY, self.reported_as,
             f"라이다 {face.distance_m:.3f}m yaw {face.yaw_error_rad:+.3f}rad "
             f"점 {face.point_count} 좌우 "
             + (f"{face.lateral_offset_m * 1000:+.0f}mm"
                if face.lateral_known else "창 안(중앙)"))
-        return BaselineInsertState(self.label, self.grasp_confirmed)
+        return BaselineInsertState(self.label)
 
 
 class BaselineInsertState(State):
@@ -1032,12 +1026,11 @@ class BaselineInsertState(State):
     # 비교해서 다시 조정할 것.
     RELEASE_LOAD_DROP = 0.008
 
-    def __init__(self, label, grasp_confirmed: bool = True):
+    def __init__(self, label):
         self.label = label
         # CARRY에서 넘어온 판정을 그대로 들고 있다가, 투하 자세 실패로
         # CARRY로 되돌아갈 때(아래) 다시 넘긴다 — 팔만 움직이다 실패한
         # 것이지 그리퍼가 놓친 게 아니므로 판정이 리셋될 이유가 없다.
-        self.grasp_confirmed = grasp_confirmed
 
     # servo 1 보정을 편도로 요청했는데 도착 못 미치는 등 응답이 없을 때(포트
     # 계약상 correct_drop_yaw는 도달 실패도 항상 bool을 준다 — 이 값은 순수
@@ -1049,40 +1042,31 @@ class BaselineInsertState(State):
         ports.base.stop()
         gp = plan_for_label(self.label)
 
-        # ── 아직 물고 있나 ────────────────────────────────────────────────
+        # ── 쥐었는지 확인하지 않는다 ─────────────────────────────────────
         #
-        # 파지 성공 판정은 CARRY 로 접은 **직후** 한 번 한다. 그 뒤로 여기까지
-        # 오는 사이에 차가 바구니까지 주행한다 — 그 사이에 놓치면 아무도 안
-        # 본다. 2026-09-07 실기에서 그 일이 났다: 사용자 보고 "실제로는 잡지
-        # 못했는데 잡았다고 판단하여 물체를 놓으러 갔고".
+        # ⚠️ 2026-09-08 사용자 지시로 투하 직전 재확인을 들어냈다:
         #
-        # 그때 CARRY 판정값은 1181 로, 빈 턱(1112)보다 69 raw = 약 14mm 위였다
-        # — **판정 시점에는 턱 사이에 정말 뭔가 있었다.** 문턱이 틀린 게
-        # 아니라, 그 뒤에 흘린 것을 확인하는 자리가 없었던 것이다.
+        #   "진짜 쥐었는지 확인하는 단계와 로봇과 노트북이 집은 것과 못 집은
+        #    것에 대해 양방향 소통하는 것이 필요없는 거 같아"
         #
-        # 여기서 한 번 더 읽으면 헛투하를 안 한다. 못 읽으면(-1) 진행한다 —
-        # 모르는 것을 실패로 단정해 물건을 든 채 서 있는 것이 더 나쁘다.
-        # 문턱은 파지 때와 같은 기준(0mm 로 닫은 빈 턱)이어야 한다.
-        close_w = JUDGE_CLOSE_WIDTH_MM
-        held_min = bc.held_threshold_raw(close_w)
-        held_raw = ports.arm.gripper_position_raw()
-        if 0 <= held_raw < held_min:
-            ports.arm.move_to_floor_pose(gp.profile, "idle")
-            ports.host.report(
-                Report.INSERT_FAILED, self.name,
-                f"투하 직전 그리퍼가 비었다 — 위치 {held_raw} "
-                f"(물었으면 {held_min} 이상, {close_w:.0f}mm 로 닫은 "
-                f"빈 턱은 {bc.empty_stop_raw(close_w)}). "
-                f"운반 도중 놓친 것으로 본다")
-            ports.host.report(Report.IDLE_DONE, MissionState.IDLE, "복귀 완료")
-            return BaselineIdleState()
-
+        # 맞는 판단이다. 그 확인이 막으려던 것은 "빈 그리퍼로 투하 동작을
+        # 하는 것"인데, 그건 물리적으로 무해하다 — 상자 위에서 손을 폈다
+        # 접을 뿐이다.
+        #
+        # 그리고 **정보가 중복이다.** 물체가 아직 바닥에 있는지는 탑뷰가
+        # 이미 안다. Pi 가 서보 위치로 추측해 봐야 Host 가 모르는 것을
+        # 더해 주지 못하면서, 틀릴 기회만 만든다 — 2026-09-07 하루에 세 번
+        # 틀려서 성공한 파지를 버렸다(문턱이 옛 하한 기준, 루프 미완료를
+        # 실패로 읽음, 읽기 실패를 빈손으로 읽음).
+        #
+        # 못 놓았으면 다음 사이클의 SEARCH_TARGET 이 그 기물을 다시 찾는다.
+        # 그게 원래 이 계통의 진실 공급원이다.
         if not ports.arm.move_to_floor_pose(gp.profile, "drop"):
             ports.arm.hold_position()
             ports.host.report(Report.INSERT_FAILED, self.name, "투하 자세 실패")
-            # 표본(라이다·부하)은 버리지만 grasp_confirmed는 들고 간다 — 팔
+            # 표본(라이다·부하)은 버린다 — 팔
             # 자세만 실패했지 그리퍼가 놓친 게 아니다.
-            return BaselineCarryState(self.label, grasp_confirmed=self.grasp_confirmed)
+            return BaselineCarryState(self.label)
 
         # safe_300 — "drop" 자세(300mm)에 도달했지만 아직 그리퍼는 열지
         # 않은 상태다. Host가 차량을 NUDGE 경계선에서 방향 그대로(방향에
