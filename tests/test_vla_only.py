@@ -137,36 +137,3 @@ def test_실패_판정은_그대로다():
 # ── 조준 바이어스 ──────────────────────────────────────────────────────────
 
 
-def test_바이어스도_안_넣는다():
-    """⚠️ 이것도 정책이 아니라 우리가 얹은 보정이다.
-
-    실기 녹화(2026-09-06)에서 정책의 shoulder_pan 출력은 한 판 내내
-    -3.50 ~ -4.18 도, 폭 0.7도였다. 거기 ±8도를 더하니 바이어스가 정책
-    출력의 10배다 — 구조는 상대지만 효과는 사실상 절대 조준이다.
-
-    부호 규약이 GRASP 경로에서 아직 실기 검증이 안 됐으므로, 빼고 돌려
-    비교할 수 있어야 한다."""
-    from domain.ports.baseline_ports import HostCommand, MissionState
-    host = FakeHostLink(script=[HostCommand(
-        state=MissionState.GRASP, yaw_correction_deg=+5.0)])
-    ports = BaselinePorts(base=FakeBase(), arm=FakeArm(), host=host,
-                          perception=ScriptedPerception(), lidar=None, estop=None, vla=_SpyVla(),
-                          use_depth_gate=False, vla_only=True)
-
-    BaselineGraspState("queen").execute(ports)
-
-    assert ports.vla.calls[0][1] == 0.0
-
-
-def test_평소에는_바이어스를_넣는다():
-    """기본 동작은 안 바뀌어야 한다."""
-    from domain.ports.baseline_ports import HostCommand, MissionState
-    host = FakeHostLink(script=[HostCommand(
-        state=MissionState.GRASP, yaw_correction_deg=+5.0)])
-    ports = BaselinePorts(base=FakeBase(), arm=FakeArm(), host=host,
-                          perception=ScriptedPerception(), lidar=None, estop=None, vla=_SpyVla(),
-                          use_depth_gate=False, vla_only=False)
-
-    BaselineGraspState("queen").execute(ports)
-
-    assert ports.vla.calls[0][1] == -5.0

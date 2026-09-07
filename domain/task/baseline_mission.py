@@ -730,62 +730,29 @@ class BaselineGraspState(State):
                 ports.host.report(Report.GRASP_BLOCKED, self.name,
                                   "VLA 시작 자세(IDLE) 실패")
             return False
-        # ── 좌우 조준: 차체 대신 servo 1 로 흡수한다 ─────────────────────
+        # ── 좌우 조준은 하지 않는다 ────────────────────────────────────
         #
-        # 사용자 지시(2026-09-06): "물체 앞에서 yaw 하는 부분이 있다면 1번
-        # 모터로 각을 맞춰주는 작업이 들어가는 게 낫겠다."
+        # ⚠️ 2026-09-07 사용자 지시로 servo 1 조준을 **들어냈다.**
         #
-        # 차체 yaw 로는 못 좁힌다. 주행 허용오차가 12도인데(회전이 bang-bang
-        # 이라 정지 명령 뒤 관성으로 약 10도를 더 돌아서 그보다 좁히면 헌팅이
-        # 난다), 그리퍼-기물 20cm 에서 12도면 좌우 42mm 다. VLA 허용치
-        # (grasp_alignment 의 1.5σ, 리치 294mm 기준 ±41mm)를 이미 넘는다.
+        # Host 가 보낸 yaw_correction_deg 를 부호 뒤집고 ±8도로 잘라 정책의
+        # pan 출력에 더하던 코드였다. 지운 이유는 세 가지다.
         #
-        # ⚠️ 부호를 뒤집는다. INSERT 의 safe_300 이 같은 필드로 이미 겪은
-        # 것이다 — 2026-09-05 실기에서 "servo1이 돌았는데 반대방향으로
-        # 돌았어"였다. yaw_correction_deg 는 차량 좌표계, servo 1 의 +는 팔
-        # 베이스 좌표계라 부호축이 반대다.
+        #   정책 것이 아니다   정책이 안 시킨 팔 동작인데 크기가 정책을
+        #                      압도했다 — 실기 녹화에서 정책의 pan 출력은
+        #                      한 판 내내 -3.50 ~ -4.18 도(폭 0.7도)인데
+        #                      여기 더하는 값이 ±8도까지 갔다. 구조는
+        #                      상대(출력에 더함)지만 효과는 절대 조준이었다.
+        #   부호를 모른다      -yaw_correction_deg 라는 규약이 GRASP 경로에서
+        #                      한 번도 실기로 검증된 적이 없다. 틀렸다면
+        #                      계통에서 가장 큰 좌우 교란원이다.
+        #   책임이 다르다      물체 앞 20cm 까지 데려다 놓는 것은 주행의
+        #                      몫이고, 거기서 좌우를 맞추는 것은 정책이
+        #                      학습한 일이다.
         #
-        # ⚠️ 한계를 넘으면 **자른다 — 버리지 않는다.**
-        #
-        # 2026-09-07 실기에서 세 번 연속으로 pan_bias 가 0.0 으로 나갔다
-        # (로그: `vla.run_grasp args=('queen', 0.0)` x3). 예전 코드는 한계를
-        # 넘으면 보정을 **통째로** 버렸는데, 그 합에는 두 가지가 섞여
-        # 있다:
-        #
-        #   PIECE_AIM_YAW_TRIM_DEG  — 그리퍼·마커의 **고정** 장착 오차
-        #   차체 잔차                            — 이번 회차에서만 생긴 값
-        #
-        # 통째로 버리면 **항상 필요한 트림까지 같이 버려진다.** 그러면
-        # 조준이 차체가 우연히 멈춘 각도에 그대로 맡겨진다 — 주행 허용오차가
-        # ±8도이고 r=0.38m 이므로 좌우 ±5.3cm 가 **무작위로** 남는다. 사용자가
-        # 본 "어느 날은 좌편향, 어느 날은 우편향"이 정확히 이것이다.
-        #
-        # 자르면 분포 밖으로는 안 나가면서 방향은 맞는다. ±8도가 0도보다
-        # 항상 가깝다 — 보정이 모자란 것과 반대로 가는 것은 다르다.
-        # ⚠️ vla_only 면 바이어스도 뺀다. 이것도 정책이 아니라 **우리가 얹은
-        # 보정**이고, 크기가 정책을 압도한다 — 실기 녹화에서 정책의 pan 출력은
-        # 한 판 내내 -3.50 ~ -4.18 도(폭 0.7도)인데 여기 더하는 값이 ±8도까지
-        # 간다. 즉 구조는 상대(출력에 더함)지만 효과는 사실상 절대 조준이다.
-        #
-        # 부호 규약(-yaw_correction_deg)이 GRASP 경로에서 아직 실기로 검증된
-        # 적이 없어서, 틀렸다면 지금 계통에서 가장 큰 좌우 교란원이다. 빼고
-        # 한 판 돌려 비교할 수 있어야 한다.
-        command = None if ports.vla_only else ports.host.last_command()
-        pan_bias_deg = 0.0
-        if command is not None and command.yaw_correction_deg:
-            wanted = -float(command.yaw_correction_deg)
-            limit = ga.VLA_PAN_LIMIT_DEG
-            pan_bias_deg = max(-limit, min(limit, wanted))
-            if pan_bias_deg == wanted:
-                ports.host.report(
-                    Report.STATE, self.name,
-                    f"servo 1 좌우 보정 {pan_bias_deg:+.1f}도 (정책 pan 출력에 더한다)")
-            else:
-                ports.host.report(
-                    Report.STATE, self.name,
-                    f"servo 1 좌우 보정 {wanted:+.1f}도는 학습 분포 밖"
-                    f"(한계 ±{limit:.0f}도) — {pan_bias_deg:+.1f}도로 잘라서 넣는다")
-        ok = bool(ports.vla.run_grasp(self.label, pan_bias_deg))
+        # Host 는 여전히 yaw_correction_deg 를 계산해 보낸다(화면의 "servo 1
+        # 조준각" 로그). Pi 는 그것을 읽지 않을 뿐이다 — 끄려면 Host 쪽도
+        # 같이 손봐야 한다.
+        ok = bool(ports.vla.run_grasp(self.label))
         # ⚠️ 정책이 끝난 **직후** 한 번 재 둔다. 최종 판정은 CARRY 뒤에
         # 하는데, 그것만으로는 "정책이 애초에 못 잡았다"와 "잡았다가 CARRY
         # 로 옮기다 놓쳤다"를 구분할 수 없다 — 고칠 곳이 완전히 다른데도.

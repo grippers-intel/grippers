@@ -63,89 +63,43 @@ class _Profile:
     profile = "queen"
 
 
-def _run(yaw_correction_deg, ok=True):
-    """주어진 Host 보정각으로 _grasp_vla 를 돌리고 (전달된 바이어스, 보고) 반환."""
+# ── 좌우 조준은 안 한다 (2026-09-07 사용자 지시) ──────────────────────────
+#
+# 예전에는 Host 의 yaw_correction_deg 를 부호 뒤집고 ±8도로 잘라 정책의 pan
+# 출력에 더했다. 그 계약을 고정하던 시험 열 개가 여기 있었는데, 계약 자체가
+# 없어졌으므로 같이 지우고 **안 한다는 것**을 대신 고정한다.
+
+
+def _ports_with_correction(deg):
     host = FakeHostLink(script=[HostCommand(
-        state=MissionState.GRASP, yaw_correction_deg=yaw_correction_deg)])
-    vla = _SpyVla(ok=ok)
-    ports = BaselinePorts(base=FakeBase(), arm=FakeArm(), perception=None,
-                          host=host, lidar=None, estop=None, vla=vla)
-    state = BaselineGraspState("queen")
-    state._grasp_vla(ports, _Profile())
-    assert vla.calls, "run_grasp 가 아예 안 불렸다"
-    return vla.calls[0][1], " ".join(str(r) for r in host.reports)
+        state=MissionState.GRASP, yaw_correction_deg=deg)])
+    return BaselinePorts(base=FakeBase(), arm=FakeArm(), perception=None,
+                         host=host, lidar=None, estop=None, vla=_SpyVla())
 
 
-# ── 부호 ───────────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("deg", [0.0, 3.5, -3.5, 20.0, -20.0])
+def test_Host_가_보정을_보내도_정책에_안_넣는다(deg):
+    """Host 는 여전히 계산해 보낸다 — Pi 가 안 읽을 뿐이다."""
+    ports = _ports_with_correction(deg)
 
-
-def test_부호를_뒤집어_넘긴다():
-    """⚠️ 2026-09-05 실기: 그대로 넘겼다가 servo 1 이 반대로 돌았다."""
-    bias, _ = _run(+5.0)
-    assert bias == -5.0
-
-
-def test_반대쪽도_뒤집는다():
-    bias, _ = _run(-3.0)
-    assert bias == +3.0
-
-
-# ── 한계 ───────────────────────────────────────────────────────────────────
-
-
-def test_한계_안이면_적용한다():
-    bias, report = _run(ga.VLA_PAN_LIMIT_DEG - 0.5)
-    assert bias == pytest.approx(-(ga.VLA_PAN_LIMIT_DEG - 0.5))
-    assert "보정" in report
-
-
-def test_한계_경계는_적용한다():
-    """<= 이지 < 가 아니다 — 경계에서 조용히 포기하면 원인을 못 찾는다."""
-    bias, _ = _run(ga.VLA_PAN_LIMIT_DEG)
-    assert bias == pytest.approx(-ga.VLA_PAN_LIMIT_DEG)
-
-
-@pytest.mark.parametrize("deg", [12.0, -12.0, 45.0])
-def test_한계_밖이면_한계까지_잘라서_넣는다(deg):
-    """⚠️ 2026-09-07 에 뒤집힌 계약이다 — 파일 상단 설명 참고.
-
-    0 으로 버리면 고정 트림까지 사라져 조준이 무작위가 된다."""
-    bias, report = _run(deg)
-    assert bias == pytest.approx(-ga.VLA_PAN_LIMIT_DEG * (1 if deg > 0 else -1))
-    assert "분포 밖" in report
-
-
-@pytest.mark.parametrize("deg", [12.0, -12.0, 45.0])
-def test_잘린_보정도_방향은_맞다(deg):
-    """자르기의 존재 이유 — 크기는 모자라도 부호는 옳아야 한다."""
-    bias, _ = _run(deg)
-    assert bias * deg < 0, "부호가 Host 보정과 반대여야 한다(좌표계가 반대)"
-
-
-def test_잘려도_0보다는_가깝다():
-    """'모자란 보정'과 '보정 없음'은 다르다는 것을 수치로 못 박는다."""
-    wanted = -20.0                      # Host 가 원한 servo 1 각
-    bias, _ = _run(20.0)
-    assert abs(bias - wanted) < abs(0.0 - wanted)
-
-
-# ── 없을 때 ────────────────────────────────────────────────────────────────
-
-
-def test_보정이_0이면_아무것도_안_한다():
-    """기존 경로와 100% 같아야 한다 — 이 기능을 껐을 때의 동작이다."""
-    bias, report = _run(0.0)
-    assert bias == 0.0
-    assert "보정" not in report
-
-
-def test_Host_명령이_없어도_안_죽는다():
-    """파지 도중에 예외로 죽는 것이 최악이다."""
-    vla = _SpyVla()
-    ports = BaselinePorts(base=FakeBase(), arm=FakeArm(), perception=None,
-                          host=FakeHostLink(script=[]), lidar=None, estop=None, vla=vla)
     BaselineGraspState("queen")._grasp_vla(ports, _Profile())
-    assert vla.calls[0][1] == 0.0
+
+    assert ports.vla.calls == [("queen", 0.0)], (
+        f"보정 {deg}도가 정책에 흘러들어갔다: {ports.vla.calls}")
+
+
+def test_보정을_읽지도_않는다():
+    """읽기만 해도 소비 순서가 얽힌다 — 아예 안 본다."""
+    import inspect
+
+    from domain.task.baseline_mission import BaselineGraspState as G
+
+    # 주석에는 "왜 안 하는지"가 남아 있어야 하므로 코드 줄만 본다.
+    code = chr(10).join(line for line in inspect.getsource(G._grasp_vla).splitlines()
+                        if not line.strip().startswith("#"))
+    assert "yaw_correction_deg" not in code
+    assert "last_command" not in code
+    assert "pan_bias" not in code
 
 
 # ── 실패 경로 ──────────────────────────────────────────────────────────────
@@ -166,37 +120,6 @@ def test_실패하면_물체를_놓고_접는다():
         "실패 뒤 그리퍼를 release 폭으로 열어야 한다")
     # 놓은 것을 확인한 **뒤에** 접기용으로 닫는다(_release_and_fold 주석).
     assert arm.gripper_widths[-1] == pytest.approx(9.0)
-
-
-# ── 소비 계약 ──────────────────────────────────────────────────────────────
-
-
-def test_다른_곳에서_먼저_읽어도_보정이_살아_있다():
-    """⚠️ `latest_command()` 는 **한 번 읽으면 소비**된다(아직 안 읽은 새
-    명령이 없으면 None). 주행 루프에는 맞는 계약이지만, 파지는 그 뒤로
-    `fold_to_cradle` 등 몇 초를 보내고 나서 한 번 읽는다 — 그 사이 새 패킷이
-    안 왔으면 조준 보정이 조용히 0 이 된다.
-
-    그래서 `_grasp_vla` 는 소비하지 않는 `last_command()` 를 쓴다. 조준
-    보정은 못 읽으면 멈춰야 하는 값이 아니라 마지막 값을 쓰면 되는 값이다 —
-    차체는 이미 그 자리에 서 있다."""
-    host = FakeHostLink(script=[HostCommand(
-        state=MissionState.GRASP, yaw_correction_deg=+5.0)])
-    host.latest_command()                    # 주행 루프가 먼저 소비했다
-
-    vla = _SpyVla()
-    ports = BaselinePorts(base=FakeBase(), arm=FakeArm(), perception=None,
-                          host=host, lidar=None, estop=None, vla=vla)
-    BaselineGraspState("queen")._grasp_vla(ports, _Profile())
-
-    assert vla.calls[0][1] == -5.0
-
-
-def test_last_command는_읽어도_안_사라진다():
-    """계약 자체 — 몇 번을 읽어도 같은 값이다."""
-    host = FakeHostLink(script=[HostCommand(
-        state=MissionState.GRASP, yaw_correction_deg=+5.0)])
-    assert [host.last_command().yaw_correction_deg for _ in range(3)] == [5.0] * 3
 
 
 # ── 루프 실패 != 못 잡았다 (2026-09-07 실기) ──────────────────────────────
