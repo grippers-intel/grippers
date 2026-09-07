@@ -89,12 +89,12 @@ def test_실패해도_팔은_접는다():
 
 def test_보고에_읽은_값과_문턱이_같이_남는다():
     """숫자가 없으면 다음에 또 원인을 못 찾는다."""
-    ports = _ports(1130)
+    ports = _ports(1050)
 
     BaselineInsertState("queen").execute(ports)
 
     detail = _details(ports)
-    assert "1130" in detail
+    assert "1050" in detail
     # ⚠️ 문턱은 절대 상수가 아니라 닫기 명령에서 계산된다(2026-09-07) —
     # queen 은 0mm 로 닫으므로 held_threshold_raw(0.0) 이다.
     assert str(bc.held_threshold_raw(0.0)) in detail

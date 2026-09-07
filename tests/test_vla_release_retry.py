@@ -92,7 +92,8 @@ def test_한_번_실패해도_다시_시도해_놓는다():
     state = _state()
 
     assert state._release_and_fold(_ports(arm), _Profile())
-    assert arm.set_gripper_calls == 2
+    # 놓기 2회(1회 실패 + 1회 성공) + 접기 전 닫기 1회.
+    assert arm.set_gripper_calls == 3
 
 
 def test_버스가_4초_나가_있어도_끝내_놓는다():
@@ -181,5 +182,7 @@ def test_놓기_성공_뒤_접기만_실패하면_놓기를_또_안_부른다():
 
     arm = FoldOnlyFailsArm()
     assert _state()._release_and_fold(_ports(arm), _Profile())
-    assert arm.set_gripper_calls == 1
+    # 놓기 1회 + 접기 전 닫기 1회. 접기가 3번 도는 동안 **둘 다 다시 안 부른다**
+    # — 이미 된 것을 반복할 이유가 없다(_release_and_fold 의 closed 플래그).
+    assert arm.set_gripper_calls == 2
     assert arm.fold_calls == 3

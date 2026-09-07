@@ -705,30 +705,25 @@ def test_auto_align_verifies_it_actually_reached_idle():
     assert "ArmHardwareUnavailableError" in tail
 
 
-def test_auto_align_only_closes_a_gripper_that_is_clearly_empty():
-    """활짝 열린 손가락 판을 단 채 IDLE로 접으면 차체에 닿는다. 그렇다고
-    무조건 닫으면, 물체를 문 채 정렬이 불려 왔을 때 그 물체를 으깬다 —
-    servo 6에는 토크 제한 레지스터가 없어 위치 오차가 곧 힘이다."""
-    threshold = _module_constants(ARM_NODE, {"AUTO_ALIGN_GRIPPER_CLOSE_ABOVE_MM"})[
-        "AUTO_ALIGN_GRIPPER_CLOSE_ABOVE_MM"
-    ]
-    profiles_src = ARM_NODE.with_name("floor_grasp_profiles.py").read_text(encoding="utf-8")
-    squeeze = next(
-        ast.literal_eval(node.value)
-        for node in ast.parse(profiles_src).body
-        if isinstance(node, ast.Assign)
-        and isinstance(node.targets[0], ast.Name)
-        and node.targets[0].id == "GRIPPER_SQUEEZE_MM"
-    )
-    calibration = _load_gripper_calibration()
-    widest_object_mm = 46.0  # soccer_polyhedron — FLOOR_GRASP_PROFILES 최대 폭
-    widest_close_mm = max(calibration.GRIPPER_CLOSED_MM, widest_object_mm - squeeze)
+def test_auto_align_never_touches_the_gripper():
+    """⚠️ 2026-09-07 사용자 지시로 `_close_gripper_before_folding` 을 들어냈다.
 
-    assert threshold > widest_close_mm
+    그 함수는 접기 전에 그리퍼가 45mm 보다 넓으면 9.0mm 로 닫았다. 접힌 팔이
+    차체를 긁지 않게 하려는 조치였지만, 부르는 자리가 문제였다 —
+    fold_to_cradle -> _auto_align_to_idle 이 이것을 거치는데 미션은 파지
+    **시작**마다 fold_to_cradle 을 부른다. 즉 정책이 돌기 직전마다 드라이버가
+    제 판단으로 그리퍼를 닫고 있었고, 실패한 정책이 물체 위에 열린 채 멈춘
+    자리에서는 그 물체를 그대로 물었다.
 
-    fn = ast.unparse(_function("_close_gripper_before_folding"))
-    assert "width_from_position" in fn
-    assert "AUTO_ALIGN_GRIPPER_CLOSE_ABOVE_MM" in fn
+    닫는 자리는 이제 미션이 정한다(_release_and_fold, BaselineInsertState) —
+    둘 다 놓았다는 것을 위치로 확인한 뒤에만 닫는다."""
+    defined = {node.name for node in ast.walk(_parse())
+               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assert "_close_gripper_before_folding" not in defined, (
+        "드라이버가 다시 제 판단으로 그리퍼를 닫는다 — 파지는 정책과 미션의 몫이다")
+
+    align = ast.unparse(_function("_auto_align_to_idle"))
+    assert "GRIPPER_SERVO_ID" not in align, "정렬 경로가 다시 그리퍼를 건드린다"
 
 
 def test_auto_align_moves_more_slowly_than_a_verified_transition():

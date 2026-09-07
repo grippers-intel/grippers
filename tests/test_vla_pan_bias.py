@@ -57,7 +57,9 @@ class _SpyVla:
 
 
 class _Profile:
-    release_width_mm = 40.0
+    # 실제 프로파일과 같은 값이어야 한다 — 40mm 로는 release_until_open 의
+    # 위치 확인(GRIPPER_RELEASED_MIN_RAW)을 못 넘어 "못 놓았다"가 된다.
+    release_width_mm = 168.0
     profile = "queen"
 
 
@@ -154,11 +156,16 @@ def test_실패하면_물체를_놓고_접는다():
     정책은 실패했는데 물건은 들려 있는 상태가 된다."""
     vla = _SpyVla(ok=False)
     arm = FakeArm()
+    # 턱을 비워 둔다 — 물고 있으면 놓지 않고 판정으로 넘긴다(2026-09-07).
+    arm.jaw_blocked_raw = None
+    arm.gripper_position_raw_value = FakeArm.EMPTY_RAW
     ports = BaselinePorts(base=FakeBase(), arm=arm, perception=None,
                           host=FakeHostLink(script=[]), lidar=None, estop=None, vla=vla)
     BaselineGraspState("queen")._grasp_vla(ports, _Profile())
-    assert arm.gripper_widths and arm.gripper_widths[-1] == pytest.approx(
-        _Profile.release_width_mm), "실패 뒤 그리퍼를 release 폭으로 열어야 한다"
+    assert _Profile.release_width_mm in arm.gripper_widths, (
+        "실패 뒤 그리퍼를 release 폭으로 열어야 한다")
+    # 놓은 것을 확인한 **뒤에** 접기용으로 닫는다(_release_and_fold 주석).
+    assert arm.gripper_widths[-1] == pytest.approx(9.0)
 
 
 # ── 소비 계약 ──────────────────────────────────────────────────────────────
@@ -190,3 +197,45 @@ def test_last_command는_읽어도_안_사라진다():
     host = FakeHostLink(script=[HostCommand(
         state=MissionState.GRASP, yaw_correction_deg=+5.0)])
     assert [host.last_command().yaw_correction_deg for _ in range(3)] == [5.0] * 3
+
+
+# ── 루프 실패 != 못 잡았다 (2026-09-07 실기) ──────────────────────────────
+
+
+def test_루프가_끝을_못_봐도_물고_있으면_안_놓는다():
+    """실기 로그:
+
+        16청크(33.6s)를 다 썼는데 복귀를 못 봤습니다   -> run_grasp=False
+        그 직후 그리퍼 위치 1067                        -> 물고 있었다
+
+    정책은 집었는데 노드의 "복귀" 신호만 안 떴다. 그걸 실패로 접으면 물체를
+    도로 놓고 처음부터 다시 한다 — 사용자 보고 "이번에는 잡았는데도
+    approach_piece 로 돌아갔다"."""
+    from domain.task import baseline_constants as bc
+
+    vla = _SpyVla(ok=False)
+    arm = FakeArm()
+    arm.gripper_position_raw_value = bc.held_threshold_raw(0.0) + 10
+    arm.jaw_blocked_raw = arm.gripper_position_raw_value
+    ports = BaselinePorts(base=FakeBase(), arm=arm, perception=None,
+                          host=FakeHostLink(script=[]), lidar=None, estop=None, vla=vla)
+
+    assert BaselineGraspState("queen")._grasp_vla(ports, _Profile()) is True
+    assert _Profile.release_width_mm not in arm.gripper_widths, (
+        "물고 있는데 놓았다 — 성공한 파지를 버린다")
+
+
+def test_루프도_실패하고_턱도_비었으면_놓고_접는다():
+    """위와 짝. 문턱 아래면 그대로 실패다 — 규칙이 한쪽으로만 느슨해지면
+    빈 턱을 물었다고 보고하게 된다."""
+    from domain.task import baseline_constants as bc
+
+    vla = _SpyVla(ok=False)
+    arm = FakeArm()
+    arm.jaw_blocked_raw = None
+    arm.gripper_position_raw_value = bc.held_threshold_raw(0.0) - 10
+    ports = BaselinePorts(base=FakeBase(), arm=arm, perception=None,
+                          host=FakeHostLink(script=[]), lidar=None, estop=None, vla=vla)
+
+    assert BaselineGraspState("queen")._grasp_vla(ports, _Profile()) is False
+    assert _Profile.release_width_mm in arm.gripper_widths

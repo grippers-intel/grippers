@@ -321,11 +321,6 @@ IDLE_OFFSET_ERROR_RAW = 800
 AUTO_ALIGN_LIFT_VIA_SAFE_SERVO2_RAW = 2200
 # 정렬 이동은 출발 자세가 검증되지 않았으므로 정상 이동의 절반 속도로 간다.
 AUTO_ALIGN_SPEED_RAW = 600
-# 접기 전에 그리퍼를 닫을지 가르는 폭. 실제로 물체를 문 닫힘 폭은 가장 넓은
-# 것이 soccer의 31.0mm라, 그보다 한참 위인 이 값을 넘으면 아무것도 물고 있지
-# 않은 '열린' 상태로 본다(_close_gripper_before_folding 참고).
-AUTO_ALIGN_GRIPPER_CLOSE_ABOVE_MM = 45.0
-
 CRADLE_XYZ_M = [0.15, 0.0, 0.20]  # TODO: INSERT 후 복귀 경로 별도 실측 필요
 
 # MentorPi 베이스 보드가 잡는 장치. arm_port가 이걸 가리키면 팔 드라이버가
@@ -1594,38 +1589,25 @@ class ArmDriverNode(Node):
             }
         return safe, named
 
-    def _close_gripper_before_folding(self, backend) -> None:
-        """접기 전에 활짝 열린 그리퍼만 닫는다.
-
-        "다음 동작이 요구하는 형상을 그 동작 전에 만든다"는 이 프로젝트의
-        규칙(사용자 지시 2026-08-25)을 정렬에도 적용한다 — 벌어진 손가락 판을
-        단 채 IDLE로 접으면 차체에 닿는다.
-
-        ⚠️ 다만 **무조건 닫지는 않는다**. 정렬이 불려 오는 시점에 그리퍼가
-        물체를 문 채일 수 있고, 그때 GRIPPER_CLOSED_MM(9.0)을 명령하면 물체를
-        으깬다 — servo 6에는 토크 제한 레지스터가 없어 위치 오차가 곧 힘이다.
-        기준은 폭 하나로 충분하다: 실제로 무언가를 쥐고 있는 닫힘 폭은 가장
-        넓은 것이 soccer의 31.0mm이므로, 그보다 한참 위인 45mm를 넘는 폭은
-        정의상 아무것도 물고 있지 않은 '열린' 상태다.
-        """
-        present = backend.drv.get_position(GRIPPER_SERVO_ID)
-        if present is None:
-            self.get_logger().warn("자동 정렬: servo 6 위치를 못 읽어 그리퍼를 건드리지 않습니다")
-            return
-        width_mm = width_from_position(present)
-        if width_mm <= AUTO_ALIGN_GRIPPER_CLOSE_ABOVE_MM:
-            self.get_logger().info(
-                f"자동 정렬: 그리퍼 {width_mm:.1f}mm — 이미 접기에 알맞아 그대로 둡니다"
-            )
-            return
-        self.get_logger().warn(
-            f"자동 정렬: 그리퍼가 {width_mm:.1f}mm로 열려 있습니다 — "
-            f"접기 전에 {GRIPPER_CLOSED_MM}mm로 닫습니다"
-        )
-        backend.drv.set_speed(GRIPPER_SERVO_ID, GRIPPER_SPEED_RAW)
-        backend.drv.set_acceleration(GRIPPER_SERVO_ID, GRIPPER_ACCEL_RAW)
-        backend.drv.set_position(GRIPPER_SERVO_ID, position_from_width(GRIPPER_CLOSED_MM))
-        self._wait_gripper_motion_settled(backend)
+    # ⚠️ 2026-09-07 사용자 지시로 `_close_gripper_before_folding` 을 들어냈다.
+    #
+    #   "아까 말한 close_gripper_before_folding 부분인 거 같은데 아직도 이
+    #    부분이 남아 있거든"
+    #
+    # 그 함수는 접기 전에 그리퍼가 45mm 보다 넓게 열려 있으면 9.0mm 로
+    # 닫았다. 접힌 팔이 차체를 긁지 않게 하려는 조치였고 그 자체는 맞다.
+    #
+    # 문제는 **부르는 자리**였다. fold_to_cradle -> _auto_align_to_idle 이
+    # 이것을 거치는데, 미션은 파지 **시작**마다 fold_to_cradle 을 부른다
+    # (BaselineGraspState._grasp_vla 의 IDLE 정렬). 즉 정책이 돌기 직전마다
+    # 드라이버가 그리퍼를 제 판단으로 닫고 있었다 — 정책이 안 시킨 파지
+    # 동작이고, 실패한 정책이 물체 위에 열린 채 멈춘 자리에서는 그 물체를
+    # 그대로 물었다.
+    #
+    # 지금은 닫아야 하는 자리를 **미션이 정한다.** 실패 뒤 놓고 접을 때
+    # (_release_and_fold)와 투하 뒤 접을 때(BaselineInsertState), 둘 다
+    # 놓았는지 위치로 확인한 **뒤에** CLOSED_MM 을 명령한다. 파지는
+    # 사용자 영역이므로 드라이버가 끼어들지 않는다.
 
     def _auto_align_to_idle(self) -> None:
         """세션 첫 이동 직전에 팔을 IDLE로 자동 정렬한다.
@@ -1685,7 +1667,6 @@ class ArmDriverNode(Node):
             route = f"미등록 자세이나 servo2={actual[2]}로 이미 접힌 영역 — IDLE 직행"
 
         self.get_logger().warn(f"자동 정렬 시작 — IDLE 편차 {summary} / {route}")
-        self._close_gripper_before_folding(backend)
         for waypoint in chain:
             defer = RETURN_TO_IDLE_DEFERRED_JOINTS if waypoint is idle else ()
             self._glide_to_raw_positions(

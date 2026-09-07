@@ -776,6 +776,33 @@ class BaselineGraspState(State):
             f"정책 직후 그리퍼 {held_after_policy} "
             f"({'물고 있음' if held_after_policy >= bc.GRIPPER_HELD_POSITION_RAW else '비었음'}"
             f", 문턱 {bc.GRIPPER_HELD_POSITION_RAW})")
+
+        # ⚠️ run_grasp 가 False 라고 "못 잡았다"는 뜻이 아니다.
+        #
+        # RunVlaGrasp.action 이 "True 가 물체를 집었다는 뜻이 아니다"라고
+        # 경고하는데, 그 반대도 똑같이 참이다. False 는 **정책 루프가 끝을
+        # 못 봤다**는 뜻이다.
+        #
+        # 2026-09-07 실기가 정확히 그 경우였다:
+        #
+        #     16청크(33.6s)를 다 썼는데 복귀를 못 봤습니다   -> run_grasp=False
+        #     그 직후 그리퍼 위치 1067                        -> 물고 있었다
+        #
+        # 정책은 물체를 집었는데 노드의 "복귀" 신호만 안 떴다. 그걸 실패로
+        # 접으면 물체를 도로 놓고 처음부터 다시 한다 — 사용자 보고
+        # "이번에는 잡았는데도 approach_piece 로 돌아갔다".
+        #
+        # 턱이 물고 있으면 판정에 맡긴다. 판정은 어차피 한 번 더 확실히
+        # 닫고 위치를 다시 읽으므로, 여기서 통과시킨다고 헛것이 넘어가지
+        # 않는다 — 신호가 하나 더 있는 쪽으로 보내는 것뿐이다.
+        if not ok and held_after_policy >= bc.held_threshold_raw(JUDGE_CLOSE_WIDTH_MM):
+            ports.host.report(
+                Report.STATE, self.name,
+                f"정책 루프는 끝을 못 봤지만 그리퍼가 {held_after_policy} 로 "
+                f"물고 있다(문턱 {bc.held_threshold_raw(JUDGE_CLOSE_WIDTH_MM)}) "
+                f"— 놓지 않고 성공 판정으로 넘긴다")
+            ok = True
+
         if not ok:
             # ⚠️ 접기 **전에** 활짝 연다. 2026-09-06 실기 사고 대응.
             #
@@ -822,7 +849,7 @@ class BaselineGraspState(State):
 
         끝내 못 놓았으면 True 를 돌려주지 않는다. 호출하는 쪽이 그걸 보고
         Host 에 알려야 한다 — 물건을 문 채 다음 기물로 가는 것이 최악이다."""
-        released = folded = False
+        released = closed = folded = False
         for attempt in range(1, self.RELEASE_RETRIES + 1):
             if not released:
                 # 한 번만 시도하고 아래에서 간격을 둔다 — 접기 실패와 따로
@@ -830,6 +857,19 @@ class BaselineGraspState(State):
                 # 재시도와 횟수가 엉킨다).
                 released = release_until_open(
                     ports, gp.release_width_mm, retries=1)
+            if released and not closed:
+                # ⚠️ 접기 전에 닫는다. 예전에는 arm_driver 가 알아서 닫았는데
+                # (_close_gripper_before_folding) 그 함수를 들어냈다 — 파지
+                # 시작마다 정책 몰래 그리퍼를 몰았기 때문이다(그 자리의 주석).
+                #
+                # 여기서는 안전하다. 바로 위에서 **놓았다는 것을 위치로
+                # 확인한 뒤**라, 닫아도 물 것이 없다. 활짝 열린 채 접으면
+                # 손가락 판이 차체에 닿는다.
+                #
+                # 놓기·접기와 따로 센다 — 접기만 실패해 재시도가 돌 때 이미
+                # 닫힌 턱을 매번 다시 닫을 이유가 없다.
+                ports.arm.set_gripper(CLOSED_MM)
+                closed = True
             if released and not folded:
                 folded = bool(ports.arm.fold_to_cradle())
             if released and folded:

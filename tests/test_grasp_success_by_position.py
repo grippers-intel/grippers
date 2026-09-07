@@ -121,11 +121,20 @@ def test_문턱이_뜻하는_최소_물체_두께를_적어_둔다():
     """이 문턱을 넘으려면 물체가 얼마나 두꺼워야 하는가.
 
     지금 기물(퀸 17mm, 나이트 22mm)은 넉넉히 넘지만, 더 얇은 것을 넣으려면
-    여기가 한계가 된다."""
-    raw_per_mm = (1578 - 1150) / (96.0 - 9.0)          # 보정표 첫 구간
-    min_mm = 9.0 + (bc.GRIPPER_HELD_POSITION_RAW - 1150) / raw_per_mm
+    여기가 한계가 된다.
+
+    ⚠️ 2026-09-07 저녁에 기준선이 바뀌었다. 예전에는 보정표 첫 구간
+    (9mm=1150)에서 재던 값인데, 서보 하한을 1007 로 내리면서 문턱(1070)이
+    그 점보다 **아래**로 내려갔다 — 보정표 밖이라 그 식으로는 음수가 나온다.
+    그래서 빈 턱에서 문턱까지의 잔차를 폭으로 환산한다."""
+    raw_per_mm = (bc.GRIPPER_OPEN_POSITION_RAW
+                  - bc.GRIPPER_EMPTY_POSITION_RAW) / bc.GRIPPER_MAX_OPEN_MM
+    min_mm = bc.GRIPPER_HELD_MARGIN_RAW / raw_per_mm
+
     assert min_mm < 17.0, f"퀸(17mm)도 못 넘는다 — 문턱 {min_mm:.1f}mm"
-    assert min_mm > 9.0
+    # 서보 위치 데드밴드가 약 5 raw(1mm 미만)라, 그보다는 확실히 두꺼워야
+    # 한다 — 안 그러면 판독 흔들림이 "물었다"로 읽힌다.
+    assert min_mm > 2.0, f"문턱이 데드밴드에 너무 가깝다 — {min_mm:.1f}mm"
 
 
 # ── 문턱은 닫기 명령에 따라 달라진다 (2026-09-07) ─────────────────────────
