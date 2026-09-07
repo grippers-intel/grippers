@@ -555,6 +555,39 @@ class BaselineGraspState(State):
             # ⚠️ 여기까지 오는 경우는 **팔을 못 움직였을 때뿐**이다
             # (VLA 포트 없음, 시작 자세 정렬 실패). 정책이 물체를 집었는지
             # 여부로는 실패를 만들지 않는다 — _grasp_vla 의 그 주석 참고.
+            #
+            # ── servo 6 만 죽었으면 상자로 간다 ──────────────────────────
+            #
+            # 사용자 지시(2026-09-08): "오히려 6번서보모터가 오류가 났을때
+            # 상자(toy, chess)로 가게끔 하는 것이 좋을 거 같아."
+            #
+            # 맞는 판단이다. servo 6 이 죽은 채로 제자리에서 재시도해 봐야
+            # 파지가 될 리가 없고, 그 사이 물체를 문 채로 있을 수도 있다.
+            # 상자로 가면 셋 다 나아진다:
+            #
+            #   문 게 있으면   목적지 근처까지는 옮겨 놓는다
+            #   시간이 번다    주행하는 몇 초가 곧 서보 회복 시간이다
+            #                  (2026-09-07 실측: 버스가 약 4초 뒤 돌아왔다)
+            #   투하가 재시도   INSERT 의 release_until_open 이 4회 x 1.5초
+            #                  로 다시 열어 본다 — 여기서 살아날 수 있다
+            #
+            # ⚠️ 그래도 **팔은 움직일 수 있어야** 한다. CARRY 전환이 되면
+            # 팔이 알려진 자세에 있다는 뜻이라 주행이 안전하다. 그것마저
+            # 안 되면 진짜로 팔이 갇힌 것이니 예전대로 실패다.
+            if ports.arm.gripper_position_raw() < 0:
+                ports.host.report(
+                    Report.STATE, self.name,
+                    "servo 6 이 응답하지 않는다 — 제자리 재시도 대신 상자로 "
+                    "간다(주행 중 회복을 노리고, 물었으면 목적지 근처까지 옮긴다)")
+                if ports.arm.move_to_floor_pose(gp.profile, "carry"):
+                    ports.host.report(
+                        Report.GRASP_DONE, MissionState.CARRY,
+                        f"{self.label} servo 6 고장으로 상자행 — 그리퍼 상태는 "
+                        f"모른다(투하 직전에 다시 확인한다)")
+                    return BaselineCarryState(self.label, grasp_confirmed=True)
+                ports.host.report(
+                    Report.STATE, self.name,
+                    "CARRY 전환도 실패했다 — 팔이 갇혔다")
             return self._failed(ports, "팔을 움직이지 못했다")
 
         # ⚠️ vla_only 면 CARRY 로 안 옮긴다 — 정책이 끝낸 자세 그대로 둔다

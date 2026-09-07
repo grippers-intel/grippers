@@ -270,3 +270,51 @@ def test_팔을_못_움직이면_그때만_실패다():
     assert Report.GRASP_FAILED in ports.host.reported_kinds
     detail = " ".join(d for _k, _s, d, _f in ports.host.reports)
     assert "팔을 움직이지 못했다" in detail
+
+
+# ── servo 6 이 죽으면 상자로 간다 (2026-09-08 사용자 지시) ────────────────
+
+
+def test_servo6이_죽으면_제자리_재시도_대신_상자로_간다():
+    """사용자: "오히려 6번서보모터가 오류가 났을때 상자로 가게끔 하는 것이
+    좋을 거 같아."
+
+    servo 6 이 죽은 채 제자리에서 재시도해 봐야 파지가 될 리 없고, 그 사이
+    물체를 문 채일 수도 있다. 주행하는 몇 초가 곧 회복 시간이기도 하다
+    (2026-09-07 실측: 버스가 약 4초 뒤 돌아왔다)."""
+    class DeadGripperArm(FakeArm):
+        def fold_to_cradle(self) -> bool:
+            return False          # servo 6 읽기 실패로 정렬이 죽는다
+
+        def gripper_position_raw(self) -> int:
+            return -1
+
+    ports = _grasp_ports(DeadGripperArm())
+
+    nxt = BaselineGraspState("queen").execute(ports)
+
+    assert nxt.name == MissionState.CARRY
+    assert Report.GRASP_FAILED not in ports.host.reported_kinds
+    detail = " ".join(d for _k, _s, d, _f in ports.host.reports)
+    assert "servo 6" in detail
+
+
+def test_팔이_통째로_갇히면_그때는_실패다():
+    """CARRY 전환마저 안 되면 팔이 알려진 자세에 없다 — 그대로 주행시키면
+    안 된다."""
+    class StuckArm(FakeArm):
+        def fold_to_cradle(self) -> bool:
+            return False
+
+        def move_to_floor_pose(self, profile, stage) -> bool:
+            self.floor_pose_calls.append((profile, stage))
+            return False
+
+        def gripper_position_raw(self) -> int:
+            return -1
+
+    ports = _grasp_ports(StuckArm())
+
+    BaselineGraspState("queen").execute(ports)
+
+    assert Report.GRASP_FAILED in ports.host.reported_kinds
