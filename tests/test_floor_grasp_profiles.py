@@ -351,7 +351,18 @@ def test_운반_자세_피치가_파지_피치와_같다():
 
     턱 사이에서 물체를 붙잡는 것은 마찰뿐이라, 파지 때와 각도가 달라지면
     중력이 턱 면을 따라 미끄러지는 성분을 갖는다. 예전 CARRY(servo4 2514)는
-    파지보다 26도 들려 있었다."""
+    파지보다 26도 들려 있었다.
+
+    ⚠️ 2026-09-08 "주행자세도 vla 시작자세와 통일시켜줄 수 있을까?" 에 대한
+    답이 이 숫자다 — IDLE 로 맞추면 피치가 더 나빠진다:
+
+        IDLE   2751 -> +46.4도
+        옛 값  2514 -> +25.6도    <- 이때 계속 떨어뜨렸다
+        지금   2217 ->  -0.5도    <- 문 순간 그대로
+
+    라이다도 같은 방향이다(IDLE 에서 나이트를 물면 정면 ±30도 79점 중 58점
+    막힘, 2026-08-26 실측). 두 자세는 하는 일이 다르므로 통일하지 않는다 —
+    관계만 코드로 드러냈다(test_carry_는_idle_에서_손목만_바꾼_자세다)."""
     module = _load_profiles()
     _pan, lift, elbow, wrist, _roll = module.CARRY_RAW
 
@@ -372,3 +383,22 @@ def test_운반_손목은_IDLE보다_더_들려_있다():
     # 가동범위 안이어야 한다.
     low, high = module.TAUGHT_POSITION_LIMITS[4]
     assert low < module.CARRY_RAW[3] < high
+
+
+def test_carry_는_idle_에서_손목만_바꾼_자세다():
+    """⚠️ 2026-09-08: 두 자세를 **통일하지 말 것.** 하는 일이 다르다.
+
+    사용자가 "주행자세도 vla 시작자세와 통일시켜줄 수 있을까?" 라고 물었고,
+    재 보니 통일할 수 없다는 답이 나왔다. 다만 **다른 관절은 손목 하나뿐**이라
+    그 관계를 코드로 드러냈다 — 예전에는 같은 값 네 개를 따로 적어 두어서,
+    IDLE 을 재교시하면(2026-08-24 에 실제로 손으로 다시 잡았다) CARRY 가
+    조용히 어긋났다.
+
+    이 시험이 지키는 것은 "손목 말고는 늘 IDLE 을 따라간다"이다."""
+    m = _load_profiles()
+    idle, carry = m.IDLE_CRADLE_RAW, m.CARRY_RAW
+
+    assert len(carry) == len(idle) == 5
+    差 = [i for i, (a, b) in enumerate(zip(idle, carry)) if a != b]
+    assert 差 == [3], f"손목(index 3) 말고 다른 관절이 달라졌다: {差}"
+    assert carry[3] == m.CARRY_WRIST_RAW
