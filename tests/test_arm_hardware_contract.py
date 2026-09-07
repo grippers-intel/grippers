@@ -635,7 +635,15 @@ def test_auto_align_latches_torque_before_writing_any_target():
     latch = _function("_latch_torque_at_present")
     names = [_called_name(call) for call in _calls(latch)]
     # present를 읽고 그대로 되쓴다 — 이 순서가 계약의 전부다.
-    assert names.index("get_position") < names.index("set_position")
+    #
+    # ⚠️ 2026-09-07: 읽기가 _read_with_retry 를 거치도록 바뀌었다. 여기만
+    # 재시도가 없어서, servo 6 이 패킷을 한 번 흘리면 fold_to_cradle 이
+    # 실패하고 미션이 파지를 통째로 실패로 접어 0.35초 주기로 무한반복했다.
+    assert names.index("_read_with_retry") < names.index("set_position")
+
+    # 재시도로 감싸도 **읽는 레지스터는 present position 이어야** 한다.
+    # 여기가 다른 읽기로 바뀌면 goal<-present 계약이 조용히 깨진다.
+    assert "_read_with_retry(backend.drv.get_position" in ast.unparse(latch)
 
 
 def test_auto_align_never_interpolates_straight_to_idle_from_a_low_pose():

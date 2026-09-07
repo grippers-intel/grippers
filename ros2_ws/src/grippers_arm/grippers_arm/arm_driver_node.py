@@ -1538,7 +1538,20 @@ class ArmDriverNode(Node):
         """
         present = {}
         for servo_id in ALL_SERVO_IDS:
-            position = backend.drv.get_position(servo_id)
+            # ⚠️ 2026-09-07: 여기만 재시도 없는 단발 읽기였다. 이 노드의 다른
+            # 읽기는 전부 _read_with_retry 를 거치는데(그 함수 주석: "이 버스는
+            # 패킷을 이따금 흘린다"), 하필 **모든 이동의 첫 단계**인 이 함수만
+            # 빠져 있었다.
+            #
+            # 그 결과가 무한반복이다. servo 6 읽기가 한 번 흘리면
+            # fold_to_cradle 이 실패하고, _grasp_vla 는 시작 자세를 못 잡아
+            # 파지를 통째로 실패로 접는다. 그러면 미션이 APPROACH 로 돌아가고
+            # Host 가 곧바로 GRASP 를 다시 지시해 같은 자리로 온다 — 0.35초
+            # 주기로 영원히 돈다(2026-09-07 실기, 수 분간).
+            #
+            # 특히 servo 6 은 파지 중 부하가 걸린 채라 다른 관절보다 응답이
+            # 잘 흔들린다(같은 시각 실측: 다른 관절 33~35°C, servo 6 41°C).
+            position = self._read_with_retry(backend.drv.get_position, servo_id)
             if position is None:
                 raise ArmHardwareUnavailableError(
                     f"servo {servo_id} present position 읽기 실패 — torque latch 중단"

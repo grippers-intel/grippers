@@ -20,13 +20,15 @@ class _FakeLink:
     """레지스터 몇 개짜리 서보. 쓰기 실패를 주소별로 주입한다."""
 
     def __init__(self, gain=16, fail_on=(), min_limit=1090, max_limit=2090,
-                 homing=1343):
+                 homing=1343, max_torque=1000):
         self.registers = {
             ggg.ADDR_POSITION_P: gain,
             ggg.ADDR_LOCK: 1,
             ggg.ADDR_MIN_POSITION_LIMIT: min_limit,
             11: max_limit,
             ggg.ADDR_HOMING_OFFSET: homing,
+            ggg.ADDR_MAX_TORQUE_LIMIT: max_torque,
+            48: max_torque,
         }
         self.fail_on = set(fail_on)
         self.writes = []
@@ -140,3 +142,45 @@ def test_하한_쓰기가_실패해도_다시_잠근다():
 
     assert link.registers[ggg.ADDR_LOCK] == 1
     assert _lock_writes(link) == [0, 1]
+
+
+# ── 하한과 토크 상한은 짝이다 ──────────────────────────────────────────────
+
+
+def test_텔레옵_복원은_하한과_토크상한을_같이_바꾼다():
+    """2026-09-07 실기: 하한만 1007 로 내리고 상한을 1000 그대로 뒀더니
+    정책이 물체를 조이는 순간 servo 6 이 버스에서 떨어졌다. 둘은 짝이다."""
+    link = _FakeLink(min_limit=1090, max_torque=1000)
+
+    assert ggg.restore_teleop_grip(link) == 0
+
+    assert link.registers[ggg.ADDR_MIN_POSITION_LIMIT] == 1007
+    assert link.registers[ggg.ADDR_MAX_TORQUE_LIMIT] == ggg.TELEOP_MAX_TORQUE
+
+
+def test_토크_뚜껑을_하한보다_먼저_씌운다():
+    """순서가 뒤집히면 하한만 깊어진 짧은 창이 생긴다 — 그 사이에 정책이
+    조이면 같은 사고가 난다."""
+    link = _FakeLink(min_limit=1090, max_torque=1000)
+
+    ggg.restore_teleop_grip(link)
+
+    addrs = [addr for addr, _v in link.writes]
+    assert addrs.index(ggg.ADDR_MAX_TORQUE_LIMIT) < addrs.index(ggg.ADDR_MIN_POSITION_LIMIT)
+
+
+def test_토크_상한_쓰기가_실패하면_하한은_안_건드린다():
+    link = _FakeLink(min_limit=1090, max_torque=1000,
+                     fail_on={ggg.ADDR_MAX_TORQUE_LIMIT})
+
+    assert ggg.restore_teleop_grip(link) == 1
+
+    assert link.registers[ggg.ADDR_MIN_POSITION_LIMIT] == 1090
+    assert link.registers[ggg.ADDR_LOCK] == 1
+
+
+def test_토크_상한은_0에서_1000_밖을_거부한다():
+    link = _FakeLink(max_torque=1000)
+
+    assert ggg.set_max_torque(link, 1001) == 1
+    assert link.writes == []

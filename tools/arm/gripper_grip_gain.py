@@ -22,8 +22,20 @@ MotorsBus.write_calibration 이 쓰는 자리들).
     11 Max_Position_Limit           2427      2090
 
 **토크 상한은 텔레옵이 오히려 절반(500)이었는데 더 셌다.** 상한이 걸리고
-있었다면 반으로 줄였을 때 약해졌어야 한다. 즉 출력은 상한 근처에도 못 갔고,
-Max_Torque 를 올리는 것으로는 아무 일도 일어나지 않는다. PID 게인도 텔레옵과
+있었다면 반으로 줄였을 때 약해졌어야 한다. 즉 그때(하한 1090, 오차 100 raw)의
+출력은 상한 근처에도 못 갔고, Max_Torque 를 올리는 것으로는 아무 일도
+일어나지 않는다.
+
+⚠️ 그렇다고 1000 으로 **둬도** 되는 것은 아니다. 하한을 깊게 주면 오차가
+커지고, 그때부터는 상한이 실제로 일을 한다 — 2026-09-07 실기에서 하한만
+1007 로 내리고 상한을 1000 그대로 뒀더니 정책이 물체를 조이는 순간
+servo 6 이 버스에서 떨어졌다("관절 청크 하드웨어 오류: servo 통신 실패 —
+servo IDs: [6]", 청크 6/16). 과전류 보호(Protection_Current 250)가 걸린
+것이다. 텔레옵이 몇 달을 멀쩡히 돈 것은 500 이 전류를 먼저 잘라 줬기
+때문이고, lerobot 주석도 그렇게 적어 뒀다("50% of max torque to avoid
+burnout"). **하한과 상한은 짝이다.**
+
+PID 게인도 텔레옵과
 글자 그대로 같다(P=16 은 Feetech 기본 32 가 아니라 **lerobot 이 일부러 쓰는
 값**이다 — lekiwi.py 주석 "lower value to avoid shakiness").
 
@@ -49,15 +61,22 @@ STS3215 는 위치 제어 서보다. 무는 힘은 이렇게 만들어진다:
     지금            목표 1090   위치 오차 100 raw      (서보가 잘라낸 값)
     set_gripper(0)  목표 1106   위치 오차  84 raw      (보정표 외삽값)
 
-**1.83 배**. 텔레옵이 세게 물던 이유가 이것이고, 토크와는 무관하다.
+**1.83 배**. 텔레옵이 세게 물던 이유가 이것이다. 토크 상한을 **올려서**
+되는 일은 없지만, 하한을 깊게 준 뒤에는 상한을 500 으로 **내려 줘야**
+한다 — 위 경고 참고. 힘을 만드는 것은 하한이고, 그 힘이 과전류로
+넘어가지 않게 막는 것이 상한이다.
 
 ## 고치는 법
 
-    python3 tools/arm/gripper_grip_gain.py --restore-teleop-limit
+    python3 tools/arm/gripper_grip_gain.py --restore-teleop-grip
 
-`Min_Position_Limit` 을 1007 로 되돌린다 — 지어낸 값이 아니라 **텔레옵이
-실제로 쓰던 그 자리**(lerobot 캘리브레이션 range_min=1960)를 지금 프레임으로
-옮긴 값이다. 더 깊이는 안 준다.
+`Min_Position_Limit` 을 1007 로, `Max_Torque_Limit` 을 500 으로 **함께**
+되돌린다. 지어낸 값이 아니라 텔레옵이 실제로 쓰던 그 조합이다
+(lerobot 캘리브레이션 range_min=1960 과 so_follower.configure 의 500).
+
+⚠️ 하나만 바꾸면 안 된다. 하한만 깊게 주면 과전류로 서보가 떨어지고,
+상한만 씌우면 힘이 안 는다. 그래서 이 한 명령이 둘을 같이 쓴다 — 뚜껑을
+먼저 씌우고 하한을 내린다.
 
 ⚠️ 빈 턱으로 닫으면 기계 스토퍼(약 1112)를 계속 밀게 된다 — 텔레옵도 리더를
 꽉 쥐면 같은 상태였으니 새로운 위험은 아니지만, 문 것 없이 오래 두지 말 것.
@@ -66,8 +85,9 @@ STS3215 는 위치 제어 서보다. 무는 힘은 이렇게 만들어진다:
 ## 쓰는 법
 
     python3 tools/arm/gripper_grip_gain.py                    # 읽기만 (기본)
-    python3 tools/arm/gripper_grip_gain.py --restore-teleop-limit
+    python3 tools/arm/gripper_grip_gain.py --restore-teleop-grip
     python3 tools/arm/gripper_grip_gain.py --set-min-limit 1090   # 되돌리기
+    python3 tools/arm/gripper_grip_gain.py --set-max-torque 1000  # 되돌리기
     python3 tools/arm/gripper_grip_gain.py --probe            # 실제로 물려 본다
     python3 tools/arm/gripper_grip_gain.py --set-p 32         # 2차 수단(아래)
 
@@ -118,6 +138,17 @@ REGISTERS = (
 TELEOP_RANGE_MIN_RAW = 1960
 TELEOP_HOMING_OFFSET = 390
 
+#: lerobot so_follower.configure() 가 **그리퍼에만** 걸어 두던 토크 상한.
+#: "50% of max torque to avoid burnout" 이라는 주석과 함께 쓴다.
+#:
+#: ⚠️ 하한과 **한 쌍**이다. 2026-09-07 실기에서 하한만 1007 로 내리고 상한을
+#: 1000 그대로 뒀더니, 정책이 물체를 조이는 순간 servo 6 이 버스에서 떨어졌다
+#: ("관절 청크 하드웨어 오류: servo 통신 실패 — servo IDs: [6]"). 깊은 하한은
+#: 위치 오차를 키우고, 오차 x P 가 상한에 안 막히면 전류가 그대로 올라가
+#: 과전류 보호(Protection_Current 250 = 50%)에 걸린다. 텔레옵이 몇 달을
+#: 멀쩡히 돈 것은 이 500 이 전류를 먼저 잘라 줬기 때문이다.
+TELEOP_MAX_TORQUE = 500
+
 #: 되돌릴 하한. 지금 프레임으로 옮긴 값은 실행 시점의 Homing_Offset 으로
 #: 계산한다 — 상수로 박아 두면 오프셋이 바뀐 팔에서 조용히 틀린다.
 #: (2026-09-07 실측 오프셋 1343 에서는 1007 이 나온다.)
@@ -128,6 +159,7 @@ MIN_LIMIT_FLOOR_MARGIN_RAW = 0
 
 ADDR_POSITION_P = 21
 ADDR_MIN_POSITION_LIMIT = 9
+ADDR_MAX_TORQUE_LIMIT = 16
 ADDR_HOMING_OFFSET = 31
 ADDR_TORQUE_ENABLE = 40
 ADDR_GOAL_POSITION = 42
@@ -228,9 +260,15 @@ def show(link: Link) -> None:
         if low > floor:
             print(f"  지금 하한은 {low} — 닫으라는 명령이 {low - floor} raw "
                   f"얕은 데서 잘린다. 그만큼 무는 힘이 준다.")
-            print("  되돌리려면: --restore-teleop-limit")
+            print("  되돌리려면: --restore-teleop-grip")
         else:
             print(f"  지금 하한은 {low} — 텔레옵과 같거나 더 깊다.")
+            cap = link.read(ADDR_MAX_TORQUE_LIMIT, 2)
+            if cap is not None and cap > TELEOP_MAX_TORQUE:
+                print(f"  ⚠️ 그런데 Max_Torque_Limit 이 {cap} 다(텔레옵 "
+                      f"{TELEOP_MAX_TORQUE}). 깊은 하한에 뚜껑이 없으면 "
+                      f"전류가 과전류 보호까지 올라가 servo 6 이 버스에서 "
+                      f"떨어진다 — --restore-teleop-grip 으로 짝을 맞출 것.")
 
 
 def teleop_min_limit(link: Link):
@@ -290,6 +328,61 @@ def set_min_limit(link: Link, value: int) -> int:
     print(f"확인: Min_Position_Limit = {after}")
     print(f"되돌리려면: --set-min-limit {before}")
     return 0
+
+
+def set_max_torque(link: Link, value: int) -> int:
+    """Max_Torque_Limit(16) 을 쓴다 — 깊은 하한과 짝이 되는 전류 뚜껑."""
+    if not 0 <= value <= 1000:
+        print(f"Max_Torque_Limit 은 0~1000 이어야 한다: {value}")
+        return 1
+
+    before = link.read(ADDR_MAX_TORQUE_LIMIT, 2)
+    print(f"Max_Torque_Limit: {before} -> {value}")
+    if before == value:
+        print("이미 그 값이다 — 아무것도 안 한다.")
+        return 0
+
+    if not link.write(ADDR_LOCK, 1, 0):
+        print("EEPROM 잠금 해제 실패")
+        return 1
+    try:
+        ok = link.write(ADDR_MAX_TORQUE_LIMIT, 2, value)
+    finally:
+        if not link.write(ADDR_LOCK, 1, 1):
+            print("⚠️ EEPROM 을 다시 잠그지 못했다 — 전원을 껐다 켤 것")
+
+    if not ok:
+        print("쓰기 실패")
+        return 1
+    after = link.read(ADDR_MAX_TORQUE_LIMIT, 2)
+    if after != value:
+        print(f"⚠️ 확인 실패 — 다시 읽으니 {after} 다")
+        return 1
+    # 48번(RAM)은 16번에서 복사되지만 그건 전원/토크를 다시 켤 때다.
+    # 지금 도는 판에도 먹이려면 여기서 같이 써 준다.
+    link.write(48, 2, value)
+    print(f"확인: Max_Torque_Limit = {after} (Torque_Limit 도 같이 맞춤)")
+    print(f"되돌리려면: --set-max-torque {before}")
+    return 0
+
+
+def restore_teleop_grip(link: Link) -> int:
+    """하한과 토크 상한을 **함께** 텔레옵 값으로 되돌린다.
+
+    둘은 짝이다 — 하나만 바꾸면 안 된다. 깊은 하한만 주면 과전류로 서보가
+    떨어지고, 상한만 주면 힘이 안 는다.
+    """
+    floor, homing = teleop_min_limit(link)
+    if floor is None:
+        print("Homing_Offset 을 못 읽었다")
+        return 1
+    print(f"Homing_Offset = {homing} — 텔레옵 하한은 지금 프레임으로 {floor}")
+    print("")
+    rc = set_max_torque(link, TELEOP_MAX_TORQUE)   # 뚜껑을 먼저 씌운다
+    if rc:
+        return rc
+    print()
+    return set_min_limit(link, floor)
 
 
 def set_gain(link: Link, value: int) -> int:
@@ -364,9 +457,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="그리퍼(servo 6)의 무는 힘 관련 레지스터를 읽고 P 를 바꾼다")
     parser.add_argument("--port", default=DEFAULT_PORT)
+    parser.add_argument("--restore-teleop-grip", action="store_true",
+                        help="하한과 토크 상한을 함께 텔레옵 값으로 되돌린다 "
+                             "(둘은 짝이다 — 이것을 쓸 것)")
     parser.add_argument("--restore-teleop-limit", action="store_true",
-                        help="Min_Position_Limit 을 텔레옵이 쓰던 자리로 되돌린다 "
-                             "(무는 힘의 진짜 손잡이 — EEPROM)")
+                        help="하한만 되돌린다. ⚠️ 토크 상한이 1000 이면 "
+                             "과전류로 servo 6 이 버스에서 떨어진다")
+    parser.add_argument("--set-max-torque", type=int, metavar="RAW",
+                        help="Max_Torque_Limit 을 직접 쓴다 (텔레옵 500, 되돌리기 1000)")
     parser.add_argument("--set-min-limit", type=int, metavar="RAW",
                         help="Min_Position_Limit 을 직접 쓴다 (되돌릴 때 1090)")
     parser.add_argument("--set-p", type=int, metavar="N",
@@ -379,6 +477,10 @@ def main() -> int:
 
     link = Link(args.port)
     try:
+        if args.restore_teleop_grip:
+            return restore_teleop_grip(link)
+        if args.set_max_torque is not None:
+            return set_max_torque(link, args.set_max_torque)
         if args.restore_teleop_limit:
             floor, _homing = teleop_min_limit(link)
             if floor is None:
