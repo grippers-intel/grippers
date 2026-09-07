@@ -268,54 +268,6 @@ def test_주행_명령이_합의_속도로_바퀴까지_간다(run_through):
     # 스스로 뻗는다(BaselineGraspState._grasp_vla 주석).
 
 
-def test_파지_성공은_부하와_뎁스가_모두_있어야_한다(run_through):
-    """AND(2026-09-05 최종) — 부하와 뎁스(confirm_grasp) 둘 다 있어야
-    성공이다. 한때 OR(2026-09-04)로 통일했었지만, 그 이유였던 "부하가
-    실제로는 정상인데 오판된다"는 사고는 사실 부하 0.0이 '진짜 빈손'과
-    '서보 읽기 실패'를 구분 못 한 것이 원인이었다(2026-09-05, 사용자
-    진단). 읽기 실패를 -1.0으로 따로 구분한 뒤에는(domain.task.
-    baseline_mission의 판정부 코멘트가 전체 이력) AND를 원안대로
-    되돌렸다 — 부하를 실제로 정상 읽었다면 뎁스도 같이 맞아야 한다."""
-    _names, host, ports = run_through()
-    assert ports.perception.confirm_grasp_calls >= 1
-    assert Report.GRASP_DONE in host.reported_kinds
-
-    # 부하는 정상(HOLDING, 읽기 실패 아님)인데 뎁스가 뒤집히면(오탐 흉내)
-    # AND에서는 실패한다 — 2026-09-01 뎁스 오탐 위험을 알고 받아들인 것.
-    _names, host, _ports = run_through(
-        perception=ScriptedPerception(
-            script=[TargetObservation(LABEL, JAW_LINE_M + 0.02, 0.0, True)],
-            grasp_confirmed=False))
-    assert Report.GRASP_DONE not in host.reported_kinds
-    assert Report.GRASP_FAILED in host.reported_kinds
-
-
-def test_부하도_뎁스도_없으면_실패다(run_through):
-    """둘 다 실패를 가리킬 때만 진짜 실패다 — 유일하게 남은 실패 경로."""
-    _names, host, _ports = run_through(
-        arm=FakeArm(load_ratio=EMPTY),
-        perception=ScriptedPerception(
-            script=[TargetObservation(LABEL, JAW_LINE_M + 0.02, 0.0, True)],
-            grasp_confirmed=False))
-    assert Report.GRASP_DONE not in host.reported_kinds
-    failures = [detail for kind, _s, detail, _f in host.reports
-                if kind == Report.GRASP_FAILED]
-    assert failures, host.reported_kinds
-
-
-def test_파지_실패_보고에_시도_횟수가_실린다(run_through):
-    """Host가 재시도 여부를 정하려면 몇 번째인지 알아야 한다(2026-08-28)."""
-    _names, host, _ports = run_through(
-        arm=FakeArm(load_ratio=EMPTY),
-        perception=ScriptedPerception(
-            script=[TargetObservation(LABEL, JAW_LINE_M + 0.02, 0.0, True)],
-            grasp_confirmed=False))
-    failures = [detail for kind, _s, detail, _f in host.reports
-                if kind == Report.GRASP_FAILED]
-    assert failures, host.reported_kinds
-    assert "1번째 시도 실패" in failures[0], failures[0]
-
-
 def test_라이다가_바구니를_못_보면_INSERT로_안_넘어간다(run_through, monkeypatch):
     """"모르면 실패"가 이 포트의 계약이다 — 관측이 없는데 팔을 펴면 안 된다.
 

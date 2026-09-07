@@ -394,22 +394,6 @@ def test_파지_후_IDLE이_아니라_CARRY로_접는다():
     assert "idle" not in stages
 
 
-def test_파지에_실패하면_APPROACH로_돌아가고_스스로_재시도하지_않는다():
-    """부하 0(빈손)이어도, 뎁스가 "그대로 있다"고 같이 말해야 진짜
-    실패다(아래 OR 판정 참고) — 2026-09-03 이후로는 부하 하나만으로
-    미리 거르지 않는다."""
-    host = FakeHostLink()
-    ports = _ports(
-        host=host, arm=FakeArm(load_ratio=0.0),
-        perception=ScriptedPerception(grasp_confirmed=False),
-    )
-
-    nxt = BaselineGraspState("queen").execute(ports)
-
-    assert Report.GRASP_FAILED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
-
-
 def test_부하_판독이_흔들려도_CARRY_최종_판정만으로_성공한다():
     """09-02 10:41 실기, 이어서 2026-09-03 실기(box, 3번째 시도) 재현 —
     회귀 방지.
@@ -929,105 +913,6 @@ def _empty_jaw_arm(load_ratio):
     arm.gripper_position_raw_value = bc.GRIPPER_EMPTY_POSITION_RAW
     arm.jaw_blocked_raw = None
     return arm
-
-
-def test_부하와_뎁스가_모두_있으면_성공이다():
-    host = FakeHostLink()
-    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD),
-                   perception=ScriptedPerception(grasp_confirmed=True))
-
-    nxt = BaselineGraspState("queen").execute(ports)
-
-    assert Report.GRASP_DONE in host.reported_kinds
-    assert "뎁스 사라짐 True" in host.reports[-1][2]
-    assert "둘 다 만족해야 한다" in host.reports[-1][2]
-    assert isinstance(nxt, BaselineCarryState)
-
-
-def test_부하는_있는데_뎁스가_안_사라지면_AND라서_실패한다():
-    """AND(2026-09-05 최종)로 되돌아갔으니, 부하만으로는 더 이상 구제되지
-    않는다 — 2026-09-01의 뎁스 오탐 위험을 알고도 받아들인 결정이다."""
-    host = FakeHostLink()
-    ports = _ports(host=host, arm=FakeArm(load_ratio=HOLDING_LOAD),
-                   perception=ScriptedPerception(grasp_confirmed=False))
-
-    nxt = BaselineGraspState("queen").execute(ports)
-
-    assert Report.GRASP_FAILED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
-
-
-def test_턱이_비었으면_뎁스만으로_구제되지_않는다():
-    """2026-09-03/09-04에 반복 오판됐던 그 조합의 지금 판이다 — 첫 신호가
-    "안 쥐었다"라고 하는데 뎁스만 사라졌다고 하는 경우. AND 이므로 실패다.
-    뎁스 하나로 구제되는 것은 첫 신호를 **아예 못 읽은** 경우뿐이다.
-
-    ⚠️ 2026-09-07 전에는 이 시험이 부하 0.0 으로 같은 것을 물었는데, 부하는
-    진짜 파지에서도 문턱 아래라 "안 쥐었다"의 근거가 못 된다(위 표)."""
-    host = FakeHostLink()
-    ports = _ports(host=host, arm=_empty_jaw_arm(0.0),
-                   perception=ScriptedPerception(grasp_confirmed=True))
-
-    nxt = BaselineGraspState("queen").execute(ports)
-
-    assert Report.GRASP_FAILED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
-
-
-def test_위치_읽기_실패면_뎁스_신호_단독으로_성공을_인정한다():
-    """첫 신호를 **아예 못 읽은** 경우만 뎁스 단독으로 판단한다 — 이 예외는
-    2026-09-04 box/queen 오판정을 고칠 때 만든 것이고 그대로 유지된다.
-
-    ⚠️ 2026-09-07 전에는 그 "첫 신호"가 부하였다. 지금은 그리퍼 위치다."""
-    host = FakeHostLink()
-    ports = _ports(host=host, arm=_unreadable_jaw_arm(),
-                   perception=ScriptedPerception(grasp_confirmed=True))
-
-    nxt = BaselineGraspState("queen").execute(ports)
-
-    assert Report.GRASP_DONE in host.reported_kinds
-    assert "그리퍼 위치를 못 읽어 뎁스만 봤다" in host.reports[-1][2]
-    assert isinstance(nxt, BaselineCarryState)
-
-
-def test_위치_읽기_실패에_뎁스도_그대로면_실패한다():
-    """위치도 못 읽고 뎁스도 여전히 있다고 하면 믿을 신호가 하나도 없으니
-    실패로 본다(모르면 실패 원칙)."""
-    host = FakeHostLink()
-    ports = _ports(host=host, arm=_unreadable_jaw_arm(),
-                   perception=ScriptedPerception(grasp_confirmed=False))
-
-    nxt = BaselineGraspState("queen").execute(ports)
-
-    assert Report.GRASP_FAILED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
-
-
-def test_둘_다_실패면_그래도_실패한다():
-    host = FakeHostLink()
-    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD),
-                   perception=ScriptedPerception(grasp_confirmed=False))
-
-    nxt = BaselineGraspState("queen").execute(ports)
-
-    assert Report.GRASP_FAILED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
-
-
-def test_box도_다른_라벨과_같은_AND_통신실패_규칙을_받는다():
-    """라벨별 예외는 없다 — box도 다른 라벨과 완전히 같은 규칙을 받는다.
-    부하를 실제로 읽었는데(EMPTY_LOAD, 통신 실패 아님) 낮으면, 뎁스가
-    사라졌다고 해도 AND에 걸려 실패한다. box가 정착 후 능동 토크를 잘
-    안 낸다는 사정(BaselineGraspState 코멘트 참고)은 여기서 구제되지
-    않는다 — 구제되는 것은 오직 '부하를 아예 못 읽은' 경우뿐이다."""
-    host = FakeHostLink()
-    ports = _ports(host=host, arm=_empty_jaw_arm(EMPTY_LOAD),
-                   perception=ScriptedPerception(grasp_confirmed=True))
-
-    nxt = BaselineGraspState("box").execute(ports)
-
-    assert Report.GRASP_FAILED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
 
 
 def test_box도_위치_읽기_실패면_뎁스_단독으로_구제된다():

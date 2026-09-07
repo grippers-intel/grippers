@@ -281,48 +281,6 @@ def test_목표_식별_실패는_GRASP를_막는다():
     assert isinstance(nxt, BaselineApproachState)
 
 
-def test_파지_실패는_팔을_바닥에_두고_끝내지_않는다():
-    """실패 뒤 Host 는 곧바로 주행을 지시한다 — 그때 팔이 바닥에 있으면
-    그리퍼가 바닥과 물체를 가로질러 쓸린다.
-
-    파지 경로의 실패는 대부분 팔이 **이미 내려간 뒤** 난다(전진·닫기·
-    들어올리기). 실기로 검증된 도구들은 전부 recover_idle 로 팔을 올린다
-    (tools/grasp_test_console.recover_to_idle) — FSM 만 안 하고 있었다.
-    """
-    import threading
-
-    from domain.adapters.fake.fake_host_link import FakeHostLink as _Host
-    from domain.ports.baseline_ports import Report
-    from domain.task.baseline_mission import (
-        BaselineApproachState,
-        BaselineGraspState,
-        BaselinePorts,
-        LinkWatchdog,
-    )
-
-    host = _Host()
-    # 부하가 안 오르는 팔 — 닫았는데 아무것도 안 물린 경우다. 2026-09-03
-    # 실기(box) 이후로 부하만으로는 미리 안 거르고 CARRY 도달 후 최종
-    # OR 판정(부하 OR 뎁스 "사라짐")에 맡기므로, 여기서 진짜 실패를
-    # 재현하려면 뎁스도 같이 "그대로 있다"여야 한다 — 안 그러면
-    # 뎁스만으로 성공 처리된다.
-    arm = FakeArm(load_ratio=0.03)
-    ports = BaselinePorts(vla=FakeVla(),
-        base=FakeBase(), arm=arm,
-        perception=ScriptedPerception(grasp_confirmed=False),
-        host=host, lidar=FakeLidar(), estop=threading.Event(),
-        watchdog=LinkWatchdog(),
-    )
-
-    nxt = BaselineGraspState("queen").execute(ports)
-
-    assert Report.GRASP_FAILED in host.reported_kinds
-    assert isinstance(nxt, BaselineApproachState)
-    stages = [stage for _profile, stage in arm.floor_pose_calls]
-    assert stages[-1] == "recover_idle", (
-        f"팔을 바닥에 둔 채 Host 에 돌려줬다: {stages}")
-
-
 def test_복구도_실패하면_붙잡고_사람에게_알린다():
     """복구 경로가 원래 실패를 덮으면 안 된다 — 진짜 원인이 로그에서 묻힌다."""
     import threading

@@ -118,22 +118,6 @@ def test_시작_자세는_그대로_맞춘다():
     assert ports.arm.fold_calls >= 1
 
 
-def test_실패_판정은_그대로다():
-    """정책이 실패로 끝나면 vla_only 여도 실패다 — 판정까지 끄는 게 아니다.
-
-    ⚠️ 턱을 비워 둔다. 2026-09-07 부터 "루프는 실패했는데 턱은 물고 있다"는
-    실패로 안 친다(_grasp_vla 의 그 주석) — 여기서 보려는 것은 그 경우가
-    아니라 **정말 못 잡은** 경우다."""
-    arm = FakeArm()
-    arm.jaw_blocked_raw = None
-    arm.gripper_position_raw_value = FakeArm.EMPTY_RAW
-    ports = _ports(vla_only=True, ok=False, arm=arm)
-
-    BaselineGraspState("queen").execute(ports)
-
-    assert Report.GRASP_FAILED in ports.host.reported_kinds
-
-
 # ── 조준 바이어스 ──────────────────────────────────────────────────────────
 
 

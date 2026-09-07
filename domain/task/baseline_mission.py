@@ -537,7 +537,10 @@ class BaselineGraspState(State):
             ports.perception.remember_target(self.label)
 
         if not self._grasp_vla(ports, gp):
-            return self._failed(ports, "VLA 파지 루프 실패")
+            # ⚠️ 여기까지 오는 경우는 **팔을 못 움직였을 때뿐**이다
+            # (VLA 포트 없음, 시작 자세 정렬 실패). 정책이 물체를 집었는지
+            # 여부로는 실패를 만들지 않는다 — _grasp_vla 의 그 주석 참고.
+            return self._failed(ports, "팔을 움직이지 못했다")
 
         # ⚠️ vla_only 면 CARRY 로 안 옮긴다 — 정책이 끝낸 자세 그대로 둔다
         # (BaselinePorts.vla_only 주석). 그 대가로 운반·투하가 깨진다.
@@ -549,131 +552,42 @@ class BaselineGraspState(State):
         elif not ports.arm.move_to_floor_pose(gp.profile, "carry"):
             return self._failed(ports, "CARRY 전환 실패")
 
-        # 파지 성공 판정 — 부하와 뎁스(사라짐) 두 신호. 이 판정은 벌써 여러
-        # 번 방향을 바꿨다:
+        # ── 파지 성공/실패 판정은 하지 않는다 ──────────────────────────
         #
-        #   AND(2026-08-26~) -> OR(2026-09-01, CARRY 자세에서 팔·기물이
-        #   프레임 밖인 게 정상인데 confirm_grasp()가 "그대로 있다"를
-        #   반환한 rook 뎁스 오탐을 완화) -> AND(2026-09-03, 반대로
-        #   star/box가 부하 0.0000/0.0274 + vanished=True 조합으로 OR을
-        #   통과해 버림 — `arm_driver_node._read_load()`가 서보 읽기
-        #   실패 시 "안전값" 0.0을 돌려주는 것이 원인 후보였다) -> box만
-        #   다시 OR(2026-09-04 저녁, host+Pi 연동 실기에서 box가 부하
-        #   0.0000으로 재차 실패 보고) -> 전부 OR(같은 날, 곧이어 queen도
-        #   실제로는 물었는데 부하 0.0391로 AND에 걸려 실패 보고됨 —
-        #   사용자가 "그냥 OR로 다 퉁쳐버려"라고 라벨 구분 없이 지시) ->
-        #   **AND + 통신실패 구분(2026-09-05, 최종)**.
+        # ⚠️ 2026-09-07 사용자 지시로 **통째로 들어냈다.**
         #
-        # 전부 OR로 통일한 뒤에도 문제가 재발했다(box/star, 그리고 INSERT
-        # 쪽 부하-안정성 오판) — 원인은 AND/OR의 선택이 아니라 애초에
-        # "부하 0.0000"이 "진짜 빈손"과 "서보 읽기 실패"를 구분하지 못한
-        # 것이었다(사용자 진단, 2026-09-05). 그래서 읽기 실패를 값 자체가
-        # 아니라 별도 신호(`ports.arm.get_load()`가 -1.0을 돌려준다 —
-        # ros2_arm_driver.LOAD_UNKNOWN / arm_driver_node.
-        # GRIPPER_LOAD_READ_FAILED 참고)로 구분할 수 있게 고친 뒤, 판정을
-        # **AND를 기본으로 되돌리되(2026-08-26 원안 — 09-01 뎁스 오탐
-        # 위험은 재발하면 뎁스 신호 자체를 고친다), 부하를 아예 못 읽은
-        # 경우만 뎁스 신호 단독으로 판단**하도록 나눴다. "부하가 진짜
-        # 0.0000으로 읽혔다"(읽기는 성공, 값이 낮다)는 더 이상 뎁스만으로
-        # 구제되지 않는다 — 그건 AND가 원래부터 잡아야 하는 진짜 실패다.
-        # ── 무엇으로 판정하는가 ────────────────────────────────────────
+        #   "파지 성공 실패 시퀀스 자체를 아예 없애줘. 실패하게 되면 어차피
+        #    그 상태에서 다시 시작하게 될텐데 왜 굳이 실패 성공을 만들어
+        #    놓은건지 이해가 안돼"
         #
-        # ⚠️ **부하는 안 쓴다.** 실측으로 못 쓴다는 것이 확정됐다:
+        # 맞는 지적이다. 실패로 판정해서 얻는 것이 없었다 — Host 는 실패를
+        # 받으면 상태를 통째로 리셋하고 SEARCH_TARGET 부터 다시 하는데,
+        # 그것은 파지가 성공하지 못했을 때 어차피 일어나는 일이다. 판정은
+        # **틀릴 기회만** 만들었고, 실제로 계속 틀렸다:
         #
-        #     퀸을 실제로 물었을 때   10/256 = 0.0391
-        #     빈손 닫힘                9/256 = 0.0352
-        #     LOAD_THRESHOLD          12/256 = 0.0469
+        #   문턱이 옛 하한 기준이라 1107 을 실패로 읽음      (09-07 낮)
+        #   루프 미완료(run_grasp=False)를 못 잡았다로 읽음  (09-07 저녁)
+        #   읽기 실패(-1)를 빈손으로 읽음                     (09-07 밤)
         #
-        # 문 것이 문턱보다 **낮다.** 2026-09-07 실기가 다시 확인해 줬다 —
-        # 성공한 파지의 부하가 0.0352, 즉 빈손 값과 같았고 같은 순간 위치는
-        # 1258(빈 턱 1112)이었다.
+        # 세 번 다 **성공한 파지를 버렸고**, 버리는 과정에서 물체를 놓으려다
+        # 죽은 서보에 4회씩 재시도하며 시간을 태웠다.
         #
-        # 2026-09-06 에 뎁스 관문을 끈 경로만 위치로 옮기고 켠 경로는 부하에
-        # 남겨 뒀는데, 그쪽이 런치 **기본값**이라 더 나빴다. `load_ok and
-        # vanished` 는 진짜 파지에서 항상 False 가 된다. 게다가 부하 읽기가
-        # 실패하면 뎁스 단독으로 넘어가서, 센서가 고장 난 쪽이 멀쩡한 쪽보다
-        # 성공하기 쉬운 뒤집힌 구조였다.
+        # 그래서 지운다. 정책이 돌고 나면 CARRY 로 간다. 정말 못 집었으면
+        # 빈 그리퍼로 바구니까지 갔다가 아무것도 안 놓고 IDLE 로 돌아오고,
+        # 그 다음 사이클이 다시 집으러 간다 — 잃는 것은 한 바퀴이고, 얻는
+        # 것은 "성공한 파지를 버리지 않는다"이다.
         #
-        # 위치는 턱이 물체에 막힌 잔차라 물체 두께가 그대로 나온다 —
-        # 빈 턱 1112 대 퀸 1189, 77 raw 차이다. 부하의 1/256 과 달리 헷갈릴
-        # 수가 없다.
-        #
-        # 뎁스 관문은 그대로 **두 번째 독립 신호**로 남는다(사용자 지시
-        # 2026-08-26). 바뀐 것은 첫 번째 신호가 부하에서 위치로 옮겨간 것뿐이다.
-        carried = ports.arm.get_load()      # 보고에만 싣는다 — 판정에는 안 쓴다
-        load_unknown = carried < 0.0
-        load_ok = (not load_unknown) and carried >= bc.LOAD_THRESHOLD
-
-        # 판정에 쓰는 닫기 폭. **프로파일에서 안 온다** — 파지 폭 정책을
-        # 들어냈으므로(floor_grasp_policy 주석) 여기서 정하는 상수 하나다.
-        #
-        # 0.0mm 인 이유: 정책이 그리퍼를 직접 몰고 실기 관측상 끝까지
-        # 닫으므로(빈 턱 1097~1134), 판정 기준도 "끝까지 닫았을 때"여야
-        # 전제가 맞는다. 한때 라벨마다 다른 폭(box·star 는 20mm)을 썼는데,
-        # 그러면 빈 턱이 1216 에서 멈춰 옛 절대 문턱 1165 를 넘어 "물었음"
-        # 으로 읽혔다(bc.empty_stop_raw 주석).
-        close_w = JUDGE_CLOSE_WIDTH_MM
-
-        # ── 읽기 전에 **확실히 닫으라고 명령한다** ────────────────────────
-        #
-        # ⚠️ 2026-09-07 실기: 퀸 파지가 실패했는데 그리퍼 1190 을 읽고 성공으로
-        # 판정해 물체를 놓으러 갔다. 1190 은 퀸(17mm)을 제대로 문 값과 같다.
-        #
-        # 원인은 문턱이 아니라 **전제**였다. `held_threshold_raw` 는 "그 폭으로
-        # 닫으라고 명령했을 때 빈 턱이 도달하는 위치"를 기준으로 삼는데, VLA
-        # 경로에서는 정책이 그리퍼를 직접 몬다 — 턱이 1190 에서 멈춘 것이
-        # "물체가 막아서"인지 "정책이 거기까지만 닫으라고 해서"인지 알 수가
-        # 없었다. 전제가 깨진 채 문턱만 비교하고 있었다.
-        #
-        # 여기서 한 번 확실히 닫으면 전제가 성립한다. 물체가 있으면 그 두께에서
-        # 멈추고(1190 유지), 없으면 빈 턱까지 내려간다(1112). 이미 물고 있는
-        # 것에는 더 조이는 것뿐이라 잃는 것이 없다.
-        ports.arm.set_gripper(close_w)
-        time.sleep(GRIP_SETTLE_SEC)
-
-        held_min = bc.held_threshold_raw(close_w)
+        # 남겨 둔 신호가 하나 있다: 투하 **직전**의 재확인(BaselineInsertState).
+        # 그것은 파지 판정이 아니라 "운반 도중에 흘렸는가"이고, 헛투하를
+        # 막는 자리라 성격이 다르다.
         held_raw = ports.arm.gripper_position_raw()
-        held_unknown = held_raw < 0
-        held_ok = (not held_unknown) and held_raw >= held_min
-        held_txt = (f"그리퍼 {held_raw} "
-                    f"(물었으면 {held_min} 이상, "
-                    f"{close_w:.0f}mm 로 닫은 빈 턱은 {bc.empty_stop_raw(close_w)})")
-
-        if not ports.use_depth_gate:
-            if held_unknown:
-                # 위치를 못 읽으면 부하로 물러선다. 좋은 신호는 아니지만
-                # 없는 것보다 낫고, 읽기 실패는 시리얼 패킷 유실로 종종 난다.
-                success = load_ok
-                evidence = (f"그리퍼 위치를 못 읽어 부하로 판정 — {carried:.4f}"
-                            if not load_unknown else
-                            "그리퍼 위치도 부하도 못 읽었다")
-            else:
-                success = held_ok
-                evidence = held_txt
-            reason = evidence
-        else:
-            vanished = ports.perception.confirm_grasp()
-            if held_unknown:
-                # 첫 신호를 못 읽었다 — 뎁스 단독으로 판단한다(예전 계약 유지).
-                success = vanished
-                evidence = f"그리퍼 위치를 못 읽어 뎁스만 봤다 · 사라짐 {vanished}"
-            else:
-                success = held_ok and vanished
-                evidence = f"{held_txt} · 뎁스 사라짐 {vanished} — 둘 다 만족해야 한다"
-            reason = evidence
-        if not success:
-            return self._failed(ports, reason)
-
-        detail = f"{self.label} {evidence} · 부하 {carried:.4f}(판정에는 안 씀)"
-        ports.host.report(Report.GRASP_DONE, MissionState.CARRY, detail)
-        # 여기 도달했다는 것 자체가 위 OR 판정을 통과했다는 뜻이다 — 그 판정
-        # 결과를 CARRY 이후로 그대로 들고 간다(아래 BaselineCarryState.
-        # grasp_confirmed). INSERT 앞단(check_insert)이 "그리퍼가 비어
-        # 있다"를 여기서 이미 끝난 판정과 무관하게 raw 부하로 다시 재던 것이
-        # 2026-09-03 box 3번째 재접근 사고의 원인이었다 — box는 부하가 계속
-        # 0에 가깝게 읽혀서(위 미들포인트 주석 참고) 그 게이트가 영원히
-        # 막혔다. 판정은 한 번만 하고, 그 뒤로는 신뢰한다.
+        carried = ports.arm.get_load()
+        ports.host.report(
+            Report.GRASP_DONE, MissionState.CARRY,
+            f"{self.label} 파지 완료 — 그리퍼 {held_raw} · 부하 {carried:.4f} "
+            f"(기록용, 판정에는 안 씀)")
         return BaselineCarryState(self.label, grasp_confirmed=True)
+
 
     def _grasp_vla(self, ports, gp) -> bool:
         """정책이 파지를 대신한다. 성공했다고 **주장**하면 True.
@@ -767,84 +681,28 @@ class BaselineGraspState(State):
             f"({'물고 있음' if held_after_policy >= bc.GRIPPER_HELD_POSITION_RAW else '비었음'}"
             f", 문턱 {bc.GRIPPER_HELD_POSITION_RAW})")
 
-        # ⚠️ run_grasp 가 False 라고 "못 잡았다"는 뜻이 아니다.
+        # ── 정책 결과로 성공/실패를 가르지 않는다 ──────────────────────
         #
-        # RunVlaGrasp.action 이 "True 가 물체를 집었다는 뜻이 아니다"라고
-        # 경고하는데, 그 반대도 똑같이 참이다. False 는 **정책 루프가 끝을
-        # 못 봤다**는 뜻이다.
+        # ⚠️ 2026-09-07 사용자 지시. 여기 있던 것들을 전부 지웠다:
         #
-        # 2026-09-07 실기가 정확히 그 경우였다:
+        #   run_grasp 결과로 실패 판정
+        #   "루프는 실패했지만 턱은 물고 있다" 구제
+        #   실패하면 물체를 놓고 접기(_release_and_fold)
         #
-        #     16청크(33.6s)를 다 썼는데 복귀를 못 봤습니다   -> run_grasp=False
-        #     그 직후 그리퍼 위치 1067                        -> 물고 있었다
+        # run_grasp 가 False 라고 "못 잡았다"는 뜻이 아니다 —
+        # RunVlaGrasp.action 이 "True 가 집었다는 뜻이 아니다"라고 경고하는
+        # 것의 반대편이고, False 는 **루프가 끝을 못 봤다**는 뜻일 뿐이다.
+        # 실기에서 16청크를 다 쓰고도 복귀를 못 본 회차가 실제로는 물체를
+        # 물고 있었다.
         #
-        # 정책은 물체를 집었는데 노드의 "복귀" 신호만 안 떴다. 그걸 실패로
-        # 접으면 물체를 도로 놓고 처음부터 다시 한다 — 사용자 보고
-        # "이번에는 잡았는데도 approach_piece 로 돌아갔다".
-        #
-        # 턱이 물고 있으면 판정에 맡긴다. 판정은 어차피 한 번 더 확실히
-        # 닫고 위치를 다시 읽으므로, 여기서 통과시킨다고 헛것이 넘어가지
-        # 않는다 — 신호가 하나 더 있는 쪽으로 보내는 것뿐이다.
-        # ⚠️ 그리고 **-1(읽기 실패)은 "안 물었다"가 아니다.**
-        #
-        # 2026-09-07 실기에서 이것이 물렸다. servo 6 이 과전류로 응답을
-        # 멈춘 채 물체를 물고 있었는데, 위치가 -1 로 오니 아래 문턱 비교가
-        # 거짓이 되어 놓기 경로로 갔다. 놓기도 같은 서보라 4회 전부 실패해
-        # "놓지 못했다 — 그리퍼에 물건이 남아 있을 수 있다" 를 보고하고,
-        # 이어서 파지까지 실패로 접었다. 사용자: "파지 성공했는데 계속
-        # 실패로 이해하고 있다".
-        #
-        # 이 저장소가 2026-09-05 에 부하 0.0 으로 겪은 것과 같은 실수다 —
-        # **모르는 것을 아니라고 단정**했다. 놓는 것은 되돌릴 수 없는 쪽이라
-        # 확신이 있을 때만 해야 한다.
-        #
-        # 모르면 판정으로 넘긴다. 판정은 한 번 더 닫고 다시 읽고, 그래도 못
-        # 읽으면 부하로 물러선다(execute 꼬리의 held_unknown 분기) — 여기서
-        # 성급히 놓는 것보다 신호가 하나 더 있는 자리다.
-        held_min = bc.held_threshold_raw(JUDGE_CLOSE_WIDTH_MM)
-        held_unknown = held_after_policy < 0
-        if not ok and (held_unknown or held_after_policy >= held_min):
-            ports.host.report(
-                Report.STATE, self.name,
-                ("정책 루프는 끝을 못 봤고 그리퍼 위치도 못 읽었다 — "
-                 "놓지 않고 성공 판정으로 넘긴다(모르는 것을 빈손으로 "
-                 "단정하지 않는다)")
-                if held_unknown else
-                (f"정책 루프는 끝을 못 봤지만 그리퍼가 {held_after_policy} 로 "
-                 f"물고 있다(문턱 {held_min}) — 놓지 않고 성공 판정으로 넘긴다"))
-            ok = True
-
-        if not ok:
-            # ⚠️ 접기 **전에** 활짝 연다. 2026-09-06 실기 사고 대응.
-            #
-            # fold_to_cradle 은 arm_driver 의 _close_gripper_before_folding 을
-            # 거치는데, 그 함수는 "폭이 AUTO_ALIGN_GRIPPER_CLOSE_ABOVE_MM
-            # (45mm)을 넘으면 아무것도 안 물고 있는 것"으로 보고 9.0mm 로
-            # 닫는다. 접힌 팔이 차체를 긁지 않게 하려는 조치이고 그 자체는
-            # 맞다.
-            #
-            # 그런데 정책이 실패로 끝나는 자리는 **그리퍼가 69mm 로 열린 채
-            # 물체 바로 위**다. 거기서 닫으면 물체를 그대로 문다 — 정책은
-            # 실패했는데 물건은 들려 있는 상태가 된다. 사용자가 "결국
-            # 동료 잡기 시퀀스가 잡았다"고 본 것이 정확히 이것이다.
-            #
-            # 실패는 깨끗한 실패여야 한다. 물체를 놓고 접는다.
-            #
-            # ⚠️ **한 번만 시도하면 안 된다.** 2026-09-07 실기: 정책이
-            # "servo 6 write 실패 — step 63/63" 으로 끝났는데, 그 100ms 뒤에
-            # 부른 set_gripper 도 "servo 통신 실패", 이어진 fold_to_cradle 도
-            # "present position 읽기 실패"로 죽었다. 버스가 잠깐 나갔던 것뿐이라
-            # 4초 뒤에는 멀쩡했다(같은 로그에서 move_to_floor_pose 성공).
-            #
-            # 결과가 나빴다 — 그때 그리퍼에는 **별이 물려 있었고**, 놓기가
-            # 실패했으니 그대로 문 채 다음 물체를 잡으러 갔다. 사용자 보고:
-            # "실제로 파지도 되었는데 물건을 따로 놓으러가지는 않고 3번째
-            # 물건을 잡으러가는 행동을 취했어".
-            #
-            # 놓기는 한 번 실패해도 물러설 수 있는 동작이 아니다. 실패한
-            # 파지가 물건을 들고 가는 것보다는 몇 초 늦는 편이 낫다.
-            self._release_and_fold(ports, gp)
-        return ok
+        # 그걸 실패로 접으면 놓기 경로가 돌고, 놓기는 되돌릴 수 없다 —
+        # 성공한 파지를 버린다. 그래서 결과는 **기록만** 하고 그대로 CARRY 로
+        # 간다. 못 집었으면 빈 그리퍼로 한 바퀴 돌고 다시 온다.
+        ports.host.report(
+            Report.STATE, self.name,
+            f"정책 루프 {'완료' if ok else '미완료'} · 그리퍼 {held_after_policy} "
+            f"(기록용 — 여기서 성공/실패를 가르지 않는다)")
+        return True
 
     #: 버스가 잠깐 나갔다 돌아오는 데 실기에서 4초쯤 걸렸다(2026-09-07).
     #: 간격 x 횟수가 그보다 넉넉해야 한다. 도메인에서 유일하게 자는
@@ -856,53 +714,6 @@ class BaselineGraspState(State):
     #: 실기 회복이 약 4초였으므로(2026-09-07) 그 언저리로 잡는다. 이것도
     #: 도메인이 자는 자리라 클래스 속성이다 — 시험은 0 으로 두고 부른다.
     HARDWARE_FAULT_DWELL_SEC = 4.0
-
-    def _release_and_fold(self, ports, gp) -> bool:
-        """물체를 놓고 접는다. 통신이 잠깐 나가도 **끈질기게** 다시 시도한다.
-
-        놓기와 접기를 따로 센다 — 놓기는 됐는데 접기만 실패하는 경우가
-        있고(둘은 다른 서보를 건드린다), 그때 놓기를 또 부를 이유가 없다.
-
-        끝내 못 놓았으면 True 를 돌려주지 않는다. 호출하는 쪽이 그걸 보고
-        Host 에 알려야 한다 — 물건을 문 채 다음 기물로 가는 것이 최악이다."""
-        released = closed = folded = False
-        for attempt in range(1, self.RELEASE_RETRIES + 1):
-            if not released:
-                # 한 번만 시도하고 아래에서 간격을 둔다 — 접기 실패와 따로
-                # 세기 위해서다(release_until_open 을 통째로 부르면 접기
-                # 재시도와 횟수가 엉킨다).
-                released = release_until_open(
-                    ports, gp.release_width_mm, retries=1)
-            if released and not closed:
-                # ⚠️ 접기 전에 닫는다. 예전에는 arm_driver 가 알아서 닫았는데
-                # (_close_gripper_before_folding) 그 함수를 들어냈다 — 파지
-                # 시작마다 정책 몰래 그리퍼를 몰았기 때문이다(그 자리의 주석).
-                #
-                # 여기서는 안전하다. 바로 위에서 **놓았다는 것을 위치로
-                # 확인한 뒤**라, 닫아도 물 것이 없다. 활짝 열린 채 접으면
-                # 손가락 판이 차체에 닿는다.
-                #
-                # 놓기·접기와 따로 센다 — 접기만 실패해 재시도가 돌 때 이미
-                # 닫힌 턱을 매번 다시 닫을 이유가 없다.
-                ports.arm.set_gripper(CLOSED_MM)
-                closed = True
-            if released and not folded:
-                folded = bool(ports.arm.fold_to_cradle())
-            if released and folded:
-                if attempt > 1:
-                    ports.host.report(
-                        Report.STATE, self.name,
-                        f"놓기·접기 {attempt}회 만에 성공 — 통신이 잠깐 나갔다")
-                return True
-            if attempt < self.RELEASE_RETRIES:
-                time.sleep(self.RELEASE_RETRY_SEC)
-
-        ports.host.report(
-            Report.GRASP_BLOCKED, self.name,
-            f"{self.RELEASE_RETRIES}회 시도했는데 "
-            f"{'접지' if released else '놓지'} 못했다 — "
-            f"그리퍼에 물건이 남아 있을 수 있다")
-        return False
 
     def _failed(self, ports, detail):
         """파지 실패 — 팔을 붙잡고 APPROACH로 되돌아가 Host의 판단을 기다린다.

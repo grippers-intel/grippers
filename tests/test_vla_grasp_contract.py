@@ -38,8 +38,9 @@ import pytest
 
 from domain.adapters.fake.fake_arm import FakeArm
 from domain.adapters.fake.fake_base import FakeBase
-from domain.adapters.fake.fake_host_link import FakeHostLink
-from domain.ports.baseline_ports import HostCommand, MissionState
+from domain.adapters.fake.fake_host_link import FakeHostLink, FakeLidar
+from domain.adapters.fake.scripted_perception import ScriptedPerception
+from domain.ports.baseline_ports import HostCommand, MissionState, Report
 from domain.task import grasp_alignment as ga
 from domain.task.baseline_mission import BaselineGraspState, BaselinePorts
 
@@ -105,63 +106,7 @@ def test_보정을_읽지도_않는다():
 # ── 실패 경로 ──────────────────────────────────────────────────────────────
 
 
-def test_실패하면_물체를_놓고_접는다():
-    """⚠️ 2026-09-06: 놓지 않고 접으면 fold 의 자동 닫기가 물체를 물어서,
-    정책은 실패했는데 물건은 들려 있는 상태가 된다."""
-    vla = _SpyVla(ok=False)
-    arm = FakeArm()
-    # 턱을 비워 둔다 — 물고 있으면 놓지 않고 판정으로 넘긴다(2026-09-07).
-    arm.jaw_blocked_raw = None
-    arm.gripper_position_raw_value = FakeArm.EMPTY_RAW
-    ports = BaselinePorts(base=FakeBase(), arm=arm, perception=None,
-                          host=FakeHostLink(script=[]), lidar=None, estop=None, vla=vla)
-    BaselineGraspState("queen")._grasp_vla(ports, _Profile())
-    assert _Profile.release_width_mm in arm.gripper_widths, (
-        "실패 뒤 그리퍼를 release 폭으로 열어야 한다")
-    # 놓은 것을 확인한 **뒤에** 접기용으로 닫는다(_release_and_fold 주석).
-    assert arm.gripper_widths[-1] == pytest.approx(9.0)
-
-
 # ── 루프 실패 != 못 잡았다 (2026-09-07 실기) ──────────────────────────────
-
-
-def test_루프가_끝을_못_봐도_물고_있으면_안_놓는다():
-    """실기 로그:
-
-        16청크(33.6s)를 다 썼는데 복귀를 못 봤습니다   -> run_grasp=False
-        그 직후 그리퍼 위치 1067                        -> 물고 있었다
-
-    정책은 집었는데 노드의 "복귀" 신호만 안 떴다. 그걸 실패로 접으면 물체를
-    도로 놓고 처음부터 다시 한다 — 사용자 보고 "이번에는 잡았는데도
-    approach_piece 로 돌아갔다"."""
-    from domain.task import baseline_constants as bc
-
-    vla = _SpyVla(ok=False)
-    arm = FakeArm()
-    arm.gripper_position_raw_value = bc.held_threshold_raw(0.0) + 10
-    arm.jaw_blocked_raw = arm.gripper_position_raw_value
-    ports = BaselinePorts(base=FakeBase(), arm=arm, perception=None,
-                          host=FakeHostLink(script=[]), lidar=None, estop=None, vla=vla)
-
-    assert BaselineGraspState("queen")._grasp_vla(ports, _Profile()) is True
-    assert _Profile.release_width_mm not in arm.gripper_widths, (
-        "물고 있는데 놓았다 — 성공한 파지를 버린다")
-
-
-def test_루프도_실패하고_턱도_비었으면_놓고_접는다():
-    """위와 짝. 문턱 아래면 그대로 실패다 — 규칙이 한쪽으로만 느슨해지면
-    빈 턱을 물었다고 보고하게 된다."""
-    from domain.task import baseline_constants as bc
-
-    vla = _SpyVla(ok=False)
-    arm = FakeArm()
-    arm.jaw_blocked_raw = None
-    arm.gripper_position_raw_value = bc.held_threshold_raw(0.0) - 10
-    ports = BaselinePorts(base=FakeBase(), arm=arm, perception=None,
-                          host=FakeHostLink(script=[]), lidar=None, estop=None, vla=vla)
-
-    assert BaselineGraspState("queen")._grasp_vla(ports, _Profile()) is False
-    assert _Profile.release_width_mm in arm.gripper_widths
 
 
 # ── 서보가 죽었을 때 초당 열 번씩 덤비지 않는다 (2026-09-07 실기) ─────────
@@ -225,23 +170,72 @@ def test_자세만_못_잡은_것은_안_쉰다():
     assert not slept
 
 
-def test_위치를_못_읽으면_놓지_않는다():
-    """⚠️ 2026-09-07 실기. servo 6 이 과전류로 응답을 멈춘 채 물체를 물고
-    있었는데 위치가 -1 로 와서 "안 물었다"로 읽혔다. 놓기도 같은 서보라
-    4회 전부 실패해 "놓지 못했다"를 보고하고 파지까지 실패로 접었다.
 
-    2026-09-05 의 부하 0.0 사고와 같은 실수 — 모르는 것을 아니라고 단정했다.
-    놓는 것은 되돌릴 수 없으니 확신이 있을 때만 한다."""
-    vla = _SpyVla(ok=False)
 
+# ── 파지 성공/실패 판정은 없다 (2026-09-07 사용자 지시) ───────────────────
+
+
+def _grasp_ports(arm, vla_ok=True):
+    return BaselinePorts(base=FakeBase(), arm=arm,
+                         perception=ScriptedPerception(), host=FakeHostLink(),
+                         lidar=FakeLidar(), estop=None, vla=_SpyVla(ok=vla_ok),
+                         use_depth_gate=False)
+
+
+def test_턱이_비어도_CARRY_로_간다():
+    """사용자: "실패하게 되면 어차피 그 상태에서 다시 시작하게 될텐데 왜 굳이
+    실패 성공을 만들어놓은건지 이해가 안돼."
+
+    판정은 틀릴 기회만 만들었고 실제로 세 번 틀려서 성공한 파지를 버렸다.
+    못 집었으면 빈 그리퍼로 한 바퀴 돌고 다시 온다."""
+    arm = FakeArm()
+    arm.jaw_blocked_raw = None
+    arm.gripper_position_raw_value = FakeArm.EMPTY_RAW
+    ports = _grasp_ports(arm)
+
+    nxt = BaselineGraspState("queen").execute(ports)
+
+    assert Report.GRASP_DONE in ports.host.reported_kinds
+    assert Report.GRASP_FAILED not in ports.host.reported_kinds
+    assert nxt.name == MissionState.CARRY
+
+
+def test_위치를_못_읽어도_CARRY_로_간다():
+    """읽기 실패(-1)로 실패를 만들던 것이 2026-09-07 밤 사고였다."""
     class UnreadableArm(FakeArm):
         def gripper_position_raw(self) -> int:
             return -1
 
-    arm = UnreadableArm()
-    ports = BaselinePorts(base=FakeBase(), arm=arm, perception=None,
-                          host=FakeHostLink(script=[]), lidar=None, estop=None, vla=vla)
+    ports = _grasp_ports(UnreadableArm())
 
-    assert BaselineGraspState("queen")._grasp_vla(ports, _Profile()) is True
-    assert _Profile.release_width_mm not in arm.gripper_widths, (
-        "위치를 못 읽었는데 놓았다 — 물고 있으면 물체를 떨어뜨린다")
+    nxt = BaselineGraspState("queen").execute(ports)
+
+    assert Report.GRASP_FAILED not in ports.host.reported_kinds
+    assert nxt.name == MissionState.CARRY
+
+
+def test_정책_루프가_실패해도_안_놓는다():
+    """놓기는 되돌릴 수 없다 — 루프 미완료는 "못 잡았다"가 아니다."""
+    arm = FakeArm()
+    ports = _grasp_ports(arm, vla_ok=False)
+
+    nxt = BaselineGraspState("queen").execute(ports)
+
+    assert _Profile.release_width_mm not in arm.gripper_widths
+    assert nxt.name == MissionState.CARRY
+
+
+def test_팔을_못_움직이면_그때만_실패다():
+    """유일하게 남긴 실패다. 팔이 안 접히면 주행이 거부되므로(arm_parked)
+    그대로 CARRY 로 보내면 안 된다."""
+    class StuckArm(FakeArm):
+        def fold_to_cradle(self) -> bool:
+            return False
+
+    ports = _grasp_ports(StuckArm())
+
+    BaselineGraspState("queen").execute(ports)
+
+    assert Report.GRASP_FAILED in ports.host.reported_kinds
+    detail = " ".join(d for _k, _s, d, _f in ports.host.reports)
+    assert "팔을 움직이지 못했다" in detail
