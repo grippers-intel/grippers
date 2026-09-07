@@ -73,7 +73,6 @@ import sys
 import time
 
 DEFAULT_PORT = "/dev/soarm"
-BAUD = 1_000_000
 GRIPPER_ID = 6
 
 #: set_gripper(0.0mm) 이 만드는 목표. gripper_calibration.position_from_width
@@ -106,32 +105,42 @@ ADDR_PRESENT_CURRENT = 69
 
 
 class Link:
-    def __init__(self, port: str):
-        import scservo_sdk as scs
+    """servo 6 의 레지스터 하나를 읽고 쓰는 얇은 껍데기.
 
-        self._scs = scs
-        self._ph = scs.PortHandler(port)
-        if not self._ph.openPort():
+    ⚠️ scservo_sdk 가 아니라 `driver_sdk.STS3215Driver` 를 쓴다 — 컨테이너에
+    scservo_sdk 가 없다(2026-09-07 확인). 저장소의 다른 서보 도구
+    (park_release_torque.py, reteach_idle_pose.py)와 같은 경로다.
+
+    ⚠️ 이름 앞에 `_` 가 붙은 메서드를 부른다. 이 드라이버는 임의 주소 접근을
+    공개 API 로 안 내놓는데, 여기서 필요한 것이 정확히 그것이다(P 게인은
+    get/set 이 없다).
+    """
+
+    def __init__(self, port: str):
+        # driver_sdk(pyserial 의존)는 여기서만 import 한다 —
+        # park_release_torque.py 의 _connect() 와 같은 이유.
+        import soarm_lab  # noqa: F401  (flat import 를 위해 먼저 import)
+        from driver_sdk import STS3215Driver
+
+        self._drv = STS3215Driver(port)
+        if not self._drv.connect():
             raise SystemExit(
-                f"{port} 열기 실패 — arm_driver 가 떠 있으면 먼저 내릴 것 "
-                "(tools/stop_bringup.sh)")
-        self._ph.setBaudRate(BAUD)
-        self._pk = scs.PacketHandler(0)
+                f"{port} 연결 실패 — arm_driver 가 떠 있으면 배타 잠금 "
+                "때문이다. 먼저 tools/stop_bringup.sh 로 내릴 것")
 
     def read(self, addr: int, size: int):
-        fn = self._pk.read1ByteTxRx if size == 1 else self._pk.read2ByteTxRx
-        value, comm, err = fn(self._ph, GRIPPER_ID, addr)
-        if comm != self._scs.COMM_SUCCESS or err != 0:
-            return None
-        return value
+        if size == 2:
+            return self._drv._read_u16(GRIPPER_ID, addr)
+        data = self._drv._read(GRIPPER_ID, addr, 1)
+        return None if not data else data[0]
 
     def write(self, addr: int, size: int, value: int) -> bool:
-        fn = self._pk.write1ByteTxRx if size == 1 else self._pk.write2ByteTxRx
-        comm, err = fn(self._ph, GRIPPER_ID, addr, value)
-        return comm == self._scs.COMM_SUCCESS and err == 0
+        if size == 2:
+            return self._drv._write_u16(GRIPPER_ID, addr, value)
+        return self._drv._write_u8(GRIPPER_ID, addr, value)
 
     def close(self) -> None:
-        self._ph.closePort()
+        self._drv.disconnect()
 
 
 def signed_load(raw) -> str:
