@@ -17,10 +17,17 @@ _spec.loader.exec_module(ggg)
 
 
 class _FakeLink:
-    """레지스터 하나짜리 서보. 쓰기 실패를 주소별로 주입한다."""
+    """레지스터 몇 개짜리 서보. 쓰기 실패를 주소별로 주입한다."""
 
-    def __init__(self, gain=16, fail_on=()):
-        self.registers = {ggg.ADDR_POSITION_P: gain, ggg.ADDR_LOCK: 1}
+    def __init__(self, gain=16, fail_on=(), min_limit=1090, max_limit=2090,
+                 homing=1343):
+        self.registers = {
+            ggg.ADDR_POSITION_P: gain,
+            ggg.ADDR_LOCK: 1,
+            ggg.ADDR_MIN_POSITION_LIMIT: min_limit,
+            11: max_limit,
+            ggg.ADDR_HOMING_OFFSET: homing,
+        }
         self.fail_on = set(fail_on)
         self.writes = []
 
@@ -86,3 +93,50 @@ def test_목표는_set_gripper_0mm_이_만드는_값과_같다():
     from grippers_arm.gripper_calibration import position_from_width
 
     assert ggg.FULL_CLOSE_RAW == position_from_width(0.0, min_width_mm=0.0)
+
+
+# ── 무는 힘의 진짜 손잡이: Min_Position_Limit ──────────────────────────────
+
+
+def test_텔레옵_하한은_살아있는_오프셋으로_환산한다():
+    """상수로 박으면 오프셋이 바뀐 팔에서 조용히 틀린다. 2026-09-07 실측
+    오프셋 1343 에서 lerobot range_min 1960 은 1007 이 된다."""
+    assert ggg.teleop_min_limit(_FakeLink(homing=1343))[0] == 1007
+    # 오프셋이 lerobot 것(390)이면 환산할 것이 없다.
+    assert ggg.teleop_min_limit(_FakeLink(homing=390))[0] == 1960
+
+
+def test_하한을_텔레옵_자리로_되돌린다():
+    link = _FakeLink(min_limit=1090)
+
+    assert ggg.set_min_limit(link, 1007) == 0
+
+    assert link.registers[ggg.ADDR_MIN_POSITION_LIMIT] == 1007
+    assert _lock_writes(link) == [0, 1]
+
+
+def test_텔레옵보다_깊은_하한은_거부한다():
+    """그 아래는 검증된 적이 없다 — 빈 턱이 스토퍼를 미는 힘만 커진다."""
+    link = _FakeLink(min_limit=1090)
+
+    assert ggg.set_min_limit(link, 900) == 1
+
+    assert link.writes == []
+    assert link.registers[ggg.ADDR_MIN_POSITION_LIMIT] == 1090
+
+
+def test_상한보다_큰_하한은_거부한다():
+    link = _FakeLink(min_limit=1090, max_limit=2090)
+
+    assert ggg.set_min_limit(link, 2500) == 1
+
+    assert link.writes == []
+
+
+def test_하한_쓰기가_실패해도_다시_잠근다():
+    link = _FakeLink(min_limit=1090, fail_on={ggg.ADDR_MIN_POSITION_LIMIT})
+
+    assert ggg.set_min_limit(link, 1007) == 1
+
+    assert link.registers[ggg.ADDR_LOCK] == 1
+    assert _lock_writes(link) == [0, 1]

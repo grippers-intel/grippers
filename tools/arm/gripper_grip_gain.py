@@ -1,72 +1,93 @@
-#!/usr/bin/env python3
-"""무는 힘을 조절한다 — servo 6 의 힘 관련 레지스터를 읽고 P 게인을 바꾼다.
+"""무는 힘을 되찾는다 — servo 6 의 힘 관련 레지스터를 읽고 고친다.
 
-## 왜 이 도구인가
+## 무엇을 재고 있었나
 
 2026-09-07 사용자: "지금 파지가 너무 약하게 되는데 토크값을 올릴 수 있을까?"
+이어서: "텔레옵을 했을 때 팔로암도 리더암 같은 파지력이 나왔었는데 지금은
+그만큼 안 나온다."
 
-레지스터를 읽어 보니 **토크는 이미 최대였다.**
+두 번째 문장이 답을 정했다. **같은 서보로 예전에는 셌다면 원인은 서보의
+능력이 아니라 명령이다.** 그래서 lerobot 이 텔레옵 때 써 넣던 값과 지금
+서보에 올라 있는 값을 전부 맞대어 봤다(lerobot so_follower.configure 와
+MotorsBus.write_calibration 이 쓰는 자리들).
 
-    Max_Torque(16)    1000    (=100%)
-    Torque_Limit(48)  1000    (=100%)
+    레지스터                      텔레옵      지금     같은가
+    21 P / 23 I / 22 D           16/0/32   16/0/32    같다
+    16 Max_Torque_Limit             500      1000    지금이 2배 높다
+    48 Torque_Limit               (500)      1000    지금이 2배 높다
+    28 Protection_Current            250       250    같다
+    36 Overload_Torque                25        25    같다
+    31 Homing_Offset                 390      1343    프레임이 953 다르다
+     9 Min_Position_Limit           1960      1090    ★ 여기
+    11 Max_Position_Limit           2427      2090
 
-둘 다 상한이므로 "토크값을 올린다"로는 더 낼 것이 없다. 그런데 무는 힘이
-약하다면 원인은 상한이 아니라 **상한까지 안 올라가는 것**이다.
+**토크 상한은 텔레옵이 오히려 절반(500)이었는데 더 셌다.** 상한이 걸리고
+있었다면 반으로 줄였을 때 약해졌어야 한다. 즉 출력은 상한 근처에도 못 갔고,
+Max_Torque 를 올리는 것으로는 아무 일도 일어나지 않는다. PID 게인도 텔레옵과
+글자 그대로 같다(P=16 은 Feetech 기본 32 가 아니라 **lerobot 이 일부러 쓰는
+값**이다 — lekiwi.py 주석 "lower value to avoid shakiness").
+
+## 진짜 원인 — 닫으라는 명령이 잘리고 있다
 
 STS3215 는 위치 제어 서보다. 무는 힘은 이렇게 만들어진다:
 
     출력 ~= P x (목표 위치 - 현재 위치)          , 단 Torque_Limit 로 잘림
 
-즉 힘의 근원은 **도달하지 못하는 거리**(위치 오차)이고, 그것을 힘으로
-바꾸는 배율이 P 다. 물체를 물면 턱이 물체 두께에서 멈추므로 오차가 생기고,
-서보는 그 오차만큼 계속 밀어붙인다. 그것이 무는 힘이다.
+물체를 물면 턱이 두께에서 멈추므로 오차가 남고, 서보가 그 오차만큼 계속
+밀어붙이는 것이 무는 힘이다. 힘의 근원은 **도달하지 못하는 거리**다.
 
-지금 값:
+그런데 목표는 `Min_Position_Limit`(9번) 에서 펌웨어가 잘라낸다. 두 프레임을
+같은 자리로 옮겨 놓고 보면(Present_Position = Actual - Homing_Offset,
+프레임 차이 390 - 1343 = -953):
 
-    목표      1106 raw   (set_gripper(0.0mm) -> gripper_calibration
-                          .position_from_width 가 첫 구간을 외삽한 값)
-    퀸 물었을 때 1190 raw
-    오차       84 raw
-    P(21)      16        <- Feetech STS3215 기본값은 보통 32 다
+    텔레옵의 하한 1960  ->  지금 프레임으로 1007
+    지금의   하한                        1090     <- 83 raw 얕다
 
-P 가 기본값의 절반이다. 오차 84 는 그대로인데 배율만 절반이니 힘도 절반이다.
-출력이 Torque_Limit(1000)에 붙어 있었다면 "약하다"는 증상이 안 나온다 —
-즉 지금은 포화 전이고, P 를 올리면 그만큼 힘이 는다.
+퀸을 물었을 때 실측 위치가 1190 이므로:
 
-## 다른 두 방법을 왜 안 쓰는가
+    텔레옵          목표 1007   위치 오차 183 raw
+    지금            목표 1090   위치 오차 100 raw      (서보가 잘라낸 값)
+    set_gripper(0)  목표 1106   위치 오차  84 raw      (보정표 외삽값)
 
-  오차를 키운다     더 깊이 닫으라고 명령하면 오차가 커진다. 그런데 목표는
-                    Min_Angle_Limit(9번, 지금 1090)에서 서보가 잘라낸다.
-                    지금 목표 1106 이니 여유가 16 raw 뿐이라 의미가 없고,
-                    1090 자체를 내리는 것은 **빈 턱으로 닫을 때** 턱이 제
-                    기계 스토퍼를 계속 밀게 된다는 뜻이라 발열이 는다.
-  Punch 를 올린다   최소 기동력(24번)은 오차가 작을 때도 바닥 출력을 준다.
-                    정지 마찰을 이기는 값이라, 무는 힘(오차가 큰 구간)에는
-                    거의 기여하지 않으면서 미세 위치에서 떨림만 는다.
+**1.83 배**. 텔레옵이 세게 물던 이유가 이것이고, 토크와는 무관하다.
+
+## 고치는 법
+
+    python3 tools/arm/gripper_grip_gain.py --restore-teleop-limit
+
+`Min_Position_Limit` 을 1007 로 되돌린다 — 지어낸 값이 아니라 **텔레옵이
+실제로 쓰던 그 자리**(lerobot 캘리브레이션 range_min=1960)를 지금 프레임으로
+옮긴 값이다. 더 깊이는 안 준다.
+
+⚠️ 빈 턱으로 닫으면 기계 스토퍼(약 1112)를 계속 밀게 된다 — 텔레옵도 리더를
+꽉 쥐면 같은 상태였으니 새로운 위험은 아니지만, 문 것 없이 오래 두지 말 것.
+`park_release_torque.py` 가 토크를 푼다.
 
 ## 쓰는 법
 
-    python3 tools/arm/gripper_grip_gain.py                # 읽기만 (기본)
-    python3 tools/arm/gripper_grip_gain.py --set-p 32     # P 를 32 로
-    python3 tools/arm/gripper_grip_gain.py --set-p 16     # 되돌리기
-    python3 tools/arm/gripper_grip_gain.py --probe        # 실제로 물려 본다
+    python3 tools/arm/gripper_grip_gain.py                    # 읽기만 (기본)
+    python3 tools/arm/gripper_grip_gain.py --restore-teleop-limit
+    python3 tools/arm/gripper_grip_gain.py --set-min-limit 1090   # 되돌리기
+    python3 tools/arm/gripper_grip_gain.py --probe            # 실제로 물려 본다
+    python3 tools/arm/gripper_grip_gain.py --set-p 32         # 2차 수단(아래)
 
 ⚠️ arm_driver 가 떠 있으면 /dev/soarm 을 배타 잠금하고 있어 실패한다.
    먼저 `tools/stop_bringup.sh` 로 내릴 것.
 
-⚠️ P 는 **EEPROM** 이다. 전원을 꺼도 남고, 이 팔을 쓰는 팀원 전부에게
-   적용된다. 되돌리려면 위의 `--set-p 16`.
+⚠️ 9번과 21번은 **EEPROM** 이다. 전원을 꺼도 남고, 이 팔을 쓰는 팀원 전부에게
+   적용된다.
+
+## P 게인은 왜 2차 수단인가
+
+P 를 32(Feetech 기본값)로 올리면 같은 오차에서 힘이 2배가 된다. 다만 그것은
+**텔레옵보다 세게** 만드는 것이지 텔레옵을 되찾는 것이 아니고, lerobot 이
+16 을 쓰는 이유(떨림)를 도로 불러들인다. 하한을 되돌려도 모자랄 때만 쓸 것.
 
 ## --probe 로 확인하는 법
 
 턱 사이에 물체를 넣고 실행하면 닫고 나서 위치·부하·전류·온도를 읽는다.
-P 를 바꾸기 **전과 후**를 같은 물체로 재면 효과가 숫자로 남는다.
-
-    (전)  P=16  도달 1190  전류 ...
-    (후)  P=32  도달 ....  전류 ...
-
-도달 위치가 더 작아지면(더 깊이 물면) 실제로 더 세게 조인 것이다.
-온도가 55°C 를 넘으면 즉시 되돌릴 것 — 서보가 과열 래치로 죽는다.
+바꾸기 **전과 후**를 같은 물체로 재면 효과가 숫자로 남는다. 도달 위치가 더
+작아지면 실제로 더 세게 조인 것이다. 온도가 55°C 를 넘으면 되돌릴 것.
 """
 import argparse
 import sys
@@ -92,7 +113,22 @@ REGISTERS = (
     (48, "Torque_Limit",    2, "실시간 토크 상한 (1000 = 100%)"),
 )
 
+#: lerobot 캘리브레이션(host/vla/calibration/grippers_arm.json)의 그리퍼
+#: range_min 과 그때의 Homing_Offset. 텔레옵이 실제로 쓰던 자리다.
+TELEOP_RANGE_MIN_RAW = 1960
+TELEOP_HOMING_OFFSET = 390
+
+#: 되돌릴 하한. 지금 프레임으로 옮긴 값은 실행 시점의 Homing_Offset 으로
+#: 계산한다 — 상수로 박아 두면 오프셋이 바뀐 팔에서 조용히 틀린다.
+#: (2026-09-07 실측 오프셋 1343 에서는 1007 이 나온다.)
+
+#: 안전 울타리. 텔레옵이 쓰던 자리보다 **더 깊은** 값은 받지 않는다.
+#: 그 아래는 검증된 적이 없고, 빈 턱이 스토퍼를 미는 힘만 커진다.
+MIN_LIMIT_FLOOR_MARGIN_RAW = 0
+
 ADDR_POSITION_P = 21
+ADDR_MIN_POSITION_LIMIT = 9
+ADDR_HOMING_OFFSET = 31
 ADDR_TORQUE_ENABLE = 40
 ADDR_GOAL_POSITION = 42
 ADDR_GOAL_SPEED = 46
@@ -183,6 +219,78 @@ def show(link: Link) -> None:
         else:
             print("  지금은 이미 그 안쪽이라 오차가 없다 — 빈 턱이거나 열려 있다.")
 
+    floor, homing = teleop_min_limit(link)
+    low = link.read(ADDR_MIN_POSITION_LIMIT, 2)
+    if floor is not None and low is not None:
+        print("")
+        print(f"  텔레옵이 쓰던 하한은 지금 프레임(Homing_Offset={homing})으로 "
+              f"{floor} 다.")
+        if low > floor:
+            print(f"  지금 하한은 {low} — 닫으라는 명령이 {low - floor} raw "
+                  f"얕은 데서 잘린다. 그만큼 무는 힘이 준다.")
+            print("  되돌리려면: --restore-teleop-limit")
+        else:
+            print(f"  지금 하한은 {low} — 텔레옵과 같거나 더 깊다.")
+
+
+def teleop_min_limit(link: Link):
+    """텔레옵이 쓰던 하한을 **지금 서보의 프레임으로** 옮긴 값.
+
+    Present_Position = Actual_Position - Homing_Offset 이므로, 오프셋이
+    바뀌면 같은 물리 자리의 raw 가 통째로 이동한다. 그래서 상수로 박지 않고
+    매번 살아 있는 오프셋을 읽어서 계산한다.
+    """
+    live = link.read(ADDR_HOMING_OFFSET, 2)
+    if live is None:
+        return None, None
+    # Feetech 는 최상위 비트를 부호로 쓴다.
+    signed = -(live & 0x7FFF) if live & 0x8000 else live
+    return TELEOP_RANGE_MIN_RAW + (TELEOP_HOMING_OFFSET - signed), signed
+
+
+def set_min_limit(link: Link, value: int) -> int:
+    """Min_Position_Limit(9) 을 쓴다 — 무는 힘의 진짜 손잡이."""
+    floor, homing = teleop_min_limit(link)
+    if floor is None:
+        print("Homing_Offset 을 못 읽었다 — 안전 하한을 계산할 수 없다")
+        return 1
+
+    before = link.read(ADDR_MIN_POSITION_LIMIT, 2)
+    high = link.read(11, 2)
+    print(f"Homing_Offset = {homing}  ->  텔레옵의 하한은 지금 프레임으로 {floor}")
+    print(f"Min_Position_Limit: {before} -> {value}")
+
+    if value < floor - MIN_LIMIT_FLOOR_MARGIN_RAW:
+        print(f"거부 — {floor} 보다 깊다. 그 아래는 검증된 적이 없고, 빈 턱이 "
+              f"기계 스토퍼를 미는 힘만 커진다.")
+        return 1
+    if high is not None and value >= high:
+        print(f"거부 — 상한({high}) 보다 크거나 같다")
+        return 1
+    if before == value:
+        print("이미 그 값이다 — 아무것도 안 한다.")
+        return 0
+
+    if not link.write(ADDR_LOCK, 1, 0):
+        print("EEPROM 잠금 해제 실패")
+        return 1
+    try:
+        ok = link.write(ADDR_MIN_POSITION_LIMIT, 2, value)
+    finally:
+        if not link.write(ADDR_LOCK, 1, 1):
+            print("⚠️ EEPROM 을 다시 잠그지 못했다 — 전원을 껐다 켤 것")
+
+    if not ok:
+        print("쓰기 실패")
+        return 1
+    after = link.read(ADDR_MIN_POSITION_LIMIT, 2)
+    if after != value:
+        print(f"⚠️ 확인 실패 — 다시 읽으니 {after} 다")
+        return 1
+    print(f"확인: Min_Position_Limit = {after}")
+    print(f"되돌리려면: --set-min-limit {before}")
+    return 0
+
 
 def set_gain(link: Link, value: int) -> int:
     if not 0 <= value <= 254:
@@ -256,8 +364,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="그리퍼(servo 6)의 무는 힘 관련 레지스터를 읽고 P 를 바꾼다")
     parser.add_argument("--port", default=DEFAULT_PORT)
+    parser.add_argument("--restore-teleop-limit", action="store_true",
+                        help="Min_Position_Limit 을 텔레옵이 쓰던 자리로 되돌린다 "
+                             "(무는 힘의 진짜 손잡이 — EEPROM)")
+    parser.add_argument("--set-min-limit", type=int, metavar="RAW",
+                        help="Min_Position_Limit 을 직접 쓴다 (되돌릴 때 1090)")
     parser.add_argument("--set-p", type=int, metavar="N",
-                        help="Position_P 를 N 으로 쓴다 (EEPROM — 영구)")
+                        help="2차 수단. Position_P 를 N 으로 쓴다 (EEPROM — 영구)")
     parser.add_argument("--probe", action="store_true",
                         help="실제로 닫아 보고 위치·부하·전류·온도를 읽는다")
     parser.add_argument("--settle", type=float, default=1.5,
@@ -266,6 +379,14 @@ def main() -> int:
 
     link = Link(args.port)
     try:
+        if args.restore_teleop_limit:
+            floor, _homing = teleop_min_limit(link)
+            if floor is None:
+                print("Homing_Offset 을 못 읽었다")
+                return 1
+            return set_min_limit(link, floor)
+        if args.set_min_limit is not None:
+            return set_min_limit(link, args.set_min_limit)
         if args.set_p is not None:
             return set_gain(link, args.set_p)
         if args.probe:
