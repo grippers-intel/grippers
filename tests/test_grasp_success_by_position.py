@@ -39,6 +39,7 @@ from domain.adapters.fake.fake_arm import FakeArm
 from domain.adapters.fake.fake_base import FakeBase
 from domain.adapters.fake.fake_host_link import FakeHostLink
 from domain.task import baseline_constants as bc
+from domain.ports.baseline_ports import Report
 from domain.task.baseline_mission import BaselinePorts
 
 #: 실측값. 이 시험의 근거이자, 문턱이 이 둘 사이에 있어야 한다는 제약이다.
@@ -159,3 +160,59 @@ def test_빈_턱은_어떤_폭에서도_문턱을_못_넘는다():
     """문턱의 정의 자체 — 명령한 자리까지 갔으면 아무것도 안 물었다는 뜻이다."""
     for w in (0.0, 5.0, 20.0, 40.0, 96.0):
         assert bc.empty_stop_raw(w) < bc.held_threshold_raw(w)
+
+
+# ── 읽기 전에 확실히 닫는다 (2026-09-07 실기) ─────────────────────────────
+#
+# 퀸 파지가 실패했는데 그리퍼 1190 을 읽고 성공으로 판정해 물체를 놓으러 갔다.
+# 1190 은 퀸(17mm)을 제대로 문 값과 같아서 위치만으로는 못 가렸다.
+#
+# 원인은 문턱이 아니라 **전제**였다. held_threshold_raw 는 "그 폭으로 닫으라고
+# 명령했을 때"를 기준으로 삼는데, VLA 경로는 정책이 그리퍼를 직접 몬다 —
+# 턱이 1190 에서 멈춘 것이 "물체가 막아서"인지 "정책이 거기까지만 닫으라고
+# 해서"인지 알 수가 없었다.
+
+
+class _OkVla:
+    def run_grasp(self, label, pan_bias_deg=0.0):
+        return True
+
+
+def _run_vla_grasp(position_raw, blocked_raw):
+    """정책이 그 위치에 턱을 두고 끝낸 상황을 만든다."""
+    from domain.adapters.fake.scripted_perception import ScriptedPerception
+    from domain.task.baseline_mission import BaselineGraspState
+
+    arm = FakeArm(load_ratio=0.05)
+    arm.gripper_position_raw_value = position_raw
+    arm.jaw_blocked_raw = blocked_raw
+    ports = BaselinePorts(base=FakeBase(), arm=arm,
+                          perception=ScriptedPerception(), host=FakeHostLink(),
+                          lidar=None, estop=None, use_depth_gate=False,
+                          grasp_backend="vla", vla=_OkVla(), vla_only=True)
+    BaselineGraspState("queen", creep_m=0.0).execute(ports)
+    return arm, ports
+
+
+def test_판정_전에_닫기를_명령한다():
+    """⚠️ 이 명령이 없으면 문턱의 전제가 깨진 채 비교하게 된다."""
+    arm, _ = _run_vla_grasp(1190, 1190)
+    assert 0.0 in arm.gripper_widths, "닫기(0mm)를 명령해야 한다"
+
+
+def test_정책이_덜_닫아_놓은_빈_턱은_닫으면_드러난다():
+    """⚠️ 2026-09-07 실기 그대로 — 1190 을 읽었지만 실제로는 빈 손이었다.
+
+    확실히 닫으라고 하면 막는 것이 없으니 빈 턱까지 내려간다."""
+    arm, ports = _run_vla_grasp(1190, None)
+
+    assert arm.gripper_position_raw() < bc.held_threshold_raw(0.0)
+    assert Report.GRASP_FAILED in ports.host.reported_kinds
+
+
+def test_진짜_물었으면_닫아도_그대로다():
+    """물체가 턱을 막으므로 더 안 닫힌다 — 정상 경로가 안 깨져야 한다."""
+    arm, ports = _run_vla_grasp(1190, 1190)
+
+    assert arm.gripper_position_raw() == 1190
+    assert Report.GRASP_DONE in ports.host.reported_kinds

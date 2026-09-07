@@ -506,6 +506,10 @@ class BaselineApproachState(State):
 #: 버스가 잠깐 나갔다 돌아오는 데 실기에서 4.5초쯤 걸렸다(2026-09-07).
 #: 간격 x 횟수가 그보다 넉넉해야 한다. 도메인에서 유일하게 자는 자리라
 #: 상수로 빼 뒀다 — 시험은 interval_s=0 으로 부른다.
+#: 닫기 명령을 내린 뒤 턱이 자리를 잡을 때까지 기다리는 시간.
+#: VLA_GRIPPER_SPEED_RAW(600 raw/s)로 최대 900 raw 를 움직여야 1.5초다.
+GRIP_SETTLE_SEC = 1.5
+
 RELEASE_RETRIES = 4
 RELEASE_RETRY_SEC = 1.5
 
@@ -722,6 +726,24 @@ class BaselineGraspState(State):
         # 안 쓴다. 실기 관측상 끝까지 닫으므로(빈 턱 1097~1134) 0mm 기준을
         # 쓴다.
         close_w = 0.0 if getattr(ports, "grasp_backend", "classic") == "vla"             else gp.close_width_mm
+
+        # ── 읽기 전에 **확실히 닫으라고 명령한다** ────────────────────────
+        #
+        # ⚠️ 2026-09-07 실기: 퀸 파지가 실패했는데 그리퍼 1190 을 읽고 성공으로
+        # 판정해 물체를 놓으러 갔다. 1190 은 퀸(17mm)을 제대로 문 값과 같다.
+        #
+        # 원인은 문턱이 아니라 **전제**였다. `held_threshold_raw` 는 "그 폭으로
+        # 닫으라고 명령했을 때 빈 턱이 도달하는 위치"를 기준으로 삼는데, VLA
+        # 경로에서는 정책이 그리퍼를 직접 몬다 — 턱이 1190 에서 멈춘 것이
+        # "물체가 막아서"인지 "정책이 거기까지만 닫으라고 해서"인지 알 수가
+        # 없었다. 전제가 깨진 채 문턱만 비교하고 있었다.
+        #
+        # 여기서 한 번 확실히 닫으면 전제가 성립한다. 물체가 있으면 그 두께에서
+        # 멈추고(1190 유지), 없으면 빈 턱까지 내려간다(1112). 이미 물고 있는
+        # 것에는 더 조이는 것뿐이라 잃는 것이 없다.
+        ports.arm.set_gripper(close_w)
+        time.sleep(GRIP_SETTLE_SEC)
+
         held_min = bc.held_threshold_raw(close_w)
         held_raw = ports.arm.gripper_position_raw()
         held_unknown = held_raw < 0

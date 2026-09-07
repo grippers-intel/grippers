@@ -54,3 +54,15 @@ def run_to_completion():
         )
 
     return _run
+
+
+# ── 실기용 대기 시간은 시험에서 0 으로 ────────────────────────────────────
+#
+# 파지 판정 전 그리퍼 정착 대기(GRIP_SETTLE_SEC 1.5초)와 놓기 재시도 간격
+# (RELEASE_RETRY_SEC 1.5초)은 실기 값이다. 시험이 실제로 자면 전체가 22초에서
+# 82초로 늘어난다 — 그 시간에 확인되는 것은 아무것도 없다.
+@pytest.fixture(autouse=True)
+def _no_hardware_waits(monkeypatch):
+    from domain.task import baseline_mission as bm
+    monkeypatch.setattr(bm, "GRIP_SETTLE_SEC", 0.0)
+    monkeypatch.setattr(bm, "RELEASE_RETRY_SEC", 0.0)
