@@ -156,3 +156,24 @@ def test_ROS_setup_을_source_할_때는_set_u_를_끈다():
     last = text.index("source /ros2_ws/install/setup.bash")
     assert off < src, "source 앞에서 꺼야 한다"
     assert last < back, "마지막 source 뒤에 되돌려야 한다"
+
+
+def test_플래그가_세팅한_변수는_전부_런치로_나간다():
+    """⚠️ 2026-09-07: `--vla-only` 가 VLA_ONLY 변수만 세팅하고 런치에는 안
+    넘어가고 있었다. 실행하면 아무 경고 없이 평소 모드로 돌았다.
+
+    이 파일이 막으려던 바로 그 종류의 사고인데(인자가 조용히 사라진다),
+    새 플래그에 검사를 안 붙여서 그대로 통과했다. 이름 하나씩 적어 두는
+    대신 **플래그가 세팅하는 변수 전부**를 기계가 훑게 한다."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    body = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+    # 런치로 나가는 구간 = POLICY_ARGS 구성부터 exec 끝까지. CHECKPOINT 나
+    # POLICY_URL 은 exec 줄에 직접 안 적히고 "${POLICY_ARGS[@]}" 로 펼쳐진다.
+    exec_block = body[body.index("POLICY_ARGS="):]
+    assigned = set(re.findall(r"--[a-z-]+\)\s*(\w+)=", body))
+    assert assigned, "플래그 분기를 못 찾았다 — 이 시험의 전제가 깨졌다"
+    #: 런치로 안 나가는 것들. FORCE 는 기동 전 정리용, BACKEND 는 POLICY_ARGS
+    #: 를 고르는 데만 쓰고, LOG 는 리다이렉트 대상이다.
+    INTERNAL = {"FORCE", "BACKEND", "LOG"}
+    for var in sorted(assigned - INTERNAL):
+        assert "$" + var in exec_block, f"{var} 가 플래그로 세팅되는데 런치로 안 넘어간다"

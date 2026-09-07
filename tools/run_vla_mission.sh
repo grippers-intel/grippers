@@ -156,6 +156,7 @@ exec ros2 launch grippers_bringup bringup.launch.py \
   use_vla:=true grasp_backend:=vla \
   "${POLICY_ARGS[@]}" \
   use_depth_gate:=false use_depth_camera:=false \
+  "vla_only:=$VLA_ONLY" \
   default_grasp_label:=queen \
   vla_record_dir:=/grippers/runs/vla \
   "host_ip:=$HOST_IP" \
