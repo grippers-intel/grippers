@@ -12,7 +12,7 @@
 탑뷰는 로봇 마커의 자세(x, y, yaw)와 기물의 좌표를 안다. 그러니 "마커에서
 기물을 보는 방위각"은 순수 기하로 매 회차 나온다:
 
-    θ = atan2(좌우, 전방)          (run_mission 의 `[파지 진입]` 줄이 그대로 준다)
+    θ = atan2(좌우, 전방)
 
 문제는 그 θ 를 servo 1 에 **얼마로** 주느냐다. 두 가지를 모르기 때문이다.
 
@@ -30,41 +30,43 @@
     a  부호와 배율.  기대값 -1.0 (부호가 반대이고 1:1)
     b  영점 오프셋.  예전 트림이 잡으려던 그 값
 
-한 점만 재면 a 와 b 가 섞여서 못 가른다. 그래서 이 도구는 **여러 점**을
-받는다.
+한 점만 재면 a 와 b 가 섞여서 못 가른다. 그래서 여러 점을 받는다.
 
-## 절차
+## 어떻게 재는가 — 토크를 풀고 손으로 맞춘 뒤 **읽는다**
 
-준비: bringup 이 떠 있어야 한다(arm_driver 서비스를 쓴다). 미션은 IDLE 로
-두고, 팔은 기물을 겨누는 것이 보이는 자세여야 한다.
+사용자 지시(2026-09-07): "move_to_floor_pose 는 팀원 자세라 우리 VLA 형식에
+맞지 않는다. 차라리 토크값을 다 풀고 6,2,0,2,6 기준에 가져다 대 줄 테니까
+직접 확인하는 방식으로 하고 싶다."
 
-    ros2 action send_goal /arm_driver/move_to_floor_pose \\
-        grippers_interfaces/action/MoveToFloorPose \\
-        "{profile: chess_queen, stage: safe}"
+그 편이 낫다. servo 1 을 **명령해서** 맞추면 명령 경로의 한계(±15도)와
+데드밴드가 측정에 섞이는데, 손으로 맞추고 **읽기만** 하면 그것들이 빠진다.
+서보는 토크가 꺼져 있어도 자기 위치를 정확히 읽는다.
 
-1. 기물을 로봇 앞에 놓는다. **좌우 위치를 회차마다 바꾼다** — 왼쪽 6cm,
-   왼쪽 2cm, 정면, 오른쪽 2cm, 오른쪽 6cm 처럼. 한쪽에만 몰아서 재면
-   a 와 b 가 다시 섞인다.
-2. run_mission 이 그 자리에서 찍는 줄을 읽는다:
+    1. 팔 토크를 푼다                      --free
+    2. 기물을 정해진 좌우 자리에 놓는다     -60 / -20 / 0 / +20 / +60 mm
+    3. 손으로 팔 베이스를 돌려 그리퍼가 그 기물을 정면으로 겨누게 한다
+    4. Enter — servo 1 위치를 읽어 (θ, servo1) 한 쌍을 남긴다
+    5. 다섯 자리를 다 돈 뒤 --fit
 
-       [파지 진입] 물체가 로봇 기준 전방 +307mm · 좌우 -20mm
+⚠️ 좌우 자리는 **마커 정면 축**에서 재야 한다. 차체 중심선이 아니다 —
+운영 때 θ 를 내는 기준이 마커이므로, 재는 기준과 쓰는 기준이 같아야 b 가
+뜻을 갖는다.
 
-3. 이 도구를 --record 로 돌려 그 두 숫자를 입력한다.
-4. servo 1 을 조금씩 돌려(숫자 입력) **그리퍼가 기물을 정면으로 겨눌 때**
-   ok 를 친다. 도구가 (θ, servo1) 한 쌍을 남긴다.
-5. 5점 이상 모으고 --fit 을 돌린다.
+⚠️ **bringup 을 내리고 실행한다.** arm_driver 가 /dev/soarm 을 배타 잠금하고
+있어 붙을 수 없고, 떠 있으면 토크도 다시 켜 버린다.
+
+⚠️ --free 는 **servo 1 만** 푼다. 2~6 을 같이 풀면 팔이 중력으로 쓰러진다
+(park_release_torque.py 의 같은 경고). 베이스 회전만 손으로 돌리면 된다.
 
 ## 쓰는 법
 
-    python3 tools/arm/calibrate_servo1_aim.py --record     # 한 점씩 모은다
-    python3 tools/arm/calibrate_servo1_aim.py --fit        # 직선을 긋는다
-    python3 tools/arm/calibrate_servo1_aim.py --show       # 모은 점 보기
+    ./tools/ops/stop_bringup.sh                                먼저 내린다
 
-⚠️ servo 1 은 `/arm_driver/offset_base_yaw` 로만 돌린다. 그 서비스가 ±15도
-한계를 걸고 있고, 미션이 실제로 쓸 경로도 그것이라 같은 길로 재야 한다.
-
-⚠️ 각 점이 끝나면 servo 1 을 **출발 위치로 되돌린다.** 안 그러면 다음 점의
-영점이 이번 점만큼 밀려서 직선이 휜다.
+    python3 tools/arm/calibrate_servo1_aim.py --free           토크를 푼다
+    python3 tools/arm/calibrate_servo1_aim.py --record         한 점씩 모은다
+    python3 tools/arm/calibrate_servo1_aim.py --fit            직선을 긋는다
+    python3 tools/arm/calibrate_servo1_aim.py --show           모은 점 보기
+    python3 tools/arm/calibrate_servo1_aim.py --hold           토크를 되켠다
 """
 import argparse
 import json
@@ -76,23 +78,43 @@ import sys
 #: 휩쓸리기 때문이다(2026-09-05 에 체크포인트로 겪었다).
 DEFAULT_LOG = "/shared/servo1_aim_calibration.jsonl"
 
-#: 4096 카운트 = 360도. driver_sdk.position_to_degrees 와 같은 환산이다.
-RAW_PER_DEG = 4095.0 / 360.0
+DEFAULT_PORT = "/dev/soarm"
 
-#: offset_base_yaw 가 거는 한계(arm_driver.MAX_BASE_YAW_OFFSET_RAD).
-#: 여기서도 같은 값으로 막아 서비스가 거부하기 전에 알려 준다.
+#: GRASP 좌우 보정이 실제로 쓸 수 있는 한계
+#: (arm_driver.MAX_BASE_YAW_OFFSET_RAD). 잰 값이 이보다 크면 조준으로 풀
+#: 문제가 아니라는 신호라 경고한다.
 LIMIT_DEG = 15.0
+
+#: 파지 진입 전방 거리(mm). host/mission_config.GRASP_TRIGGER_DIST_M 과 같아야
+#: 한다 — 같은 거리에서 재야 각이 운영과 맞는다.
+DEFAULT_FORWARD_MM = 320.0
+
+#: 기물을 놓을 좌우 자리(mm). 음수가 오른쪽, 양수가 왼쪽 —
+#: run_mission 의 `[파지 진입] 좌우` 와 같은 부호다.
+LATERAL_LADDER_MM = (-60.0, -20.0, 0.0, 20.0, 60.0)
+
+#: 교시 IDLE 의 servo 1(floor_grasp_profiles.IDLE_CRADLE_RAW[0]).
+#: 잰 절대각을 "IDLE 기준 오프셋"으로도 보려는 기준점이다.
+IDLE_SERVO1_RAW = 2066
+
+#: 4096 카운트 = 360도, 중앙 2048. driver_sdk 와 같은 환산.
+POS_CENTER = 2048
 
 
 def bearing_deg(forward_mm: float, lateral_mm: float) -> float:
-    """탑뷰가 준 전방·좌우에서 방위각(도). 좌우 부호를 그대로 따른다.
+    """전방·좌우에서 방위각(도). 좌우 부호를 그대로 따른다.
 
     run_mission 의 `[파지 진입]` 줄과 같은 부호 규약이다 — 좌우가 음수면
-    기물이 오른쪽, 양수면 왼쪽이다(그 줄을 찍는 host/mission.py 참고).
+    기물이 오른쪽, 양수면 왼쪽이다.
     """
     if forward_mm <= 0.0:
         raise ValueError(f"전방 거리가 0 이하다: {forward_mm}")
     return math.degrees(math.atan2(lateral_mm, forward_mm))
+
+
+def raw_to_deg(raw: int) -> float:
+    """servo raw -> 도. driver_sdk.position_to_degrees 와 같은 환산."""
+    return (raw - POS_CENTER) / 4095.0 * 360.0
 
 
 def fit_line(samples):
@@ -121,35 +143,36 @@ def fit_line(samples):
 
 
 class Arm:
-    """arm_driver 서비스를 통해서만 servo 1 을 돌린다."""
+    """servo 1 에 직접 붙는다 — 토크를 끄고 위치를 읽기 위해서다.
 
-    def __init__(self):
-        import rclpy
-        from grippers_interfaces.srv import OffsetBaseYaw
-        from rclpy.node import Node
+    ⚠️ arm_driver 를 안 거친다. 그 노드가 /dev/soarm 을 배타 잠금하므로
+    **bringup 이 내려가 있어야** 한다. 그리고 이 측정의 요점이 "명령하지 않고
+    읽는 것"이라 명령 경로를 거칠 이유도 없다.
+    """
 
-        rclpy.init()
-        self._rclpy = rclpy
-        self._node = Node("calibrate_servo1_aim")
-        self._cli = self._node.create_client(OffsetBaseYaw, "/arm_driver/offset_base_yaw")
-        self._srv = OffsetBaseYaw
-        if not self._cli.wait_for_service(timeout_sec=10.0):
+    SERVO1 = 1
+
+    def __init__(self, port: str):
+        # driver_sdk(pyserial 의존)는 여기서만 import 한다 —
+        # park_release_torque.py 의 _connect() 와 같은 이유.
+        import soarm_lab  # noqa: F401  (flat import 를 위해 먼저 import)
+        from driver_sdk import STS3215Driver
+
+        self._drv = STS3215Driver(port)
+        if not self._drv.connect():
             raise SystemExit(
-                "/arm_driver/offset_base_yaw 가 없다 — bringup 이 떠 있는지 볼 것")
+                f"{port} 연결 실패 — arm_driver 가 떠 있으면 배타 잠금 때문이다. "
+                "먼저 ./tools/ops/stop_bringup.sh 로 내릴 것")
 
-    def nudge(self, deg: float):
-        """현재 위치에서 deg 만큼 돌리고 (ok, message, position_raw) 를 준다."""
-        req = self._srv.Request(offset_rad=float(math.radians(deg)))
-        future = self._cli.call_async(req)
-        self._rclpy.spin_until_future_complete(self._node, future, timeout_sec=20.0)
-        res = future.result()
-        if res is None:
-            return False, "응답 없음", None
-        return res.ok, res.message, res.position_raw
+    def position_raw(self):
+        """servo 1 의 현재 위치(raw). 못 읽으면 None."""
+        return self._drv.get_position(self.SERVO1)
 
-    def close(self):
-        self._node.destroy_node()
-        self._rclpy.shutdown()
+    def set_torque(self, on: bool) -> bool:
+        return bool(self._drv.set_torque(self.SERVO1, on))
+
+    def close(self) -> None:
+        self._drv.disconnect()
 
 
 def _ask(prompt: str) -> str:
@@ -159,68 +182,98 @@ def _ask(prompt: str) -> str:
         return "q"
 
 
-def record(path: pathlib.Path) -> int:
-    arm = Arm()
-    saved = 0
+def free(port: str) -> int:
+    """servo 1 토크만 푼다. 2~6 은 안 건드린다 — 중력으로 쓰러진다."""
+    arm = Arm(port)
     try:
-        while True:
-            line = _ask("\n탑뷰 전방mm 좌우mm (그만두려면 q): ")
-            if line in ("q", "quit", ""):
-                break
-            try:
-                forward_s, lateral_s = line.split()
-                theta = bearing_deg(float(forward_s), float(lateral_s))
-            except ValueError as e:
-                print(f"  두 숫자를 공백으로 띄어 입력할 것 ({e})")
-                continue
+        before = arm.position_raw()
+        ok = arm.set_torque(False)
+        where = (f"지금 {before} = {raw_to_deg(before):+.2f}도"
+                 if before is not None else "위치 읽기 실패")
+        print(f"servo 1 토크 해제: {'성공' if ok else '실패'}  ({where})")
+        print("이제 팔 베이스를 손으로 돌릴 수 있다. servo 2~6 은 그대로 잠겨 있다.")
+        return 0 if ok else 1
+    finally:
+        arm.close()
 
-            print(f"  θ = {theta:+.2f}도  "
-                  f"(기물이 {'왼쪽' if theta > 0 else '오른쪽'})")
-            print("  servo 1 을 돌려 그리퍼가 기물을 정면으로 겨누게 하세요.")
-            print("  숫자 = 그만큼 상대 회전(도), ok = 확정, s = 이 점 버림")
 
-            applied = 0.0
-            while True:
-                answer = _ask(f"  [누적 {applied:+.2f}도] > ")
-                if answer in ("ok", "s", "q"):
-                    break
-                try:
-                    step = float(answer)
-                except ValueError:
-                    print("    숫자거나 ok / s 여야 한다")
-                    continue
-                if abs(applied + step) > LIMIT_DEG:
-                    print(f"    누적이 한계 ±{LIMIT_DEG:.0f}도를 넘는다 — 거부")
-                    continue
-                ok, message, raw = arm.nudge(step)
-                if not ok:
-                    print(f"    실패: {message}")
-                    continue
-                applied += step
-                print(f"    servo 1 raw {raw}")
+def hold(port: str) -> int:
+    """토크를 되켠다.
 
-            # 무슨 일이 있어도 출발 위치로 되돌린다 — 다음 점의 영점이
-            # 이번 점만큼 밀리면 직선이 휜다.
-            if applied != 0.0:
-                back_ok, back_msg, _raw = arm.nudge(-applied)
-                if not back_ok:
-                    print(f"  ⚠️ 원위치 복귀 실패: {back_msg} — 다음 점 전에 손으로 맞출 것")
+    goal 은 건드리지 않는다 — STS3215 는 goal 을 쓰면 토크가 자동으로 켜지면서
+    그 목표로 **움직인다**(arm_driver._latch_torque_at_present 주석). 토크만
+    켜면 서보가 지금 위치를 그대로 유지한다.
+    """
+    arm = Arm(port)
+    try:
+        raw = arm.position_raw()
+        if raw is None:
+            print("⚠️ 위치를 못 읽었다 — 배선을 보고 다시 시도할 것")
+            return 1
+        ok = arm.set_torque(True)
+        print(f"servo 1 토크 복구: {'성공' if ok else '실패'}  "
+              f"(위치 {raw} = {raw_to_deg(raw):+.2f}도)")
+        return 0 if ok else 1
+    finally:
+        arm.close()
 
+
+def record(path: pathlib.Path, port: str, forward_mm: float) -> int:
+    """좌우 사다리를 한 자리씩 돌며 (θ, servo1) 을 모은다."""
+    arm = Arm(port)
+    saved = 0
+    idle_deg = raw_to_deg(IDLE_SERVO1_RAW)
+    try:
+        if arm.position_raw() is None:
+            print("⚠️ servo 1 위치를 못 읽는다 — 배선·전원을 볼 것")
+            return 1
+
+        ladder = ", ".join(f"{v:+.0f}" for v in LATERAL_LADDER_MM)
+        print(f"전방 {forward_mm:.0f}mm 기준 · 좌우 자리 {ladder} mm")
+        print("각 자리에서 기물을 놓고, 팔 베이스를 손으로 돌려 그리퍼가 그 기물을")
+        print("정면으로 겨누게 한 뒤 Enter.   (s = 이 자리 건너뜀, q = 그만)")
+        print("")
+
+        for lateral in LATERAL_LADDER_MM:
+            theta = bearing_deg(forward_mm, lateral)
+            side = "정면" if lateral == 0 else ("왼쪽" if lateral > 0 else "오른쪽")
+            answer = _ask(f"기물을 {side} {abs(lateral):.0f}mm 에 놓고 겨눈 뒤 "
+                          f"Enter (θ={theta:+.2f}도) > ")
             if answer == "q":
                 break
             if answer == "s":
-                print("  버렸다")
+                print("  건너뜀")
+                print("")
                 continue
 
-            sample = {"forward_mm": float(forward_s), "lateral_mm": float(lateral_s),
-                      "theta_deg": round(theta, 3), "servo1_deg": round(applied, 3)}
+            raw = arm.position_raw()
+            if raw is None:
+                print("  ⚠️ 위치 읽기 실패 — 이 자리는 버린다")
+                print("")
+                continue
+
+            servo1 = raw_to_deg(raw)
+            offset = servo1 - idle_deg
+            if abs(offset) > LIMIT_DEG:
+                print(f"  ⚠️ IDLE 기준 {offset:+.1f}도 — 운영 한계 "
+                      f"±{LIMIT_DEG:.0f}도 밖이다. 기록은 하되, 이대로면 "
+                      f"조준으로 못 푼다.")
+
+            sample = {"forward_mm": forward_mm, "lateral_mm": lateral,
+                      "theta_deg": round(theta, 3),
+                      "servo1_deg": round(servo1, 3), "servo1_raw": int(raw)}
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(sample, ensure_ascii=False) + "\n")
             saved += 1
-            print(f"  기록: θ={theta:+.2f}  servo1={applied:+.2f}   (총 {saved}점)")
+            print(f"  기록: θ={theta:+.2f}  servo1={servo1:+.2f}도 "
+                  f"(raw {raw}, IDLE 기준 {offset:+.2f}도)   [{saved}점]")
+            print("")
     finally:
         arm.close()
-    print(f"\n{saved}점을 {path} 에 남겼다.")
+
+    print(f"{saved}점을 {path} 에 남겼다.")
+    if saved:
+        print("끝났으면 --hold 로 토크를 되켤 것.")
     return 0
 
 
@@ -240,13 +293,16 @@ def show(path: pathlib.Path) -> int:
     if not samples:
         print(f"{path} 에 점이 없다")
         return 1
-    print(f"{len(samples)}점\n   θ(도)   servo1(도)")
+    print(f"{len(samples)}점")
+    print("   θ(도)   servo1(도)")
     for theta, servo1 in samples:
         print(f"  {theta:+7.2f}   {servo1:+7.2f}")
     spread = max(t for t, _ in samples) - min(t for t, _ in samples)
-    print(f"\nθ 범위 {spread:.1f}도")
+    print("")
+    print(f"θ 범위 {spread:.1f}도")
     if spread < 6.0:
-        print("⚠️ 범위가 좁다 — 기물을 좌우로 더 벌려 가며 재야 부호와 영점이 갈린다")
+        print("⚠️ 범위가 좁다 — 기물을 좌우로 더 벌려 가며 재야 "
+              "부호와 영점이 갈린다")
     return 0
 
 
@@ -256,45 +312,64 @@ def fit(path: pathlib.Path) -> int:
         print(f"{path} 에 점이 {len(samples)}개뿐이다 — 최소 2점, 5점 이상 권장")
         return 1
     a, b, rms, resid = fit_line(samples)
+    idle_deg = raw_to_deg(IDLE_SERVO1_RAW)
 
-    print(f"{len(samples)}점 최소제곱\n")
-    print(f"    servo1 = {a:+.4f} · θ  {b:+.3f}도")
+    print(f"{len(samples)}점 최소제곱")
+    print("")
+    print(f"    servo1(절대) = {a:+.4f} · θ  {b:+.3f}도")
+    print(f"    IDLE 기준    = {a:+.4f} · θ  {b - idle_deg:+.3f}도")
     print(f"    잔차 RMS {rms:.2f}도")
     worst = max(range(len(resid)), key=lambda k: abs(resid[k]))
-    print(f"    최대 잔차 {resid[worst]:+.2f}도 (θ={samples[worst][0]:+.2f})\n")
+    print(f"    최대 잔차 {resid[worst]:+.2f}도 (θ={samples[worst][0]:+.2f})")
+    print("")
 
     print("읽는 법")
     if a < 0:
         print(f"  부호: a 가 음수({a:+.2f}) — 탑뷰 θ 와 servo 1 이 **반대**다.")
-        print("        지금까지 코드가 가정하던 -θ 가 맞았다는 뜻이다.")
+        print("        코드가 가정하던 -θ 가 맞았다는 뜻이다.")
     else:
         print(f"  ⚠️ 부호: a 가 양수({a:+.2f}) — 탑뷰 θ 와 servo 1 이 **같은** 방향이다.")
         print("        코드의 -θ 가정이 틀렸다. 부호를 뒤집어야 한다.")
     if abs(abs(a) - 1.0) > 0.25:
         print(f"  ⚠️ 배율 |a|={abs(a):.2f} 이 1 에서 멀다. 1:1 이 아니라면 "
               f"마커 장착각(YAW_OFFSET_DEG)이나 팔 길이 전제를 볼 것.")
-    print(f"  영점: b = {b:+.2f}도. 마커 정면 축과 팔 베이스 0 도의 어긋남이다 —")
-    print(f"        예전 PIECE_AIM_YAW_TRIM_DEG(4.5도, 눈대중)가 잡으려던 값.")
+    print(f"  영점: IDLE 기준 {b - idle_deg:+.2f}도. 마커 정면 축과 팔 베이스의")
+    print("        어긋남이고, 예전 PIECE_AIM_YAW_TRIM_DEG(4.5도, 눈대중)가")
+    print("        잡으려던 값이다.")
+    if abs(b - idle_deg) > LIMIT_DEG:
+        print(f"  ⚠️ 영점이 운영 한계 ±{LIMIT_DEG:.0f}도 밖이다 — 조준으로 풀 "
+              f"문제가 아니라 마커나 팔 장착을 봐야 한다.")
     if rms > 1.5:
-        print(f"\n⚠️ 잔차 RMS {rms:.2f}도가 크다. 점이 흩어져 있다는 뜻이고, "
-              f"'정면으로 겨눴다'는 판정이 회차마다 달랐을 가능성이 높다.")
+        print("")
+        print(f"⚠️ 잔차 RMS {rms:.2f}도가 크다. 점이 흩어져 있다는 뜻이고, "
+              f"'정면으로 겨눴다' 판정이 자리마다 달랐을 가능성이 높다.")
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="탑뷰 방위각 -> servo 1 각도 환산을 실측한다")
-    parser.add_argument("--log", default=DEFAULT_LOG, help=f"기록 파일 (기본 {DEFAULT_LOG})")
+    parser.add_argument("--log", default=DEFAULT_LOG,
+                        help=f"기록 파일 (기본 {DEFAULT_LOG})")
+    parser.add_argument("--port", default=DEFAULT_PORT)
+    parser.add_argument("--forward-mm", type=float, default=DEFAULT_FORWARD_MM,
+                        help=f"파지 진입 전방 거리 (기본 {DEFAULT_FORWARD_MM:.0f})")
     mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--free", action="store_true", help="servo 1 토크를 푼다")
+    mode.add_argument("--hold", action="store_true", help="servo 1 토크를 되켠다")
     mode.add_argument("--record", action="store_true", help="한 점씩 모은다")
     mode.add_argument("--fit", action="store_true", help="모은 점에 직선을 긋는다")
     mode.add_argument("--show", action="store_true", help="모은 점을 본다")
     args = parser.parse_args()
 
     path = pathlib.Path(args.log)
+    if args.free:
+        return free(args.port)
+    if args.hold:
+        return hold(args.port)
     if args.record:
         path.parent.mkdir(parents=True, exist_ok=True)
-        return record(path)
+        return record(path, args.port, args.forward_mm)
     if args.show:
         return show(path)
     return fit(path)

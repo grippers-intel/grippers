@@ -91,7 +91,33 @@ def test_흩어진_점도_직선을_주고_잔차로_알린다():
     assert len(resid) == len(samples)
 
 
-def test_한계각은_서비스와_같은_값이다():
-    """도구가 서비스보다 느슨하면 거부를 서비스에서 받게 되고, 그때는 이미
-    팔이 움직인 뒤라 누적 각도가 어긋난다."""
+def test_한계각은_운영_한계와_같은_값이다():
+    """잰 값이 이보다 크면 조준으로 풀 문제가 아니다 —
+    arm_driver.MAX_BASE_YAW_OFFSET_RAD 와 같은 값이어야 그 경고가 뜻을 갖는다."""
     assert cal.LIMIT_DEG == 15.0
+
+
+# ── 손으로 맞추고 읽는 방식 (2026-09-07 사용자 지시) ──────────────────────
+
+
+def test_좌우_사다리가_양쪽으로_충분히_벌어져_있다():
+    """한쪽에만 몰리면 a 와 b 가 다시 섞인다. 기본 사다리 자체가 그 조건을
+    만족해야 한다 — 사람이 매번 신경 쓰게 두면 안 된다."""
+    thetas = [cal.bearing_deg(cal.DEFAULT_FORWARD_MM, v)
+              for v in cal.LATERAL_LADDER_MM]
+
+    assert min(thetas) < -6.0 and max(thetas) > 6.0
+    assert max(thetas) - min(thetas) >= 12.0
+
+
+def test_전방_거리가_파지_진입_거리와_같다():
+    """다른 거리에서 재면 같은 mm 가 다른 각이 된다 —
+    host/mission_config.GRASP_TRIGGER_DIST_M(0.32m) 과 맞춰 둔다."""
+    assert cal.DEFAULT_FORWARD_MM == 320.0
+
+
+def test_raw를_도로_바꾸는_환산이_driver_sdk와_같다():
+    """4096 카운트 = 360도, 중앙 2048."""
+    assert cal.raw_to_deg(cal.POS_CENTER) == 0.0
+    assert cal.raw_to_deg(cal.POS_CENTER + 4095) == pytest.approx(360.0)
+    assert cal.raw_to_deg(2066) == pytest.approx((2066 - 2048) / 4095 * 360)
