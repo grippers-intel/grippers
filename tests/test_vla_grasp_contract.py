@@ -64,11 +64,14 @@ class _Profile:
     profile = "queen"
 
 
-# ── 좌우 조준은 안 한다 (2026-09-07 사용자 지시) ──────────────────────────
+# ── 좌우 조준: 탑뷰 θ 를 servo 1 로 지운다 (2026-09-08 실측으로 복원) ────
 #
-# 예전에는 Host 의 yaw_correction_deg 를 부호 뒤집고 ±8도로 잘라 정책의 pan
-# 출력에 더했다. 그 계약을 고정하던 시험 열 개가 여기 있었는데, 계약 자체가
-# 없어졌으므로 같이 지우고 **안 한다는 것**을 대신 고정한다.
+# servo 1 을 스윕하며 탑뷰를 읽어 확정한 관계:
+#
+#     yaw = -0.975 * servo1 + 8.65도    잔차 RMS 0.18도
+#
+# 마커가 servo 1 회전축 위에 있어 위치는 제자리이고 yaw 만 1:1 로 돈다.
+# 그래서 dθ/d(servo1) = +1 이고, θ 를 지우려면 servo 1 을 -θ 만큼 돌린다.
 
 
 def _ports_with_correction(deg):
@@ -78,29 +81,57 @@ def _ports_with_correction(deg):
                          host=host, lidar=None, estop=None, vla=_SpyVla())
 
 
-@pytest.mark.parametrize("deg", [0.0, 3.5, -3.5, 20.0, -20.0])
-def test_Host_가_보정을_보내도_정책에_안_넣는다(deg):
-    """Host 는 여전히 계산해 보낸다 — Pi 가 안 읽을 뿐이다."""
-    ports = _ports_with_correction(deg)
+@pytest.mark.parametrize("theta", [3.5, -3.5, 0.0])
+def test_한계_안이면_부호를_뒤집어_그대로_넣는다(theta):
+    """실측으로 확정된 부호다 — 여태 가정만 하던 -θ 가 맞았다."""
+    ports = _ports_with_correction(theta)
 
     BaselineGraspState("queen")._grasp_vla(ports, _Profile())
 
-    assert ports.vla.calls == [("queen", 0.0)], (
-        f"보정 {deg}도가 정책에 흘러들어갔다: {ports.vla.calls}")
+    assert ports.vla.calls == [("queen", pytest.approx(-theta))]
 
 
-def test_보정을_읽지도_않는다():
-    """읽기만 해도 소비 순서가 얽힌다 — 아예 안 본다."""
-    import inspect
+@pytest.mark.parametrize("theta, expected", [(20.0, -8.0), (-20.0, 8.0)])
+def test_한계_밖이면_자른다_버리지_않는다(theta, expected):
+    """⚠️ 2026-09-07 실기에서 세 번 연속 0.0 이 나갔다. 예전 코드는 한계를
+    넘으면 보정을 **통째로 버렸는데**, 그러면 조준이 차체가 우연히 멈춘
+    각도에 그대로 맡겨진다. ±8도가 0도보다 항상 가깝다."""
+    ports = _ports_with_correction(theta)
 
-    from domain.task.baseline_mission import BaselineGraspState as G
+    BaselineGraspState("queen")._grasp_vla(ports, _Profile())
 
-    # 주석에는 "왜 안 하는지"가 남아 있어야 하므로 코드 줄만 본다.
-    code = chr(10).join(line for line in inspect.getsource(G._grasp_vla).splitlines()
-                        if not line.strip().startswith("#"))
-    assert "yaw_correction_deg" not in code
-    assert "last_command" not in code
-    assert "pan_bias" not in code
+    assert ports.vla.calls == [("queen", pytest.approx(expected))]
+
+
+def test_트림은_기본이_0이고_그대로_더해진다():
+    """b(마커 정면과 그리퍼 방향의 고정 각도)는 아직 못 쟀다 — 탑뷰 두 대가
+    158mm 어긋나 있어 그 위에서는 1도 정밀도로 못 잡는다. 0 으로 두고 실기에서
+    잡되, 더해지는 자리는 지금 고정해 둔다."""
+    import domain.task.baseline_mission as bm
+
+    assert bm.VLA_PAN_TRIM_DEG == 0.0
+
+    ports = _ports_with_correction(2.0)
+    try:
+        bm.VLA_PAN_TRIM_DEG = 1.5
+        BaselineGraspState("queen")._grasp_vla(ports, _Profile())
+    finally:
+        bm.VLA_PAN_TRIM_DEG = 0.0
+
+    assert ports.vla.calls == [("queen", pytest.approx(-2.0 + 1.5))]
+
+
+def test_vla_only면_조준을_아예_안_넣는다():
+    """정책만 돌려 보는 진단 모드다 — 우리가 얹은 것은 전부 뺀다."""
+    host = FakeHostLink(script=[HostCommand(
+        state=MissionState.GRASP, yaw_correction_deg=6.0)])
+    ports = BaselinePorts(base=FakeBase(), arm=FakeArm(), perception=None,
+                          host=host, lidar=None, estop=None, vla=_SpyVla(),
+                          vla_only=True)
+
+    BaselineGraspState("queen")._grasp_vla(ports, _Profile())
+
+    assert ports.vla.calls == [("queen", 0.0)]
 
 
 # ── 실패 경로 ──────────────────────────────────────────────────────────────

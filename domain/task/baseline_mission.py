@@ -463,6 +463,21 @@ GRIP_SETTLE_SEC = 1.5
 #: 파지 자체는 정책이 하고, 이 값은 **판정의 전제**를 세우기 위한 것이다.
 JUDGE_CLOSE_WIDTH_MM = 0.0
 
+#: 마커 정면 축과 그리퍼가 실제로 겨누는 방향의 **고정 각도 차이**(도).
+#:
+#: 마커가 servo 1 회전축 위에 있으므로(2026-09-08 실측) 이 둘은 같은 회전부에
+#: 붙어 있고 각도 차이는 상수다. 탑뷰 θ 를 0 으로 만드는 것만으로는 마커가
+#: 겨눠질 뿐이라, 그리퍼를 겨누려면 이 값을 더해야 한다.
+#:
+#: ⚠️ 아직 **안 쟀다.** 재려면 로봇 자세가 정확해야 하는데, 2026-09-08 진단에서
+#: 두 탑뷰 카메라가 같은 마커를 158mm·yaw 4.4도 다르게 보고 있는 것이
+#: 드러났다(각 카메라 안에서는 σ 0.3mm 로 안정적). 그 위에서 이 값을 1도
+#: 정밀도로 잡는 것은 불가능하다.
+#:
+#: 그래서 0 으로 두고 실기에서 잡는다(사용자 지시: "실행했을 때 틀어지면
+#: 그때 다시 수정하자"). 기물이 그리퍼 기준 **왼쪽**에 남으면 양수를 키운다.
+VLA_PAN_TRIM_DEG = 0.0
+
 RELEASE_RETRIES = 4
 RELEASE_RETRY_SEC = 1.5
 
@@ -644,29 +659,50 @@ class BaselineGraspState(State):
                 ports.host.report(Report.GRASP_BLOCKED, self.name,
                                   "VLA 시작 자세(IDLE) 실패")
             return False
-        # ── 좌우 조준은 하지 않는다 ────────────────────────────────────
+        # ── 좌우 조준: 탑뷰 방위각을 servo 1 로 지운다 ──────────────────
         #
-        # ⚠️ 2026-09-07 사용자 지시로 servo 1 조준을 **들어냈다.**
+        # 2026-09-07 에 부호를 몰라 통째로 뺐다가, 2026-09-08 에 **실측으로
+        # 확정하고** 되살렸다.
         #
-        # Host 가 보낸 yaw_correction_deg 를 부호 뒤집고 ±8도로 잘라 정책의
-        # pan 출력에 더하던 코드였다. 지운 이유는 세 가지다.
+        # ── 마커가 팔에 붙어 있다 (2026-09-08 실측) ──
         #
-        #   정책 것이 아니다   정책이 안 시킨 팔 동작인데 크기가 정책을
-        #                      압도했다 — 실기 녹화에서 정책의 pan 출력은
-        #                      한 판 내내 -3.50 ~ -4.18 도(폭 0.7도)인데
-        #                      여기 더하는 값이 ±8도까지 갔다. 구조는
-        #                      상대(출력에 더함)지만 효과는 절대 조준이었다.
-        #   부호를 모른다      -yaw_correction_deg 라는 규약이 GRASP 경로에서
-        #                      한 번도 실기로 검증된 적이 없다. 틀렸다면
-        #                      계통에서 가장 큰 좌우 교란원이다.
-        #   책임이 다르다      물체 앞 20cm 까지 데려다 놓는 것은 주행의
-        #                      몫이고, 거기서 좌우를 맞추는 것은 정책이
-        #                      학습한 일이다.
+        # servo 1 을 -12~+12도 스윕하며 탑뷰 마커를 읽었다:
         #
-        # Host 는 여전히 yaw_correction_deg 를 계산해 보낸다(화면의 "servo 1
-        # 조준각" 로그). Pi 는 그것을 읽지 않을 뿐이다 — 끄려면 Host 쪽도
-        # 같이 손봐야 한다.
-        ok = bool(ports.vla.run_grasp(self.label))
+        #     yaw = -0.975 * servo1 + 8.65도
+        #     잔차 RMS 0.18도 · 위치 산포 x 2.2mm / y 6.7mm
+        #
+        # 위치는 제자리인데 yaw 만 1:1 로 돈다 — 마커가 servo 1 회전축 위에
+        # 있다는 뜻이다. 그래서 그리퍼와 마커는 **같은 회전부**에 있고, 탑뷰가
+        # "마커와 기물이 일직선"이라고 하면 그리퍼도 같이 겨눠진다.
+        #
+        # ── 부호 ──
+        #
+        # θ = B - marker_yaw 이고 marker_yaw 는 servo1 에 -1 로 붙으므로
+        # dθ/d(servo1) = +1 이다. 즉 θ 를 지우려면 servo 1 을 **-θ** 만큼
+        # 돌린다 — 이 저장소가 여태 가정만 하던 `-yaw_correction_deg` 가
+        # 실측으로 맞았다.
+        #
+        # ── 한계를 넘으면 자른다, 버리지 않는다 ──
+        #
+        # 2026-09-07 실기에서 세 번 연속 0.0 이 나갔다. 예전 코드는 한계를
+        # 넘으면 보정을 통째로 버렸는데, 그러면 조준이 차체가 우연히 멈춘
+        # 각도에 그대로 맡겨진다. ±8도가 0도보다 항상 가깝다.
+        #
+        # ⚠️ vla_only 면 아예 안 넣는다 — 정책만 돌려 보는 진단 모드다.
+        command = None if ports.vla_only else ports.host.last_command()
+        theta = 0.0
+        if command is not None and command.yaw_correction_deg:
+            theta = float(command.yaw_correction_deg)
+        wanted = -theta + VLA_PAN_TRIM_DEG
+        limit = ga.VLA_PAN_LIMIT_DEG
+        pan_bias_deg = max(-limit, min(limit, wanted))
+        if theta or VLA_PAN_TRIM_DEG:
+            clipped = "" if pan_bias_deg == wanted else f" (한계 ±{limit:.0f}도로 자름)"
+            ports.host.report(
+                Report.STATE, self.name,
+                f"servo 1 조준 θ={theta:+.1f}도 -> pan {pan_bias_deg:+.1f}도"
+                f"{clipped}")
+        ok = bool(ports.vla.run_grasp(self.label, pan_bias_deg))
         # ⚠️ 정책이 끝난 **직후** 한 번 재 둔다. 최종 판정은 CARRY 뒤에
         # 하는데, 그것만으로는 "정책이 애초에 못 잡았다"와 "잡았다가 CARRY
         # 로 옮기다 놓쳤다"를 구분할 수 없다 — 고칠 곳이 완전히 다른데도.
