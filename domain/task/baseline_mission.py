@@ -685,61 +685,77 @@ class BaselineGraspState(State):
         # 경우만 뎁스 신호 단독으로 판단**하도록 나눴다. "부하가 진짜
         # 0.0000으로 읽혔다"(읽기는 성공, 값이 낮다)는 더 이상 뎁스만으로
         # 구제되지 않는다 — 그건 AND가 원래부터 잡아야 하는 진짜 실패다.
-        carried = ports.arm.get_load()
+        # ── 무엇으로 판정하는가 ────────────────────────────────────────
+        #
+        # ⚠️ **부하는 안 쓴다.** 실측으로 못 쓴다는 것이 확정됐다:
+        #
+        #     퀸을 실제로 물었을 때   10/256 = 0.0391
+        #     빈손 닫힘                9/256 = 0.0352
+        #     LOAD_THRESHOLD          12/256 = 0.0469
+        #
+        # 문 것이 문턱보다 **낮다.** 2026-09-07 실기가 다시 확인해 줬다 —
+        # 성공한 파지의 부하가 0.0352, 즉 빈손 값과 같았고 같은 순간 위치는
+        # 1258(빈 턱 1112)이었다.
+        #
+        # 2026-09-06 에 뎁스 관문을 끈 경로만 위치로 옮기고 켠 경로는 부하에
+        # 남겨 뒀는데, 그쪽이 런치 **기본값**이라 더 나빴다. `load_ok and
+        # vanished` 는 진짜 파지에서 항상 False 가 된다. 게다가 부하 읽기가
+        # 실패하면 뎁스 단독으로 넘어가서, 센서가 고장 난 쪽이 멀쩡한 쪽보다
+        # 성공하기 쉬운 뒤집힌 구조였다.
+        #
+        # 위치는 턱이 물체에 막힌 잔차라 물체 두께가 그대로 나온다 —
+        # 빈 턱 1112 대 퀸 1189, 77 raw 차이다. 부하의 1/256 과 달리 헷갈릴
+        # 수가 없다.
+        #
+        # 뎁스 관문은 그대로 **두 번째 독립 신호**로 남는다(사용자 지시
+        # 2026-08-26). 바뀐 것은 첫 번째 신호가 부하에서 위치로 옮겨간 것뿐이다.
+        carried = ports.arm.get_load()      # 보고에만 싣는다 — 판정에는 안 쓴다
         load_unknown = carried < 0.0
         load_ok = (not load_unknown) and carried >= bc.LOAD_THRESHOLD
 
+        # ⚠️ 문턱은 **닫기 명령에 따라 달라진다.** 절대값 하나로는 안 된다 —
+        # box·star 프로파일은 20mm 까지만 닫아서, 빈 턱이어도 1216 에서
+        # 멈춘다(bc.empty_stop_raw 주석). 옛 절대 문턱 1165 로는 그게
+        # "물었음"으로 읽혔다.
+        #
+        # VLA 는 정책이 그리퍼를 직접 몬다 — 프로파일의 close_width_mm 를
+        # 안 쓴다. 실기 관측상 끝까지 닫으므로(빈 턱 1097~1134) 0mm 기준을
+        # 쓴다.
+        close_w = 0.0 if getattr(ports, "grasp_backend", "classic") == "vla"             else gp.close_width_mm
+        held_min = bc.held_threshold_raw(close_w)
+        held_raw = ports.arm.gripper_position_raw()
+        held_unknown = held_raw < 0
+        held_ok = (not held_unknown) and held_raw >= held_min
+        held_txt = (f"그리퍼 {held_raw} "
+                    f"(물었으면 {held_min} 이상, "
+                    f"{close_w:.0f}mm 로 닫은 빈 턱은 {bc.empty_stop_raw(close_w)})")
+
         if not ports.use_depth_gate:
-            # ⚠️ 뎁스캠을 안 보는 구성에서는 confirm_grasp 가 성공을 낼 수
-            # 없다. 그대로 두면 **실제로 물었는데도 항상 실패**로 읽고 물체를
-            # 도로 떨어뜨린다 — 2026-09-06 실기에서 queen 을 집고도 그랬다.
-            #
-            # 판정이 서보 부하 하나로 줄어든다는 것은 use_depth_gate 를 끌 때
-            # 이미 감수한 거래다(BaselinePorts.use_depth_gate 주석). 물체
-            # 모서리를 살짝 물었거나 턱끼리 문 경우도 통과하므로 사람이 눈으로
-            # 지켜보는 시연에서만 쓸 것.
-            # ⚠️ 2026-09-06 밤: 부하 대신 **그리퍼 위치**로 판정한다.
-            #
-            # 부하는 못 쓴다는 것이 실측으로 확정됐다 — 퀸을 실제로 물었을
-            # 때가 10/256 인데 문턱이 12/256 이다(GRIPPER_HELD_POSITION_RAW
-            # 주석의 표). 같은 날 한 판은 0.0000 으로 실패, 다음 판은
-            # 0.0469 로 성공이 나왔고 **둘 다 틀린 판정**이었다.
-            #
-            # 위치는 턱이 물체에 막힌 잔차라 물체 두께가 그대로 나온다.
-            # 빈 턱 1147 대 퀸 1189 — 42 raw 차이다.
-            held_raw = ports.arm.gripper_position_raw()
-            if held_raw < 0:
+            if held_unknown:
                 # 위치를 못 읽으면 부하로 물러선다. 좋은 신호는 아니지만
-                # 없는 것보다는 낫고, 읽기 실패는 시리얼 패킷 유실로 종종
-                # 일어난다.
+                # 없는 것보다 낫고, 읽기 실패는 시리얼 패킷 유실로 종종 난다.
                 success = load_ok
-                reason = (f"그리퍼 위치를 못 읽었고 부하도 못 읽었다"
-                          if load_unknown else
-                          f"그리퍼 위치를 못 읽어 부하로 판정 — "
-                          f"{carried:.4f} < 문턱 {bc.LOAD_THRESHOLD}")
+                evidence = (f"그리퍼 위치를 못 읽어 부하로 판정 — {carried:.4f}"
+                            if not load_unknown else
+                            "그리퍼 위치도 부하도 못 읽었다")
             else:
-                success = held_raw >= bc.GRIPPER_HELD_POSITION_RAW
-                reason = (f"그리퍼가 {held_raw} 까지 닫혔다 — 턱 사이가 비었다"
-                          f" (물었으면 {bc.GRIPPER_HELD_POSITION_RAW} 이상,"
-                          f" 빈 턱은 {bc.GRIPPER_EMPTY_POSITION_RAW} 에서 멈춘다)")
+                success = held_ok
+                evidence = held_txt
+            reason = evidence
         else:
             vanished = ports.perception.confirm_grasp()
-            success = vanished if load_unknown else (load_ok and vanished)
-            reason = (
-                f"부하를 못 읽었고 목표도 그대로 보인다 (부하 {carried:.4f})"
-                if load_unknown else
-                f"부하 {carried:.4f} · 뎁스 사라짐 {vanished} — 둘 다 만족해야 한다"
-            )
+            if held_unknown:
+                # 첫 신호를 못 읽었다 — 뎁스 단독으로 판단한다(예전 계약 유지).
+                success = vanished
+                evidence = f"그리퍼 위치를 못 읽어 뎁스만 봤다 · 사라짐 {vanished}"
+            else:
+                success = held_ok and vanished
+                evidence = f"{held_txt} · 뎁스 사라짐 {vanished} — 둘 다 만족해야 한다"
+            reason = evidence
         if not success:
             return self._failed(ports, reason)
 
-        detail = f"{self.label} 부하 {carried:.4f}"
-        if not ports.use_depth_gate:
-            detail += " · 뎁스 관문 꺼짐 — 부하 하나로만 판정"
-        if load_unknown:
-            detail += " · 부하 읽기 실패, 뎁스 사라짐으로만 확인"
-        else:
-            detail += " · 부하+뎁스 사라짐 모두 확인"
+        detail = f"{self.label} {evidence} · 부하 {carried:.4f}(판정에는 안 씀)"
         ports.host.report(Report.GRASP_DONE, MissionState.CARRY, detail)
         # 여기 도달했다는 것 자체가 위 OR 판정을 통과했다는 뜻이다 — 그 판정
         # 결과를 CARRY 이후로 그대로 들고 간다(아래 BaselineCarryState.
@@ -1193,14 +1209,18 @@ class BaselineInsertState(State):
         #
         # 여기서 한 번 더 읽으면 헛투하를 안 한다. 못 읽으면(-1) 진행한다 —
         # 모르는 것을 실패로 단정해 물건을 든 채 서 있는 것이 더 나쁘다.
+        # 문턱은 파지 때와 같은 기준이어야 한다 — box·star 는 20mm 까지만
+        # 닫아서 빈 턱도 1216 이다(bc.empty_stop_raw 주석).
+        close_w = 0.0 if getattr(ports, "grasp_backend", "classic") == "vla"             else gp.close_width_mm
+        held_min = bc.held_threshold_raw(close_w)
         held_raw = ports.arm.gripper_position_raw()
-        if 0 <= held_raw < bc.GRIPPER_HELD_POSITION_RAW:
+        if 0 <= held_raw < held_min:
             ports.arm.move_to_floor_pose(gp.profile, "idle")
             ports.host.report(
                 Report.INSERT_FAILED, self.name,
                 f"투하 직전 그리퍼가 비었다 — 위치 {held_raw} "
-                f"(물었으면 {bc.GRIPPER_HELD_POSITION_RAW} 이상, "
-                f"빈 턱은 {bc.GRIPPER_EMPTY_POSITION_RAW}). "
+                f"(물었으면 {held_min} 이상, {close_w:.0f}mm 로 닫은 "
+                f"빈 턱은 {bc.empty_stop_raw(close_w)}). "
                 f"운반 도중 놓친 것으로 본다")
             ports.host.report(Report.IDLE_DONE, MissionState.IDLE, "복귀 완료")
             return BaselineIdleState()

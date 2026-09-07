@@ -95,7 +95,9 @@ def test_보고에_읽은_값과_문턱이_같이_남는다():
 
     detail = _details(ports)
     assert "1130" in detail
-    assert str(bc.GRIPPER_HELD_POSITION_RAW) in detail
+    # ⚠️ 문턱은 절대 상수가 아니라 닫기 명령에서 계산된다(2026-09-07) —
+    # queen 은 0mm 로 닫으므로 held_threshold_raw(0.0) 이다.
+    assert str(bc.held_threshold_raw(0.0)) in detail
 
 
 # ── 물고 있을 때 ───────────────────────────────────────────────────────────

@@ -47,6 +47,12 @@ class FakeArm(ArmDriver):
         # 붙잡기는 안전 경로다 — 복구가 실패했을 때 최소한 이건 불렸는지
         # 테스트가 확인할 수 있어야 한다(2026-08-29).
         self.hold_calls = 0
+        # 턱을 막고 있는 물체의 위치(raw). None 이면 빈 턱이라 끝까지 닫힌다.
+        # 기본은 초기 위치(=물고 있는 값)라, set_gripper 로 벌렸다 닫아도
+        # 시험이 정한 "물고 있음"이 유지된다 — 실기에서도 물체는 그대로 있다.
+        # 파지 실패(빈 턱)를 시늉하려면 gripper_position_raw_value 와 함께
+        # 이 값도 낮추거나 None 으로 둔다.
+        self.jaw_blocked_raw: int | None = self.gripper_position_raw_value
 
     def move_to_floor_pose(self, profile: str, stage: str) -> bool:
         self.floor_pose_calls.append((profile, stage))
@@ -56,29 +62,43 @@ class FakeArm(ArmDriver):
         self.move_calls.append((xyz_m, down))
         return self._move_ok
 
-    #: 활짝 열라고 명령했을 때 도달하는 위치(raw). 2026-09-07 실측 — 168mm
-    #: 명령에 1989 였다.
+    #: 활짝(168mm) 열었을 때와 빈 채로 다 닫았을 때의 위치. 2026-09-07 실측.
     OPEN_RAW = 1989
-    #: 이 폭 이상이면 "여는 명령"으로 본다. 투하 폭(약 168mm)은 넉넉히 넘고,
-    #: 파지 전 벌리기(69mm)나 닫기는 안 걸린다.
-    OPEN_COMMAND_MM = 96.0
+    EMPTY_RAW = 1112
 
     #: False 면 명령을 받아도 턱이 안 움직인다 — servo 6 통신이 죽은 상황.
     #: 2026-09-07 실기에서 실제로 그랬다(팀원 보고: "정리상자에 넣는 순간
     #: servo 6 오류로 그리퍼를 안 푼다").
     gripper_opens: bool = True
 
+    def _raw_for(self, width_mm: float) -> int:
+        """폭(mm) -> 위치(raw). 실측 두 점(0mm=1112, 168mm=1989)의 직선.
+
+        보정표(gripper_calibration)의 3점 꺾은선을 그대로 옮기지 않는 이유는
+        여기서 필요한 것이 "넓게 열면 크고 좁게 닫으면 작다"는 단조성뿐이기
+        때문이다. 정확한 환산이 필요한 판정은 실기 상수를 쓴다."""
+        span = self.OPEN_RAW - self.EMPTY_RAW
+        return int(self.EMPTY_RAW + span * max(0.0, min(width_mm, 168.0)) / 168.0)
+
     def set_gripper(self, width_mm: float) -> None:
         """⚠️ 2026-09-07까지 이 함수는 폭을 **기록만** 하고 위치에는 아무
         영향이 없었다. 그래서 "명령은 보냈지만 안 열렸다"를 시늉할 수가
-        없었고, 실기의 놓기 실패 버그가 시험을 그대로 통과했다.
+        없었고, 실기의 놓기 실패 버그가 시험을 그대로 통과했다
+        (`release_until_open` 주석).
 
         포트 계약상 반환값이 없으므로(실패해도 조용하다) 호출부는 위치를
         읽어 확인해야 한다 — 그 확인이 의미를 가지려면 여기가 위치를
-        움직여야 한다."""
+        움직여야 한다.
+
+        턱 사이에 물체가 있으면 그 두께에서 멈춘다(`jaw_blocked_raw`) —
+        실기에서 위치 판정이 성립하는 이유가 그 잔차다."""
         self.gripper_widths.append(width_mm)
-        if self.gripper_opens and width_mm >= self.OPEN_COMMAND_MM:
-            self.gripper_position_raw_value = self.OPEN_RAW
+        if not self.gripper_opens:
+            return                      # 서보가 죽었다 — 명령을 받아도 안 움직인다
+        target = self._raw_for(width_mm)
+        if self.jaw_blocked_raw is not None:
+            target = max(target, self.jaw_blocked_raw)
+        self.gripper_position_raw_value = target
 
     #: 파지 성공 판정이 읽는 servo 6 위치(raw). 기본은 **물고 있는** 값이다 —
     #: 기존 시험 대부분이 "성공한 파지"를 전제로 쓰이기 때문이다.

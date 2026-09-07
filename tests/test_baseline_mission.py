@@ -921,6 +921,43 @@ def test_GRASP_FORCE도_영역_안이면_그냥_평소대로_내려간다():
 # (2026-08-26 원안), 부하를 아예 못 읽은 경우만 뎁스 신호 단독으로
 # 판단**하도록 나눴다. 09-01의 뎁스 오탐 위험은 재발 가능성을 알고
 # 받아들인다 — 재발하면 뎁스 신호 자체(confirm_grasp)를 고쳐야 한다.
+#
+# ⚠️ **2026-09-07: 첫 번째 신호가 부하에서 그리퍼 위치로 바뀌었다.**
+# AND 라는 구조도, "첫 신호를 못 읽으면 뎁스 단독" 이라는 예외도 그대로다 —
+# 바뀐 것은 "쥐고 있다"를 무엇으로 재느냐뿐이다.
+#
+# 부하로는 잴 수 없다는 것이 실측으로 확정됐다:
+#
+#     퀸을 실제로 물었을 때   10/256 = 0.0391
+#     빈손 닫힘                9/256 = 0.0352
+#     LOAD_THRESHOLD          12/256 = 0.0469     <- 문 것이 문턱보다 낮다
+#
+# 그래서 `load_ok and vanished` 는 **진짜 파지에서 항상 False** 였다. 그런데
+# 이 경로가 런치 기본값(use_depth_gate=true)이었다. 2026-09-07 실기가 다시
+# 확인해 줬다 — 성공한 파지의 부하가 0.0352(빈손 값)였고 같은 순간 위치는
+# 1258(빈 턱 1112)이었다.
+#
+# 위치는 턱이 물체에 막힌 잔차라 물체 두께가 그대로 나온다. 빈 턱 1112 대
+# 퀸 1189 — 77 raw 차이라 헷갈릴 수가 없다.
+
+
+def _unreadable_jaw_arm(load_ratio=HOLDING_LOAD):
+    """그리퍼 위치를 못 읽는 팔(-1). 시리얼 패킷 유실로 실기에서 종종 난다 —
+    2026-09-07 실기에서도 servo 6 이 죽었을 때 -1 이 나왔다."""
+    arm = FakeArm(load_ratio=load_ratio)
+    arm.gripper_position_raw_value = -1
+    arm.jaw_blocked_raw = None
+    arm.gripper_opens = False          # 명령을 받아도 위치가 안 바뀐다
+    return arm
+
+
+def _empty_jaw_arm(load_ratio):
+    """빈 턱을 시늉하는 팔 — 위치도 낮추고 턱을 막는 물체도 없앤다.
+    둘 중 하나만 하면 set_gripper 가 다시 물고 있는 값으로 되돌린다."""
+    arm = FakeArm(load_ratio=load_ratio)
+    arm.gripper_position_raw_value = bc.GRIPPER_EMPTY_POSITION_RAW
+    arm.jaw_blocked_raw = None
+    return arm
 
 
 def test_부하와_뎁스가_모두_있으면_성공이다():
@@ -931,7 +968,8 @@ def test_부하와_뎁스가_모두_있으면_성공이다():
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
     assert Report.GRASP_DONE in host.reported_kinds
-    assert "부하+뎁스 사라짐 모두 확인" in host.reports[-1][2]
+    assert "뎁스 사라짐 True" in host.reports[-1][2]
+    assert "둘 다 만족해야 한다" in host.reports[-1][2]
     assert isinstance(nxt, BaselineCarryState)
 
 
@@ -948,14 +986,15 @@ def test_부하는_있는데_뎁스가_안_사라지면_AND라서_실패한다()
     assert isinstance(nxt, BaselineApproachState)
 
 
-def test_부하가_진짜_0으로_읽혀도_뎁스만으로_구제되지_않는다():
-    """2026-09-03/09-04에 반복 오판됐던 바로 그 조합(부하 0.0000, 읽기는
-    성공 · vanished=True)이다. 예전엔 이 조합이 OR을 통과해 문제였는데,
-    지금은 부하가 '읽기 실패'가 아니라 '진짜 0으로 읽힌' 것이므로 AND가
-    그대로 적용되어 실패해야 한다 — 뎁스 신호 하나로 구제되는 것은 부하를
-    아예 못 읽은 경우(아래 테스트)뿐이다."""
+def test_턱이_비었으면_뎁스만으로_구제되지_않는다():
+    """2026-09-03/09-04에 반복 오판됐던 그 조합의 지금 판이다 — 첫 신호가
+    "안 쥐었다"라고 하는데 뎁스만 사라졌다고 하는 경우. AND 이므로 실패다.
+    뎁스 하나로 구제되는 것은 첫 신호를 **아예 못 읽은** 경우뿐이다.
+
+    ⚠️ 2026-09-07 전에는 이 시험이 부하 0.0 으로 같은 것을 물었는데, 부하는
+    진짜 파지에서도 문턱 아래라 "안 쥐었다"의 근거가 못 된다(위 표)."""
     host = FakeHostLink()
-    ports = _ports(host=host, arm=FakeArm(load_ratio=0.0),
+    ports = _ports(host=host, arm=_empty_jaw_arm(0.0),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
@@ -964,26 +1003,27 @@ def test_부하가_진짜_0으로_읽혀도_뎁스만으로_구제되지_않는�
     assert isinstance(nxt, BaselineApproachState)
 
 
-def test_부하_읽기_실패면_뎁스_신호_단독으로_성공을_인정한다():
-    """진짜 원인 수정 확인 — 서보 읽기 자체가 실패한 경우(FakeArm.
-    LOAD_READ_FAILED, -1.0)는 부하 문턱과 비교하지 않고 뎁스 사라짐
-    신호만으로 판단한다. 이게 2026-09-04 box/queen 오판정의 진짜 수정."""
+def test_위치_읽기_실패면_뎁스_신호_단독으로_성공을_인정한다():
+    """첫 신호를 **아예 못 읽은** 경우만 뎁스 단독으로 판단한다 — 이 예외는
+    2026-09-04 box/queen 오판정을 고칠 때 만든 것이고 그대로 유지된다.
+
+    ⚠️ 2026-09-07 전에는 그 "첫 신호"가 부하였다. 지금은 그리퍼 위치다."""
     host = FakeHostLink()
-    ports = _ports(host=host, arm=FakeArm(load_ratio=LOAD_READ_FAILED),
+    ports = _ports(host=host, arm=_unreadable_jaw_arm(),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
 
     assert Report.GRASP_DONE in host.reported_kinds
-    assert "부하 읽기 실패, 뎁스 사라짐으로만 확인" in host.reports[-1][2]
+    assert "그리퍼 위치를 못 읽어 뎁스만 봤다" in host.reports[-1][2]
     assert isinstance(nxt, BaselineCarryState)
 
 
-def test_부하_읽기_실패에_뎁스도_그대로면_실패한다():
-    """부하도 못 읽고 뎁스도 여전히 있다고 하면, 믿을 신호가 하나도 없으니
+def test_위치_읽기_실패에_뎁스도_그대로면_실패한다():
+    """위치도 못 읽고 뎁스도 여전히 있다고 하면 믿을 신호가 하나도 없으니
     실패로 본다(모르면 실패 원칙)."""
     host = FakeHostLink()
-    ports = _ports(host=host, arm=FakeArm(load_ratio=LOAD_READ_FAILED),
+    ports = _ports(host=host, arm=_unreadable_jaw_arm(),
                    perception=ScriptedPerception(grasp_confirmed=False))
 
     nxt = BaselineGraspState("queen", 0.02).execute(ports)
@@ -1010,7 +1050,7 @@ def test_box도_다른_라벨과_같은_AND_통신실패_규칙을_받는다():
     안 낸다는 사정(BaselineGraspState 코멘트 참고)은 여기서 구제되지
     않는다 — 구제되는 것은 오직 '부하를 아예 못 읽은' 경우뿐이다."""
     host = FakeHostLink()
-    ports = _ports(host=host, arm=FakeArm(load_ratio=EMPTY_LOAD),
+    ports = _ports(host=host, arm=_empty_jaw_arm(EMPTY_LOAD),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
     nxt = BaselineGraspState("box", 0.02).execute(ports)
@@ -1019,9 +1059,9 @@ def test_box도_다른_라벨과_같은_AND_통신실패_규칙을_받는다():
     assert isinstance(nxt, BaselineApproachState)
 
 
-def test_box도_부하_읽기_실패면_뎁스_단독으로_구제된다():
+def test_box도_위치_읽기_실패면_뎁스_단독으로_구제된다():
     host = FakeHostLink()
-    ports = _ports(host=host, arm=FakeArm(load_ratio=LOAD_READ_FAILED),
+    ports = _ports(host=host, arm=_unreadable_jaw_arm(),
                    perception=ScriptedPerception(grasp_confirmed=True))
 
     nxt = BaselineGraspState("box", 0.02).execute(ports)

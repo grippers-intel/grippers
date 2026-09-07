@@ -423,6 +423,42 @@ GRIPPER_HELD_POSITION_RAW = 1165
 # 뿐인 정상 상황을 실패로 읽지 않기 위해서다.
 GRIPPER_RELEASED_MIN_RAW = 1600
 
+# 활짝(168mm) 열었을 때의 위치. 2026-09-07 실측 — 위 EMPTY(0mm=1112) 와 이
+# 둘이 폭 -> 위치 직선의 두 끝점이다.
+GRIPPER_OPEN_POSITION_RAW = 1989
+GRIPPER_MAX_OPEN_MM = 168.0
+
+# 물체가 턱을 막았다고 볼 **최소 잔차**(raw). 명령한 위치에서 이만큼 못 가면
+# 뭔가 끼어 있는 것이다. 서보 위치 데드밴드가 약 5 raw 로 실측됐으므로
+# (2026-09-06) 열 배 여유다. 약 10mm 두께에 해당한다.
+GRIPPER_HELD_MARGIN_RAW = 50
+
+
+def empty_stop_raw(close_width_mm: float) -> int:
+    """그 폭을 명령했을 때 **빈 턱이** 도달하는 위치.
+
+    ⚠️ 이것이 GRIPPER_HELD_POSITION_RAW 하나로는 안 되는 이유다. 그 상수는
+    "0mm 를 명령했을 때" 만 맞는다. 2026-09-07 에 실제로 구멍이 드러났다:
+
+        queen/knight/rook  close 0.0mm  -> 빈 턱 1112   문턱 1165 아래, 정상
+        box/star           close 20.0mm -> 빈 턱 1216   문턱 1165 **위**
+
+    box 와 star 는 프로파일이 20mm 까지만 닫는다. 빈손이어도 거기서 멈추니
+    절대 문턱을 넘어 "물었다"로 읽혔다. 팀원이 지목한 두 물체가 정확히
+    이것이다.
+    """
+    span = GRIPPER_OPEN_POSITION_RAW - GRIPPER_EMPTY_POSITION_RAW
+    w = max(0.0, min(float(close_width_mm), GRIPPER_MAX_OPEN_MM))
+    return int(GRIPPER_EMPTY_POSITION_RAW + span * w / GRIPPER_MAX_OPEN_MM)
+
+
+def held_threshold_raw(close_width_mm: float) -> int:
+    """그 폭으로 닫았을 때 "물었다"고 볼 위치 하한.
+
+    close_width_mm=0.0 이면 1162 로, 기존 GRIPPER_HELD_POSITION_RAW(1165) 와
+    사실상 같다 — 그 상수가 맞던 경우를 그대로 재현한다."""
+    return empty_stop_raw(close_width_mm) + GRIPPER_HELD_MARGIN_RAW
+
 # 그리퍼가 **비어 있다**고 볼 부하 상한. GRASP 조건 판정에 쓴다 —
 # 이미 무언가를 물고 있는데 또 파지하러 내려가면 물고 있던 것을 떨어뜨린다.
 # LOAD_THRESHOLD와 같은 값을 쓰되 이름을 나눠 둔다: 하나는 "쥐었다"를,

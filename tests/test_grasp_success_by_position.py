@@ -125,3 +125,37 @@ def test_문턱이_뜻하는_최소_물체_두께를_적어_둔다():
     min_mm = 9.0 + (bc.GRIPPER_HELD_POSITION_RAW - 1150) / raw_per_mm
     assert min_mm < 17.0, f"퀸(17mm)도 못 넘는다 — 문턱 {min_mm:.1f}mm"
     assert min_mm > 9.0
+
+
+# ── 문턱은 닫기 명령에 따라 달라진다 (2026-09-07) ─────────────────────────
+#
+# 절대 문턱 하나로는 안 된다는 것이 뒤늦게 드러났다. box·star 프로파일은
+# 20mm 까지만 닫아서, **빈 턱이어도** 거기서 멈춘다 — 옛 절대 문턱 1165 로는
+# 그 1216 이 "물었음"으로 읽혔다. 팀원이 지목한 두 물체가 정확히 이것이다.
+
+
+def test_0mm로_닫으면_옛_절대_문턱과_사실상_같다():
+    """기존에 맞던 경우를 그대로 재현해야 한다 — 안 그러면 queen 판정이
+    조용히 바뀐다."""
+    assert abs(bc.held_threshold_raw(0.0) - bc.GRIPPER_HELD_POSITION_RAW) <= 5
+
+
+def test_20mm로_닫는_프로파일은_문턱이_올라간다():
+    """⚠️ 이것이 2026-09-07 에 찾은 구멍이다."""
+    empty_at_20 = bc.empty_stop_raw(20.0)
+    assert empty_at_20 > bc.GRIPPER_HELD_POSITION_RAW, (
+        "20mm 빈 턱이 옛 절대 문턱보다 낮으면 이 시험의 전제가 사라진다")
+    assert bc.held_threshold_raw(20.0) > empty_at_20
+
+
+def test_box와_star가_실제로_20mm로_닫는다():
+    """이 값이 바뀌면 위 두 시험의 근거가 사라진다 — 프로파일과 같이 본다."""
+    from domain.task.baseline_mission import plan_for_label
+    for label in ("box", "star"):
+        assert plan_for_label(label).close_width_mm == 20.0
+
+
+def test_빈_턱은_어떤_폭에서도_문턱을_못_넘는다():
+    """문턱의 정의 자체 — 명령한 자리까지 갔으면 아무것도 안 물었다는 뜻이다."""
+    for w in (0.0, 5.0, 20.0, 40.0, 96.0):
+        assert bc.empty_stop_raw(w) < bc.held_threshold_raw(w)
