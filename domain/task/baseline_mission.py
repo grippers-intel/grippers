@@ -785,12 +785,33 @@ class BaselineGraspState(State):
         # 턱이 물고 있으면 판정에 맡긴다. 판정은 어차피 한 번 더 확실히
         # 닫고 위치를 다시 읽으므로, 여기서 통과시킨다고 헛것이 넘어가지
         # 않는다 — 신호가 하나 더 있는 쪽으로 보내는 것뿐이다.
-        if not ok and held_after_policy >= bc.held_threshold_raw(JUDGE_CLOSE_WIDTH_MM):
+        # ⚠️ 그리고 **-1(읽기 실패)은 "안 물었다"가 아니다.**
+        #
+        # 2026-09-07 실기에서 이것이 물렸다. servo 6 이 과전류로 응답을
+        # 멈춘 채 물체를 물고 있었는데, 위치가 -1 로 오니 아래 문턱 비교가
+        # 거짓이 되어 놓기 경로로 갔다. 놓기도 같은 서보라 4회 전부 실패해
+        # "놓지 못했다 — 그리퍼에 물건이 남아 있을 수 있다" 를 보고하고,
+        # 이어서 파지까지 실패로 접었다. 사용자: "파지 성공했는데 계속
+        # 실패로 이해하고 있다".
+        #
+        # 이 저장소가 2026-09-05 에 부하 0.0 으로 겪은 것과 같은 실수다 —
+        # **모르는 것을 아니라고 단정**했다. 놓는 것은 되돌릴 수 없는 쪽이라
+        # 확신이 있을 때만 해야 한다.
+        #
+        # 모르면 판정으로 넘긴다. 판정은 한 번 더 닫고 다시 읽고, 그래도 못
+        # 읽으면 부하로 물러선다(execute 꼬리의 held_unknown 분기) — 여기서
+        # 성급히 놓는 것보다 신호가 하나 더 있는 자리다.
+        held_min = bc.held_threshold_raw(JUDGE_CLOSE_WIDTH_MM)
+        held_unknown = held_after_policy < 0
+        if not ok and (held_unknown or held_after_policy >= held_min):
             ports.host.report(
                 Report.STATE, self.name,
-                f"정책 루프는 끝을 못 봤지만 그리퍼가 {held_after_policy} 로 "
-                f"물고 있다(문턱 {bc.held_threshold_raw(JUDGE_CLOSE_WIDTH_MM)}) "
-                f"— 놓지 않고 성공 판정으로 넘긴다")
+                ("정책 루프는 끝을 못 봤고 그리퍼 위치도 못 읽었다 — "
+                 "놓지 않고 성공 판정으로 넘긴다(모르는 것을 빈손으로 "
+                 "단정하지 않는다)")
+                if held_unknown else
+                (f"정책 루프는 끝을 못 봤지만 그리퍼가 {held_after_policy} 로 "
+                 f"물고 있다(문턱 {held_min}) — 놓지 않고 성공 판정으로 넘긴다"))
             ok = True
 
         if not ok:

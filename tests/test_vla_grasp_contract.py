@@ -223,3 +223,25 @@ def test_자세만_못_잡은_것은_안_쉰다():
         bm.time.sleep = real_sleep
 
     assert not slept
+
+
+def test_위치를_못_읽으면_놓지_않는다():
+    """⚠️ 2026-09-07 실기. servo 6 이 과전류로 응답을 멈춘 채 물체를 물고
+    있었는데 위치가 -1 로 와서 "안 물었다"로 읽혔다. 놓기도 같은 서보라
+    4회 전부 실패해 "놓지 못했다"를 보고하고 파지까지 실패로 접었다.
+
+    2026-09-05 의 부하 0.0 사고와 같은 실수 — 모르는 것을 아니라고 단정했다.
+    놓는 것은 되돌릴 수 없으니 확신이 있을 때만 한다."""
+    vla = _SpyVla(ok=False)
+
+    class UnreadableArm(FakeArm):
+        def gripper_position_raw(self) -> int:
+            return -1
+
+    arm = UnreadableArm()
+    ports = BaselinePorts(base=FakeBase(), arm=arm, perception=None,
+                          host=FakeHostLink(script=[]), lidar=None, estop=None, vla=vla)
+
+    assert BaselineGraspState("queen")._grasp_vla(ports, _Profile()) is True
+    assert _Profile.release_width_mm not in arm.gripper_widths, (
+        "위치를 못 읽었는데 놓았다 — 물고 있으면 물체를 떨어뜨린다")
