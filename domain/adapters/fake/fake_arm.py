@@ -56,12 +56,33 @@ class FakeArm(ArmDriver):
         self.move_calls.append((xyz_m, down))
         return self._move_ok
 
+    #: 활짝 열라고 명령했을 때 도달하는 위치(raw). 2026-09-07 실측 — 168mm
+    #: 명령에 1989 였다.
+    OPEN_RAW = 1989
+    #: 이 폭 이상이면 "여는 명령"으로 본다. 투하 폭(약 168mm)은 넉넉히 넘고,
+    #: 파지 전 벌리기(69mm)나 닫기는 안 걸린다.
+    OPEN_COMMAND_MM = 96.0
+
+    #: False 면 명령을 받아도 턱이 안 움직인다 — servo 6 통신이 죽은 상황.
+    #: 2026-09-07 실기에서 실제로 그랬다(팀원 보고: "정리상자에 넣는 순간
+    #: servo 6 오류로 그리퍼를 안 푼다").
+    gripper_opens: bool = True
+
     def set_gripper(self, width_mm: float) -> None:
+        """⚠️ 2026-09-07까지 이 함수는 폭을 **기록만** 하고 위치에는 아무
+        영향이 없었다. 그래서 "명령은 보냈지만 안 열렸다"를 시늉할 수가
+        없었고, 실기의 놓기 실패 버그가 시험을 그대로 통과했다.
+
+        포트 계약상 반환값이 없으므로(실패해도 조용하다) 호출부는 위치를
+        읽어 확인해야 한다 — 그 확인이 의미를 가지려면 여기가 위치를
+        움직여야 한다."""
         self.gripper_widths.append(width_mm)
+        if self.gripper_opens and width_mm >= self.OPEN_COMMAND_MM:
+            self.gripper_position_raw_value = self.OPEN_RAW
 
     #: 파지 성공 판정이 읽는 servo 6 위치(raw). 기본은 **물고 있는** 값이다 —
     #: 기존 시험 대부분이 "성공한 파지"를 전제로 쓰이기 때문이다.
-    #: 빈 턱을 흉내 내려면 1147 로 낮춘다.
+    #: 빈 턱을 흉내 내려면 GRIPPER_EMPTY_POSITION_RAW(1112) 로 낮춘다.
     gripper_position_raw_value: int = 1200
 
     def gripper_position_raw(self) -> int:

@@ -17,6 +17,7 @@ from domain.adapters.fake.fake_host_link import FakeHostLink, FakeLidar
 from domain.adapters.fake.scripted_perception import ScriptedPerception
 from domain.ports.baseline_ports import BasketFace, HostCommand, MissionState, Report
 from domain.task import baseline_constants as bc
+from domain.task import baseline_mission as bm
 from domain.task.baseline_mission import (
     DEBUG_FORCE_CARRY_LABEL,
     BaselineApproachState,
@@ -609,14 +610,55 @@ def test_투하_후_부하가_줄면_성공으로_보고하고_IDLE로_돌아간
     assert isinstance(nxt, BaselineIdleState)
 
 
-def test_부하가_안_줄면_실패로_보고한다():
+@pytest.fixture(autouse=True)
+def _no_release_sleep(monkeypatch):
+    """놓기 재시도 간격은 실기용(1.5초 x 4)이다 — 시험에서 실제로 자면
+    실패 시늉 하나마다 4.5초가 든다."""
+    monkeypatch.setattr(bm, "RELEASE_RETRY_SEC", 0.0)
+
+
+def test_그리퍼가_안_열리면_실패로_보고한다():
+    """⚠️ 2026-09-07 에 판정 근거가 바뀌었다 — 부하가 아니라 **위치**다.
+
+    예전에는 투하 전후 부하 차이로 놓였는지 봤는데, 부하는 못 쓴다는 것이
+    이미 확정돼 있었다(퀸을 문 것 10/256 대 빈손 9/256 — 한 양자화 단위).
+    같은 함수가 부하를 **못 읽으면 성공으로** 단정하기까지 했다. 서보가
+    맛이 갔을 때가 바로 못 읽는 때라, 실패를 성공으로 읽는 조합이었다.
+
+    팀원 보고가 그 결과였다 — "상자나 별을 정리상자에 넣는 순간 servo 6
+    오류로 그리퍼를 안 푼다"."""
     host = FakeHostLink()
     arm = FakeArm(load_ratio=0.0626)
+    arm.gripper_opens = False          # servo 6 통신이 죽은 상황
     ports = _ports(host=host, arm=arm)
 
     BaselineInsertState("queen").execute(ports)
 
     assert Report.INSERT_FAILED in host.reported_kinds
+
+
+def test_안_열렸으면_다시_닫지_않는다():
+    """⚠️ 예전에는 판정과 무관하게 CLOSED_MM 으로 닫았다 — 안 떨어진 물체를
+    도로 무는 동작이다. 그리퍼를 못 푼 채 다음으로 가는 사고의 마지막 조각."""
+    arm = FakeArm(load_ratio=0.0626)
+    arm.gripper_opens = False
+    ports = _ports(arm=arm)
+
+    BaselineInsertState("queen").execute(ports)
+
+    from domain.task.baseline_mission import CLOSED_MM
+    assert CLOSED_MM not in arm.gripper_widths
+
+
+def test_열렸으면_접기_전에_닫는다():
+    """정상 경로는 그대로여야 한다 — 닫아야 접힌 팔이 차체를 안 긁는다."""
+    arm = FakeArm(load_ratio=[0.0626, 0.0313])
+    ports = _ports(arm=arm)
+
+    BaselineInsertState("queen").execute(ports)
+
+    from domain.task.baseline_mission import CLOSED_MM
+    assert CLOSED_MM in arm.gripper_widths
 
 
 def test_놓기_전후_부하_읽기가_실패하면_그래도_성공으로_본다():

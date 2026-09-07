@@ -479,6 +479,40 @@ class BaselineApproachState(State):
         return self
 
 
+#: 버스가 잠깐 나갔다 돌아오는 데 실기에서 4.5초쯤 걸렸다(2026-09-07).
+#: 간격 x 횟수가 그보다 넉넉해야 한다. 도메인에서 유일하게 자는 자리라
+#: 상수로 빼 뒀다 — 시험은 interval_s=0 으로 부른다.
+RELEASE_RETRIES = 4
+RELEASE_RETRY_SEC = 1.5
+
+
+def release_until_open(ports, width_mm, retries=None, interval_s=None) -> bool:
+    """그리퍼를 열고 **위치로 확인**한다. 안 열렸으면 다시 시도한다.
+
+    ⚠️ `ArmDriver.set_gripper` 은 반환값이 없다(포트 계약) — 서보 통신이
+    실패해도 호출한 쪽은 모른다. 2026-09-07 실기에서 그게 두 번 물렸다:
+
+      파지 실패 뒤   정책이 servo 6 write 실패로 끝나고, 이어진 놓기도 실패해
+                     **별을 문 채** 다음 기물로 갔다.
+      투하 순간      팀원 보고 — "상자나 별을 정리상자에 넣는 순간 servo 6
+                     오류로 그리퍼를 안 푼다".
+
+    그래서 명령이 아니라 위치를 읽어 판정한다(bc.GRIPPER_RELEASED_MIN_RAW).
+    읽기 실패(-1)는 문턱보다 작으므로 자연히 "안 열렸다"가 된다 — 모르는
+    것을 열렸다고 치면 물건을 문 채 다음으로 간다."""
+    # ⚠️ 기본값을 인자 자리에 박지 않는다 — 그러면 def 시점에 굳어서 시험이
+    # 모듈 상수를 낮춰도 안 먹고, 실패 시늉 하나마다 4.5초를 실제로 잔다.
+    retries = RELEASE_RETRIES if retries is None else retries
+    interval_s = RELEASE_RETRY_SEC if interval_s is None else interval_s
+    for attempt in range(1, int(retries) + 1):
+        ports.arm.set_gripper(width_mm)
+        if ports.arm.gripper_position_raw() >= bc.GRIPPER_RELEASED_MIN_RAW:
+            return True
+        if attempt < retries:
+            time.sleep(interval_s)
+    return False
+
+
 class BaselineGraspState(State):
     """파지 수행 (임무 3번).
 
@@ -809,8 +843,8 @@ class BaselineGraspState(State):
     #: 버스가 잠깐 나갔다 돌아오는 데 실기에서 4초쯤 걸렸다(2026-09-07).
     #: 간격 x 횟수가 그보다 넉넉해야 한다. 도메인에서 유일하게 자는
     #: 자리라 클래스 속성으로 뺐다 — 시험은 0 으로 두고 부른다.
-    RELEASE_RETRIES = 4
-    RELEASE_RETRY_SEC = 1.5
+    RELEASE_RETRIES = RELEASE_RETRIES
+    RELEASE_RETRY_SEC = RELEASE_RETRY_SEC
 
     def _release_and_fold(self, ports, gp) -> bool:
         """물체를 놓고 접는다. 통신이 잠깐 나가도 **끈질기게** 다시 시도한다.
@@ -823,12 +857,11 @@ class BaselineGraspState(State):
         released = folded = False
         for attempt in range(1, self.RELEASE_RETRIES + 1):
             if not released:
-                # ⚠️ set_gripper 는 반환값이 없다 — 실패해도 조용하다.
-                # 그래서 명령이 아니라 **위치를 읽어** 확인한다
-                # (bc.GRIPPER_RELEASED_MIN_RAW 주석).
-                ports.arm.set_gripper(gp.release_width_mm)
-                released = (ports.arm.gripper_position_raw()
-                            >= bc.GRIPPER_RELEASED_MIN_RAW)
+                # 한 번만 시도하고 아래에서 간격을 둔다 — 접기 실패와 따로
+                # 세기 위해서다(release_until_open 을 통째로 부르면 접기
+                # 재시도와 횟수가 엉킨다).
+                released = release_until_open(
+                    ports, gp.release_width_mm, retries=1)
             if released and not folded:
                 folded = bool(ports.arm.fold_to_cradle())
             if released and folded:
@@ -1186,7 +1219,24 @@ class BaselineInsertState(State):
                     "보정 없이 투하를 계속한다")
 
         before = ports.arm.get_load()
-        ports.arm.set_gripper(gp.release_width_mm)
+        # ── 놓기: 명령이 아니라 **위치로** 확인하고, 안 되면 다시 한다 ────
+        #
+        # ⚠️ 2026-09-07 팀원 보고: "상자나 별을 정리상자에 넣는 순간 servo 6
+        # 오류로 그리퍼를 안 푼다." 여기 코드가 정확히 그 모양이었다.
+        #
+        #   1) set_gripper 을 **한 번만** 부르고, 그 함수는 반환값이 없어
+        #      통신 실패가 안 보였다.
+        #   2) 놓았는지를 **부하 차이**로 봤는데, 부하는 못 쓴다는 것이 이미
+        #      실측으로 확정됐다(퀸을 문 것 10/256 대 빈손 9/256 — 한 양자화
+        #      단위 차이다. GRIPPER_HELD_POSITION_RAW 주석의 표).
+        #   3) 부하를 **못 읽으면 released=True** 로 단정했다. 서보가 맛이
+        #      갔을 때가 바로 못 읽는 때다 — 실패를 성공으로 읽는 조합이다.
+        #   4) 그리고 곧바로 CLOSED_MM 으로 닫았다. 물체가 안 떨어졌으면
+        #      **도로 물어 버린다.**
+        #
+        # 이제 위치로 본다. 열렸으면 raw 가 1600 을 넘고(투하 폭은 약 1989),
+        # 못 읽으면 -1 이라 자연히 "안 열렸다"가 된다.
+        released = release_until_open(ports, gp.release_width_mm)
         after = ports.arm.get_load()
         # ⚠️ 2026-09-05: before/after 둘 중 하나라도 부하 읽기 실패(-1.0)면
         # 차분 비교 자체를 하지 않는다 — before가 -1.0이면 `after - before`가
@@ -1197,9 +1247,13 @@ class BaselineInsertState(State):
         # 경우는 놓인 것으로 본다(release_width_mm 명령이 실행됐다는 사실을
         # 신뢰) — 다만 보고 문구에 판독 실패였다는 걸 남긴다.
         load_read_failed = before < 0.0 or after < 0.0
-        released = True if load_read_failed else after <= before - self.RELEASE_LOAD_DROP
 
-        ports.arm.set_gripper(CLOSED_MM)
+        # ⚠️ 놓은 것이 확인됐을 때만 닫는다. 예전에는 무조건 닫았는데, 안
+        # 떨어진 물체를 도로 무는 동작이었다(위 4번). 못 놓았으면 턱을 벌린
+        # 채 둔다 — 접기 전에 닫는 것은 팔이 차체를 안 긁게 하려는 조치이고,
+        # 물건을 물고 가는 것보다는 그 위험이 작다.
+        if released:
+            ports.arm.set_gripper(CLOSED_MM)
         # safe_300에서 servo 1을 돌렸으면, idle로 접기 전에 먼저 그 각도를
         # 되돌린다(사용자 지시) — idle 자체도 servo 1을 교시 절대값으로
         # 되돌리긴 하지만(_move_floor_stage 참고), 큰 보정각을 그대로 안고
@@ -1213,15 +1267,20 @@ class BaselineInsertState(State):
         folded = ports.arm.move_to_floor_pose(gp.profile, "idle")
 
         if released:
-            detail = f"{self.label} 부하 {before:.4f} -> {after:.4f}"
+            detail = (f"{self.label} 그리퍼가 열린 것을 위치로 확인했다 "
+                      f"(문턱 {bc.GRIPPER_RELEASED_MIN_RAW}) · "
+                      f"부하 {before:.4f} -> {after:.4f}")
             if load_read_failed:
-                detail += " (부하 판독 실패 — 놓기 명령 실행만으로 판정)"
+                detail += " (부하는 판독 실패 — 판정에는 안 쓴다)"
             ports.host.report(Report.INSERT_DONE, self.name, detail)
         else:
             # 놓이지 않았는데 IDLE로 접으면 물체를 문 채 라이다를 가린다.
             # 그래도 접기는 한다 — 팔을 전개한 채 두는 편이 더 위험하다.
-            ports.host.report(Report.INSERT_FAILED, self.name,
-                              f"부하가 안 줄었다 ({before:.4f} -> {after:.4f})")
+            ports.host.report(
+                Report.INSERT_FAILED, self.name,
+                f"{RELEASE_RETRIES}회 시도했는데 그리퍼가 안 열렸다 "
+                f"(위치가 {bc.GRIPPER_RELEASED_MIN_RAW} 미만) — 물체를 문 채 "
+                f"접는다. servo 6 통신을 볼 것")
 
         ports.host.report(Report.IDLE_DONE, MissionState.IDLE,
                           "복귀 완료" if folded else "IDLE 복귀 실패")
