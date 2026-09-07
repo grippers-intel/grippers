@@ -42,11 +42,12 @@
 데드밴드가 측정에 섞이는데, 손으로 맞추고 **읽기만** 하면 그것들이 빠진다.
 서보는 토크가 꺼져 있어도 자기 위치를 정확히 읽는다.
 
-    1. 팔 토크를 푼다                      --free
-    2. 기물을 정해진 좌우 자리에 놓는다     -60 / -20 / 0 / +20 / +60 mm
-    3. 손으로 팔 베이스를 돌려 그리퍼가 그 기물을 정면으로 겨누게 한다
-    4. Enter — servo 1 위치를 읽어 (θ, servo1) 한 쌍을 남긴다
-    5. 다섯 자리를 다 돈 뒤 --fit
+    1. 팔 토크를 **전부** 푼다              --free   (팔을 받치고 있을 것)
+    2. 팔을 정책이 파지할 때의 자세로 잡는다
+    3. 기물을 정해진 좌우 자리에 놓는다      -60 / -20 / 0 / +20 / +60 mm
+    4. 그리퍼가 그 기물을 정면으로 겨누게 손으로 돌린다
+    5. Enter — servo 1 위치를 읽어 (θ, servo1) 한 쌍을 남긴다
+    6. 다섯 자리를 다 돈 뒤 --hold 로 토크를 되켜고 --fit
 
 ⚠️ 좌우 자리는 **마커 정면 축**에서 재야 한다. 차체 중심선이 아니다 —
 운영 때 θ 를 내는 기준이 마커이므로, 재는 기준과 쓰는 기준이 같아야 b 가
@@ -55,14 +56,19 @@
 ⚠️ **bringup 을 내리고 실행한다.** arm_driver 가 /dev/soarm 을 배타 잠금하고
 있어 붙을 수 없고, 떠 있으면 토크도 다시 켜 버린다.
 
-⚠️ --free 는 **servo 1 만** 푼다. 2~6 을 같이 풀면 팔이 중력으로 쓰러진다
-(park_release_torque.py 의 같은 경고). 베이스 회전만 손으로 돌리면 된다.
+⚠️ --free 는 servo 1~6 을 **전부** 푼다(2026-09-08 사용자 지시: "모든 토크를
+다 풀어줘야지 우리가 vla 파지할때까지 유사하게라도 진행하지"). servo 1 만
+풀면 팔이 접힌 채라 "겨눴다"를 판정할 수가 없다.
+
+⚠️ **팔이 중력으로 떨어진다.** servo 2~5 가 무게를 받치고 있던 관절이다.
+--free 부터 --hold 까지 팔을 손으로 받치고 있을 것.
 
 ## 쓰는 법
 
     ./tools/ops/stop_bringup.sh                                먼저 내린다
 
-    python3 tools/arm/calibrate_servo1_aim.py --free           토크를 푼다
+    python3 tools/arm/calibrate_servo1_aim.py --free           토크를 전부 푼다
+                                                              (--yes 로 확인 생략)
     python3 tools/arm/calibrate_servo1_aim.py --record         한 점씩 모은다
     python3 tools/arm/calibrate_servo1_aim.py --fit            직선을 긋는다
     python3 tools/arm/calibrate_servo1_aim.py --show           모은 점 보기
@@ -177,6 +183,7 @@ class Arm:
     """
 
     SERVO1 = 1
+    ALL = (1, 2, 3, 4, 5, 6)
 
     def __init__(self, port: str):
         # ⚠️ arm_driver 가 떠 있으면 **열기 전에** 막는다.
@@ -199,12 +206,17 @@ class Arm:
                 f"{port} 연결 실패 — arm_driver 가 떠 있으면 배타 잠금 때문이다. "
                 "먼저 ./tools/ops/stop_bringup.sh 로 내릴 것")
 
-    def position_raw(self):
-        """servo 1 의 현재 위치(raw). 못 읽으면 None."""
-        return self._drv.get_position(self.SERVO1)
+    def position_raw(self, servo_id: int = SERVO1):
+        """그 서보의 현재 위치(raw). 못 읽으면 None."""
+        return self._drv.get_position(servo_id)
 
-    def set_torque(self, on: bool) -> bool:
-        return bool(self._drv.set_torque(self.SERVO1, on))
+    def all_positions(self):
+        """servo 1..6 의 위치. 못 읽은 것은 None 으로 남긴다 — 회차마다 팔이
+        어떤 자세였는지 기록에 남겨 두면 나중에 흩어진 점의 원인을 본다."""
+        return {sid: self._drv.get_position(sid) for sid in self.ALL}
+
+    def set_torque(self, on: bool, servo_id: int = SERVO1) -> bool:
+        return bool(self._drv.set_torque(servo_id, on))
 
     def close(self) -> None:
         self._drv.disconnect()
@@ -217,38 +229,71 @@ def _ask(prompt: str) -> str:
         return "q"
 
 
-def free(port: str) -> int:
-    """servo 1 토크만 푼다. 2~6 은 안 건드린다 — 중력으로 쓰러진다."""
+def free(port: str, assume_yes: bool = False) -> int:
+    """servo 1..6 토크를 **전부** 푼다.
+
+    ⚠️ 2026-09-08 사용자 지시로 servo 1 만 풀던 것을 전부 푸는 것으로 바꿨다:
+
+        "모든 토크를 다 풀어줘야지 우리가 vla 파지할때까지 유사하게라도
+         진행하지"
+
+    맞는 지적이다. servo 1 만 풀면 팔은 접힌 채로 남는데, 접힌 팔로는
+    "그리퍼가 기물을 겨눴다"를 판정할 수가 없다. 정책이 파지할 때의 자세로
+    사람이 직접 잡아 놓고 그 자세에서 재야 잰 각이 운영과 같은 뜻을 갖는다.
+
+    ⚠️ **팔이 중력으로 떨어진다.** servo 2~5 는 무게를 받치고 있던 관절이다.
+    푸는 순간 팔을 손으로 받치고 있어야 한다.
+    """
+    if not assume_yes:
+        print("⚠️ servo 1~6 토크를 전부 풉니다 — 팔이 중력으로 떨어집니다.")
+        print("   푸는 동안 팔을 손으로 받치고 계세요.")
+        if _ask("   받치고 있으면 yes 를 입력: ") != "yes":
+            print("취소했다.")
+            return 1
+
     arm = Arm(port)
     try:
-        before = arm.position_raw()
-        ok = arm.set_torque(False)
-        where = (f"지금 {before} = {raw_to_deg(before):+.2f}도"
-                 if before is not None else "위치 읽기 실패")
-        print(f"servo 1 토크 해제: {'성공' if ok else '실패'}  ({where})")
-        print("이제 팔 베이스를 손으로 돌릴 수 있다. servo 2~6 은 그대로 잠겨 있다.")
-        return 0 if ok else 1
+        failed = [sid for sid in arm.ALL if not arm.set_torque(False, sid)]
+        for sid in arm.ALL:
+            raw = arm.position_raw(sid)
+            where = f"{raw} = {raw_to_deg(raw):+.2f}도" if raw is not None else "읽기 실패"
+            mark = "실패" if sid in failed else "해제"
+            print(f"  servo {sid}  토크 {mark}   {where}")
+        if failed:
+            print(f"⚠️ 토크 해제 실패: servo {failed} — 그 관절은 아직 잠겨 있다")
+            return 1
+        print("")
+        print("이제 팔을 **정책이 파지할 때의 자세**로 잡아 놓고 --record 를 돌린다.")
+        return 0
     finally:
         arm.close()
 
 
 def hold(port: str) -> int:
-    """토크를 되켠다.
+    """servo 1..6 토크를 전부 되켠다.
 
     goal 은 건드리지 않는다 — STS3215 는 goal 을 쓰면 토크가 자동으로 켜지면서
     그 목표로 **움직인다**(arm_driver._latch_torque_at_present 주석). 토크만
-    켜면 서보가 지금 위치를 그대로 유지한다.
+    켜면 서보가 지금 위치를 그대로 유지하므로 팔이 튀지 않는다.
+
+    ⚠️ 다 켜졌다는 말이 나올 때까지 팔을 받치고 있을 것.
     """
     arm = Arm(port)
     try:
-        raw = arm.position_raw()
-        if raw is None:
-            print("⚠️ 위치를 못 읽었다 — 배선을 보고 다시 시도할 것")
+        failed = []
+        for sid in arm.ALL:
+            raw = arm.position_raw(sid)
+            ok = arm.set_torque(True, sid)
+            if not ok:
+                failed.append(sid)
+            where = f"{raw} = {raw_to_deg(raw):+.2f}도" if raw is not None else "읽기 실패"
+            print(f"  servo {sid}  토크 {'복구' if ok else '실패'}   {where}")
+        if failed:
+            print(f"⚠️ 토크 복구 실패: servo {failed} — 손을 떼지 말 것")
             return 1
-        ok = arm.set_torque(True)
-        print(f"servo 1 토크 복구: {'성공' if ok else '실패'}  "
-              f"(위치 {raw} = {raw_to_deg(raw):+.2f}도)")
-        return 0 if ok else 1
+        print("")
+        print("전부 잠겼다. 이제 손을 떼도 된다.")
+        return 0
     finally:
         arm.close()
 
@@ -265,8 +310,10 @@ def record(path: pathlib.Path, port: str, forward_mm: float) -> int:
 
         ladder = ", ".join(f"{v:+.0f}" for v in LATERAL_LADDER_MM)
         print(f"전방 {forward_mm:.0f}mm 기준 · 좌우 자리 {ladder} mm")
-        print("각 자리에서 기물을 놓고, 팔 베이스를 손으로 돌려 그리퍼가 그 기물을")
-        print("정면으로 겨누게 한 뒤 Enter.   (s = 이 자리 건너뜀, q = 그만)")
+        print("팔은 **정책이 파지할 때의 자세**로 잡아 둔다 — 접힌 팔로는")
+        print("'겨눴다'를 판정할 수 없다(--free 주석).")
+        print("각 자리에서 기물을 놓고 그리퍼가 그 기물을 정면으로 겨누게 한 뒤")
+        print("Enter.   (s = 이 자리 건너뜀, q = 그만)")
         print("")
 
         for lateral in LATERAL_LADDER_MM:
@@ -294,9 +341,16 @@ def record(path: pathlib.Path, port: str, forward_mm: float) -> int:
                       f"±{LIMIT_DEG:.0f}도 밖이다. 기록은 하되, 이대로면 "
                       f"조준으로 못 푼다.")
 
+            # 팔 전체 자세도 남긴다. 토크를 다 풀고 사람이 잡는 방식이라
+            # 자리마다 자세가 조금씩 달라지는데, 나중에 점이 흩어졌을 때
+            # "겨눔 판정이 흔들린 것"인지 "자세가 달랐던 것"인지 가르려면
+            # 그때의 자세가 남아 있어야 한다.
+            pose = {f"servo{sid}_raw": value
+                    for sid, value in arm.all_positions().items()}
             sample = {"forward_mm": forward_mm, "lateral_mm": lateral,
                       "theta_deg": round(theta, 3),
-                      "servo1_deg": round(servo1, 3), "servo1_raw": int(raw)}
+                      "servo1_deg": round(servo1, 3), "servo1_raw": int(raw),
+                      "pose_raw": pose}
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(sample, ensure_ascii=False) + "\n")
             saved += 1
@@ -390,8 +444,11 @@ def main() -> int:
     parser.add_argument("--forward-mm", type=float, default=DEFAULT_FORWARD_MM,
                         help=f"파지 진입 전방 거리 (기본 {DEFAULT_FORWARD_MM:.0f})")
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--free", action="store_true", help="servo 1 토크를 푼다")
-    mode.add_argument("--hold", action="store_true", help="servo 1 토크를 되켠다")
+    parser.add_argument("--yes", action="store_true",
+                        help="--free 의 확인 프롬프트를 건너뛴다")
+    mode.add_argument("--free", action="store_true",
+                      help="servo 1~6 토크를 전부 푼다 (팔이 떨어진다)")
+    mode.add_argument("--hold", action="store_true", help="servo 1~6 토크를 되켠다")
     mode.add_argument("--record", action="store_true", help="한 점씩 모은다")
     mode.add_argument("--fit", action="store_true", help="모은 점에 직선을 긋는다")
     mode.add_argument("--show", action="store_true", help="모은 점을 본다")
@@ -399,7 +456,7 @@ def main() -> int:
 
     path = pathlib.Path(args.log)
     if args.free:
-        return free(args.port)
+        return free(args.port, args.yes)
     if args.hold:
         return hold(args.port)
     if args.record:

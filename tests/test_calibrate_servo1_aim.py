@@ -121,3 +121,26 @@ def test_raw를_도로_바꾸는_환산이_driver_sdk와_같다():
     assert cal.raw_to_deg(cal.POS_CENTER) == 0.0
     assert cal.raw_to_deg(cal.POS_CENTER + 4095) == pytest.approx(360.0)
     assert cal.raw_to_deg(2066) == pytest.approx((2066 - 2048) / 4095 * 360)
+
+
+# ── 토크는 전부 푼다 (2026-09-08 사용자 지시) ─────────────────────────────
+
+
+def test_모든_서보를_대상으로_한다():
+    """사용자: "모든 토크를 다 풀어줘야지 우리가 vla 파지할때까지 유사하게라도
+    진행하지."
+
+    servo 1 만 풀면 팔이 접힌 채라 "그리퍼가 겨눴다"를 판정할 수가 없다."""
+    assert cal.Arm.ALL == (1, 2, 3, 4, 5, 6)
+
+
+def test_확인_없이는_안_푼다(monkeypatch, capsys):
+    """팔이 중력으로 떨어지는 동작이라 손이 받치고 있는지부터 묻는다."""
+    monkeypatch.setattr(cal, "_ask", lambda _prompt: "")
+    opened = []
+    monkeypatch.setattr(cal, "Arm", lambda port: opened.append(port))
+
+    assert cal.free("/dev/soarm") == 1
+
+    assert not opened, "확인도 안 받고 포트를 열었다"
+    assert "취소" in capsys.readouterr().out
