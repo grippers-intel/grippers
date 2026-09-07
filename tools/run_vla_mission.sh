@@ -94,16 +94,23 @@ fi
 # 두 벌이 겹쳐 뜨면 같은 시리얼 포트를 두 번 열고, 죽일 때 서로의 자식을
 # 좀비로 남긴다(2026-09-07 에 실제로 그렇게 됐다). 조용히 겹치는 것보다
 # 서서 알려 주는 편이 낫다.
-RUNNING=$(pgrep -f "grippers_|ros_robot_controller|bringup.launch" | grep -v $$ || true)
+# ⚠️ 2026-09-07: 이 패턴에 odom_publisher/joint_state_publisher/
+# robot_state_publisher 가 빠져 있었다. bringup.launch 가 저 셋도 같이
+# 띄우는데 정리 대상이 아니라, --force 로 재시작할 때마다 이전 판의 셋이
+# **살아남아 쌓였다** — 실제로 세 번 재시작한 뒤 노드 목록에 두 벌씩 떠
+# 있었다. robot_state_publisher 두 벌은 같은 /tf 를 서로 다른 시각에
+# 밀어넣고, odom_publisher 두 벌은 한 토픽에 같이 발행한다.
+BRINGUP_PROCS="grippers_|ros_robot_controller|ldlidar|ascamera|bringup.launch|odom_publisher|joint_state_publisher|robot_state_publisher"
+RUNNING=$(pgrep -f "$BRINGUP_PROCS" | grep -v $$ || true)
 if [ -n "$RUNNING" ]; then
   if [ -z "$FORCE" ]; then
     echo "이미 떠 있는 노드가 있다 — 먼저 내리거나 --force 를 줄 것:" >&2
-    pgrep -af "grippers_|ros_robot_controller|bringup.launch" | grep -v $$ >&2
+    pgrep -af "$BRINGUP_PROCS" | grep -v $$ >&2
     exit 1
   fi
   echo "[run] --force — 기존 노드를 정리한다"
   pkill -INT -f "bringup.launch"; sleep 5
-  pkill -9 -f "grippers_|ros_robot_controller|ldlidar|ascamera|bringup.launch" 2>/dev/null
+  pkill -9 -f "$BRINGUP_PROCS" 2>/dev/null
   sleep 3
 fi
 
