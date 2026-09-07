@@ -142,6 +142,32 @@ def fit_line(samples):
     return a, b, rms, resid
 
 
+def arm_driver_pids():
+    """돌고 있는 arm_driver 프로세스의 PID 들. /proc 만 본다 — 컨테이너 안에서
+    ps 가 없을 수도 있어서다."""
+    pids = []
+    for entry in pathlib.Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except (OSError, PermissionError):
+            continue
+        cmdline = raw.replace(bytes([0]), b" ").decode("utf-8", "replace")
+        if "arm_driver" in cmdline and "calibrate_servo1_aim" not in cmdline:
+            pids.append(int(entry.name))
+    return pids
+
+
+def _refuse_if_arm_driver_running() -> None:
+    pids = arm_driver_pids()
+    if pids:
+        raise SystemExit(
+            f"arm_driver 가 돌고 있다 (PID {', '.join(map(str, pids))}) — "
+            "같은 시리얼 버스를 둘이 쓰면 판독이 무작위로 깨진다. "
+            "먼저 내릴 것:  ./tools/ops/stop_bringup.sh")
+
+
 class Arm:
     """servo 1 에 직접 붙는다 — 토크를 끄고 위치를 읽기 위해서다.
 
@@ -153,6 +179,15 @@ class Arm:
     SERVO1 = 1
 
     def __init__(self, port: str):
+        # ⚠️ arm_driver 가 떠 있으면 **열기 전에** 막는다.
+        #
+        # /dev/soarm 의 배타 잠금은 flock 이라 권고(advisory)일 뿐이라,
+        # 그냥 열면 열린다 — 2026-09-07 에 실제로 그랬다. 그러면 두 프로세스가
+        # 같은 버스에 패킷을 섞어 넣고, 이 저장소가 이미 겪은 대로
+        # "위치·부하 값이 무작위로 깨진다"(_read_with_retry 의 2026-08-25 주석).
+        # 캘리브레이션이 그 값을 믿고 직선을 그으므로 조용히 틀린 답이 나온다.
+        _refuse_if_arm_driver_running()
+
         # driver_sdk(pyserial 의존)는 여기서만 import 한다 —
         # park_release_torque.py 의 _connect() 와 같은 이유.
         import soarm_lab  # noqa: F401  (flat import 를 위해 먼저 import)
