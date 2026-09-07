@@ -5,7 +5,7 @@
 #   ./run_vla_mission.sh --act        ACT 120k, Pi 로컬 추론 (노트북 불필요)
 #   ./run_vla_mission.sh --host-ip 192.168.0.5
 #   ./run_vla_mission.sh --force      이미 떠 있는 노드를 정리하고 띄운다
-#   ./run_vla_mission.sh --vla-only   정책이 안 시킨 팔 동작을 전부 뺀다
+#   ./run_vla_mission.sh --vla-only   정책이 안 시킨 것을 전부 뺀다
 #                                     (진단용 — 운반·투하는 동작하지 않는다)
 #
 # ⚠️ 기본이 DP 인 것은 **지금 무엇을 재고 있느냐**에 달린 선택이다(2026-09-07

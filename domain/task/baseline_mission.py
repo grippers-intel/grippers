@@ -830,7 +830,15 @@ class BaselineGraspState(State):
         #
         # 자르면 분포 밖으로는 안 나가면서 방향은 맞는다. ±8도가 0도보다
         # 항상 가깝다 — 보정이 모자란 것과 반대로 가는 것은 다르다.
-        command = ports.host.last_command()
+        # ⚠️ vla_only 면 바이어스도 뺀다. 이것도 정책이 아니라 **우리가 얹은
+        # 보정**이고, 크기가 정책을 압도한다 — 실기 녹화에서 정책의 pan 출력은
+        # 한 판 내내 -3.50 ~ -4.18 도(폭 0.7도)인데 여기 더하는 값이 ±8도까지
+        # 간다. 즉 구조는 상대(출력에 더함)지만 효과는 사실상 절대 조준이다.
+        #
+        # 부호 규약(-yaw_correction_deg)이 GRASP 경로에서 아직 실기로 검증된
+        # 적이 없어서, 틀렸다면 지금 계통에서 가장 큰 좌우 교란원이다. 빼고
+        # 한 판 돌려 비교할 수 있어야 한다.
+        command = None if ports.vla_only else ports.host.last_command()
         pan_bias_deg = 0.0
         if command is not None and command.yaw_correction_deg:
             wanted = -float(command.yaw_correction_deg)

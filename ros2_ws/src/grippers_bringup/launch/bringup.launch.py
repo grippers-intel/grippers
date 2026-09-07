@@ -359,9 +359,9 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "vla_only",
                 default_value="false",
-                description="true 면 정책이 안 시킨 팔 동작을 전부 건너뛴다 "
-                "(creep 관문·뎁스 관측·CARRY 전환). 파지만 눈으로 확인하는 "
-                "진단용 — 운반·투하는 동작하지 않는다",
+                description="true 면 정책이 안 시킨 것을 전부 건너뛴다 "
+                "(creep 관문·뎁스 관측·CARRY 전환·servo 1 조준 바이어스). "
+                "파지만 눈으로 확인하는 진단용 — 운반·투하는 동작하지 않는다",
             ),
             DeclareLaunchArgument(
                 "use_depth_gate",
