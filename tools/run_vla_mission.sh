@@ -150,8 +150,20 @@ PYEOF
   POLICY_ARGS=(policy_source:=remote "policy_url:=$POLICY_URL")
 fi
 
+# ⚠️ setsid + PGID 파일. 팀 도구인 tools/ops/stop_bringup.sh 가
+# /tmp/bringup.pgid 를 읽어 **프로세스 그룹**에 SIGINT 를 보낸다
+# (kill -INT -- -$PGID). 그러려면 새 세션의 리더여야 하고, 그 PID 를
+# 남겨 둬야 한다.
+#
+# 2026-09-07: 이걸 안 해서 stop_bringup.sh 가 우리 판을 못 껐고
+# ("bringup_now.sh 로 띄운 게 아니면 못 끕니다"), run_mission 의 자동
+# 정리도 같은 이유로 실패했다. 우리 스크립트만 팀 도구 밖에 있을 이유가 없다.
+#
+# exec 를 안 쓰므로 이 스크립트는 바로 프롬프트를 돌려준다 — 로그는
+# "$LOG" 로 간다(bringup_now.sh 와 같은 동작).
+
 set -x
-exec ros2 launch grippers_bringup bringup.launch.py \
+setsid ros2 launch grippers_bringup bringup.launch.py \
   use_fake_base:=false use_fake_arm:=false use_fake_perception:=false \
   use_vla:=true grasp_backend:=vla \
   "${POLICY_ARGS[@]}" \
@@ -160,4 +172,8 @@ exec ros2 launch grippers_bringup bringup.launch.py \
   default_grasp_label:=queen \
   vla_record_dir:=/grippers/runs/vla \
   "host_ip:=$HOST_IP" \
-  > "$LOG" 2>&1
+  > "$LOG" 2>&1 &
+
+PGID_FILE=/tmp/bringup.pgid
+echo "$!" > "$PGID_FILE"
+echo "[run] launch PID/PGID = $(cat $PGID_FILE) — 정지: stop_bringup.sh, 로그: $LOG"

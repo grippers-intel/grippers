@@ -116,7 +116,8 @@ def test_DP_는_띄우기_전에_서버를_두드린다():
     assert "/health" in text
     # 점검이 실제 실행문 **앞**에 있어야 의미가 있다.
     # ⚠️ "ros2 launch" 로 찾으면 안 된다 — 머리말 주석이 그 문구를 먼저 쓴다.
-    assert text.index("/health") < text.index("exec ros2 launch")
+    # (2026-09-07 exec -> setsid 로 바뀌었다. stop_bringup.sh 호환용.)
+    assert text.index("/health") < text.index("setsid ros2 launch")
 
 
 def test_서버가_없으면_띄우지_않고_안내한다():
@@ -177,3 +178,19 @@ def test_플래그가_세팅한_변수는_전부_런치로_나간다():
     INTERNAL = {"FORCE", "BACKEND", "LOG"}
     for var in sorted(assigned - INTERNAL):
         assert "$" + var in exec_block, f"{var} 가 플래그로 세팅되는데 런치로 안 넘어간다"
+
+
+def test_팀_정지_도구가_끌_수_있게_PGID_를_남긴다():
+    """⚠️ 2026-09-07: 이걸 안 해서 `tools/ops/stop_bringup.sh` 가 우리 판을
+    못 껐다 — "bringup_now.sh 로 띄운 게 아니면 못 끕니다". run_mission 의
+    자동 정리도 같은 이유로 실패해서, 손으로 프로세스를 찾아 죽여야 했다.
+
+    그 도구는 /tmp/bringup.pgid 를 읽어 **프로세스 그룹**에 SIGINT 를 보낸다
+    (`kill -INT -- -$PGID`). 그러려면 새 세션의 리더로 띄우고(setsid) 그 PID
+    를 남겨야 한다. 우리 스크립트만 팀 도구 밖에 있을 이유가 없다."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    body = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+    assert "setsid ros2 launch" in body, "그룹 리더로 안 띄우면 그룹 kill 이 안 먹는다"
+    assert "/tmp/bringup.pgid" in body, "팀 도구가 읽는 경로여야 한다"
+    # PID 기록이 기동 **뒤**에 와야 $! 가 그 launch 를 가리킨다.
+    assert body.index("setsid ros2 launch") < body.index('echo "$!"')
