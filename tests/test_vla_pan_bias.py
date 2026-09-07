@@ -239,3 +239,64 @@ def test_루프도_실패하고_턱도_비었으면_놓고_접는다():
 
     assert BaselineGraspState("queen")._grasp_vla(ports, _Profile()) is False
     assert _Profile.release_width_mm in arm.gripper_widths
+
+
+# ── 서보가 죽었을 때 초당 열 번씩 덤비지 않는다 (2026-09-07 실기) ─────────
+
+
+def test_서보가_응답_안_하면_다음_시도까지_쉰다():
+    """실기: servo 6 이 과전류로 떨어지자 fold 가 매번 실패했고, Host 가
+    실패를 받자마자 리셋해 0.35초 주기로 **37번째 시도**까지 갔다.
+
+    재시도가 틀린 게 아니라 간격이 없는 것이 틀렸다 — 같은 로그에서 버스는
+    4초쯤 뒤에 스스로 돌아왔다."""
+    slept = []
+
+    class DeadBusArm(FakeArm):
+        def fold_to_cradle(self) -> bool:
+            return False
+
+        def gripper_position_raw(self) -> int:
+            return -1          # 읽기 실패 = 버스가 나갔다
+
+    arm = DeadBusArm()
+    host = FakeHostLink(script=[])
+    ports = BaselinePorts(base=FakeBase(), arm=arm, perception=None,
+                          host=host, lidar=None, estop=None, vla=_SpyVla())
+
+    state = BaselineGraspState("queen")
+    state.HARDWARE_FAULT_DWELL_SEC = 0.0
+    import domain.task.baseline_mission as bm
+    real_sleep = bm.time.sleep
+    bm.time.sleep = lambda s: slept.append(s)
+    try:
+        assert state._grasp_vla(ports, _Profile()) is False
+    finally:
+        bm.time.sleep = real_sleep
+
+    assert slept, "서보가 죽었는데 곧바로 실패를 돌려줬다 — 스핀이 된다"
+    detail = " ".join(d for _k, _s, d, _f in host.reports)
+    assert "servo 6" in detail, f"무엇이 죽었는지 보고에 없다: {detail}"
+
+
+def test_자세만_못_잡은_것은_안_쉰다():
+    """버스가 살아 있으면 기다릴 이유가 없다 — 그때는 다시 해 보는 게 맞다."""
+    slept = []
+
+    class FoldFailsArm(FakeArm):
+        def fold_to_cradle(self) -> bool:
+            return False
+
+    ports = BaselinePorts(base=FakeBase(), arm=FoldFailsArm(), perception=None,
+                          host=FakeHostLink(script=[]), lidar=None, estop=None,
+                          vla=_SpyVla())
+
+    import domain.task.baseline_mission as bm
+    real_sleep = bm.time.sleep
+    bm.time.sleep = lambda s: slept.append(s)
+    try:
+        assert BaselineGraspState("queen")._grasp_vla(ports, _Profile()) is False
+    finally:
+        bm.time.sleep = real_sleep
+
+    assert not slept

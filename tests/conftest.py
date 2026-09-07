@@ -71,3 +71,7 @@ def _no_hardware_waits(monkeypatch):
     from domain.task import baseline_mission as bm
     monkeypatch.setattr(bm, "GRIP_SETTLE_SEC", 0.0)
     monkeypatch.setattr(bm, "RELEASE_RETRY_SEC", 0.0)
+    # ⚠️ BaselineGraspState.RELEASE_RETRY_SEC 는 **안 건드린다** — 그 값을
+    # 그대로 읽어 "재시도 예산이 실기 4.5초를 넘는가"를 보는 시험이 있다.
+    # 서보가 떨어졌을 때의 대기(4초)만 끈다.
+    monkeypatch.setattr(bm.BaselineGraspState, "HARDWARE_FAULT_DWELL_SEC", 0.0)

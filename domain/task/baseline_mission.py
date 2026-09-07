@@ -705,7 +705,30 @@ class BaselineGraspState(State):
         # 시작하든 안전한 경로를 고른다(바닥 높이면 safe 를 경유해 들어 올린다).
         # 자세 게이트가 없다.
         if not ports.arm.fold_to_cradle():
-            ports.host.report(Report.GRASP_BLOCKED, self.name, "VLA 시작 자세(IDLE) 실패")
+            # ── 서보가 죽었는데 초당 열 번씩 다시 덤비지 않는다 ──────────
+            #
+            # 2026-09-07 실기: servo 6 이 과전류 보호로 버스에서 떨어지자
+            # 이 fold 가 매번 실패했고, Host 는 실패를 받자마자 상태를
+            # 리셋해 곧바로 GRASP 를 다시 지시했다. 0.35초 주기로 돌아
+            # **37번째 시도**까지 갔다 — 사용자: "파지실패라는 말이 나오는데
+            # 그냥 그런걸 없애줘".
+            #
+            # 재시도 자체가 틀린 게 아니라 **간격이 없는 것**이 틀렸다.
+            # 같은 로그에서 버스는 4초쯤 뒤에 스스로 돌아왔다. 그 사이를
+            # 쉬지 않고 두드리면 회복을 돕지도 않으면서 로그만 덮는다.
+            #
+            # 하드웨어가 죽은 것인지 자세를 못 잡은 것인지는 그리퍼 위치를
+            # 읽어 보면 갈린다 — 읽기 실패(-1)면 버스가 나간 것이다.
+            if ports.arm.gripper_position_raw() < 0:
+                ports.host.report(
+                    Report.GRASP_BLOCKED, self.name,
+                    f"servo 6 이 응답하지 않는다 — 버스가 돌아올 때까지 "
+                    f"{self.HARDWARE_FAULT_DWELL_SEC:.0f}초 기다린다 "
+                    f"(과전류 보호로 떨어졌을 때 실기 회복 시간 약 4초)")
+                time.sleep(self.HARDWARE_FAULT_DWELL_SEC)
+            else:
+                ports.host.report(Report.GRASP_BLOCKED, self.name,
+                                  "VLA 시작 자세(IDLE) 실패")
             return False
         # ── 좌우 조준: 차체 대신 servo 1 로 흡수한다 ─────────────────────
         #
@@ -840,6 +863,11 @@ class BaselineGraspState(State):
     #: 자리라 클래스 속성으로 뺐다 — 시험은 0 으로 두고 부른다.
     RELEASE_RETRIES = RELEASE_RETRIES
     RELEASE_RETRY_SEC = RELEASE_RETRY_SEC
+
+    #: 서보가 버스에서 떨어졌을 때 다음 시도까지 쉬는 시간(초).
+    #: 실기 회복이 약 4초였으므로(2026-09-07) 그 언저리로 잡는다. 이것도
+    #: 도메인이 자는 자리라 클래스 속성이다 — 시험은 0 으로 두고 부른다.
+    HARDWARE_FAULT_DWELL_SEC = 4.0
 
     def _release_and_fold(self, ports, gp) -> bool:
         """물체를 놓고 접는다. 통신이 잠깐 나가도 **끈질기게** 다시 시도한다.
