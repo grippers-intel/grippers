@@ -105,7 +105,7 @@ class FakeArm(ArmDriver):
 
     #: 파지 성공 판정이 읽는 servo 6 위치(raw). 기본은 **물고 있는** 값이다 —
     #: 기존 시험 대부분이 "성공한 파지"를 전제로 쓰이기 때문이다.
-    #: 빈 턱을 흉내 내려면 GRIPPER_EMPTY_POSITION_RAW(1112) 로 낮춘다.
+    #: 빈 턱을 흉내 내려면 GRIPPER_EMPTY_POSITION_RAW(1040) 로 낮춘다.
     gripper_position_raw_value: int = 1200
 
     def gripper_position_raw(self) -> int:

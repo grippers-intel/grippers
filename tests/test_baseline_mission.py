@@ -1007,14 +1007,34 @@ def test_파지_계획은_파지_폭을_안_들고_있다():
     assert plan.release_width_mm == 168.0
 
 
-def test_미션이_그리퍼_폭을_정하는_자리는_하나다():
-    """판정 직전의 "확실히 닫아라" 한 번뿐이고, 그 값은 프로파일이 아니라
-    상수다. 라벨마다 달라지면 빈 턱 위치도 같이 달라져 판정 문턱의 전제가
-    깨진다(2026-09-07, box·star 가 20mm 로 닫혀 빈 턱 1216 이 옛 문턱
-    1165 를 넘던 사고)."""
-    from domain.task.baseline_mission import JUDGE_CLOSE_WIDTH_MM
+def test_파지부터_CARRY까지_그리퍼_명령이_없다():
+    """⚠️ 정책이 만든 쥔 상태를 아무도 건드리면 안 된다.
 
-    assert JUDGE_CLOSE_WIDTH_MM == 0.0
+    예전에는 판정 직전에 "확실히 닫아라"를 한 번 보냈다(JUDGE_CLOSE_WIDTH_MM,
+    2026-09-08 에 삭제). 그 닫기가 오히려 힘을 **풀고 있었다** — 위치제어의
+    힘은 P x (목표 - 현재) 인데, 그 명령이 정책이 잡아 둔 자리보다 넓었다:
+
+        정책이 명령한 자리        1007      오차 183 raw
+        판정용 닫기가 명령한 자리  1106      오차  84 raw   <- 힘이 절반
+
+    그리고 그 직후가 주행이었다.
+
+    이 시험은 상수 값이 아니라 **행동**을 본다. 상수만 보면 누가 다른 이름으로
+    닫기를 되살려도 안 걸린다 — 정작 막아야 할 것이 그거다."""
+    arm = FakeArm(load_ratio=HOLDING_LOAD)
+    ports = _ports(arm=arm)
+
+    nxt = BaselineGraspState("queen").execute(ports)
+
+    assert isinstance(nxt, BaselineCarryState)
+    assert arm.gripper_widths == [], (
+        f"파지와 CARRY 사이에 그리퍼 명령이 나갔다: {arm.gripper_widths}")
+
+
+def test_라벨이_그리퍼_폭을_정하지_않는다():
+    """라벨마다 닫는 폭이 달라지면 빈 턱 위치도 같이 달라져 판정 문턱의 전제가
+    깨진다(2026-09-07, box·star 가 20mm 로 닫혀 빈 턱 1216 이 옛 문턱 1165 를
+    넘던 사고). 파지 폭 정책을 들어내면서 그 구멍 자체가 없어졌다."""
     for label in ("queen", "box", "star", "soccer"):
         assert not hasattr(plan_for_label(label), "close_width_mm"), label
 

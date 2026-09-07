@@ -163,11 +163,11 @@ def test_미션은_어떤_라벨에도_20mm를_안_쓴다():
     프로파일 값은 없앴다(2026-09-07).
 
     box·star 를 20mm 로 닫던 것이 kica927 파지 폭 정책이었고 사용자 지시로
-    통째로 지웠다. 이제 미션이 닫으라고 하는 폭은 JUDGE_CLOSE_WIDTH_MM
-    하나뿐이라, 빈 턱 위치가 라벨에 따라 달라지지 않는다."""
-    from domain.task.baseline_mission import JUDGE_CLOSE_WIDTH_MM, plan_for_label
+    통째로 지웠다. 2026-09-08 에는 판정용 닫기(JUDGE_CLOSE_WIDTH_MM)까지
+    없어져서, 이제 미션이 파지 구간에 내는 그리퍼 명령이 **하나도 없다** —
+    빈 턱 위치가 라벨에 따라 달라질 자리 자체가 사라졌다."""
+    from domain.task.baseline_mission import plan_for_label
 
-    assert JUDGE_CLOSE_WIDTH_MM == 0.0
     for label in ("box", "star", "queen"):
         assert not hasattr(plan_for_label(label), "close_width_mm"), label
 
