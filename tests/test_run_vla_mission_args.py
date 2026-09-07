@@ -216,3 +216,36 @@ def test_부팅_자동_실행_컨트롤러를_먼저_치운다():
     kill = body.index('pkill -9 -f "ros_robot_controller"')
     assert guard < kill, "bringup 유무를 먼저 확인해야 한다"
     assert kill < body.index("setsid ros2 launch"), "띄우기 전에 치워야 한다"
+
+
+def _default_of(name: str) -> str:
+    """런치가 선언한 인자의 기본값."""
+    m = re.search(r'DeclareLaunchArgument\(\s*\n\s*"%s",\s*\n\s*default_value="([^"]*)"'
+                  % re.escape(name),
+                  LAUNCH.read_text(encoding="utf-8"))
+    assert m, f"{name} 선언을 못 찾았다"
+    return m.group(1)
+
+
+@pytest.mark.parametrize("name", ["use_depth_camera", "use_depth_gate"])
+def test_뎁스는_기본으로_안_켜진다(name):
+    """⚠️ 2026-09-08: 이 기본값을 true 로 되돌리지 말 것.
+
+    뎁스캠을 띄우면 perception_node 가 뎁스 스트림에 CPU YOLO 를 돌리느라
+    포화한다. 그런데 정책이 보는 그리퍼캠 발행이 **같은 노드 안에** 있다:
+
+        perception_node       100%
+        depth_cam_rotate_node  82%
+        /gripper_cam/image_raw  0.4Hz   (설정은 10Hz)
+
+    정책이 2.5초 낡은 프레임을 본다는 뜻이라 파지가 안 된다.
+
+    기본값이어야 하는 이유는 따로 있다. 팀 표준 기동 스크립트인
+    tools/ops/bringup_now.sh 는 이 인자를 **안 넘긴다.** 그래서 기본이 true 이면
+    "우리는 뎁스를 안 쓴다"고 합의해 놓고도 그 스크립트로 띄울 때마다 조용히
+    켜졌다. 인자로 끄는 것으로는 막을 수 없고 기본값을 뒤집어야 막힌다.
+
+    둘은 **짝으로** 움직여야 한다 — 관문만 켜져 있고 뎁스캠이 없으면
+    remember_target 이 응답 없이 타임아웃한다."""
+    assert _default_of(name) == "false", (
+        f"{name} 기본값이 true 로 돌아갔다 — 그리퍼캠이 0.4Hz 로 굶는다")

@@ -86,9 +86,8 @@ def launch_setup(context):
         ),
         condition=UnlessCondition(use_fake_base),
     )
-    # ⚠️ use_depth_camera 로 통째로 끌 수 있다 — 기본값은 켬이라 기존 사용에는
-    # 변화가 없다. 끄는 이유는 CPU 다(2026-09-07 실측, ACT 를 Pi 에서
-    # 로컬로 돌리기 시작하면서 드러났다):
+    # ⚠️ 2026-09-08: 기본값을 **끔**으로 뒤집었다. 이유는 CPU 다(2026-09-07 실측,
+    # ACT 를 Pi 에서 로컬로 돌리기 시작하면서 드러났다):
     #
     #     perception_node       100%   <- 뎁스 스트림에 CPU YOLO 를 돌린다
     #     depth_cam_rotate_node  82%
@@ -337,13 +336,22 @@ def generate_launch_description():
             # 노트북이 필요한 것은 remote 를 명시로 줬을 때뿐이다. 이 주석대로
             # 믿으면 "노트북 없이는 못 돌린다"고 오해하게 된다 — 실제로는 ACT 가
             # Pi 에서 듀티 14% 로 돈다.
+            # ⚠️ 2026-09-08 사용자 지시로 기본값을 true -> false 로 뒤집었다.
+            #
+            # 팀 표준 스크립트(tools/ops/bringup_now.sh)가 이 인자를 안 넘겨서,
+            # 그걸로 띄우면 뎁스캠이 조용히 켜졌다. 그러면 perception_node 가
+            # 뎁스 일까지 떠안아 CPU 를 다 먹고 **그리퍼캠이 10Hz 설정에서
+            # 0.4Hz 로 굶는다**(2026-09-07 실측) — 정책이 2.5초 낡은 프레임을
+            # 본다. 어느 스크립트로 띄우든 안 켜지는 쪽이 안전하다.
+            #
+            # 되살리려면 use_depth_camera:=true 를 명시할 것.
             DeclareLaunchArgument(
                 "use_depth_camera",
-                default_value="true",
-                description="뎁스캠(ascamera)과 회전 노드를 띄울지. false 면 "
-                "perception_node 가 뎁스 일에서 풀려나 그리퍼캠을 제 주기로 "
-                "발행한다 — use_depth_gate=false 로 쓰는 구성에서 켜 둘 이유가 "
-                "없다(2026-09-07 실측: 0.4Hz -> 설정값)",
+                default_value="false",
+                description="뎁스캠(ascamera)과 회전 노드를 띄울지. 기본은 끔 — "
+                "켜면 perception_node 가 뎁스 일에 묶여 그리퍼캠이 굶는다"
+                "(2026-09-07 실측: 10Hz 설정 -> 0.4Hz). 뎁스가 필요한 구성에서만 "
+                "true 로 켤 것",
             ),
             DeclareLaunchArgument(
                 "vla_only",
@@ -352,11 +360,15 @@ def generate_launch_description():
                 "(creep 관문·뎁스 관측·CARRY 전환·servo 1 조준 바이어스). "
                 "파지만 눈으로 확인하는 진단용 — 운반·투하는 동작하지 않는다",
             ),
+            # ⚠️ 2026-09-08: 위 use_depth_camera 와 같은 이유로 기본을 false 로.
+            # 뎁스캠을 안 띄우는데 이 관문만 켜져 있으면 remember_target 이
+            # 매번 타임아웃으로 실패한다 — 둘은 짝으로 움직여야 한다.
             DeclareLaunchArgument(
                 "use_depth_gate",
-                default_value="true",
-                description="false 면 뎁스캠을 안 본다 — 물체 식별·정렬 판정·파지 성공의 "
-                "두 번째 신호가 빠진다. 주행(탑뷰)이 세운 자리에서 곧장 파지한다",
+                default_value="false",
+                description="뎁스 신호를 판정에 쓸지. 기본은 끔 — 주행(탑뷰)이 "
+                "세운 자리에서 곧장 파지한다. true 로 켜려면 use_depth_camera 도 "
+                "같이 켜야 한다(안 그러면 remember_target 이 타임아웃한다)",
             ),
             DeclareLaunchArgument(
                 "default_grasp_label",

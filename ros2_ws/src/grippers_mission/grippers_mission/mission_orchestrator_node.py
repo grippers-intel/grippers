@@ -78,7 +78,9 @@ class MissionOrchestratorNode(Node):
         # 뎁스 관문. 끄면 뎁스캠을 한 번도 안 본다 — 물체 식별·정렬 판정·
         # 파지 성공의 두 번째 신호가 빠지고, 주행(탑뷰)이 세운 자리에서
         # 곧장 파지한다. 잃는 것은 BaselinePorts.use_depth_gate 주석 참고.
-        self.declare_parameter("use_depth_gate", True)
+        # ⚠️ 2026-09-08: 런치 기본값과 함께 True -> False. 노드를 직접 띄우는
+        # 경우에도 뎁스를 안 보는 쪽이 기본이어야 한다(런치 주석 참고).
+        self.declare_parameter("use_depth_gate", False)
         self.declare_parameter("default_grasp_label", "queen")
         # 정책만 돌려 본다 — 정책이 안 시킨 CARRY 전환을 건너뛴다.
         # 자세한 것은 BaselinePorts.vla_only.
