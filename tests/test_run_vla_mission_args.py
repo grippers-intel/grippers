@@ -281,3 +281,30 @@ def test_정책서버가_스크립트가_쓰는_인자를_전부_받는다():
     for flag in ("--ckpt", "--device", "--scheduler", "--denoise",
                  "--n-action-steps", "--host"):
         assert f'add_argument("{flag}"' in server, f"{flag} 를 안 받는다"
+
+
+BRINGUP_NOW = ROOT / "tools" / "ops" / "bringup_now.sh"
+
+
+def test_두_기동_스크립트가_부팅_자동실행분을_똑같이_치운다():
+    """⚠️ 2026-09-08 실기: 배포 직후 bringup 이 안 떴다.
+
+    Pi 는 부팅하면 ros_robot_controller 를 자동으로 띄운다. bringup_now.sh 의
+    "이미 떠 있는 노드" 검사가 그걸 잡아서, 재부팅 뒤 첫 기동마다
+    "먼저 stop_bringup.sh 를 돌리세요"로 거부했다 — 그런데 그건 이전 bringup
+    의 잔재가 아니라 부팅 자동 실행분이라 stop_bringup.sh 로 지울 것도 아니다.
+
+    run_vla_mission.sh 는 같은 문제를 이미 풀고 있었다(38fdabd). 두 스크립트가
+    같은 하드웨어를 다르게 다루면 어느 쪽으로 띄웠느냐에 따라 결과가 갈린다.
+
+    치우는 조건도 같아야 한다 — bringup 이 **안 떠 있을 때만**이다. 떠 있으면
+    그 컨트롤러는 자동 실행분이 아니라 그 bringup 의 것이다."""
+    for path in (SCRIPT, BRINGUP_NOW):
+        text = path.read_text(encoding="utf-8")
+        body = "\n".join(l for l in text.splitlines()
+                         if not l.lstrip().startswith("#"))
+        assert 'pgrep -f "bringup.launch"' in body, f"{path.name}: 조건이 없다"
+        assert 'pkill -9 -f "ros_robot_controller"' in body, f"{path.name}: 정리가 없다"
+        # bringup 유무를 먼저 보고 나서 죽여야 한다.
+        assert (body.index('pgrep -f "bringup.launch"')
+                < body.index('pkill -9 -f "ros_robot_controller"')), path.name

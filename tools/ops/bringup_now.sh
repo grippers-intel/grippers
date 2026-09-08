@@ -20,6 +20,31 @@ set -eo pipefail
 # SETUP_FILES 같은 변수를 먼저 체크 없이 참조해서(벤더 코드, 우리가 못
 # 고침) -u 아래서는 소싱 자체가 죽는다.
 
+# ── 부팅 때 자동 실행된 컨트롤러부터 치운다 ──────────────────────────────
+#
+# ⚠️ 2026-09-08: 이게 없어서 배포 직후 bringup 이 안 떴다.
+#
+# Pi 는 부팅하면 ros_robot_controller 를 자동으로 띄운다. 아래 STALE 검사가
+# 그걸 "이미 떠 있는 노드"로 잡아서, 재부팅 뒤 처음 띄울 때마다
+# "먼저 stop_bringup.sh 를 돌리세요"로 **매번 거부**했다. 그런데 그건 이전
+# bringup 의 잔재가 아니라 부팅 자동 실행분이라, stop_bringup.sh 로 지울
+# 것도 아니다(그 스크립트는 bringup 프로세스 그룹에 신호를 보낸다).
+#
+# tools/run_vla_mission.sh 는 같은 문제를 이미 이렇게 풀고 있었다
+# (커밋 38fdabd). 팀 표준 기동 스크립트인 여기에도 같은 처리를 둔다 —
+# 두 스크립트가 같은 하드웨어를 다르게 다룰 이유가 없다.
+#
+# ⚠️ bringup 이 안 떠 있을 때만 치운다. 떠 있으면 그 컨트롤러는 자동
+# 실행분이 아니라 **그 bringup 의 것**이라 죽이면 안 된다.
+if ! pgrep -f "bringup.launch" >/dev/null 2>&1; then
+  STRAY=$(pgrep -f "ros_robot_controller" || true)
+  if [ -n "$STRAY" ]; then
+    echo "[bringup] 부팅 자동 실행 ros_robot_controller 정리 — 시리얼 포트 중복 방지"
+    pkill -9 -f "ros_robot_controller" 2>/dev/null || true
+    sleep 3
+  fi
+fi
+
 # <defunct>(좀비)는 제외 — 이미 죽은 프로세스라 자원을 안 쥐고 있고,
 # 부모가 reap 하면 곧 사라진다. 여기서 걸러야 할 건 "진짜 살아서 포트를
 # 쥐고 있는" 프로세스뿐이다.
