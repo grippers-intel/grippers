@@ -93,6 +93,10 @@ def _bgr_from_image_msg(msg):
     return buf.reshape(msg.height, msg.width, 3)
 
 
+#: shoulder_pan 이 이 각도를 넘으면 경고한다(도). 학습 실측 범위가
+#: -15.4~+16.9 도이고(grasp_alignment.VLA_PAN_LIMIT_DEG 주석) 여유를 얹었다.
+PAN_ENVELOPE_DEG = 25.0
+
 class VlaInferenceNode(Node):
     def __init__(self):
         super().__init__("vla_inference_node")
@@ -393,18 +397,64 @@ class VlaInferenceNode(Node):
                     goal_handle.abort()
                     return result
 
-                chunk = self._runner.predict_chunk(frame, state, task)
-                # 기록은 **바이어스 전** 값으로 남긴다 — 정책이 무엇을 냈는지가
-                # 진단의 근거이고, 우리가 얹은 보정과 섞이면 못 가린다.
-                self._record_chunk(run_dir, chunks + 1, frame, state, chunk)
                 # goal 이 준 값이 우선이고, 0 이면 파라미터로 물러선다 —
                 # 파라미터는 실기에서 손으로 흔들어 볼 때 쓰는 길이다.
                 pan_bias = (float(request.pan_bias_deg) if request.pan_bias_deg
                             else float(self.get_parameter("pan_bias_deg").value))
-                if pan_bias:
+
+                # ── 조준각은 **좌표계 오프셋**이지 매번 더하는 값이 아니다 ──
+                #
+                # ⚠️ 2026-09-08 실기에서 이것 때문에 팔이 40도까지 돌아갔다.
+                # 예전 코드는 정책 출력에만 bias 를 더했는데, 정책이 읽는
+                # state 에는 **직전에 더한 bias 가 이미 반영돼 있다.** 정책은
+                # 절대 위치를 내므로 지금 자세를 대체로 유지하고, 거기에 또
+                # 더하니 청크마다 톱니처럼 쌓였다(그날 기록):
+                #
+                #     청크  실측pan  정책출력
+                #       1    -2.95    -3.67
+                #       2     3.82     2.68     <- +6.8
+                #       4    14.99    15.11
+                #       7    38.02    36.75     <- 학습 범위는 -15.4~+16.9
+                #
+                # 학습 분포 밖이라 파지가 될 리 없다(VLA_PAN_LIMIT_DEG 주석:
+                # "좌우는 사실상 배우지 못한 축이라 분포 밖으로 나가면 그냥
+                # 실패한다").
+                #
+                # 고침 — 정책을 **조준하지 않은 좌표계**에서 돌린다. 입력에서
+                # 빼고 출력에 더하면 정책이 보는 세계가 늘 같아진다:
+                #
+                #     정상 상태에서  실측 = 출력 + bias
+                #                    정책이 보는 값 = 실측 - bias = 출력
+                #
+                # 즉 자기 출력을 그대로 되읽으므로 더 쌓이지 않는다.
+                #
+                # ⚠️ **첫 청크에는 빼지 않는다.** 빼는 값은 "지금까지 실제로
+                # 얹은 양"인데, 첫 청크 시점의 팔은 아직 안 돌아가 있다
+                # (fold_to_cradle 로 IDLE 에 있다). 거기서 빼면 정책이 있지도
+                # 않은 회전을 되돌리려 하고, 조준이 청크마다 조금씩만 들어가
+                # 10청크 안에 다 못 실린다(설계 검토 때 시뮬레이션으로 확인).
+                if pan_bias and chunks > 0:
                     # shoulder_pan 은 0번 열이다(JOINTS 순서, policy_runner).
+                    state = list(state)
+                    state[0] -= pan_bias
+
+                chunk = self._runner.predict_chunk(frame, state, task)
+                # 기록은 **바이어스 전** 값으로 남긴다 — 정책이 무엇을 냈는지가
+                # 진단의 근거이고, 우리가 얹은 보정과 섞이면 못 가린다.
+                # state 도 정책이 실제로 본 값(조준 전 좌표계)이라 짝이 맞는다.
+                self._record_chunk(run_dir, chunks + 1, frame, state, chunk)
+                if pan_bias:
                     chunk = np.array(chunk, dtype=np.float32, copy=True)
                     chunk[:, 0] += pan_bias
+                    # 그래도 분포 밖으로 나가면 알린다 — 위 톱니를 조용히
+                    # 넘기지 않기 위한 그물이다. 학습 실측 범위가
+                    # -15.4~+16.9 도라 여유를 얹어 ±25 도에서 경고한다.
+                    worst = float(np.max(np.abs(chunk[:, 0])))
+                    if worst > PAN_ENVELOPE_DEG:
+                        self.get_logger().warn(
+                            f"shoulder_pan 이 {worst:.1f}도 — 학습 범위"
+                            f"(-15.4~+16.9)를 크게 벗어납니다. 조준 누적을"
+                            f" 의심하십시오(pan_bias={pan_bias:+.1f})")
                 if not np.isfinite(chunk).all():
                     result.ok, result.chunks = False, chunks
                     result.message = "정책이 NaN/Inf 를 냈습니다"
