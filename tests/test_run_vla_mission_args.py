@@ -308,3 +308,28 @@ def test_두_기동_스크립트가_부팅_자동실행분을_똑같이_치운�
         # bringup 유무를 먼저 보고 나서 죽여야 한다.
         assert (body.index('pgrep -f "bringup.launch"')
                 < body.index('pkill -9 -f "ros_robot_controller"')), path.name
+
+
+def test_두_스크립트가_좀비를_똑같이_무시한다():
+    """⚠️ 2026-09-08 실기: 좀비 때문에 기동이 막혔다.
+
+        이미 떠 있는 노드가 있다 — 먼저 내리거나 --force 를 줄 것:
+        1959 odom_publisher
+        2415 odom_publisher
+
+    둘 다 STAT=Z, PPID=1 이었다. 컨테이너의 PID 1 이 reap 을 안 해서 남은
+    항목이고 자원은 아무것도 안 쥔다 — 시리얼 포트도 토픽도 없다. 그런데
+    pgrep 은 좀비도 세므로 기동이 영영 막혔고, stop 을 아무리 돌려도(이미
+    죽은 프로세스라) 사라지지 않는다.
+
+    bringup_now.sh 는 처음부터 걸러 왔다. 두 스크립트가 같은 상황을 다르게
+    판정하면 어느 쪽으로 띄우느냐에 따라 결과가 갈린다 — 오늘 부팅 자동
+    실행분에서 이미 한 번 겪은 일이다(위 시험)."""
+    for path in (SCRIPT, BRINGUP_NOW):
+        body = "\n".join(l for l in path.read_text(encoding="utf-8").splitlines()
+                         if not l.lstrip().startswith("#"))
+        assert "defunct" in body, f"{path.name}: 좀비를 안 거른다"
+    # 이미 떠 있는지 보는 판정에서 pgrep 을 쓰면 좀비가 다시 샌다.
+    body = "\n".join(l for l in SCRIPT.read_text(encoding="utf-8").splitlines()
+                     if not l.lstrip().startswith("#"))
+    assert 'RUNNING=$(pgrep' not in body, "판정이 pgrep 으로 돌아갔다 — 좀비가 샌다"

@@ -101,11 +101,29 @@ fi
 # 있었다. robot_state_publisher 두 벌은 같은 /tf 를 서로 다른 시각에
 # 밀어넣고, odom_publisher 두 벌은 한 토픽에 같이 발행한다.
 BRINGUP_PROCS="grippers_|ros_robot_controller|ldlidar|ascamera|bringup.launch|odom_publisher|joint_state_publisher|robot_state_publisher"
-RUNNING=$(pgrep -f "$BRINGUP_PROCS" | grep -v $$ || true)
+# ⚠️ 좀비(<defunct>)는 세지 않는다. 2026-09-08 실기에서 이것 때문에 못 띄웠다:
+#
+#     이미 떠 있는 노드가 있다 — 먼저 내리거나 --force 를 줄 것:
+#     1959 odom_publisher
+#     2415 odom_publisher
+#
+# 둘 다 STAT=Z, PPID=1 이었다. 컨테이너의 PID 1 이 제대로 reap 하지 않아
+# 남은 항목이고, **자원을 아무것도 안 쥔다** — 시리얼 포트도 토픽도 없다.
+# 그런데 pgrep 은 좀비도 그대로 세므로 기동이 영영 막혔고, 사용자는 stop 을
+# 아무리 돌려도(이미 죽은 프로세스라) 사라지지 않는 것을 봐야 했다.
+#
+# tools/ops/bringup_now.sh 는 처음부터 `grep -v defunct` 로 걸러 왔고 그
+# 이유도 주석에 적혀 있다. 두 스크립트가 같은 상황을 다르게 판정할 이유가
+# 없다 — 그래서 여기도 ps 로 STAT 을 보고 좀비를 뺀다.
+_live_bringup_procs() {
+  ps -eo pid,stat,cmd     | grep -E "$BRINGUP_PROCS"     | grep -v grep | grep -v defunct     | awk -v self="$$" '$1 != self { print }'
+}
+
+RUNNING=$(_live_bringup_procs || true)
 if [ -n "$RUNNING" ]; then
   if [ -z "$FORCE" ]; then
     echo "이미 떠 있는 노드가 있다 — 먼저 내리거나 --force 를 줄 것:" >&2
-    pgrep -af "$BRINGUP_PROCS" | grep -v $$ >&2
+    echo "$RUNNING" >&2
     exit 1
   fi
   echo "[run] --force — 기존 노드를 정리한다"
