@@ -71,6 +71,12 @@ def main() -> int:
         if volt is not None and volt < cfg.arm.min_voltage_v:
             print(f"서보 전압 {volt:.1f}V < {cfg.arm.min_voltage_v:.1f}V — 충전 후 다시 할 것")
             return 2
+        hot = [(sid, t) for sid in SERVO_IDS
+               for t in [bus.read_temperature(sid)] if t and t >= cfg.arm.max_servo_temp_c]
+        if hot:
+            print(f"서보 온도 상한({cfg.arm.max_servo_temp_c:.0f}°C) 초과: "
+                  + ", ".join(f"servo {s} {t}°C" for s, t in hot) + " — 식을 때까지 대기")
+            return 2
 
         if args.pose:
             poses = load_poses(cfg.arm.poses_file)

@@ -45,6 +45,8 @@ def main() -> int:
                 problems.append(f"servo {sid} Homing_Offset {homing} != {joint.homing_offset}")
             if pos is None:
                 problems.append(f"servo {sid} 위치 읽기 실패")
+            if temp is not None and temp >= cfg.arm.max_servo_temp_c:
+                problems.append(f"servo {sid} 온도 {temp}°C >= 상한 {cfg.arm.max_servo_temp_c:.0f}°C")
             lim = f"{limits[0]}..{limits[1]}" if limits else "?"
             print(f"{sid:>2} {name:<14} {'O':<4} {f'{homing}/{joint.homing_offset}':<20} {lim:<12} "
                   f"{pos if pos is not None else '?':>5} {load if load is not None else 0:>5.2f} "

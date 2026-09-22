@@ -153,6 +153,20 @@ class ArmDriverNode(Node):
         if v is not None and v < self.cfg.arm.min_voltage_v:
             raise RuntimeError(f"서보 전압 {v:.1f}V < {self.cfg.arm.min_voltage_v:.1f}V — 배터리 충전 필요")
 
+    def _check_temperature(self) -> None:
+        """이동 전 서보 온도. 읽히는 것만 본다 — 못 읽은 서보 때문에 이동을 막지는 않는다.
+
+        그리퍼는 닫힘 끝단을 토크로 누르고 있으면 계속 달궈진다. 서보 자체 보호(70°C 근처)가
+        걸리면 토크가 끊겨 팔이 떨어지므로, 그 앞에서 우리가 먼저 멈춘다."""
+        limit = self.cfg.arm.max_servo_temp_c
+        hot = []
+        for servo_id in SERVO_IDS:
+            temp = self.bus.read_temperature(servo_id)
+            if temp is not None and temp >= limit:
+                hot.append(f"servo {servo_id} {temp}°C")
+        if hot:
+            raise RuntimeError(f"서보 온도 상한({limit:.0f}°C) 초과: {', '.join(hot)} — 식을 때까지 대기")
+
     def _servo_error_note(self) -> str:
         errs = {sid: describe_error(e) for sid, e in self.bus.stats.last_error.items() if e}
         return f" 서보 오류비트 {errs}" if errs else ""
@@ -199,6 +213,7 @@ class ArmDriverNode(Node):
             return res
         try:
             self._check_voltage()
+            self._check_temperature()
             target = min(100.0, max(0.0, float(req.percent)))
             start = self._read_policy()
             goal = list(start)
@@ -276,6 +291,7 @@ class ArmDriverNode(Node):
             max_step_raw = max(1, round(degrees_to_raw_delta(max_step_deg)))
 
             self._check_voltage()
+            self._check_temperature()
             # ⚠️ 재생마다 명시적으로 다시 쓴다. 다른 동작이 남긴 속도 제한이 RAM 에 남아
             # 팔이 정책을 못 따라가던 사고가 있었다(2026-09-02).
             self.bus.set_goal_velocity(SERVO_IDS, 0)
@@ -374,6 +390,7 @@ class ArmDriverNode(Node):
             if not all(math.isfinite(v) for v in target):
                 raise ValueError("목표에 NaN/Inf 가 있다")
             self._check_voltage()
+            self._check_temperature()
             self.bus.set_goal_velocity(SERVO_IDS, 0)
             start = self._read_policy()
             if req.gripper_mode == 1:
