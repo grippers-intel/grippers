@@ -80,7 +80,7 @@ def basket_target(name: str, box_xy: XY, box_size, half_width_m: float,
 def facing_error_deg(target: BasketTarget, p: XY, yaw_deg: float) -> float:
     """지금 향한 방향과 목표 중심 방위각의 차(도). 이 값이 팔의 base 가 틀 각도다.
 
-    부호는 map 규약 그대로 **반시계가 +** 다. 이 부호가 servo 1 의 + 방향과 같은지는
-    실기에서 확인해야 하고, 다르면 Pi 의 `place.host_yaw_sign` 을 -1 로 둔다.
+    부호는 map 규약 그대로 **반시계가 +** 다. servo 1 은 반대로 음수가 반시계라
+    (2026-09-22 실기 확인) Pi 가 `place.host_yaw_sign: -1` 로 뒤집어 쓴다.
     """
     return wrap_deg(target.heading_deg(p) - yaw_deg)
