@@ -64,7 +64,7 @@ policy:
   n_action_steps: 0
   fps: 30.0
   timeout_s: 45.0
-  max_chunks: 10
+  max_chunks: 8                    # 한 사이클만 허용 (정상 5청크 · 학습 최대 7.1청크). 재시도는 Host 몫
   min_chunks: 2
   extended_lift_deg: -50.0
   returned_lift_deg: -95.0

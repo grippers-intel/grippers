@@ -173,7 +173,13 @@ class PolicyConfig:
     n_action_steps: int = 0                     # 0 = 체크포인트 값. 줄이지 말 것
     fps: float = 30.0
     timeout_s: float = 45.0
-    max_chunks: int = 10
+    # 한 번의 RunVlaGrasp 은 **한 사이클만** 시도한다. 재시도는 Host 몫이다 —
+    # 같은 자리에서 다시 돌리면 관측이 거의 같아 같은 실패를 반복한다.
+    # 청크 하나 = n_action_steps/fps = 3.33초. 실측 정상 파지 5청크(18.4초),
+    # 학습 최대 712프레임 = 7.1청크. 8 이면 한 사이클 + 여유 한 청크다.
+    # 2026-09-22 에 10 으로 두었더니 빈손 회차에서 두 번째 시도를 마치고 세 번째를
+    # 시작하다 잘렸다(37초 소요).
+    max_chunks: int = 8
     min_chunks: int = 2
     extended_lift_deg: float = -50.0
     returned_lift_deg: float = -95.0
