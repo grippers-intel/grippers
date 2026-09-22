@@ -3,23 +3,35 @@ units: "lerobot policy units: servo1-5 degrees, gripper 0-100"
 # 순서: [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper]
 #
 # measured: false 인 포즈로는 arm_driver 가 움직이지 않는다.
-# 실측은 tools/teach_pose.py 로 한다(토크를 끄고 손으로 자세를 잡은 뒤 저장).
+# 실측은 두 가지 방법이 있다.
+#   1) tools/teach_pose.py — 팔 드라이버를 내리고 시리얼로 직접 (터미널 입력 필요)
+#   2) 스택을 띄운 채 /arm/set_torque false → 손으로 자세를 잡고 /arm/get_state 로 읽기
+#      (2026-09-22 에 drop 을 이 방법으로 쟀다)
+#
+# ⚠️ 배포본(vla_deploy)에서 고치지 말 것 — 배포가 git checkout --force 라 덮어쓴다.
+#    저장소에서 고치고 커밋한 뒤 배포한다.
 poses:
   idle:
-    # 정책 학습 시작 자세. gripper_pick_v5_queen 15 에피소드 첫 프레임 중앙값
+    # 정책 학습 시작 자세. gripper_pick_v5_queen 15 에피소드 첫 프레임의 중앙값
     # (hardware/grippers/tools/arm/calibration/vla_idle_pose.json, 2026-09-02).
     # shoulder_lift 는 캘리브레이션 하한(822)에 걸려 있다.
     values: [-5.49, -103.3, 95.82, 73.45, -0.18, 6.94]
     measured: true
     note: "VLA 학습 시작 자세 (데이터셋 중앙값)"
   carry:
-    # 학습 에피소드는 물체를 문 채 시작 자세로 돌아와 끝난다. 그래서 운반 자세는
-    # 시작 자세와 같게 두고, 이동할 때 그리퍼는 유지한다(gripper_mode=1).
+    # 학습 회차는 물체를 문 채 시작 자세로 돌아와 끝난다. 그래서 운반 자세를 시작 자세와
+    # 같게 두고, 이동할 때 그리퍼는 유지한다(gripper_mode=1).
     values: [-5.49, -103.3, 95.82, 73.45, -0.18, 6.94]
     measured: true
     note: "idle 과 같음. 그리퍼는 이동 시 유지"
   drop:
-    # ⚠️ 미측정. 상자 위로 팔을 뻗은 자세를 teach_pose.py 로 저장할 것.
-    values: [0.0, -20.0, 40.0, 60.0, -0.18, 6.94]
-    measured: false
-    note: "TODO: 상자 위 투하 자세 실측"
+    # 2026-09-22 실측. 토크를 끄고 손으로 상자 위 자세를 잡은 뒤 /arm/get_state 로 읽었다.
+    # 팔이 앞으로 거의 수평까지 펴진 자세다(idle 대비 lift +100, elbow -89, wrist -71).
+    #
+    # ⚠️ PLACE 는 carry -> drop 을 **관절 공간 직선**으로 간다. 상자 위치나 차체가 바뀌면
+    #    중간 경로가 무엇을 스치는지 다시 볼 것.
+    # ⚠️ 여기 적힌 그리퍼 값(14.56)은 PLACE 가 쓰지 않는다 — 운반 중에는 개도를 유지하고,
+    #    놓을 때는 place.release_percent 로 연다.
+    values: [2.51, -2.73, 6.59, 2.15, -0.26, 14.56]
+    measured: true
+    note: "상자 위 투하 자세 (2026-09-22 실측)"
