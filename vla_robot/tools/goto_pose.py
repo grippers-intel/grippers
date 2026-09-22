@@ -2,6 +2,7 @@
 
     python3 tools/goto_pose.py --pose idle
     python3 tools/goto_pose.py --pose carry --keep-gripper
+    python3 tools/goto_pose.py --pose drop --base-yaw -8 --keep-gripper   # 바구니 쪽으로 틀어 본다
     python3 tools/goto_pose.py --target -5.5 -103.3 95.8 73.5 -0.2 7 --duration 4
 
 ## 왜 필요한가
@@ -26,7 +27,7 @@ import time
 
 from _common import add_common_args, confirm, open_from_args
 
-from vla_common.arm_units import GRIPPER_INDEX, JOINT_NAMES, NUM_JOINTS, SERVO_IDS
+from vla_common.arm_units import GRIPPER_INDEX, JOINT_NAMES, NUM_JOINTS, SERVO_IDS, with_base_yaw
 from vla_common.config import load_poses
 
 #: 도착으로 보는 오차(도). arm_driver_node 의 POSE_ARRIVE_TOL 과 같은 값.
@@ -54,6 +55,8 @@ def main() -> int:
     g.add_argument("--target", nargs=NUM_JOINTS, type=float, metavar=("J1", "J2", "J3", "J4", "J5", "G"),
                    help="정책 단위 목표 6개 (servo1-5 도, gripper 0..100)")
     ap.add_argument("--keep-gripper", action="store_true", help="그리퍼는 지금 값을 유지한다(물체를 문 채 이동)")
+    ap.add_argument("--base-yaw", type=float, default=0.0,
+                    help="포즈의 base(servo 1)를 이만큼(도) 더 튼다. PLACE 의 place.base_yaw_deg 를 재는 용도")
     ap.add_argument("--duration", type=float, default=0.0, help="이동 시간(초). 0 이면 설정 속도로 계산")
     ap.add_argument("--speed", type=int, default=0, help="Goal_Velocity(raw/s). 0 이면 무제한(보간이 속도를 정한다)")
     ap.add_argument("--release", action="store_true", help="도착 후 토크를 끈다 (팔이 처진다)")
@@ -91,6 +94,16 @@ def main() -> int:
             label = args.pose
         else:
             target, label = [float(v) for v in args.target], "target"
+
+        if args.base_yaw:
+            # 한계는 설정과 같은 값을 쓴다 — 벤치에서 통과한 각도가 PLACE 에서 거부되면 안 된다.
+            try:
+                target = with_base_yaw(target, args.base_yaw, cfg.place.max_base_yaw_deg)
+            except ValueError as exc:
+                print(str(exc))
+                print("  한계를 바꾸려면 robot.yaml 의 place.max_base_yaw_deg")
+                return 2
+            label = f"{label} base{args.base_yaw:+.1f}도"
 
         raw = bus.read_positions(SERVO_IDS)
         if raw is None:

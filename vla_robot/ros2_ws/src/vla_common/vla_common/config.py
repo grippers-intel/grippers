@@ -242,6 +242,16 @@ class GraspCheckConfig:
 class PlaceConfig:
     carry_pose: str = "carry"
     drop_pose: str = "drop"
+    # 바구니 앞 정차점에서 drop 포즈의 base(servo 1)를 이만큼(도) 더 튼다.
+    # Host 는 상자 앞 0.15 m 지점에 차를 세우고 box_face_yaw_deg 로 방향만 맞춘다 —
+    # 그 자리에서 팔이 바구니를 정면으로 보지 않는 나머지를 여기서 메운다.
+    # 0 이면 drop 포즈 그대로 간다. 부호는 arm_poses.yaml 첫 번째 값과 같은 축이다.
+    # 재는 법: tools/goto_pose.py --pose drop --base-yaw <도> --keep-gripper 로
+    #          바구니 위에 설 때까지 몇 도씩 올려 본 값을 여기에 적는다.
+    base_yaw_deg: float = 0.0
+    # 허용 한계. 교시 자세에서 멀어질수록 carry -> drop 관절 직선 경로가 예측에서
+    # 벗어난다. 기존 프로젝트도 ±15도에서 잘랐다(hardware arm_driver_node).
+    max_base_yaw_deg: float = 15.0
     release_percent: float = 60.0
     settle_s: float = 0.5
     return_pose: str = "idle"
@@ -288,6 +298,12 @@ def load_robot_config(path: str | Path) -> RobotConfig:
         raise ConfigError(f"policy.image_color 는 rgb|bgr: {cfg.policy.image_color!r}")
     if cfg.policy.max_chunks < 1:
         raise ConfigError("policy.max_chunks 는 1 이상이어야 한다")
+    if cfg.place.max_base_yaw_deg <= 0:
+        raise ConfigError("place.max_base_yaw_deg 는 양수여야 한다")
+    if abs(cfg.place.base_yaw_deg) > cfg.place.max_base_yaw_deg:
+        raise ConfigError(
+            f"place.base_yaw_deg {cfg.place.base_yaw_deg:+.1f} 가 "
+            f"한계 ±{cfg.place.max_base_yaw_deg:.1f} 를 넘는다")
     for name in ("max_linear_mps", "max_angular_rad_s", "watchdog_s"):
         if getattr(cfg.base, name) <= 0:
             raise ConfigError(f"base.{name} 는 양수여야 한다")

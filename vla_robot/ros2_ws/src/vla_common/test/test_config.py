@@ -12,7 +12,7 @@ def test_repo_robot_yaml_is_valid():
     assert Path(cfg.arm.calibration_file).is_file()
     poses = load_poses(cfg.arm.poses_file)
     assert poses["idle"].measured and len(poses["idle"].values) == 6
-    assert not poses["drop"].measured   # 실측 전에는 PLACE 가 거부되어야 한다
+    assert poses["drop"].measured       # 2026-09-22 실측. 이전에는 PLACE 가 거부됐다
     assert cfg.policy.image_size == (0, 0)
     assert cfg.base.cmd_vel_topic == "controller/cmd_vel"
 
@@ -68,3 +68,18 @@ def test_save_pose_roundtrip(tmp_path):
     poses = load_poses(p)
     assert poses["drop"].values == (1.0, 2.0, 3.0, 4.0, 5.0, 6.0) and poses["drop"].measured
     assert set(poses) == {"drop", "idle"}
+
+
+def test_place_base_yaw_defaults_to_zero():
+    cfg = load_robot_config(ROBOT_YAML)
+    # 실측 전에는 0 이어야 한다 — 어림값으로 팔을 틀면 바구니 밖에 놓는다
+    assert cfg.place.base_yaw_deg == 0.0
+    assert cfg.place.max_base_yaw_deg > 0
+
+
+def test_place_base_yaw_over_limit_is_rejected(tmp_path):
+    p = tmp_path / "robot.yaml"
+    p.write_text("place:" + chr(10) + "  base_yaw_deg: 40.0" + chr(10)
+                 + "  max_base_yaw_deg: 15.0" + chr(10), encoding="utf-8")
+    with pytest.raises(ConfigError, match="base_yaw_deg"):
+        load_robot_config(p)
