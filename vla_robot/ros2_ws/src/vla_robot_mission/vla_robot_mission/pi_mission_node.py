@@ -269,6 +269,19 @@ class RosJobRunner:
         except JobFailed as exc:
             grasp, failure = None, exc
 
+        # ⚠️ 복귀보다 **그리퍼를 먼저 닫는다.** 정책은 뻗으면서 턱을 열고 내려가서 닫는데,
+        # 실패하면 그 사이클이 중간에 끝나 **턱이 열린 채로 남는다.** 그대로 복귀하면 팔이
+        # 열린 그리퍼로 움직인다(2026-09-22 관찰). 물체를 쥐고 있으면 그 폭에서 멎으므로
+        # 놓치지 않고, 오히려 운반 중에 더 단단히 문다.
+        #
+        # 이 정렬은 판정의 전제이기도 하다 — 기준 프레임과 **같은 개도**여야 비교가 성립한다.
+        start_pose = self._poses.get(mcfg.start_pose)
+        if start_pose is not None:
+            try:
+                self._set_gripper(start_pose.values[GRIPPER_INDEX], "복귀 전 그리퍼 닫기")
+            except JobFailed as exc:
+                self._node.get_logger().warn(f"그리퍼 정렬 실패, 그대로 복귀한다: {exc}")
+
         # 성공·실패와 무관하게 **먼저 집으로 돌린다.** 정책은 사이클 끝(복귀 문턱이나 재시도
         # 골짜기)에서 멈추므로 팔이 공중에 남고, 그대로 두면 다음 작업이
         # `_require_known_pose` 에서 거부되어 재시도 자체가 막힌다.
@@ -279,13 +292,6 @@ class RosJobRunner:
             raise JobFailed(f"{failure or '파지 후'} / 복귀 실패: {recover}") from None
         if failure is not None:
             raise failure
-
-        # ⚠️ 비교 전에 **그리퍼 개도도 기준과 맞춘다.** 턱이 ROI 아래쪽을 크게 차지해서,
-        # 물체가 없어도 턱이 벌어진 것만으로 30% 가 바뀐다(2026-09-22 거짓 성공).
-        # 물체를 쥐고 있으면 그 폭에서 멎고, 빈손이면 기준과 같은 자리까지 닫힌다.
-        start_pose = self._poses.get(mcfg.start_pose)
-        if start_pose is not None:
-            self._set_gripper(start_pose.values[GRIPPER_INDEX], "비교 전 그리퍼 정렬")
 
         state = self._arm_state()
         opening = float(state.policy_state[GRIPPER_INDEX])
