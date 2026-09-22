@@ -64,10 +64,11 @@ policy:
   n_action_steps: 0
   fps: 30.0
   timeout_s: 45.0
-  max_chunks: 6                    # 한 번만 시도한다. 정상 5청크 · 실패 시 정책은 4청크짜리 시도를 반복
+  max_chunks: 8                    # 최후 안전장치. 실제 중단은 아래 retry_dip_deg 재시도 감지가 한다
   min_chunks: 2
   extended_lift_deg: -50.0
   returned_lift_deg: -95.0
+  retry_dip_deg: -80.0             # 여기까지 내려왔다가 다시 뻗으면 두 번째 시도 → 즉시 실패 종료
   max_frame_age_s: 1.0
   min_frame_change: 0.5
 
