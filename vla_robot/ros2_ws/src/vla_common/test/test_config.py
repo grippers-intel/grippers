@@ -38,6 +38,22 @@ def test_bool_is_not_int(tmp_path):
         load_robot_config(p)
 
 
+def test_grasp_check_defaults_to_image():
+    cfg = load_robot_config(ROBOT_YAML)
+    # TPU 턱에서 개구율·부하가 빈손과 겹쳤다 — 기본 판정은 영상이어야 한다
+    assert cfg.grasp_check.method == "image"
+    assert 0 < cfg.grasp_check.image_changed_percent < 30
+    y0, y1, x0, x1 = cfg.grasp_check.image_roi
+    assert 0 <= y0 < y1 <= 1 and 0 <= x0 < x1 <= 1
+
+
+def test_invalid_grasp_check_method(tmp_path):
+    p = tmp_path / "robot.yaml"
+    p.write_text("grasp_check:" + chr(10) + "  method: vibes" + chr(10), encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_robot_config(p)
+
+
 def test_invalid_policy_source(tmp_path):
     p = tmp_path / "robot.yaml"
     p.write_text("policy:\n  source: cloud\n", encoding="utf-8")

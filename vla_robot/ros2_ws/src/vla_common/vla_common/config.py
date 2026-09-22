@@ -184,9 +184,23 @@ class PolicyConfig:
 @dataclass(frozen=True)
 class GraspCheckConfig:
     enabled: bool = True
-    # 정책 단위 0..100. 파지 후 그리퍼가 이보다 닫혀 있으면 빈손으로 본다. 실측으로 정할 것.
-    min_gripper_percent: float = 3.0
-    # 0 이면 부하 검사를 하지 않는다.
+    # image | opening | none — 무엇으로 파지를 판정할지.
+    #
+    # ⚠️ 기본이 image 인 이유(2026-09-22 실측): TPU 턱에서는 개구율도 부하도 빈손과 겹친다.
+    #     빈손 6.6~12.2% / 부하 0.13~0.18   ·   룩을 쥔 상태 10.9% / 0.17
+    #   TPU 가 무르기 때문이다 — 물체에 닿은 뒤에도 패드가 눌리며 서보가 더 들어가고(위치가 안 멈춤),
+    #   같은 변형에 힘이 천천히 올라 부하도 안 튄다. 물린 위치(턱 끝 vs 경첩 쪽 목)에 따라서도 달라진다.
+    #   반면 그리퍼캠 근접 영역은 빈손끼리 0.0% vs 파지 30~33% 로 10배 갈린다.
+    method: str = "image"
+    # image: 파지 전후 근접 ROI 에서 달라진 픽셀 비율(%)이 이 값 이상이면 쥔 것으로 본다.
+    image_changed_percent: float = 10.0
+    # ROI (y0, y1, x0, x1), 프레임 크기 대비 비율. 화면 아래 중앙 = 턱 바로 앞.
+    image_roi: tuple[float, float, float, float] = (0.42, 0.97, 0.33, 0.67)
+    # 두 프레임의 픽셀이 "달라졌다"고 볼 채널 최대 차이(0..255).
+    image_pixel_threshold: float = 30.0
+    # opening 방식일 때만 쓴다. 정책 단위 0..100.
+    min_gripper_percent: float = 20.0
+    # 0 이면 부하 검사를 하지 않는다. TPU 에서는 분리가 안 되므로 기본 0.
     min_load_ratio: float = 0.0
 
 
@@ -234,6 +248,8 @@ def load_robot_config(path: str | Path) -> RobotConfig:
     cfg = build(RobotConfig, load_yaml(path), "robot")
     if cfg.policy.source not in ("local", "remote"):
         raise ConfigError(f"policy.source 는 local|remote: {cfg.policy.source!r}")
+    if cfg.grasp_check.method not in ("image", "opening", "none"):
+        raise ConfigError(f"grasp_check.method 는 image|opening|none: {cfg.grasp_check.method!r}")
     if cfg.policy.image_color not in ("rgb", "bgr"):
         raise ConfigError(f"policy.image_color 는 rgb|bgr: {cfg.policy.image_color!r}")
     if cfg.policy.min_chunks < 1 or cfg.policy.max_chunks < cfg.policy.min_chunks:

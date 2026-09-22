@@ -28,7 +28,7 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 
-from vla_common.arm_units import SHOULDER_LIFT_INDEX
+from vla_common.arm_units import GRIPPER_INDEX, SHOULDER_LIFT_INDEX
 from vla_common.config import load_robot_config
 from vla_robot_interfaces.action import ExecuteJointChunk, RunVlaGrasp
 from vla_robot_interfaces.srv import GetArmState
@@ -47,6 +47,25 @@ class GraspAborted(Exception):
     pass
 
 
+def roi_changed_percent(before: np.ndarray, after: np.ndarray,
+                        roi_fractions, pixel_threshold: float) -> float:
+    """두 프레임의 근접 ROI 에서 달라진 픽셀 비율(%).
+
+    물체를 쥐면 턱 바로 앞이 물체로 덮이므로 이 값이 크게 뛴다.
+    2026-09-22 실측: 빈손끼리 0.0% · 룩을 쥔 상태 30~33%.
+    개구율·부하가 TPU 때문에 빈손과 겹치는 것과 달리 여기서는 10배 갈린다.
+    """
+    if before is None or after is None or before.shape != after.shape:
+        return -1.0
+    h, w = before.shape[:2]
+    y0, y1, x0, x1 = roi_fractions
+    a = before[int(h * y0):int(h * y1), int(w * x0):int(w * x1)].astype(np.int16)
+    b = after[int(h * y0):int(h * y1), int(w * x0):int(w * x1)].astype(np.int16)
+    if a.size == 0:
+        return -1.0
+    return float(np.mean(np.max(np.abs(b - a), axis=2) > pixel_threshold) * 100.0)
+
+
 class VlaGraspNode(Node):
     def __init__(self) -> None:
         super().__init__("vla_grasp_node")
@@ -55,6 +74,7 @@ class VlaGraspNode(Node):
         self.pcfg = robot.policy
         self.gcfg = robot.gripper_cam
         self.max_temp_c = robot.arm.max_servo_temp_c
+        self.check = robot.grasp_check
         self.runner = self._make_runner()
 
         cb = ReentrantCallbackGroup()
@@ -174,6 +194,13 @@ class VlaGraspNode(Node):
             started = time.monotonic()
             chunks, extended, prev = 0, False, None
             feedback = RunVlaGrasp.Feedback()
+            # 파지 직전 기준 프레임. 끝난 뒤 같은 자세에서 다시 찍어 비교한다
+            # (학습 회차는 물체를 문 채 시작 자세로 돌아와 끝난다).
+            try:
+                reference = self._fresh_frame().copy()
+            except GraspAborted:
+                reference = None
+                self.get_logger().warn("기준 프레임을 못 잡았다 — 파지 확인을 못 한다")
             try:
                 while True:
                     if goal_handle.is_cancel_requested:
@@ -224,6 +251,21 @@ class VlaGraspNode(Node):
                 result.ok, result.message = False, f"예외: {exc}"
             result.chunks = chunks
             result.elapsed_s = float(time.monotonic() - started)
+            result.held_change_percent = -1.0
+            result.gripper_percent = -1.0
+            result.gripper_load = -1.0
+            try:
+                after = self._fresh_frame()
+                result.held_change_percent = roi_changed_percent(
+                    reference, after, self.check.image_roi, self.check.image_pixel_threshold)
+                state = self._arm_state()
+                result.gripper_percent = float(state.policy_state[GRIPPER_INDEX])
+                result.gripper_load = float(state.load_ratio[GRIPPER_INDEX])
+            except GraspAborted as exc:
+                self.get_logger().warn(f"파지 확인용 관측 실패: {exc}")
+            self.get_logger().info(
+                f"파지 관측: 근접 변화 {result.held_change_percent:.1f}% · "
+                f"그리퍼 {result.gripper_percent:.1f}% · 부하 {result.gripper_load:.2f}")
             (self.get_logger().info if result.ok else self.get_logger().warn)(
                 f"VLA 파지 {'완료' if result.ok else '실패'}: {result.message}")
             if result.ok:
