@@ -56,6 +56,27 @@ class GraspAborted(Exception):
 SAME_POSE_TOL_DEG = 10.0
 
 
+def _scan_attempts(lift_cmd, above: bool, attempts: int, extended_deg: float, dip_deg: float):
+    """명령 궤적을 훑어 "몇 번째 시도인가"를 센다.
+
+    한 번의 시도는 `extended_deg` 위로 올라갔다가 `dip_deg` 아래로 내려오는 것이다. 이력을
+    둔 이유는 문턱 근처의 잔떨림을 시도로 세지 않기 위해서다(2026-09-22 실측: 시도 사이
+    저점 -66, 성공 복귀 -103).
+
+    반환: (above, attempts, retry_at) — retry_at 은 두 번째 시도가 시작되는 스텝 번호. 없으면 None.
+    """
+    for i, value in enumerate(lift_cmd):
+        if value > extended_deg:
+            if not above:
+                above = True
+                attempts += 1
+                if attempts >= 2:
+                    return above, attempts, i
+        elif value < dip_deg:
+            above = False
+    return above, attempts, None
+
+
 def roi_changed_percent(before: np.ndarray, after: np.ndarray,
                         roi_fractions, pixel_threshold: float) -> float:
     """두 프레임의 근접 ROI 에서 달라진 픽셀 비율(%).
@@ -239,6 +260,27 @@ class VlaGraspNode(Node):
                     inference_ms = (time.monotonic() - t_inf) * 1000.0
                     if chunk.ndim != 2 or chunk.shape[1] != 6 or not np.isfinite(chunk).all():
                         raise GraspAborted(f"정책 출력이 올바르지 않다: {chunk.shape}")
+
+                    # 재시도는 **명령 궤적**에서 찾는다. 측정값은 청크 경계(3.33초)에서만 보므로
+                    # 그 사이에 일어난 시도를 통째로 놓친다 — 2026-09-22 실기에서 실제로는
+                    # 여러 번 시도했는데 로그에는 한 번으로 보였다. 청크 안에는 30Hz 100스텝이
+                    # 들어 있어 100배 촘촘하고, 무엇보다 **정책의 의도**가 그대로 담겨 있다.
+                    lift_cmd = np.asarray(chunk)[:, SHOULDER_LIFT_INDEX]
+                    above, attempts, retry_at = _scan_attempts(
+                        lift_cmd, above, attempts,
+                        self.pcfg.extended_lift_deg, self.pcfg.retry_dip_deg)
+                    self.get_logger().info(
+                        f"청크 {chunks + 1} 명령 lift 처음 {lift_cmd[0]:.0f} 최소 {lift_cmd.min():.0f} "
+                        f"최대 {lift_cmd.max():.0f} 끝 {lift_cmd[-1]:.0f} · 시도 {attempts}"
+                        + (f" · {retry_at} 스텝에서 재시도 시작" if retry_at is not None else ""))
+                    if retry_at is not None:
+                        # 재시도가 시작되는 지점 **앞까지만** 재생하고 멈춘다. 그래야 팔이
+                        # 다시 뻗지 않고, 다음 접근을 Host 가 새 관측으로 시작할 수 있다.
+                        if retry_at > 0:
+                            self._play(chunk[:retry_at], goal_handle)
+                        raise GraspAborted(
+                            f"두 번째 시도를 시작했다 — {chunks}청크 + {retry_at}스텝에서 중단. "
+                            "재시도는 Host 가 다시 세운 뒤에 한다")
                     self._play(chunk, goal_handle)
                     chunks += 1
 
@@ -256,31 +298,12 @@ class VlaGraspNode(Node):
                         continue
                     # 청크마다 lift 를 남긴다 — 재시도 문턱(retry_dip_deg)을 실측으로 정하려면
                     # 실패 회차에서 이 값이 어디까지 내려갔다 올라오는지를 봐야 한다.
-                    self.get_logger().info(
-                        f"청크 {chunks} lift {lift:.1f} (뻗음={above} 시도={attempts})")
+                    self.get_logger().info(f"청크 {chunks} 실측 lift {lift:.1f}")
                     extended = extended or lift > self.pcfg.extended_lift_deg
                     if extended and chunks >= self.pcfg.min_chunks and lift < self.pcfg.returned_lift_deg:
                         result.ok = True
                         result.message = f"{chunks}청크 — 뻗었다가 복귀 (lift {lift:.1f})"
                         break
-                    # 두 번째 시도가 시작되면 그 자리에서 끝낸다.
-                    #
-                    # 정책은 못 잡으면 같은 동작을 다시 시도한다(2026-09-22 실기: 한 번이 약 4청크).
-                    # 같은 자리에서 반복해 봐야 관측이 거의 같아 같은 실패를 되풀이한다 —
-                    # 재시도는 차를 다시 세울 수 있는 Host 몫이다.
-                    #
-                    # 청크 수로 자르지 않는 이유: 그러면 "느린 성공"과 "재시도"를 구분하지 못한다.
-                    # 학습 평균이 5.06청크라 상한을 조이면 평균적인 성공이 잘린다.
-                    if lift > self.pcfg.extended_lift_deg:
-                        if not above:
-                            above = True
-                            attempts += 1
-                            if attempts >= 2:
-                                raise GraspAborted(
-                                    f"두 번째 시도를 시작했다 — {chunks}청크에서 중단 "
-                                    f"(lift {lift:.1f}). 재시도는 Host 가 다시 세운 뒤에 한다")
-                    elif lift < self.pcfg.retry_dip_deg:
-                        above = False
             except GraspAborted as exc:
                 result.ok, result.message = False, str(exc)
             except Exception as exc:  # noqa: BLE001 — 실기 루프는 죽지 않는다
