@@ -32,6 +32,7 @@ from sensor_msgs.msg import Image
 
 from vla_common.arm_units import GRIPPER_INDEX, SHOULDER_LIFT_INDEX
 from vla_common.config import load_robot_config
+from vla_common.grasp_cycle import scan_cycle
 from vla_robot_interfaces.action import ExecuteJointChunk, RunVlaGrasp
 from vla_robot_interfaces.srv import GetArmState
 
@@ -54,49 +55,6 @@ class GraspAborted(Exception):
 #: 기준(시작 자세)과 비교했더니 빈손인데도 50.8% 가 나왔다 — 물체가 아니라 **자세 차이**를
 #: 재고 있었다. 자세가 다르면 비교 자체가 성립하지 않으므로 -1(모름)로 돌려준다.
 SAME_POSE_TOL_DEG = 10.0
-
-
-#: 골짜기 바닥에서 이만큼(도) 다시 오르면 "재시도를 시작했다"고 본다. 측정 잡음은 넘고
-#: 사람 눈에 보이는 움직임(수 도)보다는 작은 값이다.
-RETRY_RISE_DEG = 3.0
-
-
-def _scan_attempts(lift_cmd, above: bool, attempts: int, extended_deg: float, dip_deg: float,
-                   returned_deg: float):
-    """명령 궤적을 훑어 "몇 번째 시도인가"를 센다.
-
-    한 번의 시도는 `extended_deg` 위로 올라갔다가 `dip_deg` 아래로 내려오는 것이다. 이력을
-    둔 이유는 문턱 근처의 잔떨림을 시도로 세지 않기 위해서다(2026-09-22 실측: 시도 사이
-    저점 -66, 성공 복귀 -103).
-
-    ⚠️ 재시도 지점은 "extended 를 다시 넘는 순간"이 아니라 **골짜기 바닥**이다.
-    넘는 순간까지 재생하면 팔이 이미 다시 뻗기 시작한 뒤라 눈에 보인다(2026-09-22 확인).
-    바닥에서 끊으면 올라오는 동작 자체가 나오지 않는다.
-
-    반환: (above, attempts, retry_at) — retry_at 은 멈출 스텝 번호. 없으면 None.
-    """
-    dip_min = None          # 골짜기에 들어간 뒤의 최저값
-    dip_idx = 0
-    for i, value in enumerate(lift_cmd):
-        if above:
-            if value < dip_deg:
-                above, dip_min, dip_idx = False, value, i
-            continue
-        if dip_min is None or value < dip_min:
-            dip_min, dip_idx = value, i
-        if attempts >= 1 and dip_min < returned_deg:
-            # 한 번 뻗었다가 완전히 복귀했다 = 회차가 끝나는 중이다(시작 자세 -103 에서
-            # 출발하는 첫 청크와 구분하려고 attempts 를 함께 본다). 여기서 다시 오르는 것을 재시도로
-            # 세면 **성공하는 청크를 중단**시킨다(바닥에서 명령이 몇 도만 흔들려도 걸린다).
-            # 성공 판정은 청크를 다 재생한 뒤 실측 자세로 한다 — 그쪽에 맡긴다.
-            return above, attempts, None
-        if value > extended_deg or (dip_min is not None and value > dip_min + RETRY_RISE_DEG):
-            above = True
-            attempts += 1
-            if attempts >= 2:
-                return above, attempts, dip_idx
-            dip_min = None
-    return above, attempts, None
 
 
 def roi_changed_percent(before: np.ndarray, after: np.ndarray,
@@ -246,9 +204,10 @@ class VlaGraspNode(Node):
             task = f"pick up the {label}"
             timeout_s = req.timeout_s if req.timeout_s > 0 else self.pcfg.timeout_s
             started = time.monotonic()
-            chunks, extended, prev = 0, False, None
+            chunks, prev = 0, None
             # 재시도 감지용. above = 지금 뻗어 있는가, attempts = 뻗기 시작한 횟수.
-            above, attempts = False, 0
+            # scan_cycle 에 이어서 넘기는 상태 (above, ever, dip_min, dip_idx)
+            cycle = (False, False, None, 0)
             feedback = RunVlaGrasp.Feedback()
             # 파지 직전 기준 프레임. 끝난 뒤 같은 자세에서 다시 찍어 비교한다
             # (학습 회차는 물체를 문 채 시작 자세로 돌아와 끝난다).
@@ -288,21 +247,22 @@ class VlaGraspNode(Node):
                     # 여러 번 시도했는데 로그에는 한 번으로 보였다. 청크 안에는 30Hz 100스텝이
                     # 들어 있어 100배 촘촘하고, 무엇보다 **정책의 의도**가 그대로 담겨 있다.
                     lift_cmd = np.asarray(chunk)[:, SHOULDER_LIFT_INDEX]
-                    above, attempts, retry_at = _scan_attempts(
-                        lift_cmd, above, attempts, self.pcfg.extended_lift_deg,
+                    cycle, stop_at, reason = scan_cycle(
+                        lift_cmd, cycle, self.pcfg.extended_lift_deg,
                         self.pcfg.retry_dip_deg, self.pcfg.returned_lift_deg)
                     self.get_logger().info(
                         f"청크 {chunks + 1} 명령 lift 처음 {lift_cmd[0]:.0f} 최소 {lift_cmd.min():.0f} "
-                        f"최대 {lift_cmd.max():.0f} 끝 {lift_cmd[-1]:.0f} · 시도 {attempts}"
-                        + (f" · {retry_at} 스텝에서 재시도 시작" if retry_at is not None else ""))
-                    if retry_at is not None:
-                        # 재시도가 시작되는 지점 **앞까지만** 재생하고 멈춘다. 그래야 팔이
-                        # 다시 뻗지 않고, 다음 접근을 Host 가 새 관측으로 시작할 수 있다.
-                        if retry_at > 0:
-                            self._play(chunk[:retry_at], goal_handle)
-                        raise GraspAborted(
-                            f"두 번째 시도를 시작했다 — {chunks}청크 + {retry_at}스텝에서 중단. "
-                            "재시도는 Host 가 다시 세운 뒤에 한다")
+                        f"최대 {lift_cmd.max():.0f} 끝 {lift_cmd[-1]:.0f}"
+                        + (f" · {stop_at} 스텝에서 사이클 끝({reason})" if stop_at is not None else ""))
+                    if stop_at is not None:
+                        # 사이클이 끝나는 지점까지만 재생한다. 재상승이면 골짜기 바닥에서
+                        # 끊기므로 팔이 다시 뻗지 않는다.
+                        if stop_at > 0:
+                            self._play(chunk[:stop_at], goal_handle)
+                        chunks += 1
+                        result.ok = True
+                        result.message = f"{chunks}청크 + {stop_at}스텝 — 한 사이클 완료({reason})"
+                        break
                     self._play(chunk, goal_handle)
                     chunks += 1
 
@@ -321,11 +281,6 @@ class VlaGraspNode(Node):
                     # 청크마다 lift 를 남긴다 — 재시도 문턱(retry_dip_deg)을 실측으로 정하려면
                     # 실패 회차에서 이 값이 어디까지 내려갔다 올라오는지를 봐야 한다.
                     self.get_logger().info(f"청크 {chunks} 실측 lift {lift:.1f}")
-                    extended = extended or lift > self.pcfg.extended_lift_deg
-                    if extended and chunks >= self.pcfg.min_chunks and lift < self.pcfg.returned_lift_deg:
-                        result.ok = True
-                        result.message = f"{chunks}청크 — 뻗었다가 복귀 (lift {lift:.1f})"
-                        break
             except GraspAborted as exc:
                 result.ok, result.message = False, str(exc)
             except Exception as exc:  # noqa: BLE001 — 실기 루프는 죽지 않는다

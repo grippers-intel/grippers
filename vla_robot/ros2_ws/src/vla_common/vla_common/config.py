@@ -200,7 +200,6 @@ class PolicyConfig:
     # ⚠️ 상한을 5~6 으로 조이면 **평균적인 성공이 잘린다.** 학습 118회차 평균이 506프레임
     # = 5.06청크이고 완료 판정은 청크 경계에서만 보므로, 평균적인 파지가 6청크를 쓴다.
     max_chunks: int = 8
-    min_chunks: int = 2
     extended_lift_deg: float = -50.0
     returned_lift_deg: float = -95.0
     # 재시도 감지용. shoulder_lift 가 여기까지 내려왔다가(완전 복귀는 아님) **다시 뻗으면**
@@ -287,8 +286,8 @@ def load_robot_config(path: str | Path) -> RobotConfig:
         raise ConfigError(f"grasp_check.method 는 image|opening|none: {cfg.grasp_check.method!r}")
     if cfg.policy.image_color not in ("rgb", "bgr"):
         raise ConfigError(f"policy.image_color 는 rgb|bgr: {cfg.policy.image_color!r}")
-    if cfg.policy.min_chunks < 1 or cfg.policy.max_chunks < cfg.policy.min_chunks:
-        raise ConfigError("policy.min_chunks/max_chunks 범위가 잘못됐다")
+    if cfg.policy.max_chunks < 1:
+        raise ConfigError("policy.max_chunks 는 1 이상이어야 한다")
     for name in ("max_linear_mps", "max_angular_rad_s", "watchdog_s"):
         if getattr(cfg.base, name) <= 0:
             raise ConfigError(f"base.{name} 는 양수여야 한다")
