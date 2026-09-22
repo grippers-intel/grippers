@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>vla_robot_policy</name>
+  <version>0.1.0</version>
+  <description>VLA 파지 액션 노드 (local lerobot 또는 원격 policy_server)</description>
+  <maintainer email="seungyong0284@gmail.com">vla_robot</maintainer>
+  <license>Proprietary</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>vla_robot_interfaces</depend>
+  <depend>vla_common</depend>
+  <exec_depend>python3-numpy</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

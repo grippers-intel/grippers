@@ -1,0 +1,10 @@
+# 정책 추론 서버 (노트북 GPU)
+#
+# ⚠️ lerobot 버전은 체크포인트를 학습한 버전과 맞춘다.
+#    ACT v5 (act_v5_all_180_120k_120000): lerobot 0.4.x
+#    DP  v5 (dp_v5_all_180_60k_060000):   lerobot 0.6.x  (processor 형식이 다르다)
+#    torch 는 CUDA 버전에 맞는 휠을 https://pytorch.org 에서 먼저 설치할 것.
+-e ../ros2_ws/src/vla_common
+numpy
+pyyaml
+# lerobot==0.4.4

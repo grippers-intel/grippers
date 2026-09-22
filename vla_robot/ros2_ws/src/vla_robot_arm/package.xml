@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>vla_robot_arm</name>
+  <version>0.1.0</version>
+  <description>SO-ARM101 드라이버 노드 — 시리얼 버스의 유일한 소유자</description>
+  <maintainer email="seungyong0284@gmail.com">vla_robot</maintainer>
+  <license>Proprietary</license>
+
+  <depend>rclpy</depend>
+  <depend>std_srvs</depend>
+  <depend>vla_robot_interfaces</depend>
+  <depend>vla_common</depend>
+  <exec_depend>python3-serial</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

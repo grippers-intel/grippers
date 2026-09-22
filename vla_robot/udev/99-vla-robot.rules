@@ -1,0 +1,22 @@
+# vla_robot udev 규칙 — /etc/udev/rules.d/ 에 복사한 뒤:
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# ⚠️ 기존 99-ttyACM0.rules 는 모든 ttyACM* 를 /dev/rrc 로 묶어서 SO-ARM 버스 어댑터까지
+#    rrc 가 됐고, 3번째 줄 끝에 깨진 따옴표("1"1")가 있었다. 그 파일은 지우고 이것을 쓴다.
+#
+# 장치를 구분하는 값은 기계마다 다르다. 확인 방법:
+#   udevadm info -a -n /dev/ttyACM0 | grep -E 'idVendor|idProduct|serial'
+#   ls -l /dev/serial/by-id/
+# 시리얼 번호로 묶을 수 없으면 robot.yaml 의 arm.port 에 /dev/serial/by-id/... 경로를
+# 직접 적어도 된다(그쪽이 udev 없이도 안정적이다).
+
+# MentorPi 차체 보드 (CH9102, 1a86:55d4) -> /dev/rrc
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="CHANGE_ME_BASE_SERIAL", MODE="0666", SYMLINK+="rrc", ENV{ID_MM_PORT_IGNORE}="1"
+
+# SO-ARM101 버스 서보 어댑터 -> /dev/soarm
+# 어댑터 칩에 따라 idProduct 가 다르다(예: CH343 55d3). 위 명령으로 확인해 채울 것.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{serial}=="CHANGE_ME_ARM_SERIAL", MODE="0666", SYMLINK+="soarm", ENV{ID_MM_PORT_IGNORE}="1"
+
+# 그리퍼 카메라 -> /dev/gripper_cam  (video index 0 = 캡처 노드만)
+# udevadm info -a -n /dev/video0 | grep -E 'ATTRS\{serial\}|idProduct|KERNELS'
+SUBSYSTEM=="video4linux", ATTRS{serial}=="CHANGE_ME_CAM_SERIAL", ATTR{index}=="0", MODE="0666", SYMLINK+="gripper_cam"

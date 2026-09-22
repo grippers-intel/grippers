@@ -1,0 +1,17 @@
+# VLA 정책이 낸 관절 궤적 한 청크를 arm_driver 가 자기 시계로 재생한다.
+# 스텝을 DDS 로 하나씩 흘리지 않는 이유: 지터가 궤적에 섞이지 않게 하려는 것이다.
+#
+# positions: 길이 = steps * 6, servo 1..6 순서로 평탄화.
+# 단위는 LeRobot 정규화 단위(GetArmState.policy_state 와 같다). 변환은 arm_driver 만 한다.
+float32[] positions
+# 재생 주기. 학습 fps(30)를 준다. 0 이하면 거부.
+float32 fps
+# 스텝당 관절 이동 상한(도). 0 이하면 설정 파일 값.
+float32 max_step_deg
+---
+bool ok
+string message
+uint32 steps_executed
+uint32 clamped_steps
+---
+uint32 step
