@@ -56,24 +56,46 @@ class GraspAborted(Exception):
 SAME_POSE_TOL_DEG = 10.0
 
 
-def _scan_attempts(lift_cmd, above: bool, attempts: int, extended_deg: float, dip_deg: float):
+#: 골짜기 바닥에서 이만큼(도) 다시 오르면 "재시도를 시작했다"고 본다. 측정 잡음은 넘고
+#: 사람 눈에 보이는 움직임(수 도)보다는 작은 값이다.
+RETRY_RISE_DEG = 3.0
+
+
+def _scan_attempts(lift_cmd, above: bool, attempts: int, extended_deg: float, dip_deg: float,
+                   returned_deg: float):
     """명령 궤적을 훑어 "몇 번째 시도인가"를 센다.
 
     한 번의 시도는 `extended_deg` 위로 올라갔다가 `dip_deg` 아래로 내려오는 것이다. 이력을
     둔 이유는 문턱 근처의 잔떨림을 시도로 세지 않기 위해서다(2026-09-22 실측: 시도 사이
     저점 -66, 성공 복귀 -103).
 
-    반환: (above, attempts, retry_at) — retry_at 은 두 번째 시도가 시작되는 스텝 번호. 없으면 None.
+    ⚠️ 재시도 지점은 "extended 를 다시 넘는 순간"이 아니라 **골짜기 바닥**이다.
+    넘는 순간까지 재생하면 팔이 이미 다시 뻗기 시작한 뒤라 눈에 보인다(2026-09-22 확인).
+    바닥에서 끊으면 올라오는 동작 자체가 나오지 않는다.
+
+    반환: (above, attempts, retry_at) — retry_at 은 멈출 스텝 번호. 없으면 None.
     """
+    dip_min = None          # 골짜기에 들어간 뒤의 최저값
+    dip_idx = 0
     for i, value in enumerate(lift_cmd):
-        if value > extended_deg:
-            if not above:
-                above = True
-                attempts += 1
-                if attempts >= 2:
-                    return above, attempts, i
-        elif value < dip_deg:
-            above = False
+        if above:
+            if value < dip_deg:
+                above, dip_min, dip_idx = False, value, i
+            continue
+        if dip_min is None or value < dip_min:
+            dip_min, dip_idx = value, i
+        if attempts >= 1 and dip_min < returned_deg:
+            # 한 번 뻗었다가 완전히 복귀했다 = 회차가 끝나는 중이다(시작 자세 -103 에서
+            # 출발하는 첫 청크와 구분하려고 attempts 를 함께 본다). 여기서 다시 오르는 것을 재시도로
+            # 세면 **성공하는 청크를 중단**시킨다(바닥에서 명령이 몇 도만 흔들려도 걸린다).
+            # 성공 판정은 청크를 다 재생한 뒤 실측 자세로 한다 — 그쪽에 맡긴다.
+            return above, attempts, None
+        if value > extended_deg or (dip_min is not None and value > dip_min + RETRY_RISE_DEG):
+            above = True
+            attempts += 1
+            if attempts >= 2:
+                return above, attempts, dip_idx
+            dip_min = None
     return above, attempts, None
 
 
@@ -267,8 +289,8 @@ class VlaGraspNode(Node):
                     # 들어 있어 100배 촘촘하고, 무엇보다 **정책의 의도**가 그대로 담겨 있다.
                     lift_cmd = np.asarray(chunk)[:, SHOULDER_LIFT_INDEX]
                     above, attempts, retry_at = _scan_attempts(
-                        lift_cmd, above, attempts,
-                        self.pcfg.extended_lift_deg, self.pcfg.retry_dip_deg)
+                        lift_cmd, above, attempts, self.pcfg.extended_lift_deg,
+                        self.pcfg.retry_dip_deg, self.pcfg.returned_lift_deg)
                     self.get_logger().info(
                         f"청크 {chunks + 1} 명령 lift 처음 {lift_cmd[0]:.0f} 최소 {lift_cmd.min():.0f} "
                         f"최대 {lift_cmd.max():.0f} 끝 {lift_cmd[-1]:.0f} · 시도 {attempts}"

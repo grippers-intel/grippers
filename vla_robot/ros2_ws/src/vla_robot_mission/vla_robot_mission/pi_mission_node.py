@@ -210,9 +210,22 @@ class RosJobRunner:
         mcfg, check = self._cfg.mission, self._cfg.grasp_check
         self._require_known_pose()
         self._move(mcfg.start_pose, keep_gripper=False)
-        grasp = self._run_action(
-            self._grasp, RunVlaGrasp.Goal(label=label, timeout_s=0.0),
-            mcfg.grasp_timeout_s, "vla/run_grasp")
+        try:
+            grasp = self._run_action(
+                self._grasp, RunVlaGrasp.Goal(label=label, timeout_s=0.0),
+                mcfg.grasp_timeout_s, "vla/run_grasp")
+        except JobFailed as exc:
+            # 실패하면 팔이 궤적 도중(재시도 골짜기 등)에 멈춰 있다. 그대로 두면 다음 작업이
+            # `_require_known_pose` 에서 거부되어 **재시도 자체가 막힌다.**
+            #
+            # 알 수 없는 자세에서 자동으로 움직이지 않는다는 원칙의 예외다 — 여기서는 팔이
+            # 어떤 경위로 거기 있는지 안다(방금 파지 궤적을 돌다 멈췄고, 공중에 있다).
+            # 복구가 실패해도 원래 실패 사유를 덮지 않는다.
+            try:
+                self._move(mcfg.start_pose, keep_gripper=False)
+            except JobFailed as recover:
+                raise JobFailed(f"{exc} / 복구 실패: {recover}") from None
+            raise
         # 관측은 vla_grasp_node 가 했다(그쪽이 카메라와 타이밍을 안다). 판정만 여기서 한다.
         changed = float(grasp.held_change_percent)
         opening = float(grasp.gripper_percent)
