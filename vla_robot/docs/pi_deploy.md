@@ -110,10 +110,14 @@ docker exec IntelPi ls /shared/act_v5_all_180_120k_120000
 도구는 시리얼을 **직접** 엽니다. `arm_driver_node` 가 떠 있으면 포트 독점 때문에 실패합니다(의도된 동작).
 런치를 내리고 쓰거나, 노드를 뺀 채 기동하십시오.
 
-호스트에서도 돌아갑니다(호스트 Python 3.13 에 pyserial·pyyaml 이 있습니다):
+호스트에서도 돌아갑니다(호스트 Python 3.13 에 pyserial·pyyaml 이 있습니다).
+⚠️ **경로가 다릅니다** — `/grippers` 는 컨테이너 안 경로입니다.
 
 ```bash
-cd /grippers/vla_deploy/vla_robot && python3 tools/arm_check.py
+# 호스트에서
+cd /home/pi/docker/shared/grippers/vla_deploy/vla_robot && python3 tools/arm_check.py
+# 컨테이너 안에서
+docker exec -it IntelPi bash -lc "cd /grippers/vla_deploy/vla_robot && python3 tools/arm_check.py"
 ```
 
 ## 8. 되돌리기

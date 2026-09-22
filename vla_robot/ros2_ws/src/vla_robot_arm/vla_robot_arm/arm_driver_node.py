@@ -45,8 +45,13 @@ from vla_robot_interfaces.action import ExecuteJointChunk, MoveToPose
 from vla_robot_interfaces.srv import GetArmState, SetGripper
 
 BASE_BOARD_DEVICE = "/dev/rrc"
-#: 포즈 이동 후 "도착"으로 보는 오차(도, 그리퍼는 %).
+#: 포즈 이동 후 "도착"으로 보는 오차(도).
 POSE_ARRIVE_TOL = 3.0
+#: 그리퍼(%)는 따로 둔다. TPU 패드가 닫힘 끝단에서 천천히 눌려 관절보다 늦게 정착한다
+#: (2026-09-22 실측: idle 로 이동 후 3초 안에 12.2% 까지만 들어갔다).
+#: 여기서 엄격하게 잡으면 파지 전 start_pose 이동이 매번 실패로 판정된다 —
+#: 물체를 쥐었는지는 grasp_check 가 따로 보므로 이 값이 느슨해도 잃는 것이 없다.
+POSE_ARRIVE_TOL_GRIPPER = 8.0
 POSE_SETTLE_MAX_S = 2.0
 GRIPPER_SETTLE_MAX_S = 2.0
 
@@ -394,7 +399,7 @@ class ArmDriverNode(Node):
                 errors[GRIPPER_INDEX] = 0.0
             worst = max(errors)
             name = req.pose_name or "target"
-            if worst > POSE_ARRIVE_TOL * 2:
+            if not self._arrived(errors, slack=2.0):
                 result.ok = False
                 result.message = f"{name} 도착 실패: 최대 오차 {worst:.1f} (관절 {errors.index(worst) + 1})"
                 goal_handle.abort()
@@ -414,6 +419,12 @@ class ArmDriverNode(Node):
             self._motion_lock.release()
         return result
 
+    @staticmethod
+    def _arrived(errs, slack: float = 1.0) -> bool:
+        """관절과 그리퍼를 다른 기준으로 본다(POSE_ARRIVE_TOL_GRIPPER 주석 참고)."""
+        return (max(errs[:GRIPPER_INDEX]) <= POSE_ARRIVE_TOL * slack
+                and errs[GRIPPER_INDEX] <= POSE_ARRIVE_TOL_GRIPPER * slack)
+
     def _wait_arrival(self, target, ignore_gripper: bool) -> list[float]:
         deadline = time.monotonic() + POSE_SETTLE_MAX_S
         while True:
@@ -421,7 +432,7 @@ class ArmDriverNode(Node):
             errs = [abs(a - b) for a, b in zip(now, target)]
             if ignore_gripper:
                 errs[GRIPPER_INDEX] = 0.0
-            if max(errs) <= POSE_ARRIVE_TOL or time.monotonic() > deadline:
+            if self._arrived(errs) or time.monotonic() > deadline:
                 return now
             time.sleep(0.1)
 

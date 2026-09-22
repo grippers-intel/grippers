@@ -29,11 +29,21 @@ from _common import add_common_args, confirm, open_from_args
 from vla_common.arm_units import GRIPPER_INDEX, JOINT_NAMES, NUM_JOINTS, SERVO_IDS
 from vla_common.config import load_poses
 
-#: 도착으로 보는 오차(도, 그리퍼는 %). arm_driver_node 의 POSE_ARRIVE_TOL 과 같은 값.
+#: 도착으로 보는 오차(도). arm_driver_node 의 POSE_ARRIVE_TOL 과 같은 값.
 ARRIVE_TOL = 3.0
-SETTLE_MAX_S = 3.0
+#: 그리퍼(%)는 따로 둔다. TPU 패드가 닫힘 끝단에서 **천천히 눌려서** 관절보다 늦게 정착한다
+#: (2026-09-22 실측: 3초 안에 12.2% 까지만 들어가고, 더 두면 8% 대로 내려간다).
+#: 그리퍼가 몇 % 덜 닫힌 것은 자세 판정에 영향이 없다 — 파지 성공 판정은 grasp_check 가 따로 한다.
+ARRIVE_TOL_GRIPPER = 8.0
+SETTLE_MAX_S = 5.0
 #: 이보다 큰 이동은 한 번 더 경고한다. 큰 이동일수록 경로가 예측에서 벗어난다.
 BIG_MOVE_DEG = 60.0
+
+
+def _arrived(errs) -> bool:
+    """관절은 ARRIVE_TOL, 그리퍼는 ARRIVE_TOL_GRIPPER 로 따로 본다."""
+    return (max(errs[:GRIPPER_INDEX]) <= ARRIVE_TOL
+            and errs[GRIPPER_INDEX] <= ARRIVE_TOL_GRIPPER)
 
 
 def main() -> int:
@@ -125,20 +135,22 @@ def main() -> int:
             errs = [abs(a - b) for a, b in zip(final, target)]
             if args.keep_gripper:
                 errs[GRIPPER_INDEX] = 0.0
-            if max(errs) <= ARRIVE_TOL or time.monotonic() > deadline:
+            if _arrived(errs) or time.monotonic() > deadline:
                 break
             time.sleep(0.1)
 
         worst = max(errs)
-        print(f"\n도착: " + "  ".join(f"{n[:6]}={v:+.1f}" for n, v in zip(JOINT_NAMES, final)))
+        ok = _arrived(errs)
+        print()
+        print("도착: " + "  ".join(f"{n[:6]}={v:+.1f}" for n, v in zip(JOINT_NAMES, final)))
         print(f"최대 오차 {worst:.1f} ({JOINT_NAMES[errs.index(worst)]})"
-              + ("" if worst <= ARRIVE_TOL else "  ⚠️ 목표에 못 미쳤다 — 걸렸거나 전압 부족"))
+              + ("" if ok else "  ⚠️ 목표에 못 미쳤다 — 걸렸거나 전압 부족"))
         if args.release:
             bus.set_torque(SERVO_IDS, False)
             print("토크 끔 — 팔이 처집니다")
         else:
             print("토크 유지 — 자세를 잡고 있습니다")
-        return 0 if worst <= ARRIVE_TOL else 1
+        return 0 if ok else 1
     finally:
         bus.close()
 
