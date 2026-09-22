@@ -82,9 +82,17 @@ mission:
   cycle_hz: 10.0
   grasp_trigger_dist_m: 0.35       # 마커 중심 기준 (마커 -0.15- 그리퍼 -0.20- 물체)
   place_trigger_dist_m: 0.35
-  box_face_yaw_deg: 90.0
-  box_nudge_m: 0.05
   box_approach_margin_m: 0.15
+  # 바구니 투입 목표와 접근 판정 — 도면 docs/workshop_floorplan.html (2026-09-05).
+  # 상자는 yaw180 = 입구가 작업구역 쪽이다. 목표는 상자 중심이 아니라 입구 안쪽의
+  # 작은 사각형이다(chess: x[1.320,1.380] y[1.450,1.480]).
+  insert_half_width_m: 0.03
+  insert_inset_depth_m: 0.03
+  # 목표 중심 반경 0.15 m 원을 120°씩 3등분하고, 남쪽 부채꼴의 바깥 호가 NUDGE 경계선.
+  # 호 위 어디로 들어오든 목표 중심을 향한 방위각으로 선다(좌 30°·중앙 90°·우 150°).
+  max_approach_dist_m: 0.15
+  approach_sector_deg: 120.0
+  nudge_max_m: 0.40             # 이만큼 밀고도 호에 못 닿으면 방위가 틀린 것 — 재접근
   piece_dest_box:
     queen: chess
     knight: chess

@@ -243,8 +243,9 @@ class PlaceConfig:
     carry_pose: str = "carry"
     drop_pose: str = "drop"
     # 바구니 앞 정차점에서 drop 포즈의 base(servo 1)를 이만큼(도) 더 튼다.
-    # Host 는 상자 앞 0.15 m 지점에 차를 세우고 box_face_yaw_deg 로 방향만 맞춘다 —
-    # 그 자리에서 팔이 바구니를 정면으로 보지 않는 나머지를 여기서 메운다.
+    # Host 는 투입 목표 중심 반경 0.15 m 의 판정 경계호까지 붙인 뒤 그 지점에서
+    # 목표 중심을 향한 방위각으로 차를 세운다(host/mission/basket_target.py).
+    # 거기서 남는 것은 정렬 허용치 ±5° 와 팔의 좌우 장착 오프셋이고, 그 몫이 이 값이다.
     # 0 이면 drop 포즈 그대로 간다. 부호는 arm_poses.yaml 첫 번째 값과 같은 축이다.
     # 재는 법: tools/goto_pose.py --pose drop --base-yaw <도> --keep-gripper 로
     #          바구니 위에 설 때까지 몇 도씩 올려 본 값을 여기에 적는다.
