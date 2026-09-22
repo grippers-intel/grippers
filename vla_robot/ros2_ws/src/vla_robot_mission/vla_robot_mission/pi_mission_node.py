@@ -133,7 +133,12 @@ class RosJobRunner:
         except Exception as exc:  # noqa: BLE001 — 작업 스레드는 결과를 반드시 남긴다
             ok, detail = False, f"예외: {exc}"
         detail = f"{detail} ({time.monotonic() - started:.1f}s)"
-        (log.info if ok else log.warn)(f"작업 {job_id} {'성공' if ok else '실패'}: {detail}")
+        # ⚠️ 한 줄에서 심각도를 바꾸지 말 것 — rclpy 가 호출 위치별로 캐시해서 예외를 던진다
+        # (2026-09-22 실기에서 vla_grasp_node 가 같은 이유로 액션 결과를 잃었다).
+        if ok:
+            log.info(f"작업 {job_id} 성공: {detail}")
+        else:
+            log.warn(f"작업 {job_id} 실패: {detail}")
         with self._lock:
             self._finished = (job_id, ok, detail)
             self._busy = False
