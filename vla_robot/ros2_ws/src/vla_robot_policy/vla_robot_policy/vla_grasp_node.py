@@ -288,8 +288,14 @@ class VlaGraspNode(Node):
             self.get_logger().info(
                 f"파지 관측: 근접 변화 {result.held_change_percent:.1f}% · "
                 f"그리퍼 {result.gripper_percent:.1f}% · 부하 {result.gripper_load:.2f}")
-            (self.get_logger().info if result.ok else self.get_logger().warn)(
-                f"VLA 파지 {'완료' if result.ok else '실패'}: {result.message}")
+            # ⚠️ 한 줄에서 심각도를 바꾸면 rclpy 가 죽는다 —
+            # "Logger severity cannot be changed between calls" (호출 위치별로 캐시한다).
+            # 2026-09-22: 같은 프로세스에서 성공(info) 다음 실패(warn)가 나오자 예외가 터져
+            # 액션 결과가 통째로 비었다(chunks 0, "Goal state not set, assuming aborted").
+            if result.ok:
+                self.get_logger().info(f"VLA 파지 완료: {result.message}")
+            else:
+                self.get_logger().warn(f"VLA 파지 실패: {result.message}")
             if result.ok:
                 goal_handle.succeed()
             elif goal_handle.is_cancel_requested:
