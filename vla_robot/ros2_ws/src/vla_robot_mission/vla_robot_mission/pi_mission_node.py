@@ -139,14 +139,25 @@ class RosJobRunner:
             return done
 
     def cancel(self) -> None:
+        """진행 중인 작업을 접는다. **종료 중에도 불린다.**
+
+        2026-09-22 실기: Ctrl-C 로 스택을 내릴 때 여기서 RCLError("node's context is
+        invalid")가 나 pi_mission_node 가 exit 1 로 죽었다. 이 시점에는 팔 드라이버가
+        이미 자기 shutdown 으로 자세를 잡은 뒤라 실제 피해는 없지만, 종료 경로가
+        예외로 끝나면 다음 사람이 "종료가 실패했다"고 읽는다. 여기서는 삼킨다 —
+        취소는 최선 노력이고, 안전은 arm_driver 쪽 hold 가 책임진다.
+        """
         if self._cancel.is_set():
             return
         self._cancel.set()
-        goal = self._active_goal
-        if goal is not None:
-            goal.cancel_goal_async()
-        if self._hold.service_is_ready():
-            self._hold.call_async(Trigger.Request())
+        try:
+            goal = self._active_goal
+            if goal is not None:
+                goal.cancel_goal_async()
+            if self._hold.service_is_ready():
+                self._hold.call_async(Trigger.Request())
+        except Exception as exc:  # noqa: BLE001 — 종료 중 컨텍스트가 닫혔을 수 있다
+            self._node.get_logger().warn(f"작업 취소 중 무시된 오류: {exc}")
 
     # -- 실행 -----------------------------------------------------------------
     def _run(self, job_id: int, action: str, label: str, arm_yaw_deg: float = 0.0) -> None:
