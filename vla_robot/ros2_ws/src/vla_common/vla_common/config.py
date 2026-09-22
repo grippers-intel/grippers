@@ -151,8 +151,19 @@ class GripperCamConfig:
     fourcc: str = "MJPG"
     # 그리퍼캠이 거꾸로 달려 있다. 녹화(LeRobot rotation=180)와 같아야 한다.
     rotate_180: bool = True
-    publish_hz: float = 15.0
+    publish_hz: float = 10.0
     topic: str = "gripper_cam/image_raw"
+    # 발행 크기. 0 이면 캡처 크기 그대로.
+    #
+    # ⚠️ 1280x720 BGR 한 장이 2.76 MB 다. 2026-09-22 실기: 15 Hz 로 발행하려 했더니 토픽이
+    # 실제로 2.3 Hz 밖에 안 나왔고, 구독자가 받는 프레임이 1.5초까지 낡아 파지가 시작조차
+    # 못 했다("그리퍼캠 프레임이 1.5s 낡았다"). BEST_EFFORT UDP 에서 큰 메시지는 수천 개로
+    # 쪼개져 하나만 유실돼도 통째로 버려진다.
+    #
+    # 정책은 어차피 180x320 으로 줄여 쓰므로(train_config.json 의 resize) 발행 단계에서
+    # 줄인다 — 172 KB 로 16배 작아진다. 캡처는 1280x720 그대로 두어 화질을 잃지 않는다.
+    publish_width: int = 320
+    publish_height: int = 180
     # 읽기가 이만큼 연속 실패하면 장치를 다시 연다.
     reopen_after_s: float = 2.0
 

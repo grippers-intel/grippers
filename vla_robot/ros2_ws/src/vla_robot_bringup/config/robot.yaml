@@ -47,7 +47,9 @@ gripper_cam:
   fps: 30
   fourcc: MJPG
   rotate_180: true
-  publish_hz: 15.0
+  publish_hz: 10.0
+  publish_width: 320               # 발행만 줄인다(캡처는 1280x720). 정책 입력이 180x320 이다
+  publish_height: 180              # 0,0 이면 원본 크기 — 2.76MB/장이라 토픽이 2.3Hz 로 떨어진다
   topic: gripper_cam/image_raw
   reopen_after_s: 2.0
 
