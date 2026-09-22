@@ -92,6 +92,7 @@ mission:
   # 호 위 어디로 들어오든 목표 중심을 향한 방위각으로 선다(좌 30°·중앙 90°·우 150°).
   max_approach_dist_m: 0.15
   approach_sector_deg: 120.0
+  max_facing_error_deg: 50.0       # 투입을 시도해도 되는 지향 오차 한계
   nudge_max_m: 0.40             # 이만큼 밀고도 호에 못 닿으면 방위가 틀린 것 — 재접근
   piece_dest_box:
     queen: chess

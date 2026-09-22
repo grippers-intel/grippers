@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Optional
 
 from planning.planner import wrap_deg
 
@@ -93,9 +94,26 @@ def in_approach_sector(target: BasketTarget, p: XY, sector_deg: float) -> bool:
     return abs(wrap_deg(target.entry_angle_deg(p) - SOUTH_DEG)) <= sector_deg / 2.0
 
 
-def approach_ready(target: BasketTarget, p: XY, max_dist_m: float, sector_deg: float) -> bool:
-    """도면의 "Host 1차 승인" — 목표 사각형에서 max_dist_m 이내 + 접근 부채꼴 안."""
-    return target.rect_distance(p) <= max_dist_m and in_approach_sector(target, p, sector_deg)
+def facing_error_deg(target: BasketTarget, p: XY, yaw_deg: float) -> float:
+    """지금 향한 방향과 목표 중심 방위각의 차(도). 부호 있는 값이다."""
+    return wrap_deg(target.heading_deg(p) - yaw_deg)
+
+
+def facing_ok(target: BasketTarget, p: XY, yaw_deg: float, max_error_deg: float) -> bool:
+    """도면의 승인 조건 중 방향 쪽(basket_target.MAX_FACING_ERROR_DEG, 기본 ±50°)."""
+    return abs(facing_error_deg(target, p, yaw_deg)) <= max_error_deg
+
+
+def approach_ready(target: BasketTarget, p: XY, max_dist_m: float, sector_deg: float,
+                   yaw_deg: Optional[float] = None, max_facing_error_deg: float = 180.0) -> bool:
+    """도면의 "Host 1차 승인" — 목표 사각형에서 max_dist_m 이내 + 접근 부채꼴 안.
+
+    yaw_deg 를 주면 지향 오차(±max_facing_error_deg)까지 같이 본다. 도면에 이 조건이
+    그려져 있지 않은 이유도 같다 — 로봇이 지금 어디를 보고 있는지에 달려 있다.
+    """
+    if not (target.rect_distance(p) <= max_dist_m and in_approach_sector(target, p, sector_deg)):
+        return False
+    return yaw_deg is None or facing_ok(target, p, yaw_deg, max_facing_error_deg)
 
 
 def crossed_arc(target: BasketTarget, p: XY, radius_m: float, sector_deg: float) -> bool:

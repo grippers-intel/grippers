@@ -153,6 +153,9 @@ class MissionConfig:
     max_approach_dist_m: float = 0.15
     # 접근을 인정하는 부채꼴 각도. 120° = 원을 3등분한 남쪽 한 조각.
     approach_sector_deg: float = 120.0
+    # 투입을 시도해도 되는 지향 오차 한계(도). 정렬은 ±yaw_tolerance_deg 로 하므로
+    # 평소에는 걸리지 않는다 — pose 가 튀었을 때 투입을 막는 마지막 문이다.
+    max_facing_error_deg: float = 50.0
     # NUDGE 에서 앞으로 밀어 볼 수 있는 최대 거리. 여기까지 가도 호를 못 넘으면
     # 정렬이 틀린 것이다 — 다시 접근한다(place_tries 가 오른다).
     nudge_max_m: float = 0.40
@@ -214,6 +217,8 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
     if cfg.aruco.min_floor_markers < 1:
         raise ConfigError("aruco.min_floor_markers >= 1")
     m = cfg.mission
+    if not 0 < m.max_facing_error_deg <= 180:
+        raise ConfigError("mission.max_facing_error_deg 는 0 초과 180 이하여야 한다")
     for name in ("insert_half_width_m", "insert_inset_depth_m", "max_approach_dist_m", "nudge_max_m"):
         if getattr(m, name) <= 0:
             raise ConfigError(f"mission.{name} 는 양수여야 한다")
