@@ -145,19 +145,17 @@ class MissionConfig:
     grasp_trigger_dist_m: float = 0.35
     place_trigger_dist_m: float = 0.35
     box_approach_margin_m: float = 0.15
-    # --- 바구니 투입 목표와 접근 판정 (mission/basket_target.py, 도면 2026-09-05) ---
+    # --- 바구니 투입 목표 (mission/basket_target.py, 도면 2026-09-05) ---
     # 상자 입구 안쪽의 투입 목표 사각형: 가로 ±3 cm · 안쪽 3 cm.
     insert_half_width_m: float = 0.03
     insert_inset_depth_m: float = 0.03
-    # 목표 중심 기준 반경. 이 원의 남쪽 부채꼴 바깥 호가 NUDGE 판정 경계선이다.
-    max_approach_dist_m: float = 0.15
-    # 접근을 인정하는 부채꼴 각도. 120° = 원을 3등분한 남쪽 한 조각.
-    approach_sector_deg: float = 120.0
-    # 투입을 시도해도 되는 지향 오차 한계(도). 정렬은 ±yaw_tolerance_deg 로 하므로
-    # 평소에는 걸리지 않는다 — pose 가 튀었을 때 투입을 막는 마지막 문이다.
-    max_facing_error_deg: float = 50.0
-    # NUDGE 에서 앞으로 밀어 볼 수 있는 최대 거리. 여기까지 가도 호를 못 넘으면
-    # 정렬이 틀린 것이다 — 다시 접근한다(place_tries 가 오른다).
+    # 상자 정면(dest_xy)에 섰다고 보는 거리. 좌우로 이보다 벗어나면 팔이 못 메운다.
+    place_arrive_tol_m: float = 0.08
+    # 팔의 base 로 메울 수 있는 좌우 각도 한계. Pi 의 place.max_base_yaw_deg 와 같은 값.
+    # 이 밖이면 그때만 차체를 돌린다.
+    max_arm_yaw_deg: float = 15.0
+    # 상자 앞에서 앞으로 밀어 볼 수 있는 최대 거리. 여기까지 가도 정면에 못 서면
+    # 다시 접근한다(place_tries 가 오른다).
     nudge_max_m: float = 0.40
     piece_dest_box: dict[str, str] = field(default_factory=lambda: {
         "queen": "chess", "knight": "chess", "rook": "chess",
@@ -217,13 +215,11 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
     if cfg.aruco.min_floor_markers < 1:
         raise ConfigError("aruco.min_floor_markers >= 1")
     m = cfg.mission
-    if not 0 < m.max_facing_error_deg <= 180:
-        raise ConfigError("mission.max_facing_error_deg 는 0 초과 180 이하여야 한다")
-    for name in ("insert_half_width_m", "insert_inset_depth_m", "max_approach_dist_m", "nudge_max_m"):
+    for name in ("insert_half_width_m", "insert_inset_depth_m", "place_arrive_tol_m", "nudge_max_m"):
         if getattr(m, name) <= 0:
             raise ConfigError(f"mission.{name} 는 양수여야 한다")
-    if not 0 < m.approach_sector_deg <= 360:
-        raise ConfigError("mission.approach_sector_deg 는 0 초과 360 이하여야 한다")
+    if not 0 < m.max_arm_yaw_deg <= 90:
+        raise ConfigError("mission.max_arm_yaw_deg 는 0 초과 90 이하여야 한다")
     return replace(
         cfg,
         cameras=replace(cfg.cameras, calib_dir=_resolve(cfg.cameras.calib_dir)),

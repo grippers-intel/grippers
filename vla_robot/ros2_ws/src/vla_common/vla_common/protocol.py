@@ -14,7 +14,8 @@
 Host -> Pi (COMMAND_PORT, 10 Hz 이상):
 
     {"v":1, "seq":42, "state":"APPROACH",
-     "linear_x":0.15, "linear_y":0.0, "angular_z":0.0, "stop":false, "label":"queen"}
+     "linear_x":0.15, "linear_y":0.0, "angular_z":0.0, "stop":false, "label":"queen",
+     "arm_yaw_deg":0.0}
 
 Pi -> Host (STATUS_PORT, 10 Hz):
 
@@ -105,6 +106,11 @@ class HostCommand:
     stop: bool = False        # 참이면 속도 필드를 무시하고 정지
     label: str = ""           # 정책 지시문용 라벨. 좌표가 아니다
     seq: int = 0
+    # PLACE 에서만 쓴다. 차를 상자 정면에 세운 뒤 남는 좌우 각도를 팔의 base(servo 1)로
+    # 메운다 — 차체는 0.5 rad/s 에 데드밴드가 있어 몇 도짜리 회전을 못 낸다.
+    # 좌표가 아니라 **각도 하나**다: "지금 네가 보는 방향에서 이만큼 더 틀어라".
+    # Pi 가 place.max_base_yaw_deg 로 자른다. 옛 Pi 는 이 키를 모르면 0 으로 읽는다.
+    arm_yaw_deg: float = 0.0
 
     def to_bytes(self) -> bytes:
         return json.dumps({
@@ -116,6 +122,7 @@ class HostCommand:
             "angular_z": float(self.angular_z),
             "stop": bool(self.stop),
             "label": self.label,
+            "arm_yaw_deg": float(self.arm_yaw_deg),
         }, ensure_ascii=False).encode("utf-8")
 
     @classmethod
@@ -141,6 +148,7 @@ class HostCommand:
             stop=stop,
             label=label,
             seq=seq,
+            arm_yaw_deg=_finite("arm_yaw_deg", obj.get("arm_yaw_deg", 0.0)),
         )
 
 

@@ -3,11 +3,7 @@ import math
 
 import pytest
 
-from mission.basket_target import (approach_ready, basket_target, crossed_arc,
-                                   facing_ok, in_approach_sector)
-
-R = 0.15          # mission.max_approach_dist_m
-SECTOR = 120.0    # mission.approach_sector_deg
+from mission.basket_target import basket_target, facing_error_deg
 
 
 @pytest.fixture
@@ -26,64 +22,40 @@ def test_target_matches_the_drawing(chess):
     assert chess.center == pytest.approx((1.350, 1.465))
 
 
-def test_heading_is_30_90_150_on_the_arc(chess):
-    """호 위 진입 지점마다 정렬각이 다르다 — 좌 30° · 중앙 90° · 우 150°."""
+def test_heading_is_90_from_straight_in_front(chess):
+    """상자 정면에서는 목표 중심 방위각이 90° 다 — 팔이 틀 각도가 0 이다."""
     cx, cy = chess.center
-    for entry_deg, want in ((-150.0, 30.0), (-90.0, 90.0), (-30.0, 150.0)):
-        rad = math.radians(entry_deg)
-        p = (cx + R * math.cos(rad), cy + R * math.sin(rad))
-        assert chess.heading_deg(p) == pytest.approx(want, abs=1e-6)
-        assert in_approach_sector(chess, p, SECTOR)
+    assert chess.heading_deg((cx, cy - 0.3)) == pytest.approx(90.0)
+    assert facing_error_deg(chess, (cx, cy - 0.3), 90.0) == pytest.approx(0.0)
 
 
-def test_sector_rejects_side_and_back(chess):
+def test_residual_angle_is_what_the_arm_must_turn(chess):
+    """정차점이 옆으로 밀리면 그만큼 팔이 틀어야 한다. 0.30 m 앞에서 0.05 m 옆 = 9.5°."""
     cx, cy = chess.center
-    assert not in_approach_sector(chess, (cx + R, cy), SECTOR)        # 정측면(0°)
-    assert not in_approach_sector(chess, (cx, cy + R), SECTOR)        # 상자 뒤(90°)
+    # 목표의 **왼쪽**에 서 있으면 목표는 내 오른쪽 — 시계방향(-)으로 틀어야 한다
+    left_of_target = facing_error_deg(chess, (cx - 0.05, cy - 0.30), 90.0)
+    assert left_of_target == pytest.approx(-9.46, abs=0.05)
+    assert abs(left_of_target) < 15.0                     # 팔 한계 안
+    # 오른쪽에 서면 부호가 뒤집힌다
+    right_of_target = facing_error_deg(chess, (cx + 0.05, cy - 0.30), 90.0)
+    assert right_of_target == pytest.approx(+9.46, abs=0.05)
 
 
-def test_arc_and_approval_radius(chess):
+def test_residual_beyond_the_arm_limit(chess):
+    """0.20 m 옆으로 서면 34° — 팔로 못 메운다. 이때만 차체를 돌린다."""
     cx, cy = chess.center
-    on_arc = (cx, cy - R)
-    assert crossed_arc(chess, on_arc, R, SECTOR)
-    assert not crossed_arc(chess, (cx, cy - R - 0.01), R, SECTOR)
-    # dest_xy(1.350, 1.300)는 호 밖 1.5 cm — 사각형 기준 승인 반경에는 걸친다
-    dest = (1.350, 1.300)
-    assert chess.distance(dest) == pytest.approx(0.165)
-    assert not crossed_arc(chess, dest, R, SECTOR)
-    assert approach_ready(chess, dest, R, SECTOR)
+    residual = facing_error_deg(chess, (cx + 0.20, cy - 0.30), 90.0)
+    assert residual == pytest.approx(33.7, abs=0.2)
+    assert abs(residual) > 15.0
 
 
-def test_side_entry_needs_a_body_turn_not_just_the_arm(chess):
-    """호 왼쪽 끝 진입은 90°에서 60° 벗어난다 — 팔의 ±15°로는 못 메운다."""
-    cx, cy = chess.center
-    rad = math.radians(-150.0)
-    p = (cx + R * math.cos(rad), cy + R * math.sin(rad))
-    assert abs(chess.heading_deg(p) - 90.0) == pytest.approx(60.0)
-
-
-@pytest.mark.parametrize("box,left,middle,right", [
-    ("toy", (0.320, 1.390), (0.450, 1.315), (0.580, 1.390)),
-    ("chess", (1.220, 1.390), (1.350, 1.315), (1.480, 1.390)),
-])
-def test_arc_points_match_the_layout_table(cfg, box, left, middle, right):
-    """도면 텍스트판(grippers_workspace_layout.md)의 "호의 주요 점" 표 그대로."""
+def test_arc_points_still_match_the_layout_table(cfg):
+    """도면의 "호의 주요 점" 표 — 호 판정은 걷어냈지만 목표 중심은 그대로여야 한다."""
     m = cfg.mission
-    bx, by, _yaw = cfg.arena.boxes[box]
-    t = basket_target(box, (bx, by), cfg.arena.box_size,
-                      m.insert_half_width_m, m.insert_inset_depth_m)
-    cx, cy = t.center
-    got = []
-    for deg in (-150.0, -90.0, -30.0):
-        rad = math.radians(deg)
-        got.append((cx + R * math.cos(rad), cy + R * math.sin(rad)))
-    for want, have in zip((left, middle, right), got):
-        assert have == pytest.approx(want, abs=5e-4)
-
-
-def test_facing_gate(chess):
-    """지향 오차 ±50° — 호 위에 서 있어도 엉뚱한 곳을 보면 투입하지 않는다."""
-    p = (chess.center[0], chess.center[1] - R)
-    assert facing_ok(chess, p, 90.0, 50.0)          # 목표 중심을 정면으로
-    assert facing_ok(chess, p, 45.0, 50.0)          # 45° 틀어져도 통과
-    assert not facing_ok(chess, p, -30.0, 50.0)     # 120° 틀어지면 거부
+    for box, want_center, south in (("toy", (0.450, 1.465), (0.450, 1.315)),
+                                    ("chess", (1.350, 1.465), (1.350, 1.315))):
+        bx, by, _yaw = cfg.arena.boxes[box]
+        t = basket_target(box, (bx, by), cfg.arena.box_size,
+                          m.insert_half_width_m, m.insert_inset_depth_m)
+        assert t.center == pytest.approx(want_center)
+        assert (t.center[0], t.center[1] - 0.15) == pytest.approx(south)

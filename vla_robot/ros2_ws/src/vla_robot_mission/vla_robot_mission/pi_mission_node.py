@@ -16,7 +16,8 @@
 
 GRASP:  (알려진 자세인지 확인) -> start_pose 로 이동 -> VLA 파지 -> 파지 확인(개구율/부하)
         -> carry 포즈(그리퍼 유지)
-PLACE:  (알려진 자세인지 확인) -> carry(그리퍼 유지) -> drop + base 회전(place.base_yaw_deg, 그리퍼 유지)
+PLACE:  (알려진 자세인지 확인) -> carry(그리퍼 유지)
+        -> drop + base 회전(place.base_yaw_deg + HostCommand.arm_yaw_deg, 그리퍼 유지)
         -> 그리퍼 열기 -> settle -> return_pose
 """
 from __future__ import annotations
@@ -123,13 +124,13 @@ class RosJobRunner:
         with self._lock:
             return self._busy
 
-    def start(self, job_id: int, action: str, label: str) -> None:
+    def start(self, job_id: int, action: str, label: str, arm_yaw_deg: float = 0.0) -> None:
         with self._lock:
             if self._busy:
                 raise RuntimeError("이미 작업 중")
             self._busy = True
         self._cancel.clear()
-        threading.Thread(target=self._run, args=(job_id, action, label),
+        threading.Thread(target=self._run, args=(job_id, action, label, float(arm_yaw_deg)),
                          name=f"job{job_id}", daemon=True).start()
 
     def poll(self) -> Optional[tuple[int, bool, str]]:
@@ -148,15 +149,16 @@ class RosJobRunner:
             self._hold.call_async(Trigger.Request())
 
     # -- 실행 -----------------------------------------------------------------
-    def _run(self, job_id: int, action: str, label: str) -> None:
+    def _run(self, job_id: int, action: str, label: str, arm_yaw_deg: float = 0.0) -> None:
         log = self._node.get_logger()
         started = time.monotonic()
         try:
-            log.info(f"작업 {job_id} 시작: {action} label={label or '-'}")
+            log.info(f"작업 {job_id} 시작: {action} label={label or '-'} "
+                     f"arm_yaw={arm_yaw_deg:+.1f}도")
             if action == State.GRASP:
                 detail = self._do_grasp(label)
             elif action == State.PLACE:
-                detail = self._do_place()
+                detail = self._do_place(arm_yaw_deg)
             else:
                 raise JobFailed(f"모르는 작업: {action}")
             ok = True
@@ -325,22 +327,28 @@ class RosJobRunner:
                     raise JobFailed(f"그리퍼 부하가 낮다: {observed}")
         return f"파지 {grasp.chunks}청크 — {observed}"
 
-    def _do_place(self) -> str:
-        """차는 바구니 앞 정차점에 서 있다. 나머지 좌우 정렬은 팔의 base 가 맡는다.
+    def _do_place(self, arm_yaw_deg: float = 0.0) -> str:
+        """차는 상자 정면에 서 있다. **좌우 정렬은 차체가 아니라 팔의 base 가 한다.**
 
-        `place.base_yaw_deg` 만큼 drop 포즈의 servo 1 을 틀어서 간다(0 이면 포즈 그대로).
+        트는 각도는 두 몫의 합이다.
+          place.base_yaw_deg  설정값. 팔의 고정 장착 오프셋처럼 매번 같은 몫
+          arm_yaw_deg         Host 가 이번 정차 자리에서 잰 잔차(HostCommand)
+        합이 place.max_base_yaw_deg 를 넘으면 거부한다 — 그 각도는 차를 다시 세워야 한다.
         복귀 포즈는 틀지 않는다 — idle 은 정책 시작 자세라 항상 제자리여야 한다.
         """
         pcfg = self._cfg.place
         drop = self._poses.get(pcfg.drop_pose)
         if drop is None or not drop.measured:
             raise JobFailed(f"'{pcfg.drop_pose}' 포즈가 실측되지 않았다 — tools/teach_pose.py --name {pcfg.drop_pose}")
+        host_yaw = pcfg.host_yaw_sign * float(arm_yaw_deg)
+        yaw = pcfg.base_yaw_deg + host_yaw
         try:
-            target = with_base_yaw(drop.values, pcfg.base_yaw_deg, pcfg.max_base_yaw_deg)
+            target = with_base_yaw(drop.values, yaw, pcfg.max_base_yaw_deg)
         except ValueError as exc:
-            raise JobFailed(f"place.base_yaw_deg 를 쓸 수 없다: {exc}") from None
-        yaw = pcfg.base_yaw_deg
-        note = f" · base {yaw:+.1f}도" if yaw else ""
+            raise JobFailed(
+                f"base 회전을 쓸 수 없다: {exc} "
+                f"(설정 {pcfg.base_yaw_deg:+.1f} + Host {host_yaw:+.1f})") from None
+        note = f" · base {yaw:+.1f}도(설정 {pcfg.base_yaw_deg:+.1f} + Host {host_yaw:+.1f})" if yaw else ""
         self._require_known_pose()
         self._move(pcfg.carry_pose, keep_gripper=True)
         if yaw:
