@@ -97,6 +97,14 @@ grasp_check:
 place:
   carry_pose: carry
   drop_pose: drop
+  # 바구니 앞 정차점(Host 가 box_approach_margin_m 만큼 띄워 세운다)에서 팔의
+  # base(servo 1)를 이만큼 더 튼다. 차체를 제자리 회전시키는 것보다 싸고 정확하다 —
+  # 차체는 0.5 rad/s 에 데드밴드가 있어 몇 도짜리 회전을 못 내고 위치추정만 흔든다.
+  #
+  # ⚠️ 파지(GRASP)에는 쓰지 않는다. 정책이 관절 목표를 절대값으로 내서 첫 청크에 지워진다.
+  # 재는 법: tools/goto_pose.py --pose drop --base-yaw <도> --keep-gripper
+  base_yaw_deg: 0.0             # 2026-09-22 현재 미측정. 바구니 앞 실측 후 채울 것
+  max_base_yaw_deg: 15.0
   release_percent: 60.0
   settle_s: 0.5
   return_pose: idle

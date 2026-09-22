@@ -16,8 +16,8 @@
 
 GRASP:  (알려진 자세인지 확인) -> start_pose 로 이동 -> VLA 파지 -> 파지 확인(개구율/부하)
         -> carry 포즈(그리퍼 유지)
-PLACE:  (알려진 자세인지 확인) -> carry(그리퍼 유지) -> drop(그리퍼 유지) -> 그리퍼 열기
-        -> settle -> return_pose
+PLACE:  (알려진 자세인지 확인) -> carry(그리퍼 유지) -> drop + base 회전(place.base_yaw_deg, 그리퍼 유지)
+        -> 그리퍼 열기 -> settle -> return_pose
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Empty
 from std_srvs.srv import Trigger
 
-from vla_common.arm_units import GRIPPER_INDEX
+from vla_common.arm_units import GRIPPER_INDEX, with_base_yaw
 from vla_common.config import RobotConfig, load_poses, load_robot_config
 from vla_common.grasp_check import roi_changed_percent
 from vla_common.motion_limits import MotionLimits
@@ -238,6 +238,12 @@ class RosJobRunner:
         goal = MoveToPose.Goal(pose_name=pose_name, gripper_mode=1 if keep_gripper else 0, duration_s=0.0)
         return self._run_action(self._pose, goal, timeout_s, f"move_to_pose({pose_name})")
 
+    def _move_values(self, values, keep_gripper: bool, what: str, timeout_s: float = 20.0):
+        """이름 없는 목표로 이동한다(pose_name 이 비면 arm_driver 가 target 을 쓴다)."""
+        goal = MoveToPose.Goal(pose_name="", target=[float(v) for v in values],
+                               gripper_mode=1 if keep_gripper else 0, duration_s=0.0)
+        return self._run_action(self._pose, goal, timeout_s, f"move_to_pose({what})")
+
     def _set_gripper(self, percent: float, what: str) -> float:
         self._check_cancel()
         if not self._gripper.wait_for_service(timeout_sec=2.0):
@@ -320,17 +326,31 @@ class RosJobRunner:
         return f"파지 {grasp.chunks}청크 — {observed}"
 
     def _do_place(self) -> str:
+        """차는 바구니 앞 정차점에 서 있다. 나머지 좌우 정렬은 팔의 base 가 맡는다.
+
+        `place.base_yaw_deg` 만큼 drop 포즈의 servo 1 을 틀어서 간다(0 이면 포즈 그대로).
+        복귀 포즈는 틀지 않는다 — idle 은 정책 시작 자세라 항상 제자리여야 한다.
+        """
         pcfg = self._cfg.place
         drop = self._poses.get(pcfg.drop_pose)
         if drop is None or not drop.measured:
             raise JobFailed(f"'{pcfg.drop_pose}' 포즈가 실측되지 않았다 — tools/teach_pose.py --name {pcfg.drop_pose}")
+        try:
+            target = with_base_yaw(drop.values, pcfg.base_yaw_deg, pcfg.max_base_yaw_deg)
+        except ValueError as exc:
+            raise JobFailed(f"place.base_yaw_deg 를 쓸 수 없다: {exc}") from None
+        yaw = pcfg.base_yaw_deg
+        note = f" · base {yaw:+.1f}도" if yaw else ""
         self._require_known_pose()
         self._move(pcfg.carry_pose, keep_gripper=True)
-        self._move(pcfg.drop_pose, keep_gripper=True)
+        if yaw:
+            self._move_values(target, keep_gripper=True, what=f"{pcfg.drop_pose}{note}")
+        else:
+            self._move(pcfg.drop_pose, keep_gripper=True)
         self._set_gripper(pcfg.release_percent, "그리퍼 열기")
         time.sleep(pcfg.settle_s)
         self._move(pcfg.return_pose, keep_gripper=False)
-        return "투하 완료"
+        return f"투하 완료{note}"
 
 
 class PiMissionNode(Node):

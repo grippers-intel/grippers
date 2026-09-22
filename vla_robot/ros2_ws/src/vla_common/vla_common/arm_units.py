@@ -28,6 +28,7 @@ Min/Max_Position_Limit 레지스터가 잡고, 스텝당 이동량은 arm_driver
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -38,6 +39,7 @@ NUM_JOINTS = 6
 GRIPPER_INDEX = 5
 WRIST_ROLL_INDEX = 4
 SHOULDER_LIFT_INDEX = 1
+BASE_INDEX = 0          # shoulder_pan. 차체가 선 자리에서 팔만 좌우로 트는 관절
 
 #: STS3215 한 바퀴 4096 카운트. lerobot 정규화 분모는 해상도 - 1 = 4095 다.
 STS3215_MAX_RES = 4095
@@ -163,3 +165,31 @@ class ArmCalibration:
         value = 100.0 - percent if j.drive_mode else percent
         bounded = min(100.0, max(0.0, float(value)))
         return int((bounded / 100.0) * (j.range_max - j.range_min) + j.range_min)
+
+
+def with_base_yaw(values: Sequence[float], yaw_deg: float, max_yaw_deg: float) -> list[float]:
+    """포즈에 base(servo 1) 회전을 더한 목표를 만든다 — 순수 계산.
+
+    차를 바구니 앞 정차점에 세워도 팔은 바구니를 정면으로 보지 않는다. 그 나머지
+    각도를 차체를 다시 돌려서 메우려 하면(0.5 rad/s 에 데드밴드까지 있는 차체다)
+    제자리 회전이 위치추정을 흔든다. 팔의 base 를 그만큼 트는 쪽이 싸고 정확하다.
+
+    ⚠️ 이 보정은 **PLACE 전용이다.** 파지는 정책이 관절 목표를 **절대값으로** 내므로
+    (ExecuteJointChunk 의 단위가 policy_state 와 같다) 미리 틀어 놓아도 첫 청크에서
+    지워진다. 파지 쪽 좌우 정렬은 차체가 맞춰야 한다.
+
+    yaw_deg 는 정책 단위(도)의 부호를 그대로 쓴다 — arm_poses.yaml 의 첫 번째 값과 같은 축.
+    한계를 넘으면 거부한다. 교시 자세에서 멀어질수록 관절 공간 직선 경로가 무엇을
+    스치는지 예측에서 벗어나기 때문이다(기존 프로젝트도 ±15도에서 잘랐다).
+    """
+    if len(values) != NUM_JOINTS:
+        raise ValueError(f"포즈 값은 6개여야 한다: {len(values)}")
+    yaw = float(yaw_deg)
+    limit = abs(float(max_yaw_deg))
+    if not math.isfinite(yaw):
+        raise ValueError(f"base 회전이 유한하지 않다: {yaw_deg!r}")
+    if abs(yaw) > limit:
+        raise ValueError(f"base 회전 {yaw:+.1f}도가 한계 ±{limit:.1f}도를 넘는다")
+    out = [float(v) for v in values]
+    out[BASE_INDEX] += yaw
+    return out
