@@ -254,6 +254,10 @@ class VlaGraspNode(Node):
                     except GraspAborted as exc:
                         self.get_logger().warn(f"완료 판정용 읽기 실패, 다음 청크에서 다시: {exc}")
                         continue
+                    # 청크마다 lift 를 남긴다 — 재시도 문턱(retry_dip_deg)을 실측으로 정하려면
+                    # 실패 회차에서 이 값이 어디까지 내려갔다 올라오는지를 봐야 한다.
+                    self.get_logger().info(
+                        f"청크 {chunks} lift {lift:.1f} (뻗음={above} 시도={attempts})")
                     extended = extended or lift > self.pcfg.extended_lift_deg
                     if extended and chunks >= self.pcfg.min_chunks and lift < self.pcfg.returned_lift_deg:
                         result.ok = True
