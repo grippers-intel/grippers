@@ -50,8 +50,14 @@ docker exec -it IntelPi bash -lc '
   colcon build --symlink-install'
 ```
 
-`--symlink-install` 이어야 `arm_poses.yaml`·`robot.yaml` 을 고쳤을 때 재빌드 없이 반영됩니다
-(`teach_pose.py` 가 소스의 yaml 을 고칩니다).
+> [!warning] `--symlink-install` 이어도 **설정 파일은 복사됩니다**
+> 파이썬 소스는 심링크되지만 `data_files`(config/launch)는 복사본입니다(2026-09-22 실측).
+> `robot.yaml`·`arm_poses.yaml` 을 고치면 **설치본은 옛 값 그대로**입니다.
+> `teach_pose.py` 가 소스의 yaml 을 고치므로 이 함정에 매번 걸립니다.
+>
+> 그래서 기동할 때 **소스의 config 를 직접 지정하는 것을 권합니다**(아래 4번).
+> 그렇게 하면 `poses_file` 도 그 파일 기준으로 풀려 소스 쪽 `arm_poses.yaml` 을 읽습니다.
+> 설치본을 쓰려면 설정을 고칠 때마다 `colcon build` 를 다시 하십시오.
 
 ## 4. 기동
 
@@ -62,8 +68,10 @@ docker exec -it IntelPi bash -lc '
   source /ros2_ws/install/setup.bash &&                      # 벤더: controller · ros_robot_controller
   source /grippers/vla_deploy/vla_robot/ros2_ws/install/setup.bash &&
   bash /grippers/vla_deploy/vla_robot/tools/ops/pi_preflight.sh &&
-  ros2 launch vla_robot_bringup robot.launch.py'
+  ros2 launch vla_robot_bringup robot.launch.py     config:=/grippers/vla_deploy/vla_robot/ros2_ws/src/vla_robot_bringup/config/robot.yaml'
 ```
+
+`config:=` 로 **소스 경로**를 주는 것이 기본입니다 — 설치본은 빌드 시점의 복사본이라 설정 변경이 반영되지 않습니다(3번 경고).
 
 source 순서가 중요합니다. 벤더 워크스페이스를 먼저 얹어야 `controller` 패키지를 찾습니다.
 
