@@ -251,10 +251,12 @@ class PlaceConfig:
     #          바구니 위에 설 때까지 몇 도씩 올려 본 값을 여기에 적는다.
     base_yaw_deg: float = 0.0
     # Host 가 보낸 잔차 각도(HostCommand.arm_yaw_deg)에 곱할 부호. +1 또는 -1.
-    # map 의 반시계 + 가 servo 1 의 + 와 같은 방향인지는 실기에서 한 번 확인한다:
-    # tools/goto_pose.py --pose drop --base-yaw +10 --keep-gripper 로 틀어 보고
-    # 그리퍼가 로봇 기준 **왼쪽**으로 돌면 +1, 오른쪽으로 돌면 -1 이다.
-    host_yaw_sign: float = 1.0
+    #
+    # 2026-09-22 실기 확인: idle 에서 servo 1 을 -10도 준 자세가 **로봇 기준 왼쪽**이었다.
+    # 즉 servo 1 은 음수가 반시계인데 map 은 반시계가 + 다 — 부호가 반대라 -1 이다.
+    # 다시 확인하려면: idle 에서 servo 1 만 ±10도 옮기고 어느 쪽으로 도는지 본다
+    # (그리퍼캠으로도 갈렸다: 팔이 오른쪽으로 돌면 먼 장면이 화면에서 왼쪽으로 밀린다).
+    host_yaw_sign: float = -1.0
     # 허용 한계. 교시 자세에서 멀어질수록 carry -> drop 관절 직선 경로가 예측에서
     # 벗어난다. 기존 프로젝트도 ±15도에서 잘랐다(hardware arm_driver_node).
     max_base_yaw_deg: float = 15.0
