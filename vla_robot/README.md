@@ -68,9 +68,11 @@ vla_robot/
 sudo apt install python3-serial python3-yaml python3-opencv
 pip install lerobot==<체크포인트와 같은 버전>   # policy.source: local 일 때만
 
-# 2) 빌드 — 설정 파일을 소스에서 바로 읽도록 symlink-install 사용
+# 2) 빌드
 cd vla_robot/ros2_ws
 colcon build --symlink-install
+#    ⚠️ 파이썬 소스는 심링크되지만 config/launch 는 **복사**된다.
+#    설정을 고친 뒤 재빌드하거나, 기동할 때 config:=<소스 robot.yaml> 로 지정할 것.
 source install/setup.bash
 
 # 3) udev: 기존 99-ttyACM0.rules 는 삭제하고 udev/99-vla-robot.rules 의 CHANGE_ME 를 채워 설치
