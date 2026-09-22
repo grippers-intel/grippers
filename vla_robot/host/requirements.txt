@@ -1,0 +1,12 @@
+# host/ 디렉터리에서 실행할 것:  pip install -r requirements.txt
+# (아래 -e 경로가 host/ 기준 상대경로다)
+-e ../ros2_ws/src/vla_common
+
+numpy>=1.26
+# cv2.aruco.ArucoDetector 가 필요하다(OpenCV 4.7+). contrib 가 아니어도 4.7+ 면 aruco 포함.
+opencv-contrib-python>=4.8
+pyyaml>=6.0
+pytest>=8.0
+
+# --detector geti 일 때만 (Python 3.11, 기존 검증 버전)
+# geti-sdk==2.13.1

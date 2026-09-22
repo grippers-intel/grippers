@@ -1,0 +1,17 @@
+# VLA 정책 루프로 파지 한 번을 수행한다.
+#
+#   그리퍼캠 프레임 + GetArmState.policy_state -> 정책 -> 청크 -> ExecuteJointChunk -> 반복
+#
+# ok=true 는 "정책 동작이 끝까지 돌았다(뻗었다가 복귀했다)"는 뜻이다.
+# "물체를 집었다"는 판정은 호출부(pi_mission_node)가 그리퍼 개구율/부하로 따로 한다.
+string label
+float32 timeout_s
+---
+bool ok
+string message
+uint32 chunks
+float32 elapsed_s
+---
+uint32 chunk
+float32 elapsed_s
+float32 last_inference_ms

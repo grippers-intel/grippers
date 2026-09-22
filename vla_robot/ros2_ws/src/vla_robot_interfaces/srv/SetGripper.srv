@@ -1,0 +1,8 @@
+# 그리퍼를 정책 단위(0 = 캘리브레이션 range_min, 100 = range_max)로 움직이고
+# 도착(또는 정지)할 때까지 기다린다.
+float32 percent
+---
+bool ok
+string message
+float32 final_percent
+float32 load_ratio

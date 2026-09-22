@@ -1,0 +1,17 @@
+# 이름 붙은 포즈(arm_poses.yaml) 또는 직접 준 목표로 관절 공간 보간 이동한다.
+# 단위는 정책 단위. pose_name 이 비어 있으면 target 을 쓴다.
+#
+# gripper_mode:
+#   0 = 포즈에 적힌 그리퍼 값으로 같이 움직인다
+#   1 = 그리퍼는 지금 값을 유지한다 (물체를 문 채 이동할 때)
+string pose_name
+float32[6] target
+uint8 gripper_mode
+# 0 이하면 설정의 pose_speed_deg_s 로 시간을 정한다.
+float32 duration_s
+---
+bool ok
+string message
+float32[6] final_policy_state
+---
+float32 progress

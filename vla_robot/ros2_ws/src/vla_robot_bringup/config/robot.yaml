@@ -1,0 +1,90 @@
+# vla_robot — Pi 쪽 설정의 단일 원본.
+#
+# 모든 노드가 이 파일을 직접 읽는다(ROS 파라미터로 따로 선언하지 않는다).
+# 모르는 키가 있으면 노드가 기동을 거부한다 — 오타가 조용히 무시되지 않게.
+# 파일 경로는 이 yaml 기준 상대경로로 적어도 된다.
+# 기본값과 각 값의 근거는 vla_common/config.py 에 있다.
+
+arm:
+  port: /dev/soarm                 # udev 심볼릭 링크 또는 /dev/serial/by-id/... 경로
+  baudrate: 1000000
+  calibration_file: arm_calibration.json
+  poses_file: arm_poses.yaml
+  verify_homing_offsets: true
+  torque_on_start: true
+  min_voltage_v: 10.5
+  max_step_deg: 5.0
+  max_chunk_steps: 500
+  chunk_acceleration: 30
+  pose_speed_deg_s: 45.0
+  pose_rate_hz: 30.0
+  gripper_speed_pct_s: 80.0
+  read_retries: 3
+  state_rate_hz: 10.0
+
+base:
+  cmd_vel_topic: controller/cmd_vel
+  feedback_topic: odom_raw
+  feedback_timeout_s: 1.0
+  max_linear_mps: 0.15
+  max_angular_rad_s: 0.5
+  reject_mixed_rotation: true
+  watchdog_s: 0.5
+  publish_hz: 20.0
+
+link:
+  bind_ip: 0.0.0.0
+  command_port: 5005
+  status_port: 5006
+  status_hz: 10.0
+  fixed_host_ip: ""
+
+gripper_cam:
+  device: /dev/gripper_cam
+  width: 1280
+  height: 720
+  fps: 30
+  fourcc: MJPG
+  rotate_180: true
+  publish_hz: 15.0
+  topic: gripper_cam/image_raw
+  reopen_after_s: 2.0
+
+policy:
+  source: local                    # local(Pi CPU) | remote(policy_server)
+  checkpoint: /shared/act_v5_all_180_120k_120000
+  device: cpu
+  url: http://192.168.0.2:8770
+  remote_timeout_s: 5.0
+  image_color: rgb                 # ⚠️ README "색 순서" 참고. 실기에서 반드시 확인
+  image_size: [0, 0]               # [0,0] = train_config.json 에서 읽음 (v5: 180x320)
+  freeze_wrist_roll: true
+  wrist_roll_value: 0.067
+  n_action_steps: 0
+  fps: 30.0
+  timeout_s: 45.0
+  max_chunks: 10
+  min_chunks: 2
+  extended_lift_deg: -50.0
+  returned_lift_deg: -95.0
+  max_frame_age_s: 1.0
+  min_frame_change: 0.5
+
+grasp_check:
+  enabled: true
+  min_gripper_percent: 3.0         # TODO 실측: 빈손으로 닫았을 때 값보다 크게
+  min_load_ratio: 0.0              # TODO 실측 후 켜기 (0 = 끔)
+
+place:
+  carry_pose: carry
+  drop_pose: drop
+  release_percent: 60.0
+  settle_s: 0.5
+  return_pose: idle
+
+mission:
+  cycle_hz: 20.0
+  start_pose: idle
+  grasp_timeout_s: 90.0
+  place_timeout_s: 45.0
+  known_pose_tolerance_deg: 20.0
