@@ -103,7 +103,11 @@ place:
   #
   # ⚠️ 파지(GRASP)에는 쓰지 않는다. 정책이 관절 목표를 절대값으로 내서 첫 청크에 지워진다.
   # 재는 법: tools/goto_pose.py --pose drop --base-yaw <도> --keep-gripper
-  base_yaw_deg: 0.0             # 고정 몫(팔 장착 오프셋). 2026-09-22 현재 미측정
+  # 고정 몫(팔 장착 오프셋). ⚠️ **잠정값이다 — 확정 아님.**
+  # 2026-09-22 첫 GRASP -> PLACE 를 0 으로 성공했지만, 그때 차와 바구니는 손으로
+  # 세워 둔 배치였다. 맵을 다시 만들고 Host 가 dest_xy 에 정차시킨 **실제 자리**에서
+  # 다시 재야 한다: tools/goto_pose.py --pose drop --base-yaw <도> --keep-gripper
+  base_yaw_deg: 0.0
   host_yaw_sign: -1.0           # 2026-09-22 실기 확인: servo 1 음수 = 로봇 기준 왼쪽(반시계).
                                 # map 은 반시계가 + 라 부호가 반대다
   max_base_yaw_deg: 15.0

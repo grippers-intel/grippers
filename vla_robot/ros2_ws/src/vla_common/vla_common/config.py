@@ -249,6 +249,9 @@ class PlaceConfig:
     # 0 이면 drop 포즈 그대로 간다. 부호는 arm_poses.yaml 첫 번째 값과 같은 축이다.
     # 재는 법: tools/goto_pose.py --pose drop --base-yaw <도> --keep-gripper 로
     #          바구니 위에 설 때까지 몇 도씩 올려 본 값을 여기에 적는다.
+    #
+    # 2026-09-22: 0 으로 첫 투하에 성공했다(룩이 바구니 안). 다만 그때 차·바구니는
+    # 손으로 세운 배치였다 — 맵 재구축 뒤 실제 정차 자리에서 다시 잰다.
     base_yaw_deg: float = 0.0
     # Host 가 보낸 잔차 각도(HostCommand.arm_yaw_deg)에 곱할 부호. +1 또는 -1.
     #
