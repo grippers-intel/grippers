@@ -15,6 +15,8 @@ import math
 import cv2
 import numpy as np
 
+from mission.basket_target import basket_target
+
 WINDOW = "vla_robot host"
 KEYMAP = {ord("q"): "quit", 27: "quit", ord(" "): "estop", ord("r"): "reset",
           ord("n"): "next", ord("p"): "prev", ord("m"): "toggle_manual"}
@@ -48,11 +50,21 @@ class MapView:
         cv2.rectangle(img, self._px(a.workspace_x[0], a.workspace_y[1]),
                       self._px(a.workspace_x[1], a.workspace_y[0]), (60, 80, 60), 1)
         bw, bl, _ = a.box_size
+        m = cfg.mission
         for name, (bx, by, _yaw) in a.boxes.items():
             cv2.rectangle(img, self._px(bx - bw / 2, by + bl / 2), self._px(bx + bw / 2, by - bl / 2),
                           (40, 120, 200), 2)
             cv2.putText(img, name, self._px(bx - bw / 2, by), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                         (40, 160, 230), 1)
+            # 투입 목표 사각형과 NUDGE 판정 경계호 — 차가 어디서 서야 하는지가 곧 이 호다.
+            target = basket_target(name, (bx, by), a.box_size,
+                                   m.insert_half_width_m, m.insert_inset_depth_m)
+            x0, x1, y0, y1 = target.rect
+            cv2.rectangle(img, self._px(x0, y1), self._px(x1, y0), (60, 200, 230), 1)
+            half = int(round(m.approach_sector_deg / 2.0))
+            cv2.ellipse(img, self._px(*target.center),
+                        (int(m.max_approach_dist_m * self.s), int(m.max_approach_dist_m * self.s)),
+                        0, 90 - half, 90 + half, (60, 200, 230), 1)
 
         for xy, _t in fsm.skipped:
             cv2.circle(img, self._px(*xy), int(cfg.mission.skip_radius_m * self.s), (80, 80, 160), 1)

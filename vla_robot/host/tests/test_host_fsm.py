@@ -1,3 +1,5 @@
+import pytest
+
 from localization.pose import Pose
 from mission.host_fsm import HostState, MissionFSM
 from vla_common.protocol import JobResult, PiStatus, State
@@ -94,12 +96,14 @@ def _setup_place(fsm):
 
 
 def _place_attempt_from_face(fsm, prev_status, t):
+    """정중앙 아래에서 들어오면 방위각이 90도라 고정 90도였던 예전과 같아진다."""
     assert fsm.state == HostState.FACE_BOX
-    fsm.step(P(1.35, 0.95), {}, prev_status, t)                 # 정렬됨 -> NUDGE_BOX
+    fsm.step(P(1.35, 1.20), {}, prev_status, t)                 # 정렬됨 -> NUDGE_BOX
     assert fsm.state == HostState.NUDGE_BOX
-    cmd = fsm.step(P(1.35, 0.95), {}, prev_status, t + 0.1)     # 전진
+    cmd = fsm.step(P(1.35, 1.20), {}, prev_status, t + 0.1)     # 호 밖 -> 전진
     assert cmd.state == State.APPROACH_BOX and cmd.linear_x > 0
-    cmd = fsm.step(P(1.35, 1.01), {}, prev_status, t + 0.2)     # 5 cm -> PLACE
+    # 목표 중심 (1.350, 1.465) 에서 0.15 m 안 = 판정 경계호를 넘었다
+    cmd = fsm.step(P(1.35, 1.33), {}, prev_status, t + 0.2)
     assert fsm.state == HostState.PLACE and cmd.state == State.PLACE
 
 
@@ -153,3 +157,32 @@ def test_manual_mode_waits_for_next(cfg):
     fsm.request_advance()
     fsm.step(P(0.9, 0.45), PM, S(), 0.1)
     assert fsm.state == HostState.APPROACH_PIECE
+
+
+def test_face_box_turns_toward_the_insert_target(cfg):
+    """사선으로 들어오면 고정 90도가 아니라 목표 중심 방위각으로 돈다."""
+    fsm = MissionFSM(cfg)
+    _setup_place(fsm)
+    fsm._enter(HostState.FACE_BOX)
+    target = fsm._basket()
+    assert target.center == pytest.approx((1.350, 1.465))
+    # 목표 중심의 남서쪽에서 진입 -> 북동(90도보다 작은 각)을 봐야 한다
+    left = (1.20, 1.30)
+    want = target.heading_deg(left)
+    assert 30.0 < want < 90.0
+    cmd = fsm.step(P(*left, yaw=90.0), {}, S(), 0.0)            # 90도로는 정렬 아님
+    assert fsm.state == HostState.FACE_BOX and cmd.angular_z != 0
+    fsm.step(P(*left, yaw=want), {}, S(), 0.1)                  # 방위각에 맞추면 통과
+    assert fsm.state == HostState.NUDGE_BOX
+
+
+def test_nudge_gives_up_when_the_arc_is_never_crossed(cfg):
+    """방위가 틀리면 계속 밀지 않는다 — 상자를 치기 전에 다시 접근한다."""
+    fsm = MissionFSM(cfg)
+    _setup_place(fsm)
+    fsm._enter(HostState.NUDGE_BOX)
+    fsm.step(P(1.00, 1.00), {}, S(), 0.0)                       # 출발점 기록 + 전진
+    assert fsm.state == HostState.NUDGE_BOX
+    moved = cfg.mission.nudge_max_m + 0.01
+    fsm.step(P(1.00, 1.00 - moved), {}, S(), 0.1)               # 호에서 멀어진 채 한계까지
+    assert fsm.state == HostState.CARRY_TO_DEST and fsm.place_tries == 1

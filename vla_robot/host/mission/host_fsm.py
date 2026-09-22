@@ -30,6 +30,7 @@ from typing import Optional
 
 from host_config import HostConfig
 from localization.pose import Pose
+from mission.basket_target import BasketTarget, basket_target, crossed_arc
 from planning.planner import DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold, wrap_deg
 from vla_common.protocol import HostCommand, JobResult, JobTracker, PiStatus, State
 
@@ -265,31 +266,55 @@ class MissionFSM:
         return cmd
 
     def _step_face(self, pose: Pose) -> HostCommand:
+        """호 위 진입 지점에서 **목표 중심을 향한 방위각**으로 돈다.
+
+        고정 90° 가 아니다 — 사선으로 들어오면 그 자세에서 팔이 입구를 비껴본다
+        (도면 2026-09-05: 좌 30° · 중앙 90° · 우 150°).
+        """
         self._clear_nav()
-        err = wrap_deg(self.cfg.mission.box_face_yaw_deg - pose.yaw_deg)
+        target = self._basket()
+        err = wrap_deg(target.heading_deg(pose.xy) - pose.yaw_deg)
         aligned = abs(err) <= self.cfg.planner.yaw_tolerance_deg
         self.ready_to_advance = aligned
         if aligned:
             if self._should_advance():
                 self._enter(HostState.NUDGE_BOX)
-            return self._stop("faced box")
+            return self._stop(f"faced {target.name} ({target.heading_deg(pose.xy):.0f}도)")
         return self._rotate(err)
 
     def _step_nudge(self, pose: Pose, pi_status) -> HostCommand:
-        """PLACE_TRIGGER(0.35 m) 에서 멈춘 자리는 상자와 멀다. 방향을 맞춘 뒤 조금 붙인다.
+        """PLACE_TRIGGER(0.35 m) 에서 멈춘 자리는 상자와 멀다. 방향을 맞춘 뒤 붙인다.
+
+        멈추는 기준은 이동 거리가 아니라 **NUDGE 판정 경계호**다 — 목표 중심에서
+        max_approach_dist_m 안으로 들어오면 그 자리가 투입 자세다. 진입 지점마다
+        남은 거리가 다르기 때문에 고정 5 cm 로는 호에 닿지 못한다.
+
         계획기를 쓰지 않는다 — 상자 앞은 회피구역과 겹쳐 "길 없음"이 나온다."""
         self._clear_nav()
+        m = self.cfg.mission
+        target = self._basket()
         if self._nudge_from is None:
             self._nudge_from = pose.xy
         moved = _dist(pose.xy, self._nudge_from)
-        done = moved >= self.cfg.mission.box_nudge_m
+        done = crossed_arc(target, pose.xy, m.max_approach_dist_m, m.approach_sector_deg)
         self.ready_to_advance = done
         if done:
             if self._should_advance():
                 self._enter(HostState.PLACE)
                 return self._step_place(pi_status)
             return self._stop("nudged")
-        err = wrap_deg(self.cfg.mission.box_face_yaw_deg - pose.yaw_deg)
+        if moved >= m.nudge_max_m:
+            # 이만큼 밀고도 호에 못 닿았다 = 방위가 틀렸다. 더 밀면 상자를 친다.
+            self.place_tries += 1
+            if self.place_tries > m.place_retry_max:
+                self._halt(f"nudge missed the arc {self.place_tries} times")
+                return self._stop("halted")
+            self._log(f"nudge {moved:.2f}m without crossing the arc — approach again "
+                      f"({self.place_tries}/{m.place_retry_max})")
+            self._nudge_from = None
+            self._enter(HostState.CARRY_TO_DEST)
+            return self._stop("nudge missed")
+        err = wrap_deg(target.heading_deg(pose.xy) - pose.yaw_deg)
         if abs(err) > self.cfg.planner.yaw_tolerance_deg:
             return self._rotate(err)
         self.last_cmd_text = "nudge"
@@ -450,6 +475,15 @@ class MissionFSM:
                 if d < best_d:
                     best, best_d = (label, p), d
         return best
+
+    def _basket(self, box: Optional[str] = None) -> BasketTarget:
+        """목적지 상자의 투입 목표. 정렬·판정이 겨누는 점은 상자 중심이 아니다."""
+        name = box or self.dest_box
+        assert name is not None
+        m = self.cfg.mission
+        bx, by, _yaw = self.cfg.arena.boxes[name]
+        return basket_target(name, (bx, by), self.cfg.arena.box_size,
+                             m.insert_half_width_m, m.insert_inset_depth_m)
 
     def _box_front_xy(self, box: str) -> XY:
         """상자 중심이 아니라 상자 앞(작업영역 쪽). 상자들은 뒤쪽 벽에 붙어 있다."""

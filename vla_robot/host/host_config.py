@@ -144,9 +144,18 @@ class MissionConfig:
     # 기준점은 ArUco 마커 중심이다(그리퍼는 마커보다 0.15 m 앞).
     grasp_trigger_dist_m: float = 0.35
     place_trigger_dist_m: float = 0.35
-    box_face_yaw_deg: float = 90.0
-    box_nudge_m: float = 0.05
     box_approach_margin_m: float = 0.15
+    # --- 바구니 투입 목표와 접근 판정 (mission/basket_target.py, 도면 2026-09-05) ---
+    # 상자 입구 안쪽의 투입 목표 사각형: 가로 ±3 cm · 안쪽 3 cm.
+    insert_half_width_m: float = 0.03
+    insert_inset_depth_m: float = 0.03
+    # 목표 중심 기준 반경. 이 원의 남쪽 부채꼴 바깥 호가 NUDGE 판정 경계선이다.
+    max_approach_dist_m: float = 0.15
+    # 접근을 인정하는 부채꼴 각도. 120° = 원을 3등분한 남쪽 한 조각.
+    approach_sector_deg: float = 120.0
+    # NUDGE 에서 앞으로 밀어 볼 수 있는 최대 거리. 여기까지 가도 호를 못 넘으면
+    # 정렬이 틀린 것이다 — 다시 접근한다(place_tries 가 오른다).
+    nudge_max_m: float = 0.40
     piece_dest_box: dict[str, str] = field(default_factory=lambda: {
         "queen": "chess", "knight": "chess", "rook": "chess",
         "star": "toy", "soccer": "toy", "box": "toy"})
@@ -204,6 +213,12 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
         raise ConfigError("planner.cell_m 는 axis_leg_tolerance_m 보다 작아야 한다")
     if cfg.aruco.min_floor_markers < 1:
         raise ConfigError("aruco.min_floor_markers >= 1")
+    m = cfg.mission
+    for name in ("insert_half_width_m", "insert_inset_depth_m", "max_approach_dist_m", "nudge_max_m"):
+        if getattr(m, name) <= 0:
+            raise ConfigError(f"mission.{name} 는 양수여야 한다")
+    if not 0 < m.approach_sector_deg <= 360:
+        raise ConfigError("mission.approach_sector_deg 는 0 초과 360 이하여야 한다")
     return replace(
         cfg,
         cameras=replace(cfg.cameras, calib_dir=_resolve(cfg.cameras.calib_dir)),
