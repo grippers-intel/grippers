@@ -4,7 +4,7 @@ import math
 import pytest
 
 from mission.basket_target import (approach_ready, basket_target, crossed_arc,
-                                   in_approach_sector)
+                                   facing_ok, in_approach_sector)
 
 R = 0.15          # mission.max_approach_dist_m
 SECTOR = 120.0    # mission.approach_sector_deg
@@ -60,3 +60,30 @@ def test_side_entry_needs_a_body_turn_not_just_the_arm(chess):
     rad = math.radians(-150.0)
     p = (cx + R * math.cos(rad), cy + R * math.sin(rad))
     assert abs(chess.heading_deg(p) - 90.0) == pytest.approx(60.0)
+
+
+@pytest.mark.parametrize("box,left,middle,right", [
+    ("toy", (0.320, 1.390), (0.450, 1.315), (0.580, 1.390)),
+    ("chess", (1.220, 1.390), (1.350, 1.315), (1.480, 1.390)),
+])
+def test_arc_points_match_the_layout_table(cfg, box, left, middle, right):
+    """도면 텍스트판(grippers_workspace_layout.md)의 "호의 주요 점" 표 그대로."""
+    m = cfg.mission
+    bx, by, _yaw = cfg.arena.boxes[box]
+    t = basket_target(box, (bx, by), cfg.arena.box_size,
+                      m.insert_half_width_m, m.insert_inset_depth_m)
+    cx, cy = t.center
+    got = []
+    for deg in (-150.0, -90.0, -30.0):
+        rad = math.radians(deg)
+        got.append((cx + R * math.cos(rad), cy + R * math.sin(rad)))
+    for want, have in zip((left, middle, right), got):
+        assert have == pytest.approx(want, abs=5e-4)
+
+
+def test_facing_gate(chess):
+    """지향 오차 ±50° — 호 위에 서 있어도 엉뚱한 곳을 보면 투입하지 않는다."""
+    p = (chess.center[0], chess.center[1] - R)
+    assert facing_ok(chess, p, 90.0, 50.0)          # 목표 중심을 정면으로
+    assert facing_ok(chess, p, 45.0, 50.0)          # 45° 틀어져도 통과
+    assert not facing_ok(chess, p, -30.0, 50.0)     # 120° 틀어지면 거부

@@ -30,7 +30,7 @@ from typing import Optional
 
 from host_config import HostConfig
 from localization.pose import Pose
-from mission.basket_target import BasketTarget, basket_target, crossed_arc
+from mission.basket_target import BasketTarget, basket_target, crossed_arc, facing_ok
 from planning.planner import DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold, wrap_deg
 from vla_common.protocol import HostCommand, JobResult, JobTracker, PiStatus, State
 
@@ -296,7 +296,10 @@ class MissionFSM:
         if self._nudge_from is None:
             self._nudge_from = pose.xy
         moved = _dist(pose.xy, self._nudge_from)
-        done = crossed_arc(target, pose.xy, m.max_approach_dist_m, m.approach_sector_deg)
+        # 호를 넘었어도 목표 중심을 향하고 있어야 투입이다. 정렬은 ±yaw_tolerance_deg
+        # 로 하므로 이 문은 평소에 안 걸린다 — pose 가 튀었을 때를 위한 것이다.
+        done = (crossed_arc(target, pose.xy, m.max_approach_dist_m, m.approach_sector_deg)
+                and facing_ok(target, pose.xy, pose.yaw_deg, m.max_facing_error_deg))
         self.ready_to_advance = done
         if done:
             if self._should_advance():
