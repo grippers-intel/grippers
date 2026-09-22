@@ -7,6 +7,8 @@
       -> arm/execute_chunk 로 재생 -> 반복
 
 - 카메라와 시리얼을 직접 열지 않는다(각 소유 노드의 토픽/서비스만 쓴다).
+- 재시도 감지: 어중간하게 내려왔다가(< retry_dip_deg) **다시 뻗으면** 두 번째 시도로 보고 즉시 끝낸다.
+  같은 자리에서 반복해 봐야 관측이 같아 결과도 같다 — 재시도는 Host 몫이다. max_chunks 는 최후 안전장치.
 - 완료 판정: shoulder_lift 가 한 번 뻗었다가(> extended_lift_deg) 다시 접히면(< returned_lift_deg)
   끝. 학습 118회차 중 117회차에서 맞았다(2026-09-04). **"물체를 집었다"가 아니다** —
   그 판정은 pi_mission_node 가 그리퍼 개구율/부하로 한다.
@@ -202,6 +204,8 @@ class VlaGraspNode(Node):
             timeout_s = req.timeout_s if req.timeout_s > 0 else self.pcfg.timeout_s
             started = time.monotonic()
             chunks, extended, prev = 0, False, None
+            # 재시도 감지용. above = 지금 뻗어 있는가, attempts = 뻗기 시작한 횟수.
+            above, attempts = False, 0
             feedback = RunVlaGrasp.Feedback()
             # 파지 직전 기준 프레임. 끝난 뒤 같은 자세에서 다시 찍어 비교한다
             # (학습 회차는 물체를 문 채 시작 자세로 돌아와 끝난다).
@@ -255,6 +259,24 @@ class VlaGraspNode(Node):
                         result.ok = True
                         result.message = f"{chunks}청크 — 뻗었다가 복귀 (lift {lift:.1f})"
                         break
+                    # 두 번째 시도가 시작되면 그 자리에서 끝낸다.
+                    #
+                    # 정책은 못 잡으면 같은 동작을 다시 시도한다(2026-09-22 실기: 한 번이 약 4청크).
+                    # 같은 자리에서 반복해 봐야 관측이 거의 같아 같은 실패를 되풀이한다 —
+                    # 재시도는 차를 다시 세울 수 있는 Host 몫이다.
+                    #
+                    # 청크 수로 자르지 않는 이유: 그러면 "느린 성공"과 "재시도"를 구분하지 못한다.
+                    # 학습 평균이 5.06청크라 상한을 조이면 평균적인 성공이 잘린다.
+                    if lift > self.pcfg.extended_lift_deg:
+                        if not above:
+                            above = True
+                            attempts += 1
+                            if attempts >= 2:
+                                raise GraspAborted(
+                                    f"두 번째 시도를 시작했다 — {chunks}청크에서 중단 "
+                                    f"(lift {lift:.1f}). 재시도는 Host 가 다시 세운 뒤에 한다")
+                    elif lift < self.pcfg.retry_dip_deg:
+                        above = False
             except GraspAborted as exc:
                 result.ok, result.message = False, str(exc)
             except Exception as exc:  # noqa: BLE001 — 실기 루프는 죽지 않는다
