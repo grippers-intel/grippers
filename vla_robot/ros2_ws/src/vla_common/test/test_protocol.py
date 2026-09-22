@@ -84,3 +84,22 @@ def test_job_tracker_handles_pi_restart():
     # Pi 재시작: 번호가 1 부터 다시
     done = tracker.poll(_status(job_id=1, result=JobResult(1, State.GRASP, True), boot="B"))
     assert done is not None and done.job_id == 1
+
+
+def test_arm_yaw_survives_the_wire():
+    """PLACE 에서 팔이 틀 각도. 좌표가 아니라 각도 하나만 건넌다."""
+    cmd = HostCommand(State.PLACE, stop=True, label="rook", arm_yaw_deg=-12.5)
+    back = HostCommand.from_bytes(cmd.to_bytes())
+    assert back.arm_yaw_deg == -12.5
+
+
+def test_arm_yaw_defaults_to_zero_for_old_senders():
+    """이 키를 모르는 예전 Host 의 패킷도 받아야 한다 — 0 이면 팔은 포즈 그대로 간다."""
+    raw = json.dumps({"v": 1, "state": State.PLACE, "stop": True}).encode("utf-8")
+    assert HostCommand.from_bytes(raw).arm_yaw_deg == 0.0
+
+
+def test_arm_yaw_must_be_finite():
+    raw = json.dumps({"v": 1, "state": State.PLACE, "arm_yaw_deg": "left"}).encode("utf-8")
+    with pytest.raises(ProtocolError):
+        HostCommand.from_bytes(raw)

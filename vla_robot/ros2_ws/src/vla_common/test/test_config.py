@@ -83,3 +83,10 @@ def test_place_base_yaw_over_limit_is_rejected(tmp_path):
                  + "  max_base_yaw_deg: 15.0" + chr(10), encoding="utf-8")
     with pytest.raises(ConfigError, match="base_yaw_deg"):
         load_robot_config(p)
+
+
+def test_host_yaw_sign_must_be_plus_or_minus_one(tmp_path):
+    p = tmp_path / "robot.yaml"
+    p.write_text("place:" + chr(10) + "  host_yaw_sign: 0.5" + chr(10), encoding="utf-8")
+    with pytest.raises(ConfigError, match="host_yaw_sign"):
+        load_robot_config(p)

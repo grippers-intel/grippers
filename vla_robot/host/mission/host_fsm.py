@@ -30,7 +30,7 @@ from typing import Optional
 
 from host_config import HostConfig
 from localization.pose import Pose
-from mission.basket_target import BasketTarget, basket_target, crossed_arc, facing_ok
+from mission.basket_target import BasketTarget, basket_target, facing_error_deg
 from planning.planner import DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold, wrap_deg
 from vla_common.protocol import HostCommand, JobResult, JobTracker, PiStatus, State
 
@@ -43,8 +43,7 @@ class HostState(Enum):
     APPROACH_PIECE = auto()    # 기물 앞까지 주행
     GRASP = auto()             # Pi 가 VLA 로 집는 동안 대기
     CARRY_TO_DEST = auto()     # 상자 앞까지 주행
-    FACE_BOX = auto()          # 제자리 회전으로 상자 정면 보기
-    NUDGE_BOX = auto()         # 조금 더 붙기
+    NUDGE_BOX = auto()         # 상자 정면(dest_xy)까지 직진해 붙기
     PLACE = auto()             # Pi 가 내려놓는 동안 대기
     HALTED = auto()            # 물체를 든 채 갈 곳이 없다 — 사람이 개입
 
@@ -54,7 +53,6 @@ WIRE_STATE = {
     HostState.APPROACH_PIECE: State.APPROACH,
     HostState.GRASP: State.GRASP,
     HostState.CARRY_TO_DEST: State.CARRY,
-    HostState.FACE_BOX: State.CARRY,
     HostState.NUDGE_BOX: State.APPROACH_BOX,
     HostState.PLACE: State.PLACE,
     # 물체를 든 채 서 있기. PLACE 로 두면 Pi 가 투하를 다시 시도할 수 있다.
@@ -65,11 +63,10 @@ _PREV = {
     HostState.APPROACH_PIECE: HostState.SEARCH_TARGET,
     HostState.GRASP: HostState.APPROACH_PIECE,
     HostState.CARRY_TO_DEST: HostState.APPROACH_PIECE,
-    HostState.FACE_BOX: HostState.CARRY_TO_DEST,
-    HostState.NUDGE_BOX: HostState.FACE_BOX,
-    HostState.PLACE: HostState.FACE_BOX,
-    # HALTED 에서 "이전"은 사람이 복구했다는 뜻 — 상자 앞 정렬부터 다시.
-    HostState.HALTED: HostState.FACE_BOX,
+    HostState.NUDGE_BOX: HostState.CARRY_TO_DEST,
+    HostState.PLACE: HostState.NUDGE_BOX,
+    # HALTED 에서 "이전"은 사람이 복구했다는 뜻 — 상자 앞 접근부터 다시.
+    HostState.HALTED: HostState.NUDGE_BOX,
 }
 
 
@@ -111,6 +108,8 @@ class MissionFSM:
         self._job_started = 0.0
         self._job_result: Optional[JobResult] = None
         self._nudge_from: Optional[XY] = None
+        # 상자 앞에 선 자리에서 팔이 메워야 할 좌우 각도. PLACE 명령에 실린다.
+        self.place_arm_yaw_deg = 0.0
         self._now = 0.0
         # 화면 표시용
         self.nav_goal: Optional[XY] = None
@@ -165,8 +164,6 @@ class MissionFSM:
             return self._step_approach(pose, piece_map, pi_status)
         if self.state == HostState.CARRY_TO_DEST:
             return self._step_carry(pose, piece_map)
-        if self.state == HostState.FACE_BOX:
-            return self._step_face(pose)
         if self.state == HostState.NUDGE_BOX:
             return self._step_nudge(pose, pi_status)
         raise AssertionError(self.state)
@@ -255,8 +252,8 @@ class MissionFSM:
         if self.ready_to_advance:
             self._clear_nav()
             if self._should_advance():
-                self._enter(HostState.FACE_BOX)
-                return self._step_face(pose)
+                self._enter(HostState.NUDGE_BOX)
+                return self._step_nudge(pose, None)
             return self._stop("carry (ready)")
         cmd = self._drive_to(pose, self.dest_xy, obstacles)
         if self._blocked_too_long():
@@ -265,61 +262,52 @@ class MissionFSM:
             return self._stop("halted")
         return cmd
 
-    def _step_face(self, pose: Pose) -> HostCommand:
-        """호 위 진입 지점에서 **목표 중심을 향한 방위각**으로 돈다.
-
-        고정 90° 가 아니다 — 사선으로 들어오면 그 자세에서 팔이 입구를 비껴본다
-        (도면 2026-09-05: 좌 30° · 중앙 90° · 우 150°).
-        """
-        self._clear_nav()
-        target = self._basket()
-        err = wrap_deg(target.heading_deg(pose.xy) - pose.yaw_deg)
-        aligned = abs(err) <= self.cfg.planner.yaw_tolerance_deg
-        self.ready_to_advance = aligned
-        if aligned:
-            if self._should_advance():
-                self._enter(HostState.NUDGE_BOX)
-            return self._stop(f"faced {target.name} ({target.heading_deg(pose.xy):.0f}도)")
-        return self._rotate(err)
-
     def _step_nudge(self, pose: Pose, pi_status) -> HostCommand:
-        """PLACE_TRIGGER(0.35 m) 에서 멈춘 자리는 상자와 멀다. 방향을 맞춘 뒤 붙인다.
+        """상자 정면(dest_xy)까지 **직진해서** 붙는다. 제자리 정렬은 하지 않는다.
 
-        멈추는 기준은 이동 거리가 아니라 **NUDGE 판정 경계호**다 — 목표 중심에서
-        max_approach_dist_m 안으로 들어오면 그 자리가 투입 자세다. 진입 지점마다
-        남은 거리가 다르기 때문에 고정 5 cm 로는 호에 닿지 못한다.
+        투입 방향을 차체로 맞추지 않는 이유: 차체는 0.5 rad/s 에 데드밴드까지 있어
+        몇 도짜리 회전을 못 내고, 제자리 회전이 ArUco 위치추정만 흔든다. 그래서
+        **남는 좌우 각도는 팔의 base(servo 1)가 맡는다** — 여기서 그 각도를 재서
+        `HostCommand.arm_yaw_deg` 로 보낸다.
 
-        계획기를 쓰지 않는다 — 상자 앞은 회피구역과 겹쳐 "길 없음"이 나온다."""
+        계획기를 쓰지 않는다 — 상자 앞은 회피구역과 겹쳐 "길 없음"이 나온다.
+        """
         self._clear_nav()
         m = self.cfg.mission
         target = self._basket()
         if self._nudge_from is None:
             self._nudge_from = pose.xy
         moved = _dist(pose.xy, self._nudge_from)
-        # 호를 넘었어도 목표 중심을 향하고 있어야 투입이다. 정렬은 ±yaw_tolerance_deg
-        # 로 하므로 이 문은 평소에 안 걸린다 — pose 가 튀었을 때를 위한 것이다.
-        done = (crossed_arc(target, pose.xy, m.max_approach_dist_m, m.approach_sector_deg)
-                and facing_ok(target, pose.xy, pose.yaw_deg, m.max_facing_error_deg))
-        self.ready_to_advance = done
-        if done:
+        dist = _dist(pose.xy, self.dest_xy)
+        residual = facing_error_deg(target, pose.xy, pose.yaw_deg)
+        close = dist <= m.place_arrive_tol_m
+        self.place_arm_yaw_deg = residual
+        self.ready_to_advance = close and abs(residual) <= m.max_arm_yaw_deg
+        if self.ready_to_advance:
             if self._should_advance():
                 self._enter(HostState.PLACE)
                 return self._step_place(pi_status)
-            return self._stop("nudged")
+            return self._stop(f"at box (arm {residual:+.1f}도)")
+        if close:
+            # 팔이 못 메우는 각도다. 이때만 차체를 돌린다 — 한계 안으로만 넣는다.
+            self._log(f"arm cannot cover {residual:+.1f}도 (limit ±{m.max_arm_yaw_deg:.0f}) — turning the body")
+            return self._rotate(residual)
         if moved >= m.nudge_max_m:
-            # 이만큼 밀고도 호에 못 닿았다 = 방위가 틀렸다. 더 밀면 상자를 친다.
+            # 이만큼 밀고도 정면에 못 섰다. 더 밀면 상자를 친다.
             self.place_tries += 1
             if self.place_tries > m.place_retry_max:
-                self._halt(f"nudge missed the arc {self.place_tries} times")
+                self._halt(f"could not stand in front of {self.dest_box} ({self.place_tries} tries)")
                 return self._stop("halted")
-            self._log(f"nudge {moved:.2f}m without crossing the arc — approach again "
+            self._log(f"nudge {moved:.2f}m and still {dist:.2f}m off — approach again "
                       f"({self.place_tries}/{m.place_retry_max})")
-            self._nudge_from = None
             self._enter(HostState.CARRY_TO_DEST)
             return self._stop("nudge missed")
-        err = wrap_deg(target.heading_deg(pose.xy) - pose.yaw_deg)
-        if abs(err) > self.cfg.planner.yaw_tolerance_deg:
-            return self._rotate(err)
+        nav = self._drive.update(pose.xy, pose.yaw_deg, self.dest_xy)
+        if nav.mode == DriveMode.ROTATE:
+            return self._rotate(nav.yaw_error_deg)
+        if nav.mode == DriveMode.STOP:
+            # 시퀀서가 직진<->회전 사이에 한 사이클 세운다. 그 한 박자를 지킨다.
+            return self._stop("nudge (settle)")
         self.last_cmd_text = "nudge"
         return HostCommand(WIRE_STATE[self.state], linear_x=self.cfg.drive.nudge_mps)
 
@@ -347,7 +335,7 @@ class MissionFSM:
                     self._halt(f"place failed {self.place_tries} times: {self._job_result.detail}")
                     return self._stop("halted")
                 self._log(f"place retry {self.place_tries}/{m.place_retry_max}")
-                self._enter(HostState.FACE_BOX)
+                self._enter(HostState.NUDGE_BOX)
                 return self._stop("place retry")
             self.ready_to_advance = True
             if self._should_advance():
@@ -355,8 +343,9 @@ class MissionFSM:
                 self._clear_target()
                 self._enter(HostState.SEARCH_TARGET)
                 return self._stop("place done")
-        self.last_cmd_text = "PLACE (wait)"
-        return HostCommand(State.PLACE, stop=True, label=self.target_label or "")
+        self.last_cmd_text = f"PLACE (wait, arm {self.place_arm_yaw_deg:+.1f}도)"
+        return HostCommand(State.PLACE, stop=True, label=self.target_label or "",
+                           arm_yaw_deg=self.place_arm_yaw_deg)
 
     # ------------------------------------------------------------------ 도우미
     def _drive_to(self, pose: Pose, goal: XY, obstacles: list[XY]) -> HostCommand:
@@ -480,7 +469,7 @@ class MissionFSM:
         return best
 
     def _basket(self, box: Optional[str] = None) -> BasketTarget:
-        """목적지 상자의 투입 목표. 정렬·판정이 겨누는 점은 상자 중심이 아니다."""
+        """목적지 상자의 투입 목표. 팔이 겨누는 점은 상자 중심이 아니다."""
         name = box or self.dest_box
         assert name is not None
         m = self.cfg.mission

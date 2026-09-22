@@ -56,15 +56,15 @@ class MapView:
                           (40, 120, 200), 2)
             cv2.putText(img, name, self._px(bx - bw / 2, by), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                         (40, 160, 230), 1)
-            # 투입 목표 사각형과 NUDGE 판정 경계호 — 차가 어디서 서야 하는지가 곧 이 호다.
+            # 투입 목표 사각형 — 팔이 겨누는 점이다(상자 중심이 아니다).
             target = basket_target(name, (bx, by), a.box_size,
                                    m.insert_half_width_m, m.insert_inset_depth_m)
             x0, x1, y0, y1 = target.rect
             cv2.rectangle(img, self._px(x0, y1), self._px(x1, y0), (60, 200, 230), 1)
-            half = int(round(m.approach_sector_deg / 2.0))
-            cv2.ellipse(img, self._px(*target.center),
-                        (int(m.max_approach_dist_m * self.s), int(m.max_approach_dist_m * self.s)),
-                        0, 90 - half, 90 + half, (60, 200, 230), 1)
+            # 정차 판정 반경 — 이 안에 들면 나머지 각도는 팔의 base 가 맡는다.
+            stop_xy = (bx, by - (a.box_size[1] / 2.0 + m.box_approach_margin_m))
+            cv2.circle(img, self._px(*stop_xy), int(m.place_arrive_tol_m * self.s),
+                       (60, 200, 230), 1)
 
         for xy, _t in fsm.skipped:
             cv2.circle(img, self._px(*xy), int(cfg.mission.skip_radius_m * self.s), (80, 80, 160), 1)

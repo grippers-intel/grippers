@@ -250,6 +250,11 @@ class PlaceConfig:
     # 재는 법: tools/goto_pose.py --pose drop --base-yaw <도> --keep-gripper 로
     #          바구니 위에 설 때까지 몇 도씩 올려 본 값을 여기에 적는다.
     base_yaw_deg: float = 0.0
+    # Host 가 보낸 잔차 각도(HostCommand.arm_yaw_deg)에 곱할 부호. +1 또는 -1.
+    # map 의 반시계 + 가 servo 1 의 + 와 같은 방향인지는 실기에서 한 번 확인한다:
+    # tools/goto_pose.py --pose drop --base-yaw +10 --keep-gripper 로 틀어 보고
+    # 그리퍼가 로봇 기준 **왼쪽**으로 돌면 +1, 오른쪽으로 돌면 -1 이다.
+    host_yaw_sign: float = 1.0
     # 허용 한계. 교시 자세에서 멀어질수록 carry -> drop 관절 직선 경로가 예측에서
     # 벗어난다. 기존 프로젝트도 ±15도에서 잘랐다(hardware arm_driver_node).
     max_base_yaw_deg: float = 15.0
@@ -301,6 +306,8 @@ def load_robot_config(path: str | Path) -> RobotConfig:
         raise ConfigError("policy.max_chunks 는 1 이상이어야 한다")
     if cfg.place.max_base_yaw_deg <= 0:
         raise ConfigError("place.max_base_yaw_deg 는 양수여야 한다")
+    if cfg.place.host_yaw_sign not in (1.0, -1.0):
+        raise ConfigError(f"place.host_yaw_sign 은 1 또는 -1: {cfg.place.host_yaw_sign}")
     if abs(cfg.place.base_yaw_deg) > cfg.place.max_base_yaw_deg:
         raise ConfigError(
             f"place.base_yaw_deg {cfg.place.base_yaw_deg:+.1f} 가 "

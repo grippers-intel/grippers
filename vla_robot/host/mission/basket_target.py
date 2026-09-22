@@ -10,35 +10,30 @@ map 원점 = 가벽 앞쪽 왼쪽 바닥 모서리, +x 오른쪽, +y 뒤쪽, 각
 중심이 아니라 **입구 안쪽의 작은 사각형**이다(가로 ±3 cm · 안쪽 3 cm). 도면의 호박색
 사각형이 그것이고, chess 기준 x[1.320, 1.380] · y[1.450, 1.480] 이다.
 
-## 왜 고정 90° 로 서면 안 되는가
+## 방향은 차체가 아니라 팔이 맞춘다
 
-예전 코드는 상자 앞 한 점(`dest_xy`)을 조준하고 항상 yaw 90°(정북)로 섰다. 사선으로
-들어오면 그 자세에서 팔이 입구를 비껴본다. 도면이 정한 규칙은 이렇다.
+차는 상자 정면(`dest_xy` = 상자 중심 x, 상자 앞 0.15 m)에 서기만 한다. 그 자리에서
+투입 목표 중심을 정확히 보고 있을 리 없고, **그 차이를 차체로 메우지 않는다** —
+차체는 0.5 rad/s 에 데드밴드까지 있어 몇 도짜리 회전을 못 내고, 제자리 회전이
+ArUco 위치추정만 흔든다.
 
-    목표 중심에서 반경 0.15 m 원을 120°씩 3등분하고, 접근 방향(남쪽·6시) 부채꼴의
-    바깥 호를 판정 경계선으로 쓴다. 그 호 위 어디로 들어오든 **목표 중심을 향한
-    방위각**으로 제자리 정렬한다 — 좌 30° · 중앙 90° · 우 150°.
+그래서 Host 는 그 잔차(`facing_error_deg`)를 재서 `HostCommand.arm_yaw_deg` 로 보내고,
+Pi 가 팔의 base(servo 1)를 그만큼 튼다. 그리퍼 턱이 마커보다 약 0.20 m 앞이라
+±15° 가 좌우 ±0.05 m 에 해당한다. 그 밖으로 벗어나면 그때만 차체를 돌린다.
 
-정중앙으로 들어올 때만 옛 고정 90° 와 같아진다.
-
-⚠️ 남은 오차(정렬 허용치 ±5° 와 팔의 좌우 장착 오프셋)는 차체로 메우지 않는다.
-차체는 0.5 rad/s 에 데드밴드까지 있어 몇 도짜리 회전을 못 낸다. 그 몫은 Pi 쪽
-`place.base_yaw_deg` 가 팔의 base 를 틀어서 맡는다(그리퍼 턱이 마커보다 약 0.20 m
-앞이라 ±15° 가 좌우 ±0.05 m 에 해당한다).
+> 도면(2026-09-05)에는 "목표 중심 반경 0.15 m 원의 남쪽 120° 부채꼴 바깥 호에서
+> 목표 중심을 향한 방위각으로 정렬" 하는 규칙이 있었고 한때 구현도 했다. 제자리
+> 정렬을 빼기로 하면서(2026-09-22) 호 판정은 걷어냈다 — 목표 사각형·중심과 잔차
+> 각도만 남는다. 호 좌표는 `docs/layout/workspace_layout.md` 에 남아 있다.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Optional
 
 from planning.planner import wrap_deg
 
 XY = tuple[float, float]
-
-#: 접근 부채꼴의 중심 방위 — 로봇은 상자의 남쪽(작업구역 쪽)에서 들어온다.
-SOUTH_DEG = -90.0
-
 
 @dataclass(frozen=True)
 class BasketTarget:
@@ -49,22 +44,18 @@ class BasketTarget:
     rect: tuple[float, float, float, float]     # x0, x1, y0, y1
 
     def distance(self, p: XY) -> float:
-        """목표 **중심**까지의 거리. 호(경계선) 판정은 이 값으로 한다."""
+        """목표 중심까지의 거리."""
         return math.hypot(p[0] - self.center[0], p[1] - self.center[1])
 
     def rect_distance(self, p: XY) -> float:
-        """목표 **사각형**까지의 거리(안에 있으면 0). Host 1차 승인용이다."""
+        """목표 사각형까지의 거리(안에 있으면 0)."""
         x0, x1, y0, y1 = self.rect
         dx = max(x0 - p[0], 0.0, p[0] - x1)
         dy = max(y0 - p[1], 0.0, p[1] - y1)
         return math.hypot(dx, dy)
 
-    def entry_angle_deg(self, p: XY) -> float:
-        """목표 중심에서 본 로봇의 방위. 남쪽(-90°) 부채꼴 안이어야 한다."""
-        return math.degrees(math.atan2(p[1] - self.center[1], p[0] - self.center[0]))
-
     def heading_deg(self, p: XY) -> float:
-        """그 자리에서 로봇이 향해야 할 방위각. 정중앙 진입이면 90° 가 된다."""
+        """그 자리에서 목표 중심을 보려면 향해야 할 방위각. 정면이면 90° 다."""
         return math.degrees(math.atan2(self.center[1] - p[1], self.center[0] - p[0]))
 
 
@@ -86,39 +77,10 @@ def basket_target(name: str, box_xy: XY, box_size, half_width_m: float,
     )
 
 
-def in_approach_sector(target: BasketTarget, p: XY, sector_deg: float) -> bool:
-    """접근 부채꼴(남쪽 120°) 안에서 들어오고 있는가.
-
-    옆이나 뒤에서 붙으면 팔이 상자 벽을 넘어야 해서 투입이 성립하지 않는다.
-    """
-    return abs(wrap_deg(target.entry_angle_deg(p) - SOUTH_DEG)) <= sector_deg / 2.0
-
-
 def facing_error_deg(target: BasketTarget, p: XY, yaw_deg: float) -> float:
-    """지금 향한 방향과 목표 중심 방위각의 차(도). 부호 있는 값이다."""
+    """지금 향한 방향과 목표 중심 방위각의 차(도). 이 값이 팔의 base 가 틀 각도다.
+
+    부호는 map 규약 그대로 **반시계가 +** 다. 이 부호가 servo 1 의 + 방향과 같은지는
+    실기에서 확인해야 하고, 다르면 Pi 의 `place.host_yaw_sign` 을 -1 로 둔다.
+    """
     return wrap_deg(target.heading_deg(p) - yaw_deg)
-
-
-def facing_ok(target: BasketTarget, p: XY, yaw_deg: float, max_error_deg: float) -> bool:
-    """도면의 승인 조건 중 방향 쪽(basket_target.MAX_FACING_ERROR_DEG, 기본 ±50°)."""
-    return abs(facing_error_deg(target, p, yaw_deg)) <= max_error_deg
-
-
-def approach_ready(target: BasketTarget, p: XY, max_dist_m: float, sector_deg: float,
-                   yaw_deg: Optional[float] = None, max_facing_error_deg: float = 180.0) -> bool:
-    """도면의 "Host 1차 승인" — 목표 사각형에서 max_dist_m 이내 + 접근 부채꼴 안.
-
-    yaw_deg 를 주면 지향 오차(±max_facing_error_deg)까지 같이 본다. 도면에 이 조건이
-    그려져 있지 않은 이유도 같다 — 로봇이 지금 어디를 보고 있는지에 달려 있다.
-    """
-    if not (target.rect_distance(p) <= max_dist_m and in_approach_sector(target, p, sector_deg)):
-        return False
-    return yaw_deg is None or facing_ok(target, p, yaw_deg, max_facing_error_deg)
-
-
-def crossed_arc(target: BasketTarget, p: XY, radius_m: float, sector_deg: float) -> bool:
-    """NUDGE 판정 경계호를 넘었는가 — 중심에서 radius_m 안, 그리고 부채꼴 안.
-
-    부채꼴 조건을 같이 보는 이유: 거리만 보면 옆에서 스쳐 지나가도 참이 된다.
-    """
-    return target.distance(p) <= radius_m and in_approach_sector(target, p, sector_deg)

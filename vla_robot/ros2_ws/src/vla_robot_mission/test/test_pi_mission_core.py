@@ -11,10 +11,10 @@ class FakeJobs:
         self._finished = None
         self.fail_start = fail_start
 
-    def start(self, job_id, action, label):
+    def start(self, job_id, action, label, arm_yaw_deg=0.0):
         if self.fail_start:
             raise RuntimeError("arm offline")
-        self.started.append((job_id, action, label))
+        self.started.append((job_id, action, label, arm_yaw_deg))
         self.busy = True
 
     def finish(self, ok=True, detail="done"):
@@ -63,7 +63,7 @@ def test_grasp_starts_once_on_transition_and_result_repeats():
     core.step(0.0, True)
     core.on_command(HostCommand(State.GRASP, label="queen"), 0.1)
     out = core.step(0.1, True)
-    assert jobs.started == [(1, State.GRASP, "queen")]
+    assert jobs.started == [(1, State.GRASP, "queen", 0.0)]
     assert out.status.busy and out.motion.is_stop
     # 작업 중에는 주행 명령이 무시된다
     core.on_command(HostCommand(State.APPROACH, linear_x=0.1), 0.2)
@@ -120,3 +120,11 @@ def test_job_runs_through_link_loss():
     core.step(0.0, True)
     out = core.step(5.0, True)          # 명령이 끊겨도
     assert jobs.cancelled == 0 and out.status.busy
+
+
+def test_place_carries_the_arm_yaw_from_the_host():
+    """PLACE 명령에 실린 각도가 작업 시작까지 그대로 간다 — 팔이 그만큼 base 를 튼다."""
+    core, jobs = make()
+    core.on_command(HostCommand(State.PLACE, arm_yaw_deg=-12.5), 0.0)
+    core.step(0.0, True)
+    assert jobs.started == [(1, State.PLACE, "", -12.5)]
