@@ -42,6 +42,10 @@ def drive(bus, calib, sid, joint, args) -> int:
     if start_raw is None:
         print("그리퍼 위치를 못 읽었다")
         return 2
+    temp = bus.read_temperature(sid)
+    if temp is not None and temp >= args.max_temp:
+        print(f"그리퍼 서보 {temp}°C >= 상한 {args.max_temp:.0f}°C — 식을 때까지 대기")
+        return 2
     target_raw = calib.gripper_percent_to_raw(args.set)
     print(f"시작 raw {start_raw} ({pct_of(start_raw):.1f}%) -> 목표 raw {target_raw} ({args.set:.1f}%)")
     print("⚠️ 턱에서 손을 떼 주세요 — 모터가 움직입니다")
@@ -102,10 +106,14 @@ def main() -> int:
                     help="그리퍼를 이 개구율(0..100)로 **모터로** 움직이고 정착값을 잰다. "
                          "손힘으로는 학습 때의 닫힘값까지 안 닫힌다 — 그 기준선은 이 경로로만 나온다")
     ap.add_argument("--speed", type=int, default=300, help="Goal_Velocity (raw/s). 작을수록 부드럽다")
+    ap.add_argument("--max-temp", type=float, default=0.0,
+                    help="이 온도 이상이면 구동하지 않는다. 0 이면 robot.yaml 의 arm.max_servo_temp_c")
     ap.add_argument("--keep-torque", action="store_true",
                     help="측정 뒤에도 토크를 켜 둔다(물체를 문 채 유지). 기본은 끈다")
     args = ap.parse_args()
     cfg, calib, bus = open_from_args(args)
+    if not args.max_temp:
+        args.max_temp = cfg.arm.max_servo_temp_c
     sid = SERVO_IDS[GRIPPER_INDEX]
     joint = calib.joints[GRIPPER_INDEX]
     try:

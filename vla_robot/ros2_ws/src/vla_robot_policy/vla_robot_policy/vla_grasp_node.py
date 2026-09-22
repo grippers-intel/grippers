@@ -54,6 +54,7 @@ class VlaGraspNode(Node):
         robot = load_robot_config(str(self.get_parameter("config_file").value))
         self.pcfg = robot.policy
         self.gcfg = robot.gripper_cam
+        self.max_temp_c = robot.arm.max_servo_temp_c
         self.runner = self._make_runner()
 
         cb = ReentrantCallbackGroup()
@@ -113,7 +114,7 @@ class VlaGraspNode(Node):
             raise GraspAborted(f"그리퍼캠 프레임이 {age:.1f}s 낡았다")
         return item[1]
 
-    def _policy_state(self) -> list[float]:
+    def _arm_state(self):
         if not self._state_client.wait_for_service(timeout_sec=2.0):
             raise GraspAborted("arm/get_state 서비스가 없다")
         future = self._state_client.call_async(GetArmState.Request())
@@ -122,7 +123,19 @@ class VlaGraspNode(Node):
         res = future.result()
         if not res.ok:
             raise GraspAborted(f"관절 상태 읽기 실패: {res.message}")
-        return list(res.policy_state)
+        return res
+
+    def _policy_state(self) -> list[float]:
+        return list(self._arm_state().policy_state)
+
+    def _check_temperature(self, state) -> None:
+        """청크 사이마다 본다. 파지는 청크를 여러 번 도는 긴 동작이라, 시작할 때만 보면
+        도중에 달궈지는 것을 놓친다. 서보 자체 보호(70°C 근처)가 걸리면 토크가 끊겨
+        팔이 떨어지므로 그 앞에서 멈춘다."""
+        hot = [f"servo {i + 1} {t}°C" for i, t in enumerate(state.temperature_c)
+               if t and t >= self.max_temp_c]
+        if hot:
+            raise GraspAborted(f"서보 온도 상한({self.max_temp_c:.0f}°C) 초과: {', '.join(hot)}")
 
     def _play(self, chunk: np.ndarray, goal_handle) -> None:
         if not self._chunk_client.wait_for_server(timeout_sec=2.0):
@@ -177,7 +190,9 @@ class VlaGraspNode(Node):
                             raise GraspAborted(f"그리퍼캠이 멈췄다(청크 사이 변화 {change:.3f}) — USB 확인")
                     prev = frame.copy()
 
-                    state = self._policy_state()
+                    arm = self._arm_state()
+                    self._check_temperature(arm)
+                    state = list(arm.policy_state)
                     t_inf = time.monotonic()
                     chunk = self.runner.predict_chunk(frame, state, task)
                     inference_ms = (time.monotonic() - t_inf) * 1000.0

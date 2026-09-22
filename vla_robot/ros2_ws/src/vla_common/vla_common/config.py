@@ -100,6 +100,10 @@ class ArmConfig:
     torque_on_start: bool = True
     # 3S LiPo. 이보다 낮으면 이동 명령을 거부한다(데드존·탈조 방지).
     min_voltage_v: float = 10.5
+    # 서보 온도 상한(°C). 이 이상이면 이동을 거부한다.
+    # 그리퍼는 닫힘 끝단을 토크로 계속 누르면 달궈진다(2026-09-22: 35 -> 40°C).
+    # STS3215 자체 보호는 70°C 근처라, 그 앞에서 **우리가 먼저 멈추는** 값이다.
+    max_servo_temp_c: float = 60.0
     # 청크 재생 시 스텝당 이동 상한(도). lerobot max_relative_target 과 같은 역할.
     max_step_deg: float = 5.0
     max_chunk_steps: int = 500

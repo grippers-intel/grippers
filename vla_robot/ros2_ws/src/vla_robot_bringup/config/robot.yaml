@@ -13,6 +13,7 @@ arm:
   verify_homing_offsets: true
   torque_on_start: true
   min_voltage_v: 10.5
+  max_servo_temp_c: 60.0        # 이 온도 이상이면 이동 거부 (STS3215 자체 보호는 70°C 근처)
   max_step_deg: 5.0
   max_chunk_steps: 500
   chunk_acceleration: 30
