@@ -208,17 +208,26 @@ class RosJobRunner:
         grasp = self._run_action(
             self._grasp, RunVlaGrasp.Goal(label=label, timeout_s=0.0),
             mcfg.grasp_timeout_s, "vla/run_grasp")
-        state = self._arm_state()
-        opening = float(state.policy_state[GRIPPER_INDEX])
-        load = float(state.load_ratio[GRIPPER_INDEX])
+        # 관측은 vla_grasp_node 가 했다(그쪽이 카메라와 타이밍을 안다). 판정만 여기서 한다.
+        changed = float(grasp.held_change_percent)
+        opening = float(grasp.gripper_percent)
+        load = float(grasp.gripper_load)
+        observed = f"근접 변화 {changed:.1f}% · 그리퍼 {opening:.1f}% · 부하 {load:.2f}"
         if check.enabled:
-            if opening < check.min_gripper_percent:
-                raise JobFailed(f"빈손으로 보인다: 그리퍼 {opening:.1f}% < {check.min_gripper_percent:.1f}% "
-                                f"(정책 {grasp.chunks}청크)")
-            if check.min_load_ratio > 0 and load < check.min_load_ratio:
-                raise JobFailed(f"그리퍼 부하 {load:.2f} < {check.min_load_ratio:.2f} — 물체를 못 쥐었다")
+            if check.method == "image":
+                if changed < 0:
+                    raise JobFailed(f"파지를 확인할 수 없다(그리퍼캠 프레임 없음) — {observed}")
+                if changed < check.image_changed_percent:
+                    raise JobFailed(f"빈손으로 보인다: {observed} "
+                                    f"(기준 {check.image_changed_percent:.0f}%, 정책 {grasp.chunks}청크)")
+            elif check.method == "opening":
+                # ⚠️ TPU 턱에서는 빈손과 겹친다. 근거는 GraspCheckConfig 주석.
+                if opening < check.min_gripper_percent:
+                    raise JobFailed(f"빈손으로 보인다: {observed} (기준 {check.min_gripper_percent:.1f}%)")
+                if check.min_load_ratio > 0 and load < check.min_load_ratio:
+                    raise JobFailed(f"그리퍼 부하가 낮다: {observed}")
         self._move(self._cfg.place.carry_pose, keep_gripper=True)
-        return f"파지 {grasp.chunks}청크, 그리퍼 {opening:.1f}% 부하 {load:.2f}"
+        return f"파지 {grasp.chunks}청크 — {observed}"
 
     def _do_place(self) -> str:
         pcfg = self._cfg.place
