@@ -27,17 +27,21 @@ import uuid
 from dataclasses import replace
 from typing import Optional
 
+import numpy as np
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import Image
 from std_msgs.msg import Empty
 from std_srvs.srv import Trigger
 
 from vla_common.arm_units import GRIPPER_INDEX
 from vla_common.config import RobotConfig, load_poses, load_robot_config
+from vla_common.grasp_check import roi_changed_percent
 from vla_common.motion_limits import MotionLimits
 from vla_common.protocol import State
 from vla_robot_interfaces.action import MoveToPose, RunVlaGrasp
@@ -79,11 +83,39 @@ class RosJobRunner:
         self._gripper = node.create_client(SetGripper, "arm/set_gripper", callback_group=cb)
         self._hold = node.create_client(Trigger, "arm/hold", callback_group=cb)
 
+        # 파지 확인용 프레임. 판정은 **팔이 시작 자세로 돌아온 뒤** 같은 자세끼리 비교한다.
+        self._frame = None
+        self._frame_lock = threading.Lock()
+        node.create_subscription(
+            Image, cfg.gripper_cam.topic, self._on_frame,
+            QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,
+                       reliability=ReliabilityPolicy.BEST_EFFORT),
+            callback_group=cb)
+
         self._lock = threading.Lock()
         self._busy = False
         self._finished: Optional[tuple[int, bool, str]] = None
         self._cancel = threading.Event()
         self._active_goal = None
+
+    def _on_frame(self, msg: Image) -> None:
+        if msg.encoding != "bgr8":
+            return
+        frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
+        with self._frame_lock:
+            self._frame = frame.copy()
+
+    def _grab_frame(self, timeout_s: float = 2.0):
+        """최신 프레임 한 장. 못 받으면 None — 모르는 것을 성공으로 읽지 않는다."""
+        with self._frame_lock:
+            self._frame = None
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            with self._frame_lock:
+                if self._frame is not None:
+                    return self._frame
+            time.sleep(0.05)
+        return None
 
     # -- JobRunner 프로토콜 ----------------------------------------------------
     @property
@@ -207,44 +239,61 @@ class RosJobRunner:
         return self._run_action(self._pose, goal, timeout_s, f"move_to_pose({pose_name})")
 
     def _do_grasp(self, label: str) -> str:
+        """파지 한 번. 판정은 **복귀한 뒤** 그리퍼캠으로 한다.
+
+        순서가 곧 판정의 전제다 — 기준 프레임과 비교 프레임이 **같은 자세**여야 한다.
+        2026-09-22 실기: 자세가 다른 채로 비교했더니 빈손인데 50.8% 가 나왔다.
+        """
         mcfg, check = self._cfg.mission, self._cfg.grasp_check
         self._require_known_pose()
         self._move(mcfg.start_pose, keep_gripper=False)
+        reference = self._grab_frame()
+        if reference is None and check.enabled and check.method == "image":
+            raise JobFailed("그리퍼캠 프레임이 없다 — 파지를 확인할 수 없어 시작하지 않는다")
+
+        failure = None
         try:
             grasp = self._run_action(
                 self._grasp, RunVlaGrasp.Goal(label=label, timeout_s=0.0),
                 mcfg.grasp_timeout_s, "vla/run_grasp")
         except JobFailed as exc:
-            # 실패하면 팔이 궤적 도중(재시도 골짜기 등)에 멈춰 있다. 그대로 두면 다음 작업이
-            # `_require_known_pose` 에서 거부되어 **재시도 자체가 막힌다.**
-            #
-            # 알 수 없는 자세에서 자동으로 움직이지 않는다는 원칙의 예외다 — 여기서는 팔이
-            # 어떤 경위로 거기 있는지 안다(방금 파지 궤적을 돌다 멈췄고, 공중에 있다).
-            # 복구가 실패해도 원래 실패 사유를 덮지 않는다.
-            try:
-                self._move(mcfg.start_pose, keep_gripper=False)
-            except JobFailed as recover:
-                raise JobFailed(f"{exc} / 복구 실패: {recover}") from None
-            raise
-        # 관측은 vla_grasp_node 가 했다(그쪽이 카메라와 타이밍을 안다). 판정만 여기서 한다.
-        changed = float(grasp.held_change_percent)
-        opening = float(grasp.gripper_percent)
-        load = float(grasp.gripper_load)
+            grasp, failure = None, exc
+
+        # 성공·실패와 무관하게 **먼저 집으로 돌린다.** 정책은 사이클 끝(복귀 문턱이나 재시도
+        # 골짜기)에서 멈추므로 팔이 공중에 남고, 그대로 두면 다음 작업이
+        # `_require_known_pose` 에서 거부되어 재시도 자체가 막힌다.
+        # 그리퍼는 유지한다 — 물체를 쥐고 있을 수 있다.
+        try:
+            self._move(mcfg.start_pose, keep_gripper=True)
+        except JobFailed as recover:
+            raise JobFailed(f"{failure or '파지 후'} / 복귀 실패: {recover}") from None
+        if failure is not None:
+            raise failure
+
+        state = self._arm_state()
+        opening = float(state.policy_state[GRIPPER_INDEX])
+        load = float(state.load_ratio[GRIPPER_INDEX])
+        changed = -1.0
+        if reference is not None:
+            after = self._grab_frame()
+            if after is not None:
+                changed = roi_changed_percent(reference, after, check.image_roi,
+                                              check.image_pixel_threshold)
         observed = f"근접 변화 {changed:.1f}% · 그리퍼 {opening:.1f}% · 부하 {load:.2f}"
+
         if check.enabled:
             if check.method == "image":
                 if changed < 0:
-                    raise JobFailed(f"파지를 확인할 수 없다(그리퍼캠 프레임 없음) — {observed}")
+                    raise JobFailed(f"파지를 확인할 수 없다(프레임 없음) — {observed}")
                 if changed < check.image_changed_percent:
                     raise JobFailed(f"빈손으로 보인다: {observed} "
-                                    f"(기준 {check.image_changed_percent:.0f}%, 정책 {grasp.chunks}청크)")
+                                    f"(기준 {check.image_changed_percent:.0f}%)")
             elif check.method == "opening":
                 # ⚠️ TPU 턱에서는 빈손과 겹친다. 근거는 GraspCheckConfig 주석.
                 if opening < check.min_gripper_percent:
                     raise JobFailed(f"빈손으로 보인다: {observed} (기준 {check.min_gripper_percent:.1f}%)")
                 if check.min_load_ratio > 0 and load < check.min_load_ratio:
                     raise JobFailed(f"그리퍼 부하가 낮다: {observed}")
-        self._move(self._cfg.place.carry_pose, keep_gripper=True)
         return f"파지 {grasp.chunks}청크 — {observed}"
 
     def _do_place(self) -> str:

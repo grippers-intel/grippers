@@ -57,27 +57,6 @@ class GraspAborted(Exception):
 SAME_POSE_TOL_DEG = 10.0
 
 
-def roi_changed_percent(before: np.ndarray, after: np.ndarray,
-                        roi_fractions, pixel_threshold: float) -> float:
-    """두 프레임의 근접 ROI 에서 달라진 픽셀 비율(%).
-
-    물체를 쥐면 턱 바로 앞이 물체로 덮이므로 이 값이 크게 뛴다.
-    2026-09-22 실측: 같은 자세의 빈손끼리 0.0% · 룩을 쥔 상태 30~33%.
-    개구율·부하가 TPU 때문에 빈손과 겹치는 것과 달리 여기서는 10배 갈린다.
-
-    ⚠️ **같은 자세끼리만 의미가 있다.** 호출부가 자세를 확인하고 부른다.
-    """
-    if before is None or after is None or before.shape != after.shape:
-        return -1.0
-    h, w = before.shape[:2]
-    y0, y1, x0, x1 = roi_fractions
-    a = before[int(h * y0):int(h * y1), int(w * x0):int(w * x1)].astype(np.int16)
-    b = after[int(h * y0):int(h * y1), int(w * x0):int(w * x1)].astype(np.int16)
-    if a.size == 0:
-        return -1.0
-    return float(np.mean(np.max(np.abs(b - a), axis=2) > pixel_threshold) * 100.0)
-
-
 class VlaGraspNode(Node):
     def __init__(self) -> None:
         super().__init__("vla_grasp_node")
@@ -209,14 +188,6 @@ class VlaGraspNode(Node):
             # scan_cycle 에 이어서 넘기는 상태 (above, ever, dip_min, dip_idx)
             cycle = (False, False, None, 0)
             feedback = RunVlaGrasp.Feedback()
-            # 파지 직전 기준 프레임. 끝난 뒤 같은 자세에서 다시 찍어 비교한다
-            # (학습 회차는 물체를 문 채 시작 자세로 돌아와 끝난다).
-            reference, reference_state = None, None
-            try:
-                reference = self._fresh_frame().copy()
-                reference_state = self._policy_state()
-            except GraspAborted:
-                self.get_logger().warn("기준 프레임을 못 잡았다 — 파지 확인을 못 한다")
             try:
                 while True:
                     if goal_handle.is_cancel_requested:
@@ -287,33 +258,15 @@ class VlaGraspNode(Node):
                 result.ok, result.message = False, f"예외: {exc}"
             result.chunks = chunks
             result.elapsed_s = float(time.monotonic() - started)
-            result.held_change_percent = -1.0
-            result.gripper_percent = -1.0
-            result.gripper_load = -1.0
+            # 파지 확인(영상 비교)은 여기서 하지 않는다 — 팔이 시작 자세로 돌아온 뒤에야
+            # 비교가 성립하는데, 그 복귀는 미션이 시킨다(pi_mission_node._do_grasp).
             try:
-                after = self._fresh_frame()
                 state = self._arm_state()
                 result.gripper_percent = float(state.policy_state[GRIPPER_INDEX])
                 result.gripper_load = float(state.load_ratio[GRIPPER_INDEX])
-                # 자세가 기준과 같을 때만 비교한다(위 SAME_POSE_TOL_DEG 주석).
-                if reference_state is None:
-                    pose_gap = None
-                else:
-                    now = list(state.policy_state)
-                    pose_gap = max(abs(a - b) for a, b in
-                                   zip(now[:GRIPPER_INDEX], reference_state[:GRIPPER_INDEX]))
-                if pose_gap is not None and pose_gap <= SAME_POSE_TOL_DEG:
-                    result.held_change_percent = roi_changed_percent(
-                        reference, after, self.check.image_roi, self.check.image_pixel_threshold)
-                else:
-                    gap = "기준 자세 없음" if pose_gap is None else f"관절 최대 {pose_gap:.0f}도 차이"
-                    self.get_logger().warn(
-                        f"파지 확인 불가 — 시작 자세로 안 돌아왔다({gap}). 영상 비교를 건너뛴다")
             except GraspAborted as exc:
-                self.get_logger().warn(f"파지 확인용 관측 실패: {exc}")
-            self.get_logger().info(
-                f"파지 관측: 근접 변화 {result.held_change_percent:.1f}% · "
-                f"그리퍼 {result.gripper_percent:.1f}% · 부하 {result.gripper_load:.2f}")
+                result.gripper_percent, result.gripper_load = -1.0, -1.0
+                self.get_logger().warn(f"파지 뒤 상태 읽기 실패: {exc}")
             # ⚠️ 한 줄에서 심각도를 바꾸면 rclpy 가 죽는다 —
             # "Logger severity cannot be changed between calls" (호출 위치별로 캐시한다).
             # 2026-09-22: 같은 프로세스에서 성공(info) 다음 실패(warn)가 나오자 예외가 터져

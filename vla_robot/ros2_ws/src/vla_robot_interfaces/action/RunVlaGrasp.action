@@ -13,12 +13,10 @@ uint32 chunks
 float32 elapsed_s
 # 파지 확인용 관측치. **판정은 여기서 하지 않는다** — 호출부(pi_mission_node)가 설정대로 가른다.
 #
-# held_change_percent: 파지 직전과 직후의 그리퍼캠 근접 ROI 에서 달라진 픽셀 비율(%).
-#   물체를 쥐면 그 영역이 물체로 덮인다. 2026-09-22 실측: 빈손끼리 0.0% · 룩을 쥔 상태 30~33%.
-#   -1 이면 못 쟀다(프레임 없음) — 모르는 것을 성공으로 읽지 않도록 호출부가 실패로 다룬다.
+# ⚠️ 파지 확인(그리퍼캠 근접 변화)은 여기에 없다. 팔이 시작 자세로 돌아온 뒤에야 비교가
+#   성립하고, 그 복귀를 시키는 것은 미션이라 미션이 직접 잰다(vla_common.grasp_check).
 # gripper_percent / gripper_load: 기록용. ⚠️ TPU 턱에서는 이 둘로 파지를 가를 수 없다
 #   (실측: 빈손 6.6~12.2% / 부하 0.13~0.18, 룩을 쥔 상태 10.9% / 0.17 — 완전히 겹친다).
-float32 held_change_percent
 float32 gripper_percent
 float32 gripper_load
 ---
