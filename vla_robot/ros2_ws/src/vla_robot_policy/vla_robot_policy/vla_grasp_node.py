@@ -47,13 +47,22 @@ class GraspAborted(Exception):
     pass
 
 
+#: 기준 프레임과 비교하려면 팔이 그때와 **같은 자세**여야 한다(관절 최대 오차, 도).
+#: 2026-09-22 실기: 물체가 없어 정책이 복귀를 못 하고 뻗은 자세로 끝났는데, 그 프레임을
+#: 기준(시작 자세)과 비교했더니 빈손인데도 50.8% 가 나왔다 — 물체가 아니라 **자세 차이**를
+#: 재고 있었다. 자세가 다르면 비교 자체가 성립하지 않으므로 -1(모름)로 돌려준다.
+SAME_POSE_TOL_DEG = 10.0
+
+
 def roi_changed_percent(before: np.ndarray, after: np.ndarray,
                         roi_fractions, pixel_threshold: float) -> float:
     """두 프레임의 근접 ROI 에서 달라진 픽셀 비율(%).
 
     물체를 쥐면 턱 바로 앞이 물체로 덮이므로 이 값이 크게 뛴다.
-    2026-09-22 실측: 빈손끼리 0.0% · 룩을 쥔 상태 30~33%.
+    2026-09-22 실측: 같은 자세의 빈손끼리 0.0% · 룩을 쥔 상태 30~33%.
     개구율·부하가 TPU 때문에 빈손과 겹치는 것과 달리 여기서는 10배 갈린다.
+
+    ⚠️ **같은 자세끼리만 의미가 있다.** 호출부가 자세를 확인하고 부른다.
     """
     if before is None or after is None or before.shape != after.shape:
         return -1.0
@@ -196,10 +205,11 @@ class VlaGraspNode(Node):
             feedback = RunVlaGrasp.Feedback()
             # 파지 직전 기준 프레임. 끝난 뒤 같은 자세에서 다시 찍어 비교한다
             # (학습 회차는 물체를 문 채 시작 자세로 돌아와 끝난다).
+            reference, reference_state = None, None
             try:
                 reference = self._fresh_frame().copy()
+                reference_state = self._policy_state()
             except GraspAborted:
-                reference = None
                 self.get_logger().warn("기준 프레임을 못 잡았다 — 파지 확인을 못 한다")
             try:
                 while True:
@@ -256,11 +266,23 @@ class VlaGraspNode(Node):
             result.gripper_load = -1.0
             try:
                 after = self._fresh_frame()
-                result.held_change_percent = roi_changed_percent(
-                    reference, after, self.check.image_roi, self.check.image_pixel_threshold)
                 state = self._arm_state()
                 result.gripper_percent = float(state.policy_state[GRIPPER_INDEX])
                 result.gripper_load = float(state.load_ratio[GRIPPER_INDEX])
+                # 자세가 기준과 같을 때만 비교한다(위 SAME_POSE_TOL_DEG 주석).
+                if reference_state is None:
+                    pose_gap = None
+                else:
+                    now = list(state.policy_state)
+                    pose_gap = max(abs(a - b) for a, b in
+                                   zip(now[:GRIPPER_INDEX], reference_state[:GRIPPER_INDEX]))
+                if pose_gap is not None and pose_gap <= SAME_POSE_TOL_DEG:
+                    result.held_change_percent = roi_changed_percent(
+                        reference, after, self.check.image_roi, self.check.image_pixel_threshold)
+                else:
+                    gap = "기준 자세 없음" if pose_gap is None else f"관절 최대 {pose_gap:.0f}도 차이"
+                    self.get_logger().warn(
+                        f"파지 확인 불가 — 시작 자세로 안 돌아왔다({gap}). 영상 비교를 건너뛴다")
             except GraspAborted as exc:
                 self.get_logger().warn(f"파지 확인용 관측 실패: {exc}")
             self.get_logger().info(
