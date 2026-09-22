@@ -54,6 +54,13 @@ vla_robot/
 └── udev/99-vla-robot.rules
 ```
 
+## Pi 설치
+
+실제 로봇의 컨테이너 구성·배포·기동 절차는 **[docs/pi_deploy.md](docs/pi_deploy.md)** 에 있습니다
+(worktree 배포, colcon 빌드, source 순서, `ros_robot_controller` 중복 문제).
+
+아래는 일반적인 요약입니다.
+
 ## Pi 설치 (ROS2 Humble 컨테이너 안)
 
 ```bash
