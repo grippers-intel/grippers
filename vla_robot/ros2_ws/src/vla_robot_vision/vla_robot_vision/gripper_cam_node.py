@@ -103,6 +103,13 @@ class GripperCamNode(Node):
             return
         stamp, frame = item
         self._published_stamp = stamp
+        # 발행 크기로 줄인다. 정책이 쓰는 크기라 받는 쪽에서 다시 줄일 일이 없고,
+        # 메시지가 16배 작아져 토픽이 실제로 제 속도를 낸다(위 설정 주석의 2026-09-22 사례).
+        # bilinear 로 줄인다 — 정책 경로(torch bilinear)와 같은 보간이다.
+        if self.cfg.publish_width and self.cfg.publish_height:
+            if (frame.shape[1], frame.shape[0]) != (self.cfg.publish_width, self.cfg.publish_height):
+                frame = cv2.resize(frame, (self.cfg.publish_width, self.cfg.publish_height),
+                                   interpolation=cv2.INTER_LINEAR)
         msg = Image()
         sec = int(stamp)
         msg.header.stamp.sec = sec
