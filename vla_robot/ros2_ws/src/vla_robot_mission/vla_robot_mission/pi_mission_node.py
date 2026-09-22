@@ -238,6 +238,16 @@ class RosJobRunner:
         goal = MoveToPose.Goal(pose_name=pose_name, gripper_mode=1 if keep_gripper else 0, duration_s=0.0)
         return self._run_action(self._pose, goal, timeout_s, f"move_to_pose({pose_name})")
 
+    def _set_gripper(self, percent: float, what: str) -> float:
+        self._check_cancel()
+        if not self._gripper.wait_for_service(timeout_sec=2.0):
+            raise JobFailed("arm/set_gripper 서비스가 없다")
+        future = self._gripper.call_async(SetGripper.Request(percent=float(percent)))
+        if not wait_future(future, 10.0) or future.result() is None or not future.result().ok:
+            msg = future.result().message if future.done() and future.result() else "응답 없음"
+            raise JobFailed(f"{what} 실패: {msg}")
+        return float(future.result().final_percent)
+
     def _do_grasp(self, label: str) -> str:
         """파지 한 번. 판정은 **복귀한 뒤** 그리퍼캠으로 한다.
 
@@ -269,6 +279,13 @@ class RosJobRunner:
             raise JobFailed(f"{failure or '파지 후'} / 복귀 실패: {recover}") from None
         if failure is not None:
             raise failure
+
+        # ⚠️ 비교 전에 **그리퍼 개도도 기준과 맞춘다.** 턱이 ROI 아래쪽을 크게 차지해서,
+        # 물체가 없어도 턱이 벌어진 것만으로 30% 가 바뀐다(2026-09-22 거짓 성공).
+        # 물체를 쥐고 있으면 그 폭에서 멎고, 빈손이면 기준과 같은 자리까지 닫힌다.
+        start_pose = self._poses.get(mcfg.start_pose)
+        if start_pose is not None:
+            self._set_gripper(start_pose.values[GRIPPER_INDEX], "비교 전 그리퍼 정렬")
 
         state = self._arm_state()
         opening = float(state.policy_state[GRIPPER_INDEX])
@@ -304,13 +321,7 @@ class RosJobRunner:
         self._require_known_pose()
         self._move(pcfg.carry_pose, keep_gripper=True)
         self._move(pcfg.drop_pose, keep_gripper=True)
-        self._check_cancel()
-        if not self._gripper.wait_for_service(timeout_sec=2.0):
-            raise JobFailed("arm/set_gripper 서비스가 없다")
-        future = self._gripper.call_async(SetGripper.Request(percent=float(pcfg.release_percent)))
-        if not wait_future(future, 10.0) or future.result() is None or not future.result().ok:
-            msg = future.result().message if future.done() and future.result() else "응답 없음"
-            raise JobFailed(f"그리퍼 열기 실패: {msg}")
+        self._set_gripper(pcfg.release_percent, "그리퍼 열기")
         time.sleep(pcfg.settle_s)
         self._move(pcfg.return_pose, keep_gripper=False)
         return "투하 완료"
