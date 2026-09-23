@@ -149,8 +149,19 @@ class MissionConfig:
     # 상자 입구 안쪽의 투입 목표 사각형: 가로 ±3 cm · 안쪽 3 cm.
     insert_half_width_m: float = 0.03
     insert_inset_depth_m: float = 0.03
-    # 상자 정면(dest_xy)에 섰다고 보는 거리. 좌우로 이보다 벗어나면 팔이 못 메운다.
-    place_arrive_tol_m: float = 0.08
+    # 정차점(dest_xy)에서 조준점까지의 거리 = **팔이 뻗어야 하는 거리**(마커 기준).
+    # 차는 상자 앞 dest_xy 까지만 간다 — 더 붙으면 차체가 상자에 닿고 주행 구역도 벗어난다.
+    # 그래서 남은 거리는 팔의 몫이다. 기하에서 나오는 값은
+    #   box_approach_margin_m 0.15 + inset/2 0.015 + place_aim_margin_m 0.04 = 0.205 m
+    # ⚠️ 실측 전이다. 팔이 이만큼 못 뻗으면 기물이 상자 앞에 떨어진다 — 기동할 때 경고한다.
+    arm_reach_m: float = 0.205
+    # 그 도달거리 대비 정차 **거리** 허용 오차. 좌우 오차는 팔이 메우지만(max_arm_yaw_deg)
+    # 앞뒤 오차는 아무도 못 메운다 — 팔 길이는 고정이다. 그래서 따로, 좁게 잡는다.
+    # 2026-09-23 시뮬레이터: 0.08 로 두었더니 상자 앞 16 mm 에 떨어뜨리는 회차가 나왔다.
+    place_arrive_tol_m: float = 0.03
+    # 판정 목표 중심보다 이만큼 더 안쪽을 겨눈다. 정차 거리 오차가 그대로 앞뒤 오차가
+    # 되므로 허용치보다 커야 한다 — 덜 붙어도 테두리 안쪽에 떨어지게 하는 여유다.
+    place_aim_margin_m: float = 0.04
     # 팔의 base 로 메울 수 있는 좌우 각도 한계. Pi 의 place.max_base_yaw_deg 와 같은 값.
     # 이 밖이면 그때만 차체를 돌린다.
     max_arm_yaw_deg: float = 15.0
@@ -215,7 +226,8 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
     if cfg.aruco.min_floor_markers < 1:
         raise ConfigError("aruco.min_floor_markers >= 1")
     m = cfg.mission
-    for name in ("insert_half_width_m", "insert_inset_depth_m", "place_arrive_tol_m", "nudge_max_m"):
+    for name in ("insert_half_width_m", "insert_inset_depth_m", "place_arrive_tol_m",
+                 "nudge_max_m", "arm_reach_m", "place_aim_margin_m"):
         if getattr(m, name) <= 0:
             raise ConfigError(f"mission.{name} 는 양수여야 한다")
     if not 0 < m.max_arm_yaw_deg <= 90:

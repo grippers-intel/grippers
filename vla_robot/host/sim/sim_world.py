@@ -8,6 +8,10 @@
 - 마지막 결과를 매 상태 패킷에 반복한다. boot_id 는 인스턴스마다 다르다.
 - watchdog_s 동안 명령이 없으면 정지한다.
 - 속도는 vla_common.motion_limits 로 Pi 와 같은 규칙으로 자른다.
+- PLACE 는 **팔이 어디를 겨누는지까지** 흉내낸다. 차가 선 자리에서 `HostCommand.arm_yaw_deg`
+  만큼 팔의 base 를 튼 방향으로 place_reach_m 앞에 놓는다. 그 점이 상자 밖이면 실패다.
+  이 값을 무시하면(`honor_arm_yaw=False`) 정차 오차가 그대로 투하 오차가 된다 —
+  각도를 전선에 실어 보내는 것이 실제로 필요한지 시뮬레이터가 확인한다.
 
 시계는 주입한다 — 테스트는 가짜 시계로 수천 사이클을 순식간에 돌린다.
 """
@@ -44,12 +48,20 @@ class SimWorld:
                  clock: Callable[[], float] = time.monotonic, grasp_s: float = 3.0,
                  place_s: float = 2.0, grasp_reach_m: float = 0.40,
                  pos_noise_m: float = 0.002, yaw_noise_deg: float = 0.3,
-                 watchdog_s: float = 0.5, seed: int = 0) -> None:
+                 watchdog_s: float = 0.5, seed: int = 0,
+                 place_reach_m: float = 0.205, honor_arm_yaw: bool = True) -> None:
         self.cfg = cfg
         self.clock = clock
         self.pieces = [SimPiece(l, x, y) for l, x, y in pieces]
         self.x, self.y, self.yaw_deg = start
         self.grasp_s, self.place_s, self.grasp_reach_m = grasp_s, place_s, grasp_reach_m
+        # 마커 중심에서 투하 지점까지. Host 의 mission.arm_reach_m 과 같은 가정이다(실측 전).
+        self.place_reach_m = place_reach_m
+        # False = arm_yaw_deg 를 무시하는 옛 Pi. 회귀 시험용이다.
+        self.honor_arm_yaw = honor_arm_yaw
+        self.last_drop: Optional[tuple[float, float]] = None
+        self.last_drop_offset_m: Optional[float] = None
+        self.last_arm_yaw_deg: Optional[float] = None
         self.pos_noise_m, self.yaw_noise_deg = pos_noise_m, yaw_noise_deg
         self.watchdog_s = watchdog_s
         self.limits = MotionLimits(max_linear_mps=0.15, max_angular_rad_s=0.5)
@@ -63,6 +75,7 @@ class SimWorld:
         self._seq = 0
         self._job_id = 0
         self._job: Optional[tuple[str, float]] = None       # (action, 끝나는 시각)
+        self._job_arm_yaw = 0.0                             # 작업을 시작시킨 명령의 각도
         self._result: Optional[JobResult] = None
         self._detail = ""
         self.link = _SimLink(self)
@@ -118,6 +131,8 @@ class SimWorld:
         if entering:
             self._job_id += 1
             self._job = (cmd.state, now + (self.grasp_s if cmd.state == State.GRASP else self.place_s))
+            # 실제 Pi 도 작업을 **시작시킨 명령**의 각도를 쓴다. 이후 패킷 값은 보지 않는다.
+            self._job_arm_yaw = float(cmd.arm_yaw_deg)
             self._vel = (0.0, 0.0, 0.0)
             return
         if cmd.state in State.JOB_STATES:
@@ -148,8 +163,32 @@ class SimWorld:
                 return
             name, (bx, by, _yaw) = min(self.cfg.arena.boxes.items(),
                                        key=lambda kv: math.hypot(kv[1][0] - self.x, kv[1][1] - self.y))
-            held.held, held.in_box, held.x, held.y = False, name, bx, by
+            dx, dy = self._drop_point()
+            bw, bl, _bh = self.cfg.arena.box_size
+            m = self.cfg.mission
+            target_y = by - bl / 2.0 + m.insert_inset_depth_m / 2.0
+            self.last_drop = (dx, dy)
+            self.last_drop_offset_m = math.hypot(dx - bx, dy - target_y)
+            self.last_arm_yaw_deg = self._job_arm_yaw
+            if abs(dx - bx) > bw / 2.0 or not (by - bl / 2.0 <= dy <= by + bl / 2.0):
+                held.x, held.y, held.held = dx, dy, False
+                self._result = JobResult(self._job_id, action, False,
+                                         f"{held.label} missed {name} "
+                                         f"({(dx - bx) * 1000:+.0f}, {(dy - target_y) * 1000:+.0f}) mm")
+                return
+            held.held, held.in_box, held.x, held.y = False, name, dx, dy
             self._result = JobResult(self._job_id, action, True, f"dropped {held.label} in {name}")
+
+    def _drop_point(self) -> tuple[float, float]:
+        """팔이 실제로 놓는 자리.
+
+        차가 선 자리에서 **차체 방위 + 팔 base 회전** 방향으로 place_reach_m 앞이다.
+        차체를 돌리지 않기로 했으므로(2026-09-22) 좌우 정렬은 이 각도 하나에 달려 있다.
+        """
+        aim = self.yaw_deg + (self._job_arm_yaw if self.honor_arm_yaw else 0.0)
+        th = math.radians(aim)
+        return (self.x + self.place_reach_m * math.cos(th),
+                self.y + self.place_reach_m * math.sin(th))
 
     def status(self) -> PiStatus:
         now = self.clock()

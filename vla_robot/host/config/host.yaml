@@ -96,7 +96,11 @@ mission:
   insert_inset_depth_m: 0.03
   # 차는 상자 정면(dest_xy)에 서기만 한다. 투입 방향은 **팔의 base 가** 맞춘다 —
   # 남는 좌우 각도를 Host 가 재서 HostCommand.arm_yaw_deg 로 보낸다.
-  place_arrive_tol_m: 0.08
+  # 정차점에서 조준점까지 = 팔이 뻗어야 하는 거리. 차는 이보다 더 붙지 않는다(상자에 닿는다).
+  # ⚠️ 실측 전 — 값이 기하와 어긋나면 기동 로그에 경고가 뜬다. 팔을 재서 맞출 것.
+  arm_reach_m: 0.205
+  place_arrive_tol_m: 0.03      # 정차 **거리** 오차 허용치. 좌우는 팔이 메우지만 앞뒤는 못 메운다
+  place_aim_margin_m: 0.04      # 판정 목표보다 이만큼 더 안쪽을 겨눈다(허용치보다 커야 한다)
   max_arm_yaw_deg: 15.0         # Pi 의 place.max_base_yaw_deg 와 같은 값. 밖이면 차체를 돌린다
   nudge_max_m: 0.40             # 이만큼 밀고도 정면에 못 서면 재접근
   piece_dest_box:
