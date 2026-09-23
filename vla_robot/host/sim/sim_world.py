@@ -49,14 +49,15 @@ class SimWorld:
                  place_s: float = 2.0, grasp_reach_m: float = 0.40,
                  pos_noise_m: float = 0.002, yaw_noise_deg: float = 0.3,
                  watchdog_s: float = 0.5, seed: int = 0,
-                 place_reach_m: float = 0.205, honor_arm_yaw: bool = True) -> None:
+                 place_reach_m: Optional[float] = None, honor_arm_yaw: bool = True) -> None:
         self.cfg = cfg
         self.clock = clock
         self.pieces = [SimPiece(l, x, y) for l, x, y in pieces]
         self.x, self.y, self.yaw_deg = start
         self.grasp_s, self.place_s, self.grasp_reach_m = grasp_s, place_s, grasp_reach_m
-        # 마커 중심에서 투하 지점까지. Host 의 mission.arm_reach_m 과 같은 가정이다(실측 전).
-        self.place_reach_m = place_reach_m
+        # 마커 중심에서 투하 지점까지. 기본은 설정값(2026-09-23 실측 0.17~0.20 의 중앙).
+        # 짧은 쪽·긴 쪽을 넣어 여유가 있는지 시험할 수 있다.
+        self.place_reach_m = cfg.mission.arm_reach_m if place_reach_m is None else place_reach_m
         # False = arm_yaw_deg 를 무시하는 옛 Pi. 회귀 시험용이다.
         self.honor_arm_yaw = honor_arm_yaw
         self.last_drop: Optional[tuple[float, float]] = None

@@ -162,15 +162,15 @@ def test_place_carries_the_residual_angle_for_the_arm(cfg):
     fsm = MissionFSM(cfg)
     _setup_place(fsm)
     fsm._enter(HostState.NUDGE_BOX)
-    # dest_xy 에서 2 cm 왼쪽으로 치우쳐 서고 정북을 본다(허용 거리 오차 안)
-    cmd = fsm.step(P(1.33, 1.30, yaw=90.0), {}, S(), 0.0)
+    # dest_xy 에서 1.5 cm 왼쪽으로 치우쳐 서고 정북을 본다(허용 거리 오차 안)
+    cmd = fsm.step(P(1.335, 1.30, yaw=90.0), {}, S(), 0.0)
     assert fsm.state == HostState.PLACE
     assert cmd.state == State.PLACE and cmd.stop
     assert cmd.angular_z == 0                                   # 제자리 회전 없음
     # 목표가 내 오른쪽에 있으니 팔은 시계방향(-)으로 튼다. 한계 15도 안이다
     assert -15.0 < cmd.arm_yaw_deg < 0.0
     # 명령이 반복돼도 같은 각도가 계속 실린다
-    assert fsm.step(P(1.33, 1.30, yaw=90.0), {}, S(), 0.1).arm_yaw_deg == cmd.arm_yaw_deg
+    assert fsm.step(P(1.335, 1.30, yaw=90.0), {}, S(), 0.1).arm_yaw_deg == cmd.arm_yaw_deg
 
 
 def test_body_turns_only_when_the_arm_cannot_cover(cfg):
