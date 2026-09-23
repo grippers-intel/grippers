@@ -134,3 +134,47 @@ def test_static_drift_math_matches_the_2026_09_06_measurement(cfg):
     drift = calib_yaw.wrap180(5.06 - expect)
     new = calib_yaw.wrap180(90.76 - drift)          # 그때의 기존 보정값
     assert new == pytest.approx(85.7, abs=0.01)
+
+
+def test_aim_tilt_points_at_the_workspace_centre(cfg):
+    """후퇴 0 · 높이 1.70 에서 중심(y=0.9)을 겨누면 62도다 — 추천 배치의 근거."""
+    tilt = check_coverage.aim_tilt_deg("A", 0.9, 0.0, 1.70, cfg)
+    assert tilt == pytest.approx(62.1, abs=0.2)
+    # 낮게 세우면 완만해진다
+    assert check_coverage.aim_tilt_deg("A", 0.9, 0.0, 1.30, cfg) < tilt
+
+
+def test_camera_matrix_uses_the_real_calibration(cfg):
+    """근사 화각이 아니라 cam0.npz 의 K 를 써야 커버리지 숫자가 실물과 맞는다."""
+    K, real = check_coverage.camera_matrix(cfg, cfg.cameras.indices[0])
+    assert real, "host/calib/cam0.npz 가 있어야 한다"
+    import math
+    hfov = 2 * math.degrees(math.atan(cfg.cameras.width / 2 / K[0, 0]))
+    assert 65.0 < hfov < 72.0      # C920 실측 68.6도
+
+
+def test_removing_the_walls_improves_dual_coverage(cfg):
+    """가벽이 없으면 근거리 가림이 사라져 두 대가 보는 영역이 넓어진다 (2026-09-23 결정 근거)."""
+    K, _real = check_coverage.camera_matrix(cfg, cfg.cameras.indices[0])
+    conf = {"K": K, "w": cfg.cameras.width, "h": cfg.cameras.height,
+            "wall_y": cfg.arena.wall_y, "boxes": cfg.arena.boxes,
+            "box_size": cfg.arena.box_size, "workspace_x": cfg.arena.workspace_x,
+            "workspace_y": cfg.arena.workspace_y}
+    # 후퇴 0.95 m 배치에서만 가벽이 시야를 먹는다(후퇴 0 이면 렌즈가 벽 위라 무관)
+    no_wall = check_coverage.evaluate(cfg, conf, 0.9, 0.95, 1.65, 0.0, grid=12)
+    with_wall = check_coverage.evaluate(cfg, conf, 0.9, 0.95, 1.65, 0.25, grid=12)
+    assert no_wall["both"] >= with_wall["both"]
+
+
+def test_sweep_returns_usable_placements_first(cfg):
+    """스윕은 두 대 관측이 넓고 해상도가 좋은 순으로 돌려준다."""
+    K, _real = check_coverage.camera_matrix(cfg, cfg.cameras.indices[0])
+    conf = {"K": K, "w": cfg.cameras.width, "h": cfg.cameras.height,
+            "wall_y": cfg.arena.wall_y, "boxes": cfg.arena.boxes,
+            "box_size": cfg.arena.box_size, "workspace_x": cfg.arena.workspace_x,
+            "workspace_y": cfg.arena.workspace_y}
+    found = check_coverage.sweep(cfg, conf, 0.0, 12, cfg.aruco.min_floor_markers)
+    assert found, "가벽 없는 1.8 m 정사각에서는 세울 자리가 있어야 한다"
+    assert all(r["any"] == pytest.approx(100.0) for r in found)
+    assert found[0]["both"] >= found[-1]["both"]
+    assert 1.2 <= found[0]["height"] <= 2.0
