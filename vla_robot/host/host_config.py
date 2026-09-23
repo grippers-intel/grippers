@@ -144,27 +144,35 @@ class MissionConfig:
     # 기준점은 ArUco 마커 중심이다(그리퍼는 마커보다 0.15 m 앞).
     grasp_trigger_dist_m: float = 0.35
     place_trigger_dist_m: float = 0.35
-    # 상자 앞면에서 정차점까지. ⚠️ 이건 **물리 한계**라 줄일 수 없다 — 차체 앞이 마커보다
-    # 약 0.15 m 앞이라 더 붙으면 상자에 닿고, planner.drive_area_y 상한 1.30 도 같은 이유다.
-    # 팔이 모자라면 차를 밀어 넣는 게 아니라 상자를 옮기거나 drop 자세를 다시 교시해야 한다.
+    # 상자 앞면에서 정차점(마커)까지. ⚠️ **물리 한계라 줄일 수 없다.**
+    # 2026-09-23 실측: 마커 중심에서 차체 맨 앞까지 0.13 m. 그래서 0.15 로 서면 차체 앞이
+    # 상자에서 2 cm 떨어진 자리다. planner.drive_area_y 상한 1.30 도 같은 지점이다
+    # (마커 1.30 -> 차체 앞 1.43 -> 상자 1.45).
+    #
+    # 정차 허용치 ±0.02 가 나오는 곳도 여기다 — 덜 붙으면 팔이 테두리를 못 넘고
+    # (실측 짧은 쪽 0.17 - 0.02 = 0.15), 더 붙으면 차체가 상자에 닿는다.
     box_approach_margin_m: float = 0.15
     # --- 바구니 투입 목표 (mission/basket_target.py, 도면 2026-09-05) ---
     # 상자 입구 안쪽의 투입 목표 사각형: 가로 ±3 cm · 안쪽 3 cm.
     insert_half_width_m: float = 0.03
     insert_inset_depth_m: float = 0.03
-    # 정차점(dest_xy)에서 조준점까지의 거리 = **팔이 뻗어야 하는 거리**(마커 기준).
-    # 차는 상자 앞 dest_xy 까지만 간다 — 더 붙으면 차체가 상자에 닿고 주행 구역도 벗어난다.
-    # 그래서 남은 거리는 팔의 몫이다. 기하에서 나오는 값은
-    #   box_approach_margin_m 0.15 + inset/2 0.015 + place_aim_margin_m 0.04 = 0.205 m
-    # 2026-09-23 실측: 마커 중심에서 턱까지 **0.17~0.20 m**. 그 중앙값을 쓴다.
-    # 팔이 이만큼 못 뻗으면 기물이 상자 앞에 떨어진다 — 기동할 때 기하와 대조해 경고한다.
-    arm_reach_m: float = 0.185
+    # **idle 자세 마커**에서 투하 지점(열린 턱 아래)까지의 수평 거리.
+    #
+    # ⚠️ 마커가 차체가 아니라 **팔에 붙어 있다**(2026-09-23 확인: 팔을 펴면 마커가 같이
+    # 앞으로 가고 그 자세에서는 탑뷰가 검출조차 못 한다). 그래서 기준은 반드시 주행 중
+    # 자세인 **idle** 이다. 팔을 편 상태에서 잰 "마커 -> 턱 0.17~0.20" 은 이 값이 아니다.
+    #
+    # 2026-09-23 실측 합산: 마커(idle) -> 차체 앞 0.13 + 차체 앞 -> 턱 0.19 = 0.32 m.
+    arm_reach_m: float = 0.32
     # 그 도달거리 대비 정차 **거리** 허용 오차. 좌우 오차는 팔이 메우지만(max_arm_yaw_deg)
     # 앞뒤 오차는 아무도 못 메운다 — 팔 길이는 고정이다. 그래서 따로, 좁게 잡는다.
-    # 2026-09-23 시뮬레이터: 0.08 로 두었더니 상자 앞 16 mm 에 떨어뜨리는 회차가 나왔다.
-    # 0.02 인 이유: 테두리까지 0.15 m + 이 값 = 0.17 m 가 팔이 뻗어야 하는 최소치이고,
-    # 그날 실측한 도달거리의 **짧은 쪽**이 정확히 0.17 m 였다.
-    place_arrive_tol_m: float = 0.02
+    # 정차 판정은 **앞뒤로 비대칭**이다. 제약이 양쪽에서 다르기 때문이다.
+    #   덜 붙는 쪽: 팔이 짧아지는 만큼 얕게 떨어진다. 도달거리 0.32 m 에 테두리까지
+    #              0.15 m 이므로 6 cm 덜 붙어도 테두리를 7 cm 넘는다 — 여유가 크다.
+    #   더 붙는 쪽: 차체 앞이 마커보다 0.13 m 앞이라 정차점에서 상자까지 **2 cm** 뿐이다.
+    #              넘어가면 차가 상자를 민다 — 여기가 진짜 한계다.
+    place_arrive_tol_m: float = 0.06        # 덜 붙어도 되는 한도
+    place_min_gap_m: float = 0.02           # 더 붙어도 되는 한도(차체-상자 간격)
     # 판정 목표 중심보다 이만큼 더 안쪽을 겨눈다. 정차 거리 오차가 그대로 앞뒤 오차가
     # 되므로 허용치보다 커야 한다 — 덜 붙어도 테두리 안쪽에 떨어지게 하는 여유다.
     place_aim_margin_m: float = 0.04
@@ -233,7 +241,7 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
         raise ConfigError("aruco.min_floor_markers >= 1")
     m = cfg.mission
     for name in ("insert_half_width_m", "insert_inset_depth_m", "place_arrive_tol_m",
-                 "nudge_max_m", "arm_reach_m", "place_aim_margin_m"):
+                 "nudge_max_m", "arm_reach_m", "place_aim_margin_m", "place_min_gap_m"):
         if getattr(m, name) <= 0:
             raise ConfigError(f"mission.{name} 는 양수여야 한다")
     if not 0 < m.max_arm_yaw_deg <= 90:

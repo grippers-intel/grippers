@@ -67,7 +67,7 @@ planner:
   robot_radius_piece_m: 0.14
   piece_obstacle_radius_m: 0.06
   obstacle_margin_m: 0.05
-  drive_area_y: [0.30, 1.30]
+  drive_area_y: [0.30, 1.30]   # 상한은 차체 앞이 상자 2 cm 앞에 서는 지점(마커 0.13 + 여유)
   waypoint_step_m: 0.15
   axis_leg_tolerance_m: 0.03
   yaw_tolerance_deg: 5.0
@@ -88,7 +88,9 @@ mission:
   cycle_hz: 10.0
   grasp_trigger_dist_m: 0.35       # 마커 중심 기준 (마커 -0.15- 그리퍼 -0.20- 물체)
   place_trigger_dist_m: 0.35
-  box_approach_margin_m: 0.15    # ⚠️ 물리 한계 — 더 붙으면 차체가 상자에 닿는다(주행 구역 상한 1.30 과 같은 이유)
+  # ⚠️ 물리 한계 — 마커에서 차체 앞까지 0.13 m(2026-09-23 실측)라 여기 서면 차체 앞이
+  # 상자에서 2 cm 떨어진다. 주행 구역 상한 1.30 도 같은 지점이다.
+  box_approach_margin_m: 0.15
   # 바구니 투입 목표 — 도면 docs/layout/workspace_layout.md (2026-09-05).
   # 상자는 yaw180 = 입구가 작업구역 쪽이다. 목표는 상자 중심이 아니라 입구 안쪽의
   # 작은 사각형이다(chess: x[1.320,1.380] y[1.450,1.480], 중심 1.350,1.465).
@@ -96,10 +98,11 @@ mission:
   insert_inset_depth_m: 0.03
   # 차는 상자 정면(dest_xy)에 서기만 한다. 투입 방향은 **팔의 base 가** 맞춘다 —
   # 남는 좌우 각도를 Host 가 재서 HostCommand.arm_yaw_deg 로 보낸다.
-  # 정차점에서 조준점까지 = 팔이 뻗어야 하는 거리. 차는 이보다 더 붙지 않는다.
-  # 2026-09-23 실측: 마커 중심 -> 턱 0.17~0.20 m. 값이 기하와 어긋나면 기동 로그에 경고.
-  arm_reach_m: 0.185
-  place_arrive_tol_m: 0.02      # 정차 **거리** 오차 허용치. 테두리 0.15 + 이 값 = 팔이 뻗어야 하는 최소치
+  # idle 자세 마커에서 투하 지점까지. ⚠️ 마커가 팔에 붙어 있어 기준 자세가 중요하다.
+  # 2026-09-23 실측: 마커(idle) -> 차체 앞 0.13 + 차체 앞 -> 턱 0.19 = 0.32
+  arm_reach_m: 0.32
+  place_arrive_tol_m: 0.06      # 덜 붙어도 되는 한도(팔이 길어 여유가 크다)
+  place_min_gap_m: 0.02         # 더 붙어도 되는 한도 — 차체 앞과 상자 사이 간격
   place_aim_margin_m: 0.04      # 판정 목표보다 이만큼 더 안쪽을 겨눈다(허용치보다 커야 한다)
   max_arm_yaw_deg: 15.0         # Pi 의 place.max_base_yaw_deg 와 같은 값. 밖이면 차체를 돌린다
   nudge_max_m: 0.40             # 이만큼 밀고도 정면에 못 서면 재접근
