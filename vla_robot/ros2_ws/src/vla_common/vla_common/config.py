@@ -227,6 +227,7 @@ class GraspCheckConfig:
     #   반면 그리퍼캠 근접 영역은 빈손끼리 0.0% vs 파지 30~33% 로 10배 갈린다.
     method: str = "image"
     # image: 파지 전후 근접 ROI 에서 달라진 픽셀 비율(%)이 이 값 이상이면 쥔 것으로 본다.
+    # 2026-09-23 여섯 기물 실측으로 확정. 빈손 0.0~6.9 vs 기물 27.1~40.6 — 간격 20%p.
     image_changed_percent: float = 10.0
     # ROI (y0, y1, x0, x1), 프레임 크기 대비 비율. 화면 아래 중앙 = 턱 바로 앞.
     image_roi: tuple[float, float, float, float] = (0.42, 0.97, 0.33, 0.67)
