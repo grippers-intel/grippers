@@ -85,6 +85,22 @@ class MissionFSM:
         self._obstacles = ObstacleHold(cfg.planner.obstacle_hold_cycles, cfg.planner.obstacle_match_m)
         self.events: deque[str] = deque(maxlen=10)
         self.reset()
+        self._check_reach()
+
+    def _check_reach(self) -> None:
+        """정차점에서 조준점까지의 거리 = **팔이 뻗어야 하는 거리**. 설정과 맞는지 본다.
+
+        차는 상자 앞 dest_xy 까지만 간다(그 이상은 차체가 상자에 닿는다). 그래서 남은
+        거리는 팔의 몫이고, 팔이 그만큼 못 뻗으면 기물이 상자 앞에 떨어진다 — 2026-09-23
+        시뮬레이터가 그 상황을 재현했다("missed toy (+2, -21) mm"). 값이 어긋나면 주행이
+        아니라 **팔을 재야 한다**(tools/goto_pose.py --pose drop 으로 투하 지점 측정).
+        """
+        m = self.cfg.mission
+        for name in self.cfg.arena.boxes:
+            need = self._basket(name).distance(self._box_front_xy(name))
+            if abs(need - m.arm_reach_m) > m.place_arrive_tol_m:
+                self._log(f"⚠️ {name}: 정차점에서 조준점까지 {need:.3f} m 인데 "
+                          f"mission.arm_reach_m 은 {m.arm_reach_m:.3f} m — 팔 도달거리를 재서 맞출 것")
 
     # ------------------------------------------------------------------ 조작
     def reset(self) -> None:
@@ -278,6 +294,10 @@ class MissionFSM:
         if self._nudge_from is None:
             self._nudge_from = pose.xy
         moved = _dist(pose.xy, self._nudge_from)
+        # 정차점은 dest_xy 다 — 상자 앞 0.15 m, 주행 구역 안이고 차체가 상자에 닿지 않는
+        # 자리다. **더 붙지 않는다**: 팔이 모자라면 차를 밀어 넣는 게 아니라 팔을 재야 한다
+        # (2026-09-23 시뮬에서 조준점까지 붙였더니 차가 주행 구역 밖으로 나가 다음 경로를
+        # 못 찾았다). 거리 허용치를 좁게 두는 이유는 앞뒤 오차를 아무도 못 메우기 때문이다.
         dist = _dist(pose.xy, self.dest_xy)
         residual = facing_error_deg(target, pose.xy, pose.yaw_deg)
         close = dist <= m.place_arrive_tol_m
@@ -298,8 +318,8 @@ class MissionFSM:
             if self.place_tries > m.place_retry_max:
                 self._halt(f"could not stand in front of {self.dest_box} ({self.place_tries} tries)")
                 return self._stop("halted")
-            self._log(f"nudge {moved:.2f}m and still {dist:.2f}m off — approach again "
-                      f"({self.place_tries}/{m.place_retry_max})")
+            self._log(f"nudge {moved:.2f}m and still {dist:.2f}m off dest_xy — "
+                      f"approach again ({self.place_tries}/{m.place_retry_max})")
             self._enter(HostState.CARRY_TO_DEST)
             return self._stop("nudge missed")
         nav = self._drive.update(pose.xy, pose.yaw_deg, self.dest_xy)
@@ -475,7 +495,8 @@ class MissionFSM:
         m = self.cfg.mission
         bx, by, _yaw = self.cfg.arena.boxes[name]
         return basket_target(name, (bx, by), self.cfg.arena.box_size,
-                             m.insert_half_width_m, m.insert_inset_depth_m)
+                             m.insert_half_width_m, m.insert_inset_depth_m,
+                             m.place_aim_margin_m)
 
     def _box_front_xy(self, box: str) -> XY:
         """상자 중심이 아니라 상자 앞(작업영역 쪽). 상자들은 뒤쪽 벽에 붙어 있다."""
