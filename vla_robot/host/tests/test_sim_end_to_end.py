@@ -76,21 +76,28 @@ def test_ignoring_the_arm_yaw_misses(cfg):
     assert honoring.last_drop_offset_m < ignoring.last_drop_offset_m
 
 
-def test_arm_reach_matches_the_geometry(cfg):
-    """정차점에서 조준점까지가 곧 팔이 뻗어야 하는 거리다. 설정이 기하와 맞는지 본다."""
-    fsm = MissionFSM(cfg)
-    for name in cfg.arena.boxes:
-        need = fsm._basket(name).distance(fsm._box_front_xy(name))
-        assert need == pytest.approx(cfg.mission.arm_reach_m, abs=cfg.mission.place_arrive_tol_m)
+def test_arm_reach_clears_the_rim_but_not_the_box(cfg):
+    """팔 길이가 기하와 맞물리는지 — 양쪽 끝을 본다.
 
-
-def test_short_arm_still_lands_inside(cfg):
-    """실측 도달거리의 **짧은 쪽**(0.17 m)에서도 기물이 상자 안에 떨어져야 한다.
-
-    2026-09-23 실측이 0.17~0.20 m 로 폭이 있어서, 나쁜 쪽을 기준으로 여유를 확인한다.
-    정차 판정에 도달거리 검사가 들어간 덕에 차가 덜 붙은 자리에서는 투하하지 않는다.
+    짧으면 기물이 상자 앞에 떨어지고, 너무 길면 상자 너머로 넘어간다. 지금 값(0.32 m)은
+    테두리를 0.17 m 넘고 상자 깊이 0.35 m 안이라 가운데에 떨어진다.
     """
-    world = SimWorld(cfg, clock=FakeClock(), seed=3, place_reach_m=0.17)
+    m = cfg.mission
+    fsm = MissionFSM(cfg)
+    for name, (_bx, by, _yaw) in cfg.arena.boxes.items():
+        rim_gap = (by - cfg.arena.box_size[1] / 2.0) - fsm._box_front_xy(name)[1]
+        assert m.arm_reach_m >= rim_gap + m.place_arrive_tol_m, "가장 덜 붙어 서면 테두리를 못 넘는다"
+        depth = m.arm_reach_m - rim_gap + m.place_min_gap_m     # 가장 붙어 섰을 때 투하 깊이
+        assert depth <= cfg.arena.box_size[1], "상자 너머로 넘어간다"
+
+
+def test_a_shorter_arm_still_lands_inside(cfg):
+    """실측(0.32 m)보다 짧은 팔(0.25 m)로도 기물이 테두리 안에 떨어져야 한다.
+
+    정차가 덜 붙는 쪽으로 place_arrive_tol_m(0.06) 까지 벌어질 수 있으므로, 도달거리에
+    그만큼 여유가 있는지 보는 것이다.
+    """
+    world = SimWorld(cfg, clock=FakeClock(), seed=3, place_reach_m=0.25)
     _run_mission(cfg, world)
     assert len(world.pieces_in_box("chess")) + len(world.pieces_in_box("toy")) == 2
     edge = cfg.arena.boxes["chess"][1] - cfg.arena.box_size[1] / 2.0

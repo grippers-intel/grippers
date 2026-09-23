@@ -103,7 +103,7 @@ class MissionFSM:
         m = self.cfg.mission
         for name, (_bx, by, _yaw) in self.cfg.arena.boxes.items():
             rim_gap = (by - self.cfg.arena.box_size[1] / 2.0) - self._box_front_xy(name)[1]
-            need = rim_gap + m.place_arrive_tol_m
+            need = rim_gap + m.place_arrive_tol_m       # 가장 덜 붙어 선 경우까지
             if m.arm_reach_m < need:
                 self._log(f"⚠️ {name}: 테두리까지 {rim_gap:.3f} m + 정차 오차 "
                           f"{m.place_arrive_tol_m:.3f} m = {need:.3f} m 가 필요한데 "
@@ -305,9 +305,12 @@ class MissionFSM:
         # 자리다. **더 붙지 않는다**: 팔이 모자라면 차를 밀어 넣는 게 아니라 팔을 재야 한다
         # (2026-09-23 시뮬에서 조준점까지 붙였더니 차가 주행 구역 밖으로 나가 다음 경로를
         # 못 찾았다). 거리 허용치를 좁게 두는 이유는 앞뒤 오차를 아무도 못 메우기 때문이다.
+        # 앞뒤는 **비대칭**으로 본다 — 덜 붙는 쪽은 팔 길이(0.32 m)가 메워 주지만,
+        # 더 붙는 쪽은 차체 앞이 상자에 닿는다(정차점에서 간격이 2 cm 뿐이다).
+        gap = target.distance(pose.xy) - target.distance(self.dest_xy)   # + 면 덜 붙었다
         dist = _dist(pose.xy, self.dest_xy)
         residual = facing_error_deg(target, pose.xy, pose.yaw_deg)
-        close = dist <= m.place_arrive_tol_m
+        close = -m.place_min_gap_m <= gap <= m.place_arrive_tol_m
         self.place_arm_yaw_deg = residual
         self.ready_to_advance = close and abs(residual) <= m.max_arm_yaw_deg
         if self.ready_to_advance:
@@ -315,6 +318,10 @@ class MissionFSM:
                 self._enter(HostState.PLACE)
                 return self._step_place(pi_status)
             return self._stop(f"at box (arm {residual:+.1f}도)")
+        if gap < -m.place_min_gap_m:
+            # 너무 붙었다. 이대로 팔을 펴면 차체가 상자를 민다 — 뒤로 조금 뺀다.
+            self.last_cmd_text = "back off"
+            return HostCommand(WIRE_STATE[self.state], linear_x=-self.cfg.drive.nudge_mps)
         if close and abs(residual) > m.max_arm_yaw_deg:
             # 팔이 못 메우는 각도다. 이때만 차체를 돌린다 — 한계 안으로만 넣는다.
             self._log(f"arm cannot cover {residual:+.1f}도 (limit ±{m.max_arm_yaw_deg:.0f}) — turning the body")
@@ -325,7 +332,7 @@ class MissionFSM:
             if self.place_tries > m.place_retry_max:
                 self._halt(f"could not stand in front of {self.dest_box} ({self.place_tries} tries)")
                 return self._stop("halted")
-            self._log(f"nudge {moved:.2f}m and still {dist:.2f}m off dest_xy — "
+            self._log(f"nudge {moved:.2f}m and still {gap:+.2f}m off the stand-off — "
                       f"approach again ({self.place_tries}/{m.place_retry_max})")
             self._enter(HostState.CARRY_TO_DEST)
             return self._stop("nudge missed")
