@@ -88,19 +88,26 @@ class MissionFSM:
         self._check_reach()
 
     def _check_reach(self) -> None:
-        """정차점에서 조준점까지의 거리 = **팔이 뻗어야 하는 거리**. 설정과 맞는지 본다.
+        """팔이 **상자 테두리를 넘는가**. 기동할 때 한 번 본다.
 
-        차는 상자 앞 dest_xy 까지만 간다(그 이상은 차체가 상자에 닿는다). 그래서 남은
-        거리는 팔의 몫이고, 팔이 그만큼 못 뻗으면 기물이 상자 앞에 떨어진다 — 2026-09-23
-        시뮬레이터가 그 상황을 재현했다("missed toy (+2, -21) mm"). 값이 어긋나면 주행이
-        아니라 **팔을 재야 한다**(tools/goto_pose.py --pose drop 으로 투하 지점 측정).
+        차는 상자 앞 dest_xy 까지만 간다 — 그 이상은 차체가 상자에 닿고 주행 구역
+        (planner.drive_area_y)도 벗어난다. 그래서 테두리까지 남은 거리는 팔의 몫이다.
+
+        기준은 조준점이 아니라 **테두리**다. 조준점은 여유를 두려고 일부러 더 깊게 잡은
+        점이라, 거기까지 못 닿아도 테두리만 넘으면 기물은 상자 안에 들어간다. 정차 오차만큼
+        덜 붙을 수 있으므로 그만큼을 더해서 본다.
+
+        ⚠️ 2026-09-23: 이걸 조준점 기준으로 두었더니 2 mm 차이로 HALT 가 났다. 시뮬레이터가
+        그 자리에서 잡았다.
         """
         m = self.cfg.mission
-        for name in self.cfg.arena.boxes:
-            need = self._basket(name).distance(self._box_front_xy(name))
-            if abs(need - m.arm_reach_m) > m.place_arrive_tol_m:
-                self._log(f"⚠️ {name}: 정차점에서 조준점까지 {need:.3f} m 인데 "
-                          f"mission.arm_reach_m 은 {m.arm_reach_m:.3f} m — 팔 도달거리를 재서 맞출 것")
+        for name, (_bx, by, _yaw) in self.cfg.arena.boxes.items():
+            rim_gap = (by - self.cfg.arena.box_size[1] / 2.0) - self._box_front_xy(name)[1]
+            need = rim_gap + m.place_arrive_tol_m
+            if m.arm_reach_m < need:
+                self._log(f"⚠️ {name}: 테두리까지 {rim_gap:.3f} m + 정차 오차 "
+                          f"{m.place_arrive_tol_m:.3f} m = {need:.3f} m 가 필요한데 "
+                          f"mission.arm_reach_m 은 {m.arm_reach_m:.3f} m — 기물이 상자 앞에 떨어진다")
 
     # ------------------------------------------------------------------ 조작
     def reset(self) -> None:
@@ -308,7 +315,7 @@ class MissionFSM:
                 self._enter(HostState.PLACE)
                 return self._step_place(pi_status)
             return self._stop(f"at box (arm {residual:+.1f}도)")
-        if close:
+        if close and abs(residual) > m.max_arm_yaw_deg:
             # 팔이 못 메우는 각도다. 이때만 차체를 돌린다 — 한계 안으로만 넣는다.
             self._log(f"arm cannot cover {residual:+.1f}도 (limit ±{m.max_arm_yaw_deg:.0f}) — turning the body")
             return self._rotate(residual)
