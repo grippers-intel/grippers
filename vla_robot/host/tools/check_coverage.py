@@ -22,9 +22,23 @@
 - **두 대 이중 관측 %** — 로봇 마커 높이 기준. 높을수록 pose 가 안정된다.
 - **최악 mm/px** — 가장 먼 지점에서 1 px 이 몇 mm 인가. 40 mm 물체가 몇 px 로 잡히는지도 같이 낸다.
 
+## 가벽 없이 만든다 (2026-09-23 결정)
+
+세트장을 다시 만들면서 **가벽은 두지 않는다.** 그래서 기본값은 `--wall-height 0` 이다.
+가벽이 없으면 근거리 가림이 사라져 카메라를 더 낮게·가깝게 세울 수 있다. 가벽을 쓸 때의
+배치를 보려면 `--wall-height 0.25` 처럼 주면 된다(그때는 한 변이 1.810 m 가 된다).
+
 ⚠️ 이 도구는 **기하만** 본다. 초점·노출·모션블러는 실물에서 `tools/place_markers.py` 로 본다.
 ⚠️ 카메라 위치는 `host.yaml` 에 없다(외부파라미터를 바닥 마커로 매번 푼다). 그래서 여기서는
    인자로 받는다 — 실제로 세운 값을 넣어야 답이 맞는다.
+
+## 어디에 세울지 찾기
+
+    python tools/check_coverage.py --sweep
+
+높이·후퇴를 훑으면서 각 조합의 하향각을 **작업 구역 중심을 겨누도록** 자동으로 잡고,
+커버리지가 되는 배치를 좋은 순서로 보여 준다. 실제 캘리브레이션(`host/calib/cam{n}.npz`)의
+내부파라미터를 쓰므로 근사 화각이 아니라 이 카메라의 실제 화각으로 계산한다.
 """
 from __future__ import annotations
 
@@ -166,6 +180,57 @@ def coverage(cams, cfg, z: float, size: float, wall_height: float, n: int) -> di
             "start_y": start_y, "worst_mm_px": worst_mm_px, "worst_at": worst_at}
 
 
+def camera_matrix(hc, index: int):
+    """실제 캘리브레이션(cam{n}.npz)의 K. 없으면 근사 화각으로 떨어진다."""
+    from localization.aruco_localizer import approx_camera_matrix
+    path = Path(hc.cameras.calib_dir) / f"cam{index}.npz"
+    if path.exists():
+        return np.load(path)["K"].astype(np.float64), True
+    return approx_camera_matrix(hc.cameras.width, hc.cameras.height, hc.cameras.hfov_deg), False
+
+
+def aim_tilt_deg(side: str, cam_x: float, setback: float, height: float, hc) -> float:
+    """작업 구역 중심(바닥)을 겨누는 하향각. 실제로 카메라를 맞출 때 하는 일과 같다."""
+    wy = hc.arena.wall_y
+    cy = (hc.arena.workspace_y[0] + hc.arena.workspace_y[1]) / 2.0
+    y = (wy[0] - setback) if side == "A" else (wy[1] + setback)
+    return math.degrees(math.atan2(height, abs(cy - y)))
+
+
+def evaluate(hc, cfg, cam_x: float, setback: float, height: float, wall_height: float,
+             grid: int) -> dict:
+    """한 배치의 성적. 스윕과 단일 확인이 같은 경로를 쓴다."""
+    cams, tilts = [], []
+    for side in ("A", "B"):
+        tilt = aim_tilt_deg(side, cam_x, setback, height, hc)
+        tilts.append(tilt)
+        cams.append(camera_pose(side, cam_x, setback, height, tilt, hc.arena.wall_y))
+    marker_seen = [0, 0]
+    for _mid, (mx, my) in sorted(hc.aruco.floor_markers.items()):
+        for k, cam in enumerate(cams):
+            ok, _px = sees(cam, np.array([mx, my, 0.0]), hc.aruco.floor_marker_size_m,
+                           cfg, wall_height)
+            marker_seen[k] += int(ok)
+    rep = coverage(cams, cfg, hc.aruco.robot_marker_height_m, hc.aruco.robot_marker_size_m,
+                   wall_height, grid)
+    rep.update({"cams": cams, "tilts": tilts, "marker_seen": marker_seen,
+                "height": height, "setback": setback, "cam_x": cam_x})
+    return rep
+
+
+def sweep(hc, cfg, wall_height: float, grid: int, need: int) -> list[dict]:
+    """높이·후퇴를 훑어 쓸 만한 배치를 좋은 순서로 돌려준다."""
+    out = []
+    for height in np.arange(0.9, 2.01, 0.1):
+        for setback in np.arange(0.0, 0.81, 0.1):
+            rep = evaluate(hc, cfg, 0.9, float(setback), float(height), wall_height, grid)
+            if rep["any"] < 100.0 or any(n < need for n in rep["marker_seen"]):
+                continue
+            out.append(rep)
+    out.sort(key=lambda r: (-r["both"], r["worst_mm_px"]))
+    return out
+
+
 def print_map(rep: dict) -> None:
     """위가 +y(상자 쪽). 2 = 두 대, 1 = 한 대, . = 사각지대."""
     print("      " + "".join("+" if i % 10 == 0 else " " for i in range(len(rep["xs"]))))
@@ -181,25 +246,52 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=None)
     ap.add_argument("--cam-x", type=float, default=0.9, help="두 카메라의 좌우 위치(m)")
-    ap.add_argument("--setback", type=float, default=0.0, help="가벽에서 뒤로 물러난 거리(m)")
+    ap.add_argument("--setback", type=float, default=0.0, help="벽면에서 뒤로 물러난 거리(m)")
     ap.add_argument("--height", type=float, default=1.30, help="렌즈 높이(m)")
-    ap.add_argument("--tilt", type=float, default=42.8, help="하향 각도(도)")
-    ap.add_argument("--wall-height", type=float, default=0.25, help="가벽 높이(m)")
+    ap.add_argument("--tilt", type=float, default=0.0,
+                    help="하향 각도(도). 0 이면 작업 구역 중심을 겨누도록 자동 계산")
+    ap.add_argument("--wall-height", type=float, default=0.0,
+                    help="가벽 높이(m). 0 = 가벽 없음 (2026-09-23 결정)")
     ap.add_argument("--grid", type=int, default=36)
+    ap.add_argument("--sweep", action="store_true", help="세울 만한 높이·후퇴를 찾아본다")
     args = ap.parse_args()
 
     hc = host_config.load_host_config(args.config)
-    from localization.aruco_localizer import approx_camera_matrix
-    K = approx_camera_matrix(hc.cameras.width, hc.cameras.height, hc.cameras.hfov_deg)
+    K, real = camera_matrix(hc, hc.cameras.indices[0])
+    hfov = 2.0 * math.degrees(math.atan(hc.cameras.width / 2.0 / K[0, 0]))
     cfg = {"K": K, "w": hc.cameras.width, "h": hc.cameras.height,
            "wall_y": hc.arena.wall_y, "boxes": hc.arena.boxes, "box_size": hc.arena.box_size,
            "workspace_x": hc.arena.workspace_x, "workspace_y": hc.arena.workspace_y}
-    cams = [camera_pose(s, args.cam_x, args.setback, args.height, args.tilt, hc.arena.wall_y)
-            for s in ("A", "B")]
+    need = hc.aruco.min_floor_markers
+    print(f"내부파라미터: {'실측 캘리브레이션' if real else '⚠️ 근사 화각'} — "
+          f"HFOV {hfov:.1f}° · {hc.cameras.width}x{hc.cameras.height}")
+    print(f"작업장 {hc.arena.wall_x} x {hc.arena.wall_y} m · "
+          + ("가벽 없음" if args.wall_height <= 0 else f"가벽 높이 {args.wall_height} m"))
+    print()
 
+    if args.sweep:
+        found = sweep(hc, cfg, args.wall_height, max(args.grid, 24), need)
+        if not found:
+            print("작업 구역을 다 덮는 배치를 못 찾았습니다 — 좌우 위치나 카메라를 보십시오")
+            return 1
+        print(f"{'높이':>6}{'후퇴':>7}{'하향각':>9}{'두 대':>8}{'최악 mm/px':>12}{'40mm':>9}")
+        for rep in found[:12]:
+            print(f"{rep['height']:>6.2f}{rep['setback']:>7.2f}{rep['tilts'][0]:>8.1f}°"
+                  f"{rep['both']:>7.0f}%{rep['worst_mm_px']:>12.2f}"
+                  f"{40.0 / max(rep['worst_mm_px'], 1e-9):>8.1f}px")
+        best = found[0]
+        print()
+        print(f"추천: 높이 {best['height']:.2f} m · 후퇴 {best['setback']:.2f} m · "
+              f"하향 {best['tilts'][0]:.1f}° (좌우 x={best['cam_x']:.2f} m)")
+        print("  그 값을 --height/--setback 으로 주면 커버리지 지도를 자세히 봅니다")
+        return 0
+
+    tilt = args.tilt or aim_tilt_deg("A", args.cam_x, args.setback, args.height, hc)
+    cams = [camera_pose(s, args.cam_x, args.setback, args.height, tilt, hc.arena.wall_y)
+            for s in ("A", "B")]
     print(f"카메라 2대: x={args.cam_x} m · 후퇴 {args.setback} m · 높이 {args.height} m · "
-          f"하향 {args.tilt}° · HFOV {hc.cameras.hfov_deg}° · {hc.cameras.width}x{hc.cameras.height}")
-    print(f"가벽 {hc.arena.wall_x} x {hc.arena.wall_y} m · 가벽 높이 {args.wall_height} m\n")
+          f"하향 {tilt:.1f}°" + ("" if args.tilt else " (자동 겨냥)"))
+    print()
 
     print("바닥 마커 가시성")
     per_cam_seen = [0, 0]
@@ -211,7 +303,6 @@ def main() -> int:
             per_cam_seen[k] += int(ok)
             cells.append(f"{'보임' if ok else '가림'} {side_px:5.0f}px")
         print(f"  ID {mid} ({mx:.3f}, {my:.3f})   camA {cells[0]}   camB {cells[1]}")
-    need = hc.aruco.min_floor_markers
     for k, n in enumerate(per_cam_seen):
         mark = "OK" if n >= need else "부족"
         print(f"  cam{'AB'[k]} 가 보는 바닥 마커 {n}/{len(hc.aruco.floor_markers)} — {mark} "
@@ -219,7 +310,8 @@ def main() -> int:
 
     rep = coverage(cams, cfg, hc.aruco.robot_marker_height_m, hc.aruco.robot_marker_size_m,
                    args.wall_height, args.grid)
-    print(f"\n로봇 마커 높이 {hc.aruco.robot_marker_height_m} m 커버리지")
+    print()
+    print(f"로봇 마커 높이 {hc.aruco.robot_marker_height_m} m 커버리지")
     print(f"  한 대 이상 {rep['any']:.0f} %   두 대 {rep['both']:.0f} %")
     if rep["start_y"] is None:
         print("  ⚠️ 작업 구역 전체가 덮이는 y 띠가 없습니다")
