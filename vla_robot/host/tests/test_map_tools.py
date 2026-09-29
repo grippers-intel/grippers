@@ -50,7 +50,8 @@ def test_wall_blocks_the_near_floor_when_the_camera_is_set_back(cfg):
     """뒤로 물러나 세우면 가벽이 가까운 바닥을 가린다 — 근거리 띠가 죽는 이유다.
     값은 팀 배치도 Rev.II 안(후퇴 0.95 m · 높이 1.65 m)."""
     C, _R, _t = check_coverage.camera_pose("A", 0.9, 0.95, 1.65, 44.1, cfg.arena.wall_y)
-    near = np.array([0.9, 0.05, 0.0])
+    # 벽 기준 상대 좌표로 둔다 — 경계(wall_y)는 장판을 바꿀 때마다 옮겨진다
+    near = np.array([0.9, cfg.arena.wall_y[0] + 0.05, 0.0])
     far = np.array([0.9, 1.20, 0.0])
     assert check_coverage.wall_blocks(C, near, cfg.arena.wall_y, 0.25)
     assert not check_coverage.wall_blocks(C, far, cfg.arena.wall_y, 0.25)
@@ -139,7 +140,7 @@ def test_static_drift_math_matches_the_2026_09_06_measurement(cfg):
 def test_aim_tilt_points_at_the_workspace_centre(cfg):
     """하향각 = 작업 구역 중심을 겨누는 각. 카메라는 작업 경계(장판 가장자리)에 선다.
 
-    2026-09-29 부터 경계가 장판 가장자리(y -0.10)라, 권장 배치 1.60 m 에서 58.0° 다.
+    2026-09-29 부터 경계가 장판 가장자리(실측 y -0.125)라, 권장 배치 1.60 m 에서 57.4° 다.
     """
     import math
     h = 1.60
@@ -147,7 +148,7 @@ def test_aim_tilt_points_at_the_workspace_centre(cfg):
     want = math.degrees(math.atan2(h, cy - cfg.arena.wall_y[0]))
     tilt = check_coverage.aim_tilt_deg("A", 0.9, 0.0, h, cfg)
     assert tilt == pytest.approx(want)
-    assert tilt == pytest.approx(58.0, abs=0.2)
+    assert tilt == pytest.approx(57.4, abs=0.2)
     # 낮게 세우면 완만해진다
     assert check_coverage.aim_tilt_deg("A", 0.9, 0.0, 1.30, cfg) < tilt
 
@@ -188,18 +189,21 @@ def test_sweep_returns_usable_placements_first(cfg):
     assert 1.2 <= found[0]["height"] <= 2.0
 
 
-def test_mat_layout_for_the_delivered_mat(cfg):
-    """배송된 장판(1.835 × 2.000 m)에 설계 사각형을 가운데 두면 — 현장에서 잴 숫자들."""
-    lay = make_layout.mat_layout(1.835, 2.000, cfg.aruco.floor_markers,
+def test_mat_layout_for_the_measured_mat(cfg):
+    """실측 장판(1.835 × 2.050 m, 2026-09-29)에 설계 사각형을 가운데 두면 — 현장에서 잴 숫자들.
+
+    배송 규격은 2.000 이었지만 실측은 2.050 이었다. 앞뒤 여백이 10 -> 12.5 cm 로 바뀐다.
+    """
+    lay = make_layout.mat_layout(1.835, 2.050, cfg.aruco.floor_markers,
                                  cfg.arena.boxes, cfg.arena.box_size)
-    assert lay["margin"] == pytest.approx((0.0175, 0.100))
-    # 네 마커 모두 옆 가장자리 11.75 cm · 앞/뒤 가장자리 50 cm — 대칭이라 외우기 쉽다
+    assert lay["margin"] == pytest.approx((0.0175, 0.125))
+    # 네 마커 모두 옆 가장자리 11.75 cm · 앞/뒤 가장자리 52.5 cm — 대칭이라 외우기 쉽다
     for mid, d in lay["markers"].items():
         assert min(d["left"], d["right"]) == pytest.approx(0.1175)
-        assert min(d["front"], d["back"]) == pytest.approx(0.500)
-    # 상자 뒷면은 장판 뒤끝에서 10 cm
+        assert min(d["front"], d["back"]) == pytest.approx(0.525)
+    # 상자 뒷면은 장판 뒤끝에서 12.5 cm
     for b in lay["boxes"].values():
-        assert b["back_edge_from_back"] == pytest.approx(0.100)
+        assert b["back_edge_from_back"] == pytest.approx(0.125)
     # 작업 경계가 곧 host.yaml 값이다
     assert lay["wall_x"] == pytest.approx(cfg.arena.wall_x)
     assert lay["wall_y"] == pytest.approx(cfg.arena.wall_y)
