@@ -8,7 +8,7 @@ aruco:
   robot_marker_id: 0
   robot_marker_size_m: 0.080       # 실측: 검은 사각형 바깥 변
   robot_marker_height_m: 0.270     # 실측: 바닥 -> 마커 중심 (2026-08-27)
-  floor_marker_size_m: 0.120
+  floor_marker_size_m: 0.120      # 실측(2026-09-29): 검은 사각형 120 mm · 흰 여백 포함 종이 140 mm
   # 실측: 마커 중심. 인쇄물 윗변이 +y 를 향하게 붙일 것.
   # ⚠️ 2026-09-23 현재 세트장이 없어 마커가 붙어 있지 않다(최종 발표 후 철거).
   #    새로 출력해 두었고, 세트장을 만들면서 아래 좌표에 붙인다 — docs/map_rebuild.md
