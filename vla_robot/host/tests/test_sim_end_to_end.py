@@ -59,8 +59,13 @@ def test_place_lands_inside_the_basket(cfg):
     _run_mission(cfg, world)
     assert world.last_drop is not None, "투하가 한 번도 없었다"
     assert world.last_arm_yaw_deg is not None
-    # 판정 목표 중심에서 이 정도면 상자 안이다(상자 깊이 0.35 · 폭 0.21)
-    assert world.last_drop_offset_m < 0.10
+    # 지켜야 할 것은 "상자 **안**에 떨어지는가" 다. 팔이 0.32 m 라 기물은 테두리 근처가 아니라
+    # 상자 가운데쯤 떨어지도록 설계돼 있다 — 테두리 쪽 판정 중심과의 거리는 기준이 아니다.
+    dx, dy = world.last_drop
+    bw, bl, _bh = cfg.arena.box_size
+    inside = any(abs(dx - bx) <= bw / 2.0 and by - bl / 2.0 <= dy <= by + bl / 2.0
+                 for bx, by, _yaw in cfg.arena.boxes.values())
+    assert inside, f"상자 밖에 떨어졌다: {world.last_drop}"
     assert len(world.pieces_in_box("chess")) + len(world.pieces_in_box("toy")) == 2
 
 

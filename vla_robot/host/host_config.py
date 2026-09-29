@@ -67,8 +67,9 @@ class ArucoConfig:
 
 @dataclass(frozen=True)
 class ArenaConfig:
-    wall_x: tuple[float, float] = (0.0, 1.8)
-    wall_y: tuple[float, float] = (0.0, 1.8)
+    # 작업 경계 = 장판 가장자리(2026-09-29, 1.835 × 2.000 m, 1.8 m 설계 사각형을 가운데 둠).
+    wall_x: tuple[float, float] = (-0.0175, 1.8175)
+    wall_y: tuple[float, float] = (-0.100, 1.900)
     # 기물이 놓이는 영역. y 밖(상자 띠)은 이미 옮긴 것으로 본다.
     workspace_x: tuple[float, float] = (0.0, 1.8)
     workspace_y: tuple[float, float] = (0.4, 1.4)
