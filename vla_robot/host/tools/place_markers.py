@@ -152,13 +152,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=None)
     ap.add_argument("--cams", type=int, nargs="+", default=None)
+    ap.add_argument("--focus", type=int, default=None,
+                    help="초점 고정값. 기본 = host.yaml cameras.focus (0 = 먼 곳)")
     args = ap.parse_args()
 
     cfg = host_config.load_host_config(args.config)
     indices = args.cams if args.cams is not None else list(cfg.cameras.indices)
     detector = make_detector(cfg.aruco)
     cams = [Camera.load(i, cfg.cameras, cfg.aruco) for i in indices]
-    caps = open_cams(indices, cfg.cameras.width, cfg.cameras.height)
+    focus = cfg.cameras.focus if args.focus is None else args.focus
+    caps = open_cams(indices, cfg.cameras.width, cfg.cameras.height, focus)
     if not any(c.isOpened() for c in caps):
         print("열린 카메라가 없습니다. --cams 로 번호를 지정해 보십시오")
         release_all(caps)

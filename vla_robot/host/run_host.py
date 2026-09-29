@@ -79,7 +79,7 @@ def main() -> int:
             from perception.piece_tracker import PieceTracker, observations_from_detections
 
             indices = args.cams if args.cams is not None else list(cfg.cameras.indices)
-            caps = open_cams(indices, cfg.cameras.width, cfg.cameras.height)
+            caps = open_cams(indices, cfg.cameras.width, cfg.cameras.height, cfg.cameras.focus)
             if not any(c.isOpened() for c in caps):
                 print("[host] 열린 카메라가 없습니다. --cams 로 인덱스를 바꿔 보세요")
                 return 1

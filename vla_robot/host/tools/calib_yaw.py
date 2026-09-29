@@ -82,7 +82,7 @@ class Eyes:
         self.cfg = cfg
         self.detector = make_detector(cfg.aruco)
         self.cams = [Camera.load(i, cfg.cameras, cfg.aruco) for i in indices]
-        self.caps = open_cams(indices, cfg.cameras.width, cfg.cameras.height)
+        self.caps = open_cams(indices, cfg.cameras.width, cfg.cameras.height, cfg.cameras.focus)
         self.loc = RobotLocalizer(cfg.aruco)
 
     def opened(self) -> bool:

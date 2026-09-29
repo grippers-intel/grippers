@@ -107,6 +107,10 @@ python tools/check_coverage.py --sweep
 python tools/place_markers.py
 ```
 
+- 켤 때 `[cameras] 카메라 N: 초점 고정 FOCUS=0` 이 떠야 한다. C920 은 오토포커스를 끄기만
+  하면 초점이 최근접에 멈춰 바닥 마커를 한 장도 못 잡은 적이 있다 — 그래서 `host.yaml` 의
+  `cameras.focus`(0 = 먼 곳)로 고정한다. 마커가 흐리면 `--focus 5` 처럼 바꿔 보되, 바꾼
+  값으로 운용하려면 **캘리브레이션도 그 값으로 다시** 해야 한다(초점이 바뀌면 fx·fy 가 바뀐다)
 - 카메라마다 바닥 마커 **4/4** — 한 장이 빠지면 그 카메라를 그 마커 쪽으로 살짝 돌린다
 - **재투영오차 1 px 미만(GOOD)** — 2 px 를 넘으면 붙인 위치가 설정과 다르다
 - 로봇을 올려 두면 ROBOT 행이 BOTH
