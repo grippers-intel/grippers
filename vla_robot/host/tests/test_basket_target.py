@@ -15,11 +15,11 @@ def basket(cfg):
 
 
 def test_target_matches_the_drawing(basket):
-    # 배치도: 상자 입구 y 1.485, 투입 목표 x[0.995, 1.055] y[1.485, 1.515]
+    # 배치도: 상자 입구 y 1.480, 투입 목표 x[0.960, 1.020] y[1.480, 1.510]
     x0, x1, y0, y1 = basket.rect
-    assert (x0, x1) == pytest.approx((0.995, 1.055))
-    assert (y0, y1) == pytest.approx((1.485, 1.515))
-    assert basket.center == pytest.approx((1.025, 1.500))
+    assert (x0, x1) == pytest.approx((0.960, 1.020))
+    assert (y0, y1) == pytest.approx((1.480, 1.510))
+    assert basket.center == pytest.approx((0.990, 1.495))
 
 
 def test_heading_is_90_from_straight_in_front(basket):
@@ -52,7 +52,7 @@ def test_residual_beyond_the_arm_limit(basket):
 def test_arc_points_still_match_the_layout_table(cfg):
     """도면의 "호의 주요 점" 표 — 호 판정은 걷어냈지만 목표 중심은 그대로여야 한다."""
     m = cfg.mission
-    for box, want_center, south in (("basket", (1.025, 1.500), (1.025, 1.350)),):
+    for box, want_center, south in (("basket", (0.990, 1.495), (0.990, 1.345)),):
         bx, by, _yaw = cfg.arena.boxes[box]
         t = basket_target(box, (bx, by), cfg.arena.box_size,
                           m.insert_half_width_m, m.insert_inset_depth_m)

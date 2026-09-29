@@ -12,8 +12,8 @@ from tools import calib_yaw, check_coverage, make_layout
 # make_layout — 줄자 값 -> 좌표
 # ---------------------------------------------------------------------------
 def test_rectangle_reproduces_the_current_layout(cfg):
-    """지금 host.yaml 의 네 점은 (7, 52.5) cm 에서 가로 191 · 세로 78.5 로 나온다."""
-    got = make_layout.rectangle(0.070, 0.525, 1.910, 0.785)
+    """지금 host.yaml 의 네 점은 (7, 52.5) cm 에서 가로 184 · 세로 78 로 나온다."""
+    got = make_layout.rectangle(0.070, 0.525, 1.840, 0.780)
     for mid, (x, y) in got.items():
         want = cfg.aruco.floor_markers[mid]
         assert (x, y) == pytest.approx(want, abs=1e-9)
@@ -73,7 +73,7 @@ def test_wall_does_not_block_what_is_above_it(cfg):
 
 def test_box_blocks_what_is_behind_it(cfg):
     """상자 바로 앞 바닥은 뒤쪽 카메라(상자 너머)에서 상자에 가린다."""
-    C, _R, _t = check_coverage.camera_pose("B", 1.025, 0.0, 1.30, 42.8, cfg.arena.wall_y)
+    C, _R, _t = check_coverage.camera_pose("B", 0.990, 0.0, 1.30, 42.8, cfg.arena.wall_y)
     bx, by, _yaw = cfg.arena.boxes["basket"]
     behind = np.array([bx, by - cfg.arena.box_size[1] / 2.0 - 0.05, 0.0])
     assert check_coverage.box_blocks(C, behind, cfg.arena.boxes, cfg.arena.box_size)
@@ -138,7 +138,7 @@ def test_static_drift_math_matches_the_2026_09_06_measurement(cfg):
 def test_aim_tilt_points_at_the_workspace_centre(cfg):
     """하향각 = 작업 구역 중심을 겨누는 각. 카메라는 작업 경계(장판 가장자리)에 선다.
 
-    배치도 REV.2: 앞뒤가 1.835 m 라 작업 구역 중심(0.9175)이 장판 중심과 같고, 1.60 m 에서 60.2° 다.
+    배치도 REV.2: 앞뒤가 1.830 m 라 작업 구역 중심(0.915)이 장판 중심과 같고, 1.60 m 에서 60.2° 다.
     """
     import math
     h = 1.60
@@ -188,8 +188,8 @@ def test_sweep_returns_usable_placements_first(cfg):
 
 
 def test_mat_layout_for_the_measured_mat(cfg):
-    """실측 장판(2.050 × 1.835 m, 긴 변이 좌우)에서 배치도 REV.2 — host.yaml 과 같아야 한다."""
-    lay = make_layout.mat_layout(2.050, 1.835, cfg.arena.box_size)
+    """실측 장판(1.980 × 1.830 m, 긴 변이 좌우)에서 배치도 REV.2 — host.yaml 과 같아야 한다."""
+    lay = make_layout.mat_layout(1.980, 1.830, cfg.arena.box_size)
     assert lay["wall_x"] == pytest.approx(cfg.arena.wall_x)
     assert lay["wall_y"] == pytest.approx(cfg.arena.wall_y)
     for mid, xy in lay["floor_markers"].items():
@@ -197,8 +197,8 @@ def test_mat_layout_for_the_measured_mat(cfg):
     assert lay["workspace_x"] == pytest.approx(cfg.arena.workspace_x)
     assert lay["workspace_y"] == pytest.approx(cfg.arena.workspace_y)
     assert lay["box"] == pytest.approx(cfg.arena.boxes["basket"])
-    # 현장 숫자: 상자 좌우 92 cm · 종이 앞뒤 변 45.5 cm
-    assert lay["box_side_gap"] == pytest.approx(0.920)
+    # 현장 숫자: 상자 좌우 88.5 cm · 종이 앞뒤 변 45.5 cm
+    assert lay["box_side_gap"] == pytest.approx(0.885)
     assert lay["paper_edge_y"] == pytest.approx(0.455)
     assert make_layout.check(lay["floor_markers"], lay["wall_x"], lay["wall_y"]) == []
 

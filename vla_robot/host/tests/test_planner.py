@@ -111,7 +111,7 @@ def test_path_goes_around_the_box(cfg):
 def test_stop_point_is_reachable_from_the_front(cfg):
     p = _planner(cfg)
     rect = _keepout(p)
-    _sub, _corner, blocked = p.update((1.025, 0.60), (1.025, rect[2]), [])
+    _sub, _corner, blocked = p.update((0.990, 0.60), (0.990, rect[2]), [])
     assert blocked is None
     for a, b in zip(p.last_path, p.last_path[1:]):
         assert not segment_hits_rect(a, b, rect)
@@ -121,7 +121,7 @@ def test_robot_that_stopped_too_close_can_still_leave(cfg):
     """허용치만큼 더 붙어 서면 금지 구역 안이다 — 막으면 빠져나오지도 못한다."""
     p = _planner(cfg)
     x0, x1, y0, y1 = _keepout(p)
-    robot = (1.025, y0 + 0.02)
+    robot = (0.990, y0 + 0.02)
     assert point_in_rect(robot, (x0, x1, y0, y1))
     _sub, _corner, blocked = p.update(robot, (0.60, 0.80), [])
     assert blocked != "blocked"

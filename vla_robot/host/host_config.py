@@ -55,7 +55,7 @@ class ArucoConfig:
     floor_marker_size_m: float = 0.120
     # 종이 좌우 변을 장판 좌우 끝에 붙인 자리(배치도 REV.2, 2026-09-29).
     floor_markers: dict[int, tuple[float, float]] = field(default_factory=lambda: {
-        1: (0.070, 0.525), 2: (1.980, 0.525), 3: (0.070, 1.310), 4: (1.980, 1.310)})
+        1: (0.070, 0.525), 2: (1.910, 0.525), 3: (0.070, 1.305), 4: (1.910, 1.305)})
     # 마커 로컬 +x 와 로봇 전진 방향의 차(도). 2026-09-06 정지 실측 85.7.
     yaw_offset_deg: float = 85.7
     pose_hold_s: float = 1.0
@@ -68,17 +68,17 @@ class ArucoConfig:
 
 @dataclass(frozen=True)
 class ArenaConfig:
-    # 작업 경계 = 장판 가장자리. 원점이 장판 앞·왼 모서리다(2026-09-29 실측 2.050 × 1.835 m).
-    wall_x: tuple[float, float] = (0.0, 2.050)
-    wall_y: tuple[float, float] = (0.0, 1.835)
+    # 작업 경계 = 장판 가장자리. 원점이 장판 앞·왼 모서리다(2026-09-29 재실측 1.980 × 1.830 m).
+    wall_x: tuple[float, float] = (0.0, 1.980)
+    wall_y: tuple[float, float] = (0.0, 1.830)
     # 기물이 놓이는 영역 = 바닥 마커 네 장 중심 안쪽. 밖(상자 안 포함)은 대상이 아니다.
-    workspace_x: tuple[float, float] = (0.070, 1.980)
-    workspace_y: tuple[float, float] = (0.525, 1.310)
+    workspace_x: tuple[float, float] = (0.070, 1.910)
+    workspace_y: tuple[float, float] = (0.525, 1.305)
     # 상자 폭(x) x 길이(y) x 높이(z)
     box_size: tuple[float, float, float] = (0.210, 0.350, 0.220)
     # 상자 중심 (x, y, yaw_deg). 하나뿐이다 — 뒤쪽 긴 변 가운데, 뒷면이 장판 뒤끝.
     boxes: dict[str, tuple[float, float, float]] = field(default_factory=lambda: {
-        "basket": (1.025, 1.660, 180.0)})
+        "basket": (0.990, 1.655, 180.0)})
 
 
 @dataclass(frozen=True)
@@ -153,7 +153,7 @@ class MissionConfig:
     # 상자 앞면에서 정차점(마커)까지. ⚠️ **물리 한계라 줄일 수 없다.**
     # 2026-09-23 실측: 마커 중심에서 차체 맨 앞까지 0.13 m. 그래서 0.15 로 서면 차체 앞이
     # 상자에서 2 cm 떨어진 자리다. planner.box_keepout_front_m 의 앞쪽 경계도 같은 지점이다
-    # (마커 1.335 -> 차체 앞 1.465 -> 상자 입구 1.485).
+    # (마커 1.330 -> 차체 앞 1.460 -> 상자 입구 1.480).
     #
     # 정차 허용치 ±0.02 가 나오는 곳도 여기다 — 덜 붙으면 팔이 테두리를 못 넘고
     # (실측 짧은 쪽 0.17 - 0.02 = 0.15), 더 붙으면 차체가 상자에 닿는다.
