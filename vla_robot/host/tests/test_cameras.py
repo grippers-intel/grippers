@@ -58,5 +58,25 @@ def test_negative_focus_only_turns_autofocus_off(monkeypatch):
     assert not any(e[:2] == ("set", cv2.CAP_PROP_FOCUS) for e in log)
 
 
-def test_config_default_is_far_focus(cfg):
-    assert cfg.cameras.focus == 0
+def test_focus_is_per_camera(monkeypatch):
+    """팀이 쓰던 값 {0: 5, 1: 0} — 카메라마다 다른 값이 들어가야 한다."""
+    made = []
+
+    def factory(*args):
+        made.append(FakeCap(*args))
+        return made[-1]
+
+    monkeypatch.setattr(cameras.cv2, "VideoCapture", factory)
+    cameras.open_cams([0, 1, 2], 1280, 720, {0: 5, 1: 0})
+    written = [[e[2] for e in cap.log if e[:2] == ("set", cv2.CAP_PROP_FOCUS)] for cap in made]
+    assert written == [[5, 5], [0, 0], []]          # 표에 없는 2번은 오토포커스만 끈다
+
+
+def test_parse_focus():
+    assert cameras.parse_focus(None) is None
+    assert cameras.parse_focus("5") == 5
+    assert cameras.parse_focus("0=5,1=0") == {0: 5, 1: 0}
+
+
+def test_config_default_matches_the_team_values(cfg):
+    assert cfg.cameras.focus == {0: 5, 1: 0}

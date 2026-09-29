@@ -89,9 +89,9 @@ class CameraConfig:
     # 캘리브레이션 파일이 없을 때만 쓰는 근사 화각(C920).
     hfov_deg: float = 70.4
     calib_dir: str = "calib"
-    # C920 수동 초점(0 = 먼 곳). 오토포커스를 끄기만 하면 초점이 멈춘 자리에 남는다.
-    # -1 이면 초점을 건드리지 않는다.
-    focus: int = 0
+    # C920 수동 초점, 카메라별 {인덱스: 값}(0 = 먼 곳). 오토포커스를 끄기만 하면 초점이
+    # 멈춘 자리에 남는다. 팀이 쓰던 값 {0: 5, 1: 0}. 표에 없거나 음수면 오토포커스만 끈다.
+    focus: dict[int, int] = field(default_factory=lambda: {0: 5, 1: 0})
 
 
 @dataclass(frozen=True)

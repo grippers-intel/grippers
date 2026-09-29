@@ -49,9 +49,13 @@ cameras:
   height: 720
   hfov_deg: 70.4
   calib_dir: calib                 # host/ 기준. cam{index}.npz (K, dist)
-  # C920 수동 초점. 오토포커스를 끄기만 하면 최근접(250)에 멈춰 바닥 마커를 못 잡은 적이 있다.
-  # 0 = 먼 곳(예전 세트장 값). 캘리브레이션도 같은 값으로 해야 한다. -1 = 건드리지 않음.
-  focus: 0
+  # C920 수동 초점, **카메라별** {인덱스: 값}. 오토포커스를 끄기만 하면 최근접(250)에 멈춰
+  # 바닥 마커를 못 잡은 적이 있다. 0 = 먼 곳. 팀이 쓰던 값이다(hardware/grippers/host/
+  # capture_dataset.py — Geti 학습 영상도 이 값). 캘리브레이션도 같은 값으로 해야 한다.
+  # 표에 없는 카메라나 음수는 오토포커스만 끈다.
+  focus:
+    0: 5
+    1: 0
 
 detector:
   kind: geti                       # geti | none

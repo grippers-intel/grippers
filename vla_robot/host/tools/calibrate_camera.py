@@ -6,7 +6,7 @@
 - cols/rows 는 **내부 코너** 개수다(칸 수가 아니다).
 - 체스보드를 화면 구석구석, 여러 기울기로 20장 이상 모은다.
 - 촬영 해상도는 실제 운용과 같아야 한다(1280x720). 다르면 K 가 맞지 않는다.
-- 초점을 **운용 때와 같은 값**(host.yaml `cameras.focus`, 기본 0 = 먼 곳)으로 고정하고 잰다.
+- 초점을 **운용 때와 같은 값**(host.yaml `cameras.focus` 의 그 카메라 값 — cam0 5 · cam1 0)으로 고정하고 잰다.
   C920 은 초점이 바뀌면 fx·fy 가 같이 변한다. 초점값을 바꾸면 다시 잴 것.
 
 키: space = 코너가 잡힌 프레임 저장 · c = 계산하고 저장 · q = 종료
@@ -38,9 +38,11 @@ def main() -> int:
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--out", default=None)
     ap.add_argument("--focus", type=int, default=None,
-                    help="초점 고정값. 기본 = host.yaml cameras.focus — 운용과 같아야 K 가 맞는다")
+                    help="초점 고정값. 기본 = host.yaml cameras.focus 의 이 카메라 값 — 운용과 같아야 K 가 맞는다")
     args = ap.parse_args()
-    focus = host_config.load_host_config().cameras.focus if args.focus is None else args.focus
+    focus = (host_config.load_host_config().cameras.focus.get(args.cam)
+             if args.focus is None else args.focus)
+    print(f"초점 {focus} 에서 잽니다" if focus is not None else "⚠️ 이 카메라의 초점값이 설정에 없습니다")
 
     out = Path(args.out) if args.out else HOST_ROOT / "calib" / f"cam{args.cam}.npz"
     pattern = (args.cols, args.rows)
