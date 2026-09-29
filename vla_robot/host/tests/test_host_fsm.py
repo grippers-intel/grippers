@@ -98,10 +98,10 @@ def _setup_place(fsm):
 def _place_attempt_from_face(fsm, prev_status, t):
     """상자 정면까지 직진해서 붙고, 남는 각도는 팔이 맡는다(차체 정렬 없음)."""
     assert fsm.state == HostState.NUDGE_BOX
-    cmd = fsm.step(P(1.025, 1.235), {}, prev_status, t)         # 아직 멀다 -> 전진
+    cmd = fsm.step(P(0.990, 1.230), {}, prev_status, t)         # 아직 멀다 -> 전진
     assert cmd.state == State.APPROACH_BOX and cmd.linear_x > 0
-    # dest_xy(1.025, 1.335) 에서 place_arrive_tol_m 안 = 정차 완료
-    cmd = fsm.step(P(1.025, 1.325), {}, prev_status, t + 0.2)
+    # dest_xy(0.990, 1.330) 에서 place_arrive_tol_m 안 = 정차 완료
+    cmd = fsm.step(P(0.990, 1.320), {}, prev_status, t + 0.2)
     assert fsm.state == HostState.PLACE and cmd.state == State.PLACE
 
 
@@ -109,31 +109,31 @@ def test_place_failures_retry_then_halt(cfg):
     assert cfg.mission.place_retry_max == 2
     fsm = MissionFSM(cfg)
     _setup_place(fsm)
-    assert fsm.step(P(1.025, 1.0), {}, S(), 0.0).state == State.PLACE
+    assert fsm.step(P(0.990, 1.0), {}, S(), 0.0).state == State.PLACE
     s1 = S(job_id=1, result=JobResult(1, State.PLACE, False, "drop"))
-    fsm.step(P(1.025, 1.0), {}, s1, 1.0)
+    fsm.step(P(0.990, 1.0), {}, s1, 1.0)
     assert fsm.state == HostState.NUDGE_BOX and fsm.place_tries == 1
 
     _place_attempt_from_face(fsm, s1, 2.0)
     s2 = S(job_id=2, result=JobResult(2, State.PLACE, False, "drop"))
-    fsm.step(P(1.025, 1.0), {}, s2, 3.0)
+    fsm.step(P(0.990, 1.0), {}, s2, 3.0)
     assert fsm.state == HostState.NUDGE_BOX and fsm.place_tries == 2
 
     _place_attempt_from_face(fsm, s2, 4.0)
-    cmd = fsm.step(P(1.025, 1.0), {}, S(job_id=3, result=JobResult(3, State.PLACE, False)), 5.0)
+    cmd = fsm.step(P(0.990, 1.0), {}, S(job_id=3, result=JobResult(3, State.PLACE, False)), 5.0)
     assert fsm.state == HostState.HALTED and fsm.halt_reason
     assert cmd.state == State.IDLE and cmd.stop
     # 사람이 prev 를 누르면 상자 앞 정렬부터 다시
     fsm.request_back()
-    fsm.step(P(1.025, 1.0, 0.0), {}, None, 6.0)
+    fsm.step(P(0.990, 1.0, 0.0), {}, None, 6.0)
     assert fsm.state == HostState.NUDGE_BOX
 
 
 def test_place_ok_returns_to_search(cfg):
     fsm = MissionFSM(cfg)
     _setup_place(fsm)
-    fsm.step(P(1.025, 1.0), {}, S(), 0.0)
-    fsm.step(P(1.025, 1.0), {}, S(job_id=1, result=JobResult(1, State.PLACE, True)), 1.0)
+    fsm.step(P(0.990, 1.0), {}, S(), 0.0)
+    fsm.step(P(0.990, 1.0), {}, S(job_id=1, result=JobResult(1, State.PLACE, True)), 1.0)
     assert fsm.state == HostState.SEARCH_TARGET and fsm.target_label is None
 
 
@@ -163,14 +163,14 @@ def test_place_carries_the_residual_angle_for_the_arm(cfg):
     _setup_place(fsm)
     fsm._enter(HostState.NUDGE_BOX)
     # dest_xy 에서 1.5 cm 왼쪽으로 치우쳐 서고 정북을 본다(허용 거리 오차 안)
-    cmd = fsm.step(P(1.010, 1.335, yaw=90.0), {}, S(), 0.0)
+    cmd = fsm.step(P(0.975, 1.330, yaw=90.0), {}, S(), 0.0)
     assert fsm.state == HostState.PLACE
     assert cmd.state == State.PLACE and cmd.stop
     assert cmd.angular_z == 0                                   # 제자리 회전 없음
     # 목표가 내 오른쪽에 있으니 팔은 시계방향(-)으로 튼다. 한계 15도 안이다
     assert -15.0 < cmd.arm_yaw_deg < 0.0
     # 명령이 반복돼도 같은 각도가 계속 실린다
-    assert fsm.step(P(1.010, 1.335, yaw=90.0), {}, S(), 0.1).arm_yaw_deg == cmd.arm_yaw_deg
+    assert fsm.step(P(0.975, 1.330, yaw=90.0), {}, S(), 0.1).arm_yaw_deg == cmd.arm_yaw_deg
 
 
 def test_body_turns_only_when_the_arm_cannot_cover(cfg):
@@ -178,7 +178,7 @@ def test_body_turns_only_when_the_arm_cannot_cover(cfg):
     fsm = MissionFSM(cfg)
     _setup_place(fsm)
     fsm._enter(HostState.NUDGE_BOX)
-    cmd = fsm.step(P(1.025, 1.335, yaw=40.0), {}, S(), 0.0)       # 정차는 했지만 50도 틀어짐
+    cmd = fsm.step(P(0.990, 1.330, yaw=40.0), {}, S(), 0.0)       # 정차는 했지만 50도 틀어짐
     assert fsm.state == HostState.NUDGE_BOX and cmd.angular_z != 0
 
 

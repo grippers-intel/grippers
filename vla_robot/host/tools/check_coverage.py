@@ -219,7 +219,7 @@ def evaluate(hc, cfg, cam_x: float, setback: float, height: float, wall_height: 
 
 
 def centre_x(hc) -> float:
-    """카메라 좌우 위치 기본값 = 앞·뒤 변의 가운데(배치도 REV.2: 장판 2.050 의 가운데 1.025)."""
+    """카메라 좌우 위치 기본값 = 앞·뒤 변의 가운데(배치도 REV.2: 장판 1.980 의 가운데 0.990)."""
     return (hc.arena.wall_x[0] + hc.arena.wall_x[1]) / 2.0
 
 
