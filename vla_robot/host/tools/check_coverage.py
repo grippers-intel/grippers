@@ -1,7 +1,7 @@
 """카메라를 그 높이·거리·각도로 세우면 작업장이 덮이는지 **하드웨어 없이** 확인한다.
 
     python tools/check_coverage.py
-    python tools/check_coverage.py --height 1.30 --setback 0.0 --tilt 42.8
+    python tools/check_coverage.py --height 1.60            # 배치도 REV.2 권장(하향각은 자동)
     python tools/check_coverage.py --wall-height 0.25 --grid 40
 
 가상 카메라 두 대를 앞뒤 가벽 쪽에 세우고, **가벽과 상자의 가림까지 반영해서**
@@ -218,12 +218,17 @@ def evaluate(hc, cfg, cam_x: float, setback: float, height: float, wall_height: 
     return rep
 
 
+def centre_x(hc) -> float:
+    """카메라 좌우 위치 기본값 = 앞·뒤 변의 가운데(배치도 REV.2: 장판 2.050 의 가운데 1.025)."""
+    return (hc.arena.wall_x[0] + hc.arena.wall_x[1]) / 2.0
+
+
 def sweep(hc, cfg, wall_height: float, grid: int, need: int) -> list[dict]:
     """높이·후퇴를 훑어 쓸 만한 배치를 좋은 순서로 돌려준다."""
     out = []
     for height in np.arange(0.9, 2.01, 0.1):
         for setback in np.arange(0.0, 0.81, 0.1):
-            rep = evaluate(hc, cfg, 0.9, float(setback), float(height), wall_height, grid)
+            rep = evaluate(hc, cfg, centre_x(hc), float(setback), float(height), wall_height, grid)
             if rep["any"] < 100.0 or any(n < need for n in rep["marker_seen"]):
                 continue
             out.append(rep)
@@ -245,9 +250,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=None)
-    ap.add_argument("--cam-x", type=float, default=0.9, help="두 카메라의 좌우 위치(m)")
+    ap.add_argument("--cam-x", type=float, default=None,
+                    help="두 카메라의 좌우 위치(m). 기본 = 장판 좌우 가운데")
     ap.add_argument("--setback", type=float, default=0.0, help="벽면에서 뒤로 물러난 거리(m)")
-    ap.add_argument("--height", type=float, default=1.30, help="렌즈 높이(m)")
+    ap.add_argument("--height", type=float, default=1.60, help="렌즈 높이(m). 예전 세트장도 1.60")
     ap.add_argument("--tilt", type=float, default=0.0,
                     help="하향 각도(도). 0 이면 작업 구역 중심을 겨누도록 자동 계산")
     ap.add_argument("--wall-height", type=float, default=0.0,
@@ -257,6 +263,8 @@ def main() -> int:
     args = ap.parse_args()
 
     hc = host_config.load_host_config(args.config)
+    if args.cam_x is None:
+        args.cam_x = centre_x(hc)
     K, real = camera_matrix(hc, hc.cameras.indices[0])
     hfov = 2.0 * math.degrees(math.atan(hc.cameras.width / 2.0 / K[0, 0]))
     cfg = {"K": K, "w": hc.cameras.width, "h": hc.cameras.height,

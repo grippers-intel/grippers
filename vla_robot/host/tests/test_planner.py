@@ -1,6 +1,9 @@
 import math
 
-from planning.planner import DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold, segment_circle_clearance
+import pytest
+
+from planning.planner import (DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold, point_in_rect,
+                              segment_circle_clearance, segment_hits_rect)
 
 
 def _planner(cfg):
@@ -73,3 +76,52 @@ def test_obstacle_hold_keeps_flickering_obstacle(cfg):
     assert h.update([]) == [(1.0, 1.0)]
     assert h.update([]) == []
     assert math.isclose(h.update([(1.02, 1.0)])[0][0], 1.02)
+
+
+# ---------------------------------------------------------------------------
+# 상자 금지 구역 — 주행 구역을 장판 전체로 넓히면서 생겼다(배치도 REV.2)
+# ---------------------------------------------------------------------------
+def _keepout(p):
+    assert len(p.keepouts) == 1
+    return p.keepouts[0]
+
+
+def test_keepout_matches_the_stop_point(cfg):
+    """금지 구역의 앞쪽 경계가 곧 정차점이다 — 그래야 정차점에 설 수 있다."""
+    p = _planner(cfg)
+    x0, x1, y0, y1 = _keepout(p)
+    bx, by, _yaw = cfg.arena.boxes["basket"]
+    assert y0 == pytest.approx(by - cfg.arena.box_size[1] / 2.0 - cfg.mission.box_approach_margin_m)
+    assert (x0, x1) == pytest.approx((bx - 0.105 - 0.20, bx + 0.105 + 0.20))
+    assert not point_in_rect((bx, y0), (x0, x1, y0, y1))
+
+
+def test_path_goes_around_the_box(cfg):
+    """상자 좌우를 잇는 직선은 상자를 지난다 — 계획기는 상자 앞으로 돌아가야 한다."""
+    p = _planner(cfg)
+    rect = _keepout(p)
+    _sub, _corner, blocked = p.update((0.45, 1.50), (1.60, 1.50), [])
+    assert blocked != "blocked"
+    path = p.last_path
+    assert len(path) > 2
+    for a, b in zip(path, path[1:]):
+        assert not segment_hits_rect(a, b, rect)
+
+
+def test_stop_point_is_reachable_from_the_front(cfg):
+    p = _planner(cfg)
+    rect = _keepout(p)
+    _sub, _corner, blocked = p.update((1.025, 0.60), (1.025, rect[2]), [])
+    assert blocked is None
+    for a, b in zip(p.last_path, p.last_path[1:]):
+        assert not segment_hits_rect(a, b, rect)
+
+
+def test_robot_that_stopped_too_close_can_still_leave(cfg):
+    """허용치만큼 더 붙어 서면 금지 구역 안이다 — 막으면 빠져나오지도 못한다."""
+    p = _planner(cfg)
+    x0, x1, y0, y1 = _keepout(p)
+    robot = (1.025, y0 + 0.02)
+    assert point_in_rect(robot, (x0, x1, y0, y1))
+    _sub, _corner, blocked = p.update(robot, (0.60, 0.80), [])
+    assert blocked != "blocked"

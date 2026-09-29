@@ -1,7 +1,8 @@
 # vla_robot — Host(노트북) 설정의 단일 원본.
 # 모르는 키가 있으면 run_host.py 가 기동을 거부한다. 기본값·근거는 host_config.py.
-# 좌표계(map): 원점 = 가벽 1.8x1.8 m 의 앞쪽 왼쪽 바닥 모서리, +x 오른쪽, +y 뒤쪽,
-# yaw = +x 기준 반시계(도), 단위 m.
+# 좌표계(map): 원점 = **장판 앞쪽 왼쪽 모서리**, +x 오른쪽(긴 변 2.050), +y 뒤쪽(상자·CAM B),
+# yaw = +x 기준 반시계(도), 단위 m. 줄자로 장판 가장자리에서 잰 값이 그대로 좌표다.
+# 배치도 REV.2 (2026-09-29): 장판 가로 배치 · 상자 1개 · 카메라는 앞뒤 긴 변 가운데 1.60 m.
 
 aruco:
   dictionary: DICT_4X4_50
@@ -9,14 +10,15 @@ aruco:
   robot_marker_size_m: 0.080       # 실측: 검은 사각형 바깥 변
   robot_marker_height_m: 0.270     # 실측: 바닥 -> 마커 중심 (2026-08-27)
   floor_marker_size_m: 0.120      # 실측(2026-09-29): 검은 사각형 120 mm · 흰 여백 포함 종이 140 mm
-  # 실측: 마커 중심. 인쇄물 윗변이 +y 를 향하게 붙일 것.
-  # ⚠️ 2026-09-23 현재 세트장이 없어 마커가 붙어 있지 않다(최종 발표 후 철거).
-  #    새로 출력해 두었고, 세트장을 만들면서 아래 좌표에 붙인다 — docs/map_rebuild.md
+  # 마커 중심. 인쇄물 윗변이 +y 를 향하게 붙일 것.
+  # 종이(140 mm) 좌우 변을 **장판 좌우 끝에 딱 붙인다** — 중심이 끝에서 0.070.
+  # 앞뒤는 가장자리에서 0.525(종이 변 0.455). 카메라마다 4장이 보이는 자리다.
+  # ⚠️ 세트장을 만들면서 이 좌표에 붙인다 — docs/map_rebuild.md
   floor_markers:
-    1: [0.100, 0.400]
-    2: [1.700, 0.400]
-    3: [0.100, 1.400]
-    4: [1.700, 1.400]
+    1: [0.070, 0.525]
+    2: [1.980, 0.525]
+    3: [0.070, 1.310]
+    4: [1.980, 1.310]
   yaw_offset_deg: 85.7             # 2026-09-06 정지 실측. 주행 방식으로 재측정 권장
   pose_hold_s: 1.0
   min_floor_markers: 2
@@ -26,21 +28,20 @@ aruco:
   extrinsic_relock_frames: 15
 
 arena:
-  # 작업 경계 = **장판 가장자리** (2026-09-29). 가벽 없이 장판 위에서 움직이므로 경계는
-  # 장판 끝이다. 장판 실측 **1.835 × 2.050 m** (배송 규격은 2.000 이었다). 좌표계는 여전히
-  # 1.8 m 설계 사각형 기준이고, 그 사각형을 장판 가운데 두었다 — 여백 좌우 1.75 · 앞뒤 12.5 cm.
-  #
-  # 마커가 장판에 붙어 좌표계가 장판에 고정되므로, 장판을 옮겨도 이 경계는 같이 따라간다.
-  # 경로계획기가 여기서 robot_radius_wall_m 을 빼 주행 경계를 만든다.
+  # 작업 경계 = **장판 가장자리**. 가벽 없이 장판 위에서 움직인다. 장판 실측 2.050 × 1.835 m
+  # (2026-09-29), 긴 변이 좌우. 경로계획기가 여기서 robot_radius_wall_m 을 빼 주행 경계를 만든다.
   # 장판을 새로 재면: python tools/make_layout.py --mat <가로cm> <세로cm>
-  wall_x: [-0.0175, 1.8175]
-  wall_y: [-0.125, 1.925]
-  workspace_x: [0.0, 1.8]
-  workspace_y: [0.4, 1.4]          # 앞뒤 400 mm 는 상자 자리
-  box_size: [0.210, 0.350, 0.220]
+  wall_x: [0.0, 2.050]
+  wall_y: [0.0, 1.835]
+  # 기물이 놓이는 곳 = **바닥 마커 네 장 중심 안쪽**. 밖에 있는 기물은 대상에서 뺀다
+  # (상자 안에 들어간 것도 여기서 걸러진다).
+  workspace_x: [0.070, 1.980]
+  workspace_y: [0.525, 1.310]
+  box_size: [0.210, 0.350, 0.220]  # 폭(x) · 길이(y) · 높이
+  # 상자는 하나다(최종 발표 피드백). 뒤쪽 긴 변 가운데, **뒷면을 장판 뒤끝에 붙인다**.
+  # 입구가 앞(-y, yaw 180). 입구 y = 1.660 - 0.175 = 1.485.
   boxes:
-    toy: [0.450, 1.625, 180.0]
-    chess: [1.350, 1.625, 180.0]
+    basket: [1.025, 1.660, 180.0]
 
 cameras:
   indices: [0, 1]
@@ -71,7 +72,13 @@ planner:
   robot_radius_piece_m: 0.14
   piece_obstacle_radius_m: 0.06
   obstacle_margin_m: 0.05
-  drive_area_y: [0.30, 1.30]   # 상한은 차체 앞이 상자 2 cm 앞에 서는 지점(마커 0.13 + 여유)
+  # 마커 중심이 설 수 있는 앞뒤 범위 = 장판 거의 전체. 앞뒤 끝 띠는 카메라가 로봇 마커를
+  # 못 본다(1.60 m 에서 앞 0.25 미만 · 뒤 1.58 초과) — 그래서 뺐다.
+  drive_area_y: [0.25, 1.575]
+  # 상자 둘레 진입 금지(주행 구역을 넓히면서 생겼다). 좌우·뒤는 로봇 반경만큼,
+  # 앞은 정차점까지(= mission.box_approach_margin_m 이하여야 정차점에 설 수 있다).
+  box_keepout_side_m: 0.20
+  box_keepout_front_m: 0.15
   waypoint_step_m: 0.15
   axis_leg_tolerance_m: 0.03
   yaw_tolerance_deg: 5.0
@@ -93,11 +100,10 @@ mission:
   grasp_trigger_dist_m: 0.35       # 마커 중심 기준 (마커 -0.15- 그리퍼 -0.20- 물체)
   place_trigger_dist_m: 0.35
   # ⚠️ 물리 한계 — 마커에서 차체 앞까지 0.13 m(2026-09-23 실측)라 여기 서면 차체 앞이
-  # 상자에서 2 cm 떨어진다. 주행 구역 상한 1.30 도 같은 지점이다.
+  # 상자에서 2 cm 떨어진다. 정차점 = (1.025, 1.335), planner.box_keepout_front_m 경계와 같다.
   box_approach_margin_m: 0.15
-  # 바구니 투입 목표 — 도면 docs/layout/workspace_layout.md (2026-09-05).
-  # 상자는 yaw180 = 입구가 작업구역 쪽이다. 목표는 상자 중심이 아니라 입구 안쪽의
-  # 작은 사각형이다(chess: x[1.320,1.380] y[1.450,1.480], 중심 1.350,1.465).
+  # 바구니 투입 목표. 상자는 yaw180 = 입구가 작업구역 쪽이다. 목표는 상자 중심이 아니라
+  # 입구 안쪽의 작은 사각형이다(x[0.995,1.055] y[1.485,1.515], 중심 1.025,1.500).
   insert_half_width_m: 0.03
   insert_inset_depth_m: 0.03
   # 차는 상자 정면(dest_xy)에 서기만 한다. 투입 방향은 **팔의 base 가** 맞춘다 —
@@ -110,13 +116,13 @@ mission:
   place_aim_margin_m: 0.04      # 판정 목표보다 이만큼 더 안쪽을 겨눈다(허용치보다 커야 한다)
   max_arm_yaw_deg: 15.0         # Pi 의 place.max_base_yaw_deg 와 같은 값. 밖이면 차체를 돌린다
   nudge_max_m: 0.40             # 이만큼 밀고도 정면에 못 서면 재접근
-  piece_dest_box:
-    queen: chess
-    knight: chess
-    rook: chess
-    star: toy
-    soccer: toy
-    box: toy
+  piece_dest_box:                  # 상자가 하나라 전부 같은 곳으로 간다
+    queen: basket
+    knight: basket
+    rook: basket
+    star: basket
+    soccer: basket
+    box: basket
   skip_radius_m: 0.10
   skip_expiry_s: 90.0
   place_retry_max: 2

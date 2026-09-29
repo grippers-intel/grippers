@@ -1,6 +1,6 @@
 """이름 포즈 실측 — 토크를 끄고 손으로 자세를 잡은 뒤 arm_poses.yaml 에 저장한다.
 
-    python3 tools/teach_pose.py --name drop --note "chess 상자 위"
+    python3 tools/teach_pose.py --name drop --note "상자 위"
     python3 tools/teach_pose.py --name drop --keep-gripper     # 그리퍼는 토크 유지(물체를 쥔 채)
 
 값은 정책 단위(servo1-5 도, gripper 0..100)로 저장되고 measured: true 가 된다.

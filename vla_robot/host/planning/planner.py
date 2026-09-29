@@ -13,6 +13,11 @@
 하나로 쓰면 목표 방위 주변에서 정지<->회전을 반복하며 떤다(2026-09-05). 멈추라고
 해도 지연 0.3 s 동안 ~6° 더 돌므로, 나올 때 5°, 들어갈 때 12° 로 벌린다.
 
+## 왜 상자 둘레를 막는가 (box_keepout)
+2026-09-29 배치도 REV.2 에서 주행 구역을 장판 거의 전체로 넓혔다. 그전에는 주행 구역
+상한(y 1.30)이 곧 상자 앞이라 계획기가 상자로 들어갈 수 없었는데, 넓히면서 그 역할이
+사라졌다. 그래서 상자 둘레 사각형을 **고정 장애물**로 둔다 — 앞쪽 경계가 정차점이다.
+
 ## 이전 구현에서 고친 것
 - 막혀서 부분목표가 로봇 자신이면, 방위 계산이 "이미 정렬"로 나와 FORWARD 가
   나갔다. 여기서는 부분목표까지 거리가 허용치 이하면 STOP 을 낸다.
@@ -43,6 +48,43 @@ def segment_circle_clearance(p0: XY, p1: XY, c: XY) -> tuple[float, float]:
     t = ((c[0] - p0[0]) * dx + (c[1] - p0[1]) * dy) / length_sq
     t = min(1.0, max(0.0, t))
     return math.hypot(p0[0] + t * dx - c[0], p0[1] + t * dy - c[1]), t
+
+
+Rect = tuple[float, float, float, float]      # x0, x1, y0, y1
+
+
+def box_keepout_rects(arena_cfg, side_m: float, front_m: float) -> list[Rect]:
+    """상자마다 진입 금지 사각형. 입구 쪽(-y, yaw 180)은 front_m, 나머지는 side_m 만큼 넓힌다.
+
+    상자는 모두 입구가 -y 를 향한다는 전제다(basket_target 과 같은 전제).
+    """
+    bw, bl = arena_cfg.box_size[0], arena_cfg.box_size[1]
+    return [(bx - bw / 2.0 - side_m, bx + bw / 2.0 + side_m,
+             by - bl / 2.0 - front_m, by + bl / 2.0 + side_m)
+            for bx, by, _yaw in arena_cfg.boxes.values()]
+
+
+def point_in_rect(p: XY, r: Rect) -> bool:
+    """경계 위는 밖으로 본다 — 정차점이 앞쪽 경계 위에 있다."""
+    return r[0] < p[0] < r[1] and r[2] < p[1] < r[3]
+
+
+def segment_hits_rect(p0: XY, p1: XY, r: Rect) -> bool:
+    """선분이 사각형 **내부**를 지나는가(Liang-Barsky). 경계를 스치는 것은 통과로 본다."""
+    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+    t0, t1 = 0.0, 1.0
+    for d, lo, hi, q in ((dx, r[0], r[1], p0[0]), (dy, r[2], r[3], p0[1])):
+        if abs(d) < 1e-12:
+            if not lo < q < hi:
+                return False
+            continue
+        ta, tb = (lo - q) / d, (hi - q) / d
+        if ta > tb:
+            ta, tb = tb, ta
+        t0, t1 = max(t0, ta), min(t1, tb)
+        if t0 >= t1:
+            return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +204,7 @@ class GridPathPlanner:
         # 실제 로봇 위치가 FSM 트리거 거리 안에 들어오게 하려는 것이다.
         self.goal_radius = max(arrive_tol - 2.0 * c.cell_m, c.cell_m)
         self.safe = c.piece_obstacle_radius_m + c.robot_radius_piece_m + c.obstacle_margin_m
-        # 마커 중심이 설 수 있는 범위다. 좌우는 가벽에서 암 휩쓸림 반경만큼 물러난다
+        # 마커 중심이 설 수 있는 범위다. 좌우는 경계에서 암 휩쓸림 반경만큼 물러난다
         # (이걸 빼먹으면 계획기가 벽을 파고드는 경로를 낸다 — 실제로 겪었다).
         self.x0 = arena_cfg.wall_x[0] + c.robot_radius_wall_m
         self.x1 = arena_cfg.wall_x[1] - c.robot_radius_wall_m
@@ -171,6 +213,7 @@ class GridPathPlanner:
         self.ny = int(round((self.y1 - self.y0) / self.cell)) + 1
         self._gx, self._gy = np.meshgrid(self.x0 + np.arange(self.nx) * self.cell,
                                          self.y0 + np.arange(self.ny) * self.cell)
+        self.keepouts = box_keepout_rects(arena_cfg, c.box_keepout_side_m, c.box_keepout_front_m)
         self.last_path: Optional[list[XY]] = None
 
     def reset(self) -> None:
@@ -220,8 +263,15 @@ class GridPathPlanner:
             return sub_goal, corner, "blocked"
         return sub_goal, corner, ("piece" if len(pts) - k > 1 else None)
 
+    def _active_keepouts(self, robot_xy: XY) -> list[Rect]:
+        """로봇이 이미 들어가 있는 금지 구역은 뺀다 — 막으면 빠져나오지도 못한다
+        (정차 허용치만큼 더 붙어 선 직후가 그렇다)."""
+        return [r for r in self.keepouts if not point_in_rect(robot_xy, r)]
+
     def _free_grid(self, obstacles, robot_xy: XY) -> np.ndarray:
         free = np.ones((self.ny, self.nx), dtype=bool)
+        for x0, x1, y0, y1 in self._active_keepouts(robot_xy):
+            free &= ~((self._gx > x0) & (self._gx < x1) & (self._gy > y0) & (self._gy < y1))
         for ox, oy in obstacles:
             if math.hypot(ox - robot_xy[0], oy - robot_xy[1]) <= 1e-6:
                 continue
@@ -314,11 +364,13 @@ class GridPathPlanner:
     def _smooth(self, pts: list[XY], obstacles, robot_xy: XY) -> list[XY]:
         """string pulling. 출발점이 이미 회피구역 안인 장애물은 시선 검사에서 뺀다."""
         obs = [o for o in obstacles if math.hypot(o[0] - robot_xy[0], o[1] - robot_xy[1]) > self.safe]
-        if not obs:
+        rects = self._active_keepouts(robot_xy)
+        if not obs and not any(segment_hits_rect(pts[0], pts[-1], r) for r in rects):
             return [pts[0], pts[-1]]
 
         def visible(a: XY, b: XY) -> bool:
-            return all(segment_circle_clearance(a, b, c)[0] >= self.safe for c in obs)
+            return (all(segment_circle_clearance(a, b, c)[0] >= self.safe for c in obs)
+                    and not any(segment_hits_rect(a, b, r) for r in rects))
 
         out = [pts[0]]
         i = 0
