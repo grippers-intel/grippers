@@ -1,5 +1,10 @@
 # 그리퍼스 작업장 도면 (텍스트판)
 
+> [!warning] 2026-09-29 배치도 REV.2 로 대체됐다
+> 장판을 가로로 깔고(2.050 × 1.835 m) 상자를 **하나**(뒤쪽 긴 변 가운데)로 줄였다. 원점도 장판
+> 앞·왼 모서리로 옮겼다. 아래 좌표(toy/chess 두 상자, 1.8 m 가벽)는 **옛 세트장 기록**이다.
+> 지금 값은 `host/config/host.yaml`, 설치 절차는 `docs/map_rebuild.md` 에 있다.
+
 > 원본: claude.ai 아티팩트 "그리퍼스 작업장 도면 (Copy)" (2026-09-05 생성분)을 Claude Code가 읽을 수 있게 옮긴 파일.
 > 값 출처: `grippers-host-mac/host/aruco/config.py`, `host/mission_config.py`, `host/basket_target.py`, `host/mission.py`
 > 코드와 다르면 **코드가 정답**이다. 이 문서는 참고용 스냅샷.
