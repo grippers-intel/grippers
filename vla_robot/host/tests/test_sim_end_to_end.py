@@ -12,7 +12,8 @@ class FakeClock:
         return self.t
 
 
-def test_sim_moves_two_pieces_into_boxes(cfg):
+def test_sim_moves_two_pieces_into_the_basket(cfg):
+    """상자가 하나라(배치도 REV.2) 두 기물 모두 basket 으로 간다."""
     clock = FakeClock()
     world = SimWorld(cfg, clock=clock, seed=1)
     fsm = MissionFSM(cfg)
@@ -23,12 +24,11 @@ def test_sim_moves_two_pieces_into_boxes(cfg):
         world.update()
         cmd = fsm.step(world.pose(), world.piece_map(), world.link.latest_status(), clock.t)
         world.link.send(cmd)
-        if len(world.pieces_in_box("chess")) + len(world.pieces_in_box("toy")) == 2:
+        if len(world.pieces_in_box("basket")) == 2:
             delivered_at = cycle
             break
     assert delivered_at is not None, f"미완료: state={fsm.state.name} events={list(fsm.events)}"
-    assert world.pieces_in_box("chess") == ["queen"]
-    assert world.pieces_in_box("toy") == ["star"]
+    assert sorted(world.pieces_in_box("basket")) == ["queen", "star"]
     assert not fsm.skipped
     # 몇 사이클 더 돌려도 새 대상을 고르지 않고 대기한다
     for _ in range(20):
@@ -48,7 +48,7 @@ def _run_mission(cfg, world, cycles=6000):
         world.update()
         world.link.send(fsm.step(world.pose(), world.piece_map(),
                                  world.link.latest_status(), clock.t))
-        if len(world.pieces_in_box("chess")) + len(world.pieces_in_box("toy")) == 2:
+        if len(world.pieces_in_box("basket")) == 2:
             break
     return fsm
 
@@ -66,7 +66,7 @@ def test_place_lands_inside_the_basket(cfg):
     inside = any(abs(dx - bx) <= bw / 2.0 and by - bl / 2.0 <= dy <= by + bl / 2.0
                  for bx, by, _yaw in cfg.arena.boxes.values())
     assert inside, f"상자 밖에 떨어졌다: {world.last_drop}"
-    assert len(world.pieces_in_box("chess")) + len(world.pieces_in_box("toy")) == 2
+    assert len(world.pieces_in_box("basket")) == 2
 
 
 def test_ignoring_the_arm_yaw_misses(cfg):
@@ -104,8 +104,8 @@ def test_a_shorter_arm_still_lands_inside(cfg):
     """
     world = SimWorld(cfg, clock=FakeClock(), seed=3, place_reach_m=0.25)
     _run_mission(cfg, world)
-    assert len(world.pieces_in_box("chess")) + len(world.pieces_in_box("toy")) == 2
-    edge = cfg.arena.boxes["chess"][1] - cfg.arena.box_size[1] / 2.0
+    assert len(world.pieces_in_box("basket")) == 2
+    edge = cfg.arena.boxes["basket"][1] - cfg.arena.box_size[1] / 2.0
     assert world.last_drop[1] >= edge, "기물이 상자 테두리 앞에 떨어졌다"
 
 
@@ -129,5 +129,5 @@ def test_a_too_short_arm_does_not_deliver(cfg):
     short = replace(cfg, mission=replace(cfg.mission, arm_reach_m=0.10))
     world = SimWorld(short, clock=FakeClock(), seed=3, place_reach_m=0.10)
     fsm = _run_mission(short, world)
-    assert len(world.pieces_in_box("chess")) + len(world.pieces_in_box("toy")) == 0
+    assert len(world.pieces_in_box("basket")) == 0
     assert fsm.state == HostState.HALTED

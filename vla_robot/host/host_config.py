@@ -53,8 +53,9 @@ class ArucoConfig:
     # 바닥에서 로봇 마커 중심까지(m). 10 mm 틀리면 위치가 약 13 mm 밀린다.
     robot_marker_height_m: float = 0.270
     floor_marker_size_m: float = 0.120
+    # 종이 좌우 변을 장판 좌우 끝에 붙인 자리(배치도 REV.2, 2026-09-29).
     floor_markers: dict[int, tuple[float, float]] = field(default_factory=lambda: {
-        1: (0.100, 0.400), 2: (1.700, 0.400), 3: (0.100, 1.400), 4: (1.700, 1.400)})
+        1: (0.070, 0.525), 2: (1.980, 0.525), 3: (0.070, 1.310), 4: (1.980, 1.310)})
     # 마커 로컬 +x 와 로봇 전진 방향의 차(도). 2026-09-06 정지 실측 85.7.
     yaw_offset_deg: float = 85.7
     pose_hold_s: float = 1.0
@@ -67,17 +68,17 @@ class ArucoConfig:
 
 @dataclass(frozen=True)
 class ArenaConfig:
-    # 작업 경계 = 장판 가장자리(2026-09-29 실측 1.835 × 2.050 m, 1.8 m 설계 사각형을 가운데 둠).
-    wall_x: tuple[float, float] = (-0.0175, 1.8175)
-    wall_y: tuple[float, float] = (-0.125, 1.925)
-    # 기물이 놓이는 영역. y 밖(상자 띠)은 이미 옮긴 것으로 본다.
-    workspace_x: tuple[float, float] = (0.0, 1.8)
-    workspace_y: tuple[float, float] = (0.4, 1.4)
+    # 작업 경계 = 장판 가장자리. 원점이 장판 앞·왼 모서리다(2026-09-29 실측 2.050 × 1.835 m).
+    wall_x: tuple[float, float] = (0.0, 2.050)
+    wall_y: tuple[float, float] = (0.0, 1.835)
+    # 기물이 놓이는 영역 = 바닥 마커 네 장 중심 안쪽. 밖(상자 안 포함)은 대상이 아니다.
+    workspace_x: tuple[float, float] = (0.070, 1.980)
+    workspace_y: tuple[float, float] = (0.525, 1.310)
     # 상자 폭(x) x 길이(y) x 높이(z)
     box_size: tuple[float, float, float] = (0.210, 0.350, 0.220)
-    # 상자 중심 (x, y, yaw_deg)
+    # 상자 중심 (x, y, yaw_deg). 하나뿐이다 — 뒤쪽 긴 변 가운데, 뒷면이 장판 뒤끝.
     boxes: dict[str, tuple[float, float, float]] = field(default_factory=lambda: {
-        "toy": (0.450, 1.625, 180.0), "chess": (1.350, 1.625, 180.0)})
+        "basket": (1.025, 1.660, 180.0)})
 
 
 @dataclass(frozen=True)
@@ -119,8 +120,12 @@ class PlannerConfig:
     robot_radius_piece_m: float = 0.14
     piece_obstacle_radius_m: float = 0.06
     obstacle_margin_m: float = 0.05
-    # 마커 중심이 설 수 있는 y 범위. 0.30 = 두 카메라에 다 잡히는 한계 0.27 + 30 mm.
-    drive_area_y: tuple[float, float] = (0.30, 1.30)
+    # 마커 중심이 설 수 있는 y 범위 = 장판 거의 전체. 앞뒤 끝은 카메라가 로봇 마커를 못 본다.
+    drive_area_y: tuple[float, float] = (0.25, 1.575)
+    # 상자 둘레 진입 금지. 좌우·뒤는 로봇 반경, 앞은 정차점까지.
+    # 주행 구역 상한이 상자를 막아 주던 것을 주행 구역을 넓히면서 이것으로 바꿨다.
+    box_keepout_side_m: float = 0.20
+    box_keepout_front_m: float = 0.15
     waypoint_step_m: float = 0.15
     axis_leg_tolerance_m: float = 0.03
     yaw_tolerance_deg: float = 5.0
@@ -147,8 +152,8 @@ class MissionConfig:
     place_trigger_dist_m: float = 0.35
     # 상자 앞면에서 정차점(마커)까지. ⚠️ **물리 한계라 줄일 수 없다.**
     # 2026-09-23 실측: 마커 중심에서 차체 맨 앞까지 0.13 m. 그래서 0.15 로 서면 차체 앞이
-    # 상자에서 2 cm 떨어진 자리다. planner.drive_area_y 상한 1.30 도 같은 지점이다
-    # (마커 1.30 -> 차체 앞 1.43 -> 상자 1.45).
+    # 상자에서 2 cm 떨어진 자리다. planner.box_keepout_front_m 의 앞쪽 경계도 같은 지점이다
+    # (마커 1.335 -> 차체 앞 1.465 -> 상자 입구 1.485).
     #
     # 정차 허용치 ±0.02 가 나오는 곳도 여기다 — 덜 붙으면 팔이 테두리를 못 넘고
     # (실측 짧은 쪽 0.17 - 0.02 = 0.15), 더 붙으면 차체가 상자에 닿는다.
@@ -184,8 +189,7 @@ class MissionConfig:
     # 다시 접근한다(place_tries 가 오른다).
     nudge_max_m: float = 0.40
     piece_dest_box: dict[str, str] = field(default_factory=lambda: {
-        "queen": "chess", "knight": "chess", "rook": "chess",
-        "star": "toy", "soccer": "toy", "box": "toy"})
+        label: "basket" for label in ("queen", "knight", "rook", "star", "soccer", "box")})
     skip_radius_m: float = 0.10
     skip_expiry_s: float = 90.0
     place_retry_max: int = 2
@@ -240,6 +244,12 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
         raise ConfigError("planner.cell_m 는 axis_leg_tolerance_m 보다 작아야 한다")
     if cfg.aruco.min_floor_markers < 1:
         raise ConfigError("aruco.min_floor_markers >= 1")
+    pl = cfg.planner
+    if pl.box_keepout_side_m < 0 or pl.box_keepout_front_m < 0:
+        raise ConfigError("planner.box_keepout_*_m 는 음수일 수 없다")
+    if pl.box_keepout_front_m > cfg.mission.box_approach_margin_m:
+        # 정차점이 금지 구역 안에 들어가 CARRY 가 영원히 "길 없음"이 된다.
+        raise ConfigError("planner.box_keepout_front_m 는 mission.box_approach_margin_m 이하여야 한다")
     m = cfg.mission
     for name in ("insert_half_width_m", "insert_inset_depth_m", "place_arrive_tol_m",
                  "nudge_max_m", "arm_reach_m", "place_aim_margin_m", "place_min_gap_m"):
