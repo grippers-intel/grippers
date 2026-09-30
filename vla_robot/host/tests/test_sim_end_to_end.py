@@ -158,6 +158,44 @@ def test_base_that_stops_responding_is_recovered_and_the_mission_finishes(cfg):
     assert any("복구 완료" in e for e in fsm.events) or world.base_recoveries == 1
 
 
+def test_runaway_base_is_reset_and_the_mission_finishes(cfg):
+    """2026-09-30 실기: 상자 앞에서 회전만 보냈는데 굳은 직진 속도로 1 m 를 달려 장판 밖으로 나갔다.
+    Host 가 "직진을 안 시켰는데 달린다"를 알아채 보드 리셋을 요청하고, 멀리 가기 전에 선다."""
+    import math
+    world = SimWorld(cfg, clock=FakeClock(), seed=3)
+    fsm = MissionFSM(cfg)
+    clock = world.clock
+    froze_at, stopped_at = None, None
+    for _ in range(8000):
+        clock.t += 0.1
+        world.update()
+        cmd = fsm.step(world.pose(), world.piece_map(), world.link.latest_status(), clock.t)
+        world.link.send(cmd)
+        if froze_at is None and fsm.state == HostState.CARRY_TO_DEST and cmd.linear_x > 0 \
+                and world._vel[0] > 0:
+            world.fail_runaway()
+            froze_at = (world.x, world.y)
+        if froze_at is not None and stopped_at is None and not world.runaway:
+            stopped_at = (world.x, world.y)
+        if len(world.pieces_in_box("basket")) == 2:
+            break
+    assert froze_at is not None and stopped_at is not None, list(fsm.events)
+    assert any("폭주" in e for e in fsm.events)
+    assert world.base_recoveries == 1
+    # 굳은 뒤 멈출 때까지: 부분목표에 닿을 때까지(최대 ~0.3 m) + 폭주 판단(grace 1 s + 창 0.5 s)
+    assert math.dist(froze_at, stopped_at) < 0.6
+    assert sorted(world.pieces_in_box("basket")) == ["queen", "star"]
+
+
+def test_runaway_is_not_confused_with_the_arm_or_coasting(cfg):
+    """팔이 펴지며 마커가 움직이는 것(GRASP/PLACE)이나 멈춘 뒤 관성으로 몇 cm 더 가는 것은 폭주가 아니다."""
+    world = SimWorld(cfg, clock=FakeClock(), seed=1)
+    fsm = _run_mission(cfg, world)
+    assert len(world.pieces_in_box("basket")) == 2
+    assert world.base_recoveries == 0
+    assert not any("폭주" in e for e in fsm.events)
+
+
 def test_base_that_never_recovers_halts_with_a_reason(cfg):
     """복구해도 계속 안 움직이면(전원·배선) 무한히 반복하지 않고 멈춰서 사람을 부른다."""
     world = SimWorld(cfg, clock=FakeClock(), seed=3)

@@ -82,6 +82,8 @@ class SimWorld:
         # 차체 고장 흉내: 보드가 쓰기를 조용히 무시한다(2026-09-23 · 09-30). recover_base 를
         # 받으면 recover_s 뒤에 풀린다 — 실제 Pi 의 컨트롤러 재기동과 같은 모양이다.
         self.base_dead = False
+        # 같은 고장이 달리는 중에 나면 마지막 속도를 그대로 유지한다(정지·워치독도 안 먹는다).
+        self._frozen_vel: Optional[tuple[float, float, float]] = None
         self.recover_s = 3.0
         self._recovering_until: Optional[float] = None
         self.base_recoveries = 0
@@ -90,6 +92,14 @@ class SimWorld:
     def fail_base(self) -> None:
         """지금부터 바퀴가 명령을 무시한다."""
         self.base_dead = True
+
+    def fail_runaway(self) -> None:
+        """지금 속도 그대로 바퀴가 굳는다 — 이후 명령·정지·워치독을 모두 무시한다(2026-09-30 실기)."""
+        self._frozen_vel = self._vel
+
+    @property
+    def runaway(self) -> bool:
+        return self._frozen_vel is not None
 
     # -- 세계 --------------------------------------------------------------
     def update(self) -> None:
@@ -102,9 +112,14 @@ class SimWorld:
             self._recovering_until = None
             self.base_dead = False
             self.base_recoveries += 1
+        if self._recovering_until is not None:
+            self._frozen_vel = None          # 컨트롤러 재기동 = 보드 리셋 — 바퀴가 선다
         watchdog = self._last_cmd_t is None or now - self._last_cmd_t > self.watchdog_s
         dead = self.base_dead or self._recovering_until is not None
-        vx, vy, wz = (0.0, 0.0, 0.0) if (watchdog or dead or self._job is not None) else self._vel
+        if self._frozen_vel is not None:
+            vx, vy, wz = self._frozen_vel
+        else:
+            vx, vy, wz = (0.0, 0.0, 0.0) if (watchdog or dead or self._job is not None) else self._vel
         th = math.radians(self.yaw_deg)
         self.x += (vx * math.cos(th) - vy * math.sin(th)) * dt
         self.y += (vx * math.sin(th) + vy * math.cos(th)) * dt

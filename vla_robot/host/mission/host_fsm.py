@@ -25,12 +25,13 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from dataclasses import replace
 from enum import Enum, auto
 from typing import Optional
 
 from host_config import HostConfig
 from localization.pose import Pose
-from mission.base_monitor import BaseStallMonitor
+from mission.base_monitor import BaseRunawayMonitor, BaseStallMonitor
 from mission.basket_target import BasketTarget, basket_target, facing_error_deg
 from planning.planner import (DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold,
                               segment_circle_clearance, segment_hits_rect, wrap_deg)
@@ -60,6 +61,10 @@ WIRE_STATE = {
     # 물체를 든 채 서 있기. PLACE 로 두면 Pi 가 투하를 다시 시도할 수 있다.
     HostState.HALTED: State.IDLE,
 }
+
+#: Host 가 바퀴를 움직이는 단계. 폭주는 여기서만 본다 — SEARCH·HALTED 에서는 사람이 로봇을
+#: 옮기는 일이 잦고, GRASP·PLACE 에서는 팔(마커)이 움직인다.
+_DRIVE_HOST_STATES = (HostState.APPROACH_PIECE, HostState.CARRY_TO_DEST, HostState.NUDGE_BOX)
 
 _PREV = {
     HostState.APPROACH_PIECE: HostState.SEARCH_TARGET,
@@ -149,6 +154,8 @@ class MissionFSM:
         # 차체 무응답 자동 복구
         m = self.cfg.mission
         self._stall = BaseStallMonitor(m.base_stall_s, m.base_stall_move_m, m.base_stall_turn_deg)
+        self._runaway = BaseRunawayMonitor(m.base_runaway_move_m, m.base_runaway_window_s,
+                                           m.base_runaway_grace_s)
         self._recover_started: Optional[float] = None
         self._recover_baseline: Optional[int] = None
         self._recover_in_a_row = 0
@@ -187,6 +194,16 @@ class MissionFSM:
             if waiting is not None:
                 return waiting
         cmd = self._step_states(pose, piece_map, pi_status, now)
+        watching = self.estop or self.state in _DRIVE_HOST_STATES
+        if self._runaway.update(now, cmd, pose, watching):
+            self._runaway.reset()
+            if self.estop:
+                # ESTOP 인데 달린다 — 정지 명령이 안 먹는 것이다. 보드 리셋만 요청하고 ESTOP 은 유지한다.
+                self._log("차체 폭주 — ESTOP 인데 움직인다. Pi 에 컨트롤러 복구(보드 리셋) 요청")
+                return replace(cmd, recover_base=True)
+            return self._start_base_recovery(
+                pi_status, f"차체 폭주 — 직진을 멈췄는데 {self.cfg.mission.base_runaway_window_s:.1f}s 에 "
+                           f"{self.cfg.mission.base_runaway_move_m * 100:.0f} cm 넘게 움직인다")
         if self._stall.update(now, cmd, pose):
             return self._start_base_recovery(pi_status)
         if self._stall.moved_since_reset:
@@ -194,16 +211,17 @@ class MissionFSM:
             self._recover_in_a_row = 0
         return cmd
 
-    def _start_base_recovery(self, pi_status: Optional[PiStatus]) -> HostCommand:
+    def _start_base_recovery(self, pi_status: Optional[PiStatus], why: Optional[str] = None) -> HostCommand:
         m = self.cfg.mission
         if self._recover_in_a_row >= m.base_recover_max:
             self._halt(f"차체가 명령을 따르지 않는다 — 자동 복구 {self._recover_in_a_row}번 뒤에도. "
                        f"차체 전원·배선을 확인할 것")
-            return self._stop("halted")
+            # HALTED 도 멈추라는 명령일 뿐이다 — 폭주 중이면 그것도 안 먹으니 보드 리셋은 계속 요청한다.
+            return replace(self._stop("halted"), recover_base=why is not None)
         self._recover_started = self._now
         self._recover_baseline = pi_status.base_recoveries if pi_status is not None else None
-        self._log(f"차체 무응답 — 움직임 명령 {m.base_stall_s:.1f}s 동안 위치가 그대로다. "
-                  f"Pi 에 컨트롤러 복구 요청({self._recover_in_a_row + 1}/{m.base_recover_max})")
+        why = why or f"차체 무응답 — 움직임 명령 {m.base_stall_s:.1f}s 동안 위치가 그대로다"
+        self._log(f"{why}. Pi 에 컨트롤러 복구 요청({self._recover_in_a_row + 1}/{m.base_recover_max})")
         self._clear_nav()
         self.last_cmd_text = "base recovery"
         return HostCommand(WIRE_STATE.get(self.state, State.IDLE), stop=True,
@@ -219,6 +237,7 @@ class MissionFSM:
                 self._recover_started = None
                 self._recover_in_a_row += 1
                 self._stall.reset()
+                self._runaway.reset()
                 self._reset_motion()
                 self._log(f"차체 컨트롤러 복구 완료 — 하던 {self.state.name} 을 이어간다")
                 return None

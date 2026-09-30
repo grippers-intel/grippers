@@ -172,6 +172,11 @@ mission:
   base_stall_turn_deg: 2.0
   base_recover_timeout_s: 45.0
   base_recover_max: 2
+  # 차체 폭주 감지: 직진을 멈춘 지 1 s 지났는데 0.5 s 동안 5 cm 넘게 움직이면 같은 복구(보드 리셋).
+  # 09-30: 상자 앞에서 회전만 보냈는데 1 m 를 달려 장판 밖으로 나갔고 정지 명령도 먹지 않았다.
+  base_runaway_move_m: 0.05
+  base_runaway_window_s: 0.5
+  base_runaway_grace_s: 1.0
 
 link:
   bind_ip: 0.0.0.0

@@ -51,3 +51,52 @@ class BaseStallMonitor:
             self.moved_since_reset = True
             return False
         return now - self._since >= self.stall_s
+
+
+class BaseRunawayMonitor:
+    """직진을 시키지 않았는데 로봇이 달리고 있으면 True — "서라/돌라고 했는데 계속 간다".
+
+    같은 고장(보드가 쓰기를 무시)이 **달리는 중에** 나면 마지막 속도를 그대로 유지한다.
+    2026-09-30: 상자 앞에서 제자리 회전만 보냈는데 8초 동안 1 m 를 곧장 달려 장판 밖으로
+    나갔고, 사람이 잡은 뒤에도 바퀴가 계속 돌았다. 정지 명령도 먹지 않으므로 컨트롤러를
+    다시 띄워(보드 리셋) 세우는 수밖에 없다 — 무응답 감지와 같은 복구를 쓴다.
+
+    마지막 병진 명령에서 grace_s 가 지났는데 최근 window_s 동안 move_m 넘게 움직였으면 폭주다.
+    grace_s 는 멈추라고 한 뒤 관성·지연으로 더 가는 몫이다. 팔 작업(GRASP/PLACE) 중에는 보지
+    않는다 — 마커가 팔에 붙어 있어 팔을 펴면 마커가 30 cm 가까이 움직인다.
+    """
+
+    def __init__(self, move_m: float, window_s: float, grace_s: float) -> None:
+        self.move_m = move_m
+        self.window_s = window_s
+        self.grace_s = grace_s
+        self.reset()
+
+    def reset(self) -> None:
+        self._last_linear_at: Optional[float] = None
+        self._poses: list[tuple[float, float, float]] = []
+
+    @staticmethod
+    def _commands_translation(cmd: HostCommand) -> bool:
+        return not cmd.stop and (abs(cmd.linear_x) > 1e-6 or abs(cmd.linear_y) > 1e-6)
+
+    def update(self, now: float, cmd: HostCommand, pose: Pose, watching: bool) -> bool:
+        """watching: 지금 폭주를 볼 상태인가(주행 단계·ESTOP). 아니면 창을 비운다."""
+        if not watching or cmd.state in State.JOB_STATES or not (pose.ok and pose.fresh):
+            self._poses.clear()
+            if self._commands_translation(cmd):
+                self._last_linear_at = now
+            return False
+        if self._commands_translation(cmd) or self._last_linear_at is None:
+            # 병진 중이거나 막 시작했다. 기준 시각만 적는다(처음 보는 경우도 방금 병진한 것으로 친다).
+            self._last_linear_at = now
+            self._poses.clear()
+            return False
+        self._poses.append((now, pose.x, pose.y))
+        self._poses = [p for p in self._poses if now - p[0] <= self.window_s]
+        if now - self._last_linear_at < self.grace_s:
+            return False
+        t0, x0, y0 = self._poses[0]
+        if now - t0 < self.window_s * 0.8:
+            return False                       # 창이 아직 덜 찼다
+        return math.hypot(pose.x - x0, pose.y - y0) > self.move_m

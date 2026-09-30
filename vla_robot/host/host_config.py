@@ -249,6 +249,12 @@ class MissionConfig:
     base_stall_turn_deg: float = 2.0
     base_recover_timeout_s: float = 45.0
     base_recover_max: int = 2
+    # 차체 폭주 감지(2026-09-30). 같은 고장이 달리는 중에 나면 마지막 속도로 계속 간다 — 상자 앞에서
+    # 회전만 보냈는데 1 m 를 달려 장판 밖으로 나갔다. 병진 명령을 멈춘 지 base_runaway_grace_s 가
+    # 지났는데 base_runaway_window_s 동안 base_runaway_move_m 넘게 움직였으면 같은 복구(보드 리셋)를 요청한다.
+    base_runaway_move_m: float = 0.05
+    base_runaway_window_s: float = 0.5
+    base_runaway_grace_s: float = 1.0
 
 
 @dataclass(frozen=True)
