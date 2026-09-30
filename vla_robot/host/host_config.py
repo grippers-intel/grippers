@@ -167,7 +167,9 @@ class DriveConfig:
 class MissionConfig:
     cycle_hz: float = 10.0
     # 기준점은 ArUco 마커 중심이다(그리퍼는 마커보다 0.15 m 앞).
-    grasp_trigger_dist_m: float = 0.35
+    # 2026-09-30 실기: 0.33 m 이상에서 시작한 파지 3번 모두 빈손, 0.27~0.31 m 6번 모두 성공
+    # (정면 오차는 둘 다 1~4°) — 0.35 -> 0.30.
+    grasp_trigger_dist_m: float = 0.30
     # 파지 구역에 들어온 뒤 이만큼 더 멀어져야 구역을 벗어난 것으로 본다. 제자리에서 기물을
     # 향해 도는 동안 마커가 몇 cm 흔들려 들락날락하지 않게.
     grasp_zone_hysteresis_m: float = 0.05

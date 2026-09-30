@@ -193,3 +193,21 @@ def with_base_yaw(values: Sequence[float], yaw_deg: float, max_yaw_deg: float) -
     out = [float(v) for v in values]
     out[BASE_INDEX] += yaw
     return out
+
+
+def hot_servos(temps, limit_c: float, valid_max_c: float) -> tuple[list[str], list[str]]:
+    """서보 온도 목록에서 (상한을 넘은 것, 읽기 오류로 보고 버린 것).
+
+    temps 는 (서보 번호, 온도) 쌍. 온도 None/0 은 못 읽은 것이라 둘 다에 넣지 않는다.
+    valid_max_c 를 넘는 값은 실제 온도가 아니다 — 서보 자체 보호가 70°C 근처에서 먼저 걸린다.
+    2026-09-30: servo 2 가 한 번 150°C 로 읽혀 파지가 중단됐다(바로 다음 시도는 정상).
+    """
+    hot, bogus = [], []
+    for sid, t in temps:
+        if not t:
+            continue
+        if t > valid_max_c:
+            bogus.append(f"servo {sid} {t}°C")
+        elif t >= limit_c:
+            hot.append(f"servo {sid} {t}°C")
+    return hot, bogus

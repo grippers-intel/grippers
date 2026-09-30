@@ -106,10 +106,13 @@ class MissionFSM:
         for name, (_bx, by, _yaw) in self.cfg.arena.boxes.items():
             rim_gap = (by - self.cfg.arena.box_size[1] / 2.0) - self._box_front_xy(name)[1]
             need = rim_gap + m.place_arrive_tol_m       # 가장 덜 붙어 선 경우까지
-            if m.arm_reach_m < need:
+            # 팔 base 를 틀면 앞으로 나가는 거리가 cos 만큼 준다(최대 max_arm_yaw_deg).
+            reach = m.arm_reach_m * math.cos(math.radians(m.max_arm_yaw_deg))
+            if reach < need:
                 self._log(f"⚠️ {name}: 테두리까지 {rim_gap:.3f} m + 정차 오차 "
                           f"{m.place_arrive_tol_m:.3f} m = {need:.3f} m 가 필요한데 "
-                          f"mission.arm_reach_m 은 {m.arm_reach_m:.3f} m — 기물이 상자 앞에 떨어진다")
+                          f"팔 {m.arm_reach_m:.3f} m 은 base ±{m.max_arm_yaw_deg:.0f}° 에서 "
+                          f"{reach:.3f} m — 기물이 상자 앞에 떨어진다")
 
     # ------------------------------------------------------------------ 조작
     def reset(self) -> None:

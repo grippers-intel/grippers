@@ -38,7 +38,7 @@ from rclpy.node import Node
 from std_srvs.srv import SetBool, Trigger
 
 from vla_common.arm_units import (GRIPPER_INDEX, NUM_JOINTS, SERVO_IDS, ArmCalibration,
-                                  degrees_to_raw_delta)
+                                  degrees_to_raw_delta, hot_servos)
 from vla_common.config import load_poses, load_robot_config
 from vla_robot_arm.feetech_bus import FeetechBus, describe_error
 from vla_robot_interfaces.action import ExecuteJointChunk, MoveToPose
@@ -159,11 +159,10 @@ class ArmDriverNode(Node):
         그리퍼는 닫힘 끝단을 토크로 누르고 있으면 계속 달궈진다. 서보 자체 보호(70°C 근처)가
         걸리면 토크가 끊겨 팔이 떨어지므로, 그 앞에서 우리가 먼저 멈춘다."""
         limit = self.cfg.arm.max_servo_temp_c
-        hot = []
-        for servo_id in SERVO_IDS:
-            temp = self.bus.read_temperature(servo_id)
-            if temp is not None and temp >= limit:
-                hot.append(f"servo {servo_id} {temp}°C")
+        hot, bogus = hot_servos(((sid, self.bus.read_temperature(sid)) for sid in SERVO_IDS),
+                                limit, self.cfg.arm.servo_temp_valid_max_c)
+        if bogus:
+            self.get_logger().warn(f"서보 온도 읽기 오류로 보고 무시: {', '.join(bogus)}")
         if hot:
             raise RuntimeError(f"서보 온도 상한({limit:.0f}°C) 초과: {', '.join(hot)} — 식을 때까지 대기")
 
