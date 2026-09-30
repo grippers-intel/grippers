@@ -120,8 +120,9 @@ class PlannerConfig:
     cell_m: float = 0.025
     # 벽 여유는 암까지 포함한 반경, 기물 회피는 하단부 반경 — 둘을 뭉개면 하나는 틀린다.
     robot_radius_wall_m: float = 0.20
-    # 합 0.18 (2026-09-30). 0.25 로는 기물 사이 50 cm 가 막혔다. 차체 폭 20 cm 기준.
-    robot_radius_piece_m: float = 0.12
+    # 합 0.22 (2026-09-30). 0.25 로는 기물 사이 50 cm 가 막혔다. 로봇 반경 = 제자리 회전
+    # 반지름(차체 20 x 25 cm 대각선 절반 16 cm) — 꺾이는 점에서 돌기 때문이다.
+    robot_radius_piece_m: float = 0.16
     piece_obstacle_radius_m: float = 0.03
     obstacle_margin_m: float = 0.03
     # 마커 중심이 설 수 있는 y 범위 = 장판 거의 전체. 앞뒤 끝은 카메라가 로봇 마커를 못 본다.
