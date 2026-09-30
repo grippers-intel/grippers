@@ -120,9 +120,10 @@ class PlannerConfig:
     cell_m: float = 0.025
     # 벽 여유는 암까지 포함한 반경, 기물 회피는 하단부 반경 — 둘을 뭉개면 하나는 틀린다.
     robot_radius_wall_m: float = 0.20
-    # 합 0.22 (2026-09-30). 0.25 로는 기물 사이 50 cm 가 막혔다. 로봇 반경 = 제자리 회전
-    # 반지름(차체 20 x 25 cm 대각선 절반 16 cm) — 꺾이는 점에서 돌기 때문이다.
-    robot_radius_piece_m: float = 0.16
+    # 기물 회피용 차체 모양(2026-09-30 실측 약 20 x 25 cm). 직진은 반폭, 꺾는 점(제자리 회전)은
+    # 대각선 반지름으로 본다 — planning/planner.py 의 safe / turn_safe.
+    robot_width_m: float = 0.20
+    robot_length_m: float = 0.25
     piece_obstacle_radius_m: float = 0.03
     obstacle_margin_m: float = 0.03
     # 마커 중심이 설 수 있는 y 범위 = 장판 거의 전체. 앞뒤 끝은 카메라가 로봇 마커를 못 본다.
@@ -250,6 +251,8 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
     if cfg.aruco.min_floor_markers < 1:
         raise ConfigError("aruco.min_floor_markers >= 1")
     pl = cfg.planner
+    if pl.robot_width_m <= 0 or pl.robot_length_m <= 0:
+        raise ConfigError("planner.robot_width_m / robot_length_m 는 양수여야 한다")
     if pl.box_keepout_side_m < 0 or pl.box_keepout_front_m < 0:
         raise ConfigError("planner.box_keepout_*_m 는 음수일 수 없다")
     if pl.box_keepout_front_m > cfg.mission.box_approach_margin_m:
