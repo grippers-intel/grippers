@@ -79,6 +79,46 @@ def test_obstacle_hold_keeps_flickering_obstacle(cfg):
 
 
 # ---------------------------------------------------------------------------
+# 차체 모양으로 피하기 — 직진은 반폭, 꺾는 점은 회전 반지름
+# ---------------------------------------------------------------------------
+def test_clearances_come_from_the_body_size(cfg):
+    p = _planner(cfg)
+    c = cfg.planner
+    pad = c.piece_obstacle_radius_m + c.obstacle_margin_m
+    assert p.safe == pytest.approx(c.robot_width_m / 2 + pad)
+    assert p.turn_safe == pytest.approx(math.hypot(c.robot_width_m / 2, c.robot_length_m / 2) + pad)
+    assert p.turn_safe > p.safe
+
+
+def test_drives_straight_between_two_pieces_the_body_fits_through(cfg):
+    """2026-09-30 실기: 한 원(0.25)으로 보면 막히던 틈을, 직진이면 차체가 지나간다."""
+    p = _planner(cfg)
+    gap = 2 * p.safe + 0.10                 # 차체 옆면이 양쪽 기물에서 5 cm 씩 남는 간격
+    left, right = (0.9 - gap / 2, 0.85), (0.9 + gap / 2, 0.85)
+    _sub, corner, blocked = p.update((0.9, 0.45), (0.9, 1.25), [left, right])
+    assert blocked is None and corner is None
+    assert len(p.last_path) == 2            # 꺾지 않고 곧장
+    assert gap < 2 * p.turn_safe            # 회전 여유로 막았다면 못 지나갔을 틈이다
+
+
+def test_corners_keep_the_turning_clearance(cfg):
+    """돌아가야 하는 배치에서 꺾이는 점은 모든 기물에서 회전 여유 밖, 직선 구간은 직진 여유 밖."""
+    p = _planner(cfg)
+    obstacles = [(0.95, 0.80), (1.20, 0.95), (0.70, 1.05), (1.45, 0.70)]
+    robot, target = (0.60, 0.40), (1.40, 1.25)
+    _sub, _corner, blocked = p.update(robot, target, obstacles)
+    assert blocked != "blocked"
+    path = p.last_path
+    assert len(path) > 2, "이 배치는 돌아가야 한다"
+    for v in path[1:]:
+        for o in obstacles:
+            assert math.dist(v, o) >= p.turn_safe - 1e-6
+    for a, b in zip(path, path[1:]):
+        for o in obstacles:
+            assert segment_circle_clearance(a, b, o)[0] >= p.safe - 1e-6
+
+
+# ---------------------------------------------------------------------------
 # 상자 금지 구역 — 주행 구역을 장판 전체로 넓히면서 생겼다(배치도 REV.2)
 # ---------------------------------------------------------------------------
 def _keepout(p):

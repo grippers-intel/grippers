@@ -87,7 +87,13 @@ class MapView:
         if pose.ok:
             c = self._px(pose.x, pose.y)
             color = (255, 160, 0) if pose.fresh else (120, 120, 255)
-            cv2.circle(img, c, int(cfg.planner.robot_radius_piece_m * self.s), color, 2)
+            # 차체 20 x 25 cm 직사각형(마커 = 차체 중심으로 본다)
+            th0 = math.radians(pose.yaw_deg)
+            hl, hw = cfg.planner.robot_length_m / 2.0, cfg.planner.robot_width_m / 2.0
+            ca, sa = math.cos(th0), math.sin(th0)
+            body = [self._px(pose.x + ca * u - sa * v, pose.y + sa * u + ca * v)
+                    for u, v in ((hl, hw), (hl, -hw), (-hl, -hw), (-hl, hw))]
+            cv2.polylines(img, [np.array(body, np.int32)], True, color, 2)
             th = math.radians(pose.yaw_deg)
             tip = self._px(pose.x + 0.2 * math.cos(th), pose.y + 0.2 * math.sin(th))
             cv2.arrowedLine(img, c, tip, color, 2, tipLength=0.3)

@@ -13,6 +13,13 @@
 하나로 쓰면 목표 방위 주변에서 정지<->회전을 반복하며 떤다(2026-09-05). 멈추라고
 해도 지연 0.3 s 동안 ~6° 더 돌므로, 나올 때 5°, 들어갈 때 12° 로 벌린다.
 
+## 왜 기물을 차체 모양으로 피하는가 (safe / turn_safe)
+차는 직진과 제자리 회전만 한다. 직진할 때 기물을 스칠 수 있는 건 차체 옆면(반폭)이고,
+제자리에서 돌 때는 대각선 반지름의 원 전체다. 예전에는 로봇을 한 원으로 보고 기물마다
+큰 쪽(회전)을 칠해 두었는데, 2026-09-30 실기에서 51 cm 떨어진 기물 사이가 막혀 HALTED 가
+났다. 지금은 직진 여유로 길을 찾고, **꺾이는 점**만 회전 여유를 확인해 모자라면 그 기물만
+넓혀 다시 찾는다.
+
 ## 왜 상자 둘레를 막는가 (box_keepout)
 2026-09-29 배치도 REV.2 에서 주행 구역을 장판 거의 전체로 넓혔다. 그전에는 주행 구역
 상한(y 1.30)이 곧 상자 앞이라 계획기가 상자로 들어갈 수 없었는데, 넓히면서 그 역할이
@@ -203,7 +210,13 @@ class GridPathPlanner:
         # 도착 칸은 트리거 거리보다 두 칸 안쪽에서 고른다. 칸 중심에 서도(±허용치)
         # 실제 로봇 위치가 FSM 트리거 거리 안에 들어오게 하려는 것이다.
         self.goal_radius = max(arrive_tol - 2.0 * c.cell_m, c.cell_m)
-        self.safe = c.piece_obstacle_radius_m + c.robot_radius_piece_m + c.obstacle_margin_m
+        # 기물 회피는 **차체 모양**으로 본다(2026-09-30). 차는 직진과 제자리 회전만 하므로
+        #   직진 중: 차체가 옆으로 차지하는 폭(반폭)만 기물을 스친다     -> safe
+        #   꺾을 때: 제자리 회전이 대각선 반지름의 원을 쓸고 지나간다     -> turn_safe
+        # 둘을 하나(큰 쪽)로 뭉치면 직진으로 충분히 지나갈 틈까지 막힌다 — 실기에서 그랬다.
+        pad = c.piece_obstacle_radius_m + c.obstacle_margin_m
+        self.safe = c.robot_width_m / 2.0 + pad
+        self.turn_safe = math.hypot(c.robot_width_m / 2.0, c.robot_length_m / 2.0) + pad
         # 마커 중심이 설 수 있는 범위다. 좌우는 경계에서 암 휩쓸림 반경만큼 물러난다
         # (이걸 빼먹으면 계획기가 벽을 파고드는 경로를 낸다 — 실제로 겪었다).
         self.x0 = arena_cfg.wall_x[0] + c.robot_radius_wall_m
@@ -232,19 +245,61 @@ class GridPathPlanner:
         if math.hypot(target_xy[0] - robot_xy[0], target_xy[1] - robot_xy[1]) <= self.cfg.axis_leg_tolerance_m:
             return target_xy, None, None
         obstacles = list(obstacles)
-        free = self._free_grid(obstacles, robot_xy)
+        # 먼저 직진 여유(safe)로 길을 찾는다. 그 길의 꺾이는 점이 어떤 기물에 회전 여유
+        # (turn_safe)보다 가까우면 **그 기물만** 넓혀서 다시 찾는다.
+        wide: set[int] = set()
+        for _ in range(self.TURN_PASSES):
+            planned = self._plan(robot_xy, target_xy, obstacles, wide)
+            if planned[0] == "done":
+                return planned[1]
+            _, pts, unreachable = planned
+            bad = self._turn_conflicts(pts, obstacles, robot_xy) - wide
+            if not bad:
+                return self._emit(pts, robot_xy, target_xy, unreachable)
+            wide |= bad
+        # 넓혀도 꺾을 자리가 안 나온다 — 그 길로 가면 돌다가 기물을 친다.
+        return robot_xy, None, "blocked"
+
+    #: 꺾이는 점 검사 후 다시 찾는 횟수. 기물마다 한 번씩 넓히므로 몇 번이면 수렴한다.
+    TURN_PASSES = 5
+
+    def _radii(self, n: int, wide: set[int]) -> list[float]:
+        return [self.turn_safe if i in wide else self.safe for i in range(n)]
+
+    def _plan(self, robot_xy: XY, target_xy: XY, obstacles: list[XY], wide: set[int]):
+        """("done", 결과) 또는 ("path", 편 경로, unreachable)."""
+        radii = self._radii(len(obstacles), wide)
+        free = self._free_grid(obstacles, robot_xy, radii)
         start = self._cell(robot_xy)
         # 출발 칸이 회피구역 안일 수 있다(기물을 막 집은 직후). 빠져나갈 수는 있어야 한다.
         free[start[1], start[0]] = True
         reach = self._reachable(start, free)
         goal_mask, unreachable = self._goal_mask(target_xy, reach)
         if goal_mask is None:
-            return robot_xy, None, "blocked"
+            return "done", (robot_xy, None, "blocked")
         cells = self._search(start, goal_mask, free)
         if cells is None or len(cells) < 2:
             # 이미 도착 칸 안이다. 격자 칸 중심은 부분목표로 쓰지 않는다.
-            return (robot_xy, None, "blocked") if unreachable else (target_xy, None, None)
-        pts = self._smooth([self._pos(*c) for c in cells], obstacles, robot_xy)
+            return "done", ((robot_xy, None, "blocked") if unreachable else (target_xy, None, None))
+        # 펴는 선분은 직진 여유(safe)만 본다 — 넓힌 기물 옆도 직진으로는 지나갈 수 있다.
+        # 꺾이는 점은 격자 칸이라 넓힌 기물에서는 이미 turn_safe 밖이다.
+        return "path", self._smooth([self._pos(*c) for c in cells], obstacles, robot_xy), unreachable
+
+    def _turn_conflicts(self, pts: list[XY], obstacles: list[XY], robot_xy: XY) -> set[int]:
+        """꺾이는 점(출발점 제외)에서 제자리 회전하면 닿는 기물의 번호.
+
+        출발점은 뺀다 — 이미 거기 서 있고, 막 집은 기물 옆처럼 피할 수 없는 경우가 있다.
+        """
+        bad = set()
+        for v in pts[1:]:
+            for i, o in enumerate(obstacles):
+                if math.hypot(o[0] - robot_xy[0], o[1] - robot_xy[1]) <= self.safe:
+                    continue            # 출발할 때 이미 안에 있던 기물(집은 직후)
+                if math.hypot(v[0] - o[0], v[1] - o[1]) < self.turn_safe - 1e-9:
+                    bad.add(i)
+        return bad
+
+    def _emit(self, pts: list[XY], robot_xy: XY, target_xy: XY, unreachable: bool):
         self.last_path = pts
         tol = self.cfg.axis_leg_tolerance_m
         k = 1
@@ -268,14 +323,15 @@ class GridPathPlanner:
         (정차 허용치만큼 더 붙어 선 직후가 그렇다)."""
         return [r for r in self.keepouts if not point_in_rect(robot_xy, r)]
 
-    def _free_grid(self, obstacles, robot_xy: XY) -> np.ndarray:
+    def _free_grid(self, obstacles, robot_xy: XY, radii=None) -> np.ndarray:
+        radii = radii if radii is not None else [self.safe] * len(obstacles)
         free = np.ones((self.ny, self.nx), dtype=bool)
         for x0, x1, y0, y1 in self._active_keepouts(robot_xy):
             free &= ~((self._gx > x0) & (self._gx < x1) & (self._gy > y0) & (self._gy < y1))
-        for ox, oy in obstacles:
+        for (ox, oy), r in zip(obstacles, radii):
             if math.hypot(ox - robot_xy[0], oy - robot_xy[1]) <= 1e-6:
                 continue
-            free &= ((self._gx - ox) ** 2 + (self._gy - oy) ** 2) >= self.safe * self.safe
+            free &= ((self._gx - ox) ** 2 + (self._gy - oy) ** 2) >= r * r
         return free
 
     def _passable(self, flat, i, j, di, dj, s_idx) -> bool:
