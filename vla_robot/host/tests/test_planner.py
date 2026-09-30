@@ -102,7 +102,7 @@ def test_drives_straight_between_two_pieces_the_body_fits_through(cfg):
 
 
 def test_corners_keep_the_turning_clearance(cfg):
-    """돌아가야 하는 배치에서 꺾이는 점은 모든 기물에서 회전 여유 밖, 직선 구간은 직진 여유 밖."""
+    """돌아가야 하는 배치에서 꺾이는 점에서 도는 차체는 기물에 닿지 않고, 직선 구간은 직진 여유 밖."""
     p = _planner(cfg)
     obstacles = [(0.95, 0.80), (1.20, 0.95), (0.70, 1.05), (1.45, 0.70)]
     robot, target = (0.60, 0.40), (1.40, 1.25)
@@ -110,9 +110,7 @@ def test_corners_keep_the_turning_clearance(cfg):
     assert blocked != "blocked"
     path = p.last_path
     assert len(path) > 2, "이 배치는 돌아가야 한다"
-    for v in path[1:]:
-        for o in obstacles:
-            assert math.dist(v, o) >= p.turn_safe - 1e-6
+    assert not p._turn_conflicts(path, obstacles, robot, target)
     for a, b in zip(path, path[1:]):
         for o in obstacles:
             assert segment_circle_clearance(a, b, o)[0] >= p.safe - 1e-6
@@ -230,3 +228,29 @@ def test_no_reuse_without_a_clock(cfg):
     p.update((0.9, 0.45), (0.9, 1.2), [(0.9, 0.8)])
     p.update((0.9, 0.45), (0.9, 1.2), [(0.9, 0.8)])
     assert len(calls) >= 2
+
+
+def test_turn_check_only_looks_at_the_angle_actually_turned(cfg):
+    """2026-09-30 저녁: 꺾이는 점마다 한 바퀴 원(turn_safe)을 비우니 조금 꺾는 점도 기물 옆이면
+    막혀 먼 길로 돌았다. 도는 각도만큼 차체 사각형이 쓸고 지나가는 곳만 본다."""
+    p = _planner(cfg)
+    v = (0.90, 0.80)
+    side = (0.90 + p.safe + 0.02, 0.80)          # 오른쪽 옆, turn_safe 안 · 직진 여유 밖
+    assert p.safe < math.dist(v, side) < p.turn_safe
+    # 북쪽으로 오다가 10° 만 꺾는다 — 옆면이 거의 그대로라 안 닿는다
+    gentle = [(0.90, 0.40), v, (0.90 - 0.4 * math.sin(math.radians(10)), 0.80 + 0.4 * math.cos(math.radians(10)))]
+    assert not p._turn_conflicts(gentle, [side], (0.90, 0.40))
+    # 90° 꺾으면 앞 모서리가 기물을 쓸고 지나간다
+    sharp = [(0.90, 0.40), v, (0.50, 0.80)]
+    assert p._turn_conflicts(sharp, [side], (0.90, 0.40)) == {0}
+
+
+def test_last_point_turn_is_toward_the_target(cfg):
+    """도착 뒤에는 목표(기물·정차점)를 향해 돈다 — 그 각도만 본다."""
+    p = _planner(cfg)
+    v = (0.90, 0.80)
+    side = (0.90 + p.safe + 0.02, 0.80)
+    pts = [(0.90, 0.40), v]
+    assert not p._turn_conflicts(pts, [side], (0.90, 0.40), (0.90, 1.10))   # 곧장 앞
+    assert p._turn_conflicts(pts, [side], (0.90, 0.40), (0.50, 0.80)) == {0}  # 왼쪽으로 90°
+    assert p._turn_conflicts(pts, [side], (0.90, 0.40), None) == {0}          # 모르면 한 바퀴

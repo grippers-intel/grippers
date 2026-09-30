@@ -86,8 +86,8 @@ planner:
   # 한 원(0.25)으로 뭉쳤을 때는 51 cm 떨어진 기물 사이가 막혀 실기에서 HALTED 가 났다.
   robot_width_m: 0.20
   robot_length_m: 0.25
-  piece_obstacle_radius_m: 0.03
-  obstacle_margin_m: 0.03
+  piece_obstacle_radius_m: 0.02      # 기물 40 mm
+  obstacle_margin_m: 0.02           # 2026-09-30 저녁 0.03 -> 0.02 (더 가깝게 지나간다)
   # 마커 중심이 설 수 있는 앞뒤 범위 = 장판 거의 전체. 앞뒤 끝 띠는 카메라가 로봇 마커를
   # 못 본다(1.60 m 에서 앞 0.25 미만 · 뒤 1.58 초과) — 그래서 뺐다.
   drive_area_y: [0.25, 1.575]

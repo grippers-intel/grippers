@@ -126,8 +126,8 @@ class PlannerConfig:
     # 대각선 반지름으로 본다 — planning/planner.py 의 safe / turn_safe.
     robot_width_m: float = 0.20
     robot_length_m: float = 0.25
-    piece_obstacle_radius_m: float = 0.03
-    obstacle_margin_m: float = 0.03
+    piece_obstacle_radius_m: float = 0.02     # 기물 40 mm
+    obstacle_margin_m: float = 0.02           # 2026-09-30 저녁 0.03 -> 0.02
     # 마커 중심이 설 수 있는 y 범위 = 장판 거의 전체. 앞뒤 끝은 카메라가 로봇 마커를 못 본다.
     drive_area_y: tuple[float, float] = (0.25, 1.575)
     # 상자 둘레 진입 금지. 좌우·뒤는 로봇 반경, 앞은 정차점까지.
