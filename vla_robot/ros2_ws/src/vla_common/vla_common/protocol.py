@@ -15,13 +15,14 @@ Host -> Pi (COMMAND_PORT, 10 Hz 이상):
 
     {"v":1, "seq":42, "state":"APPROACH",
      "linear_x":0.15, "linear_y":0.0, "angular_z":0.0, "stop":false, "label":"queen",
-     "arm_yaw_deg":0.0}
+     "arm_yaw_deg":0.0, "recover_base":false}
 
 Pi -> Host (STATUS_PORT, 10 Hz):
 
     {"v":1, "boot_id":"a1b2c3", "ack_seq":42, "state":"GRASP", "busy":true,
      "job_id":3, "result":{"job_id":2,"action":"GRASP","ok":true,"detail":"..."},
-     "base_ok":true, "watchdog":false, "detail":""}
+     "base_ok":true, "watchdog":false, "detail":"",
+     "base_recovering":false, "base_recoveries":0}
 
 ## 사건을 잃지 않는 법 — 결과를 매 패킷 반복한다
 
@@ -111,6 +112,10 @@ class HostCommand:
     # 좌표가 아니라 **각도 하나**다: "지금 네가 보는 방향에서 이만큼 더 틀어라".
     # Pi 가 place.max_base_yaw_deg 로 자른다. 옛 Pi 는 이 키를 모르면 0 으로 읽는다.
     arm_yaw_deg: float = 0.0
+    # 참이면 Pi 가 차체 컨트롤러를 다시 띄운다. Host 가 "움직이라고 했는데 탑뷰상 안 움직인다"를
+    # 봤을 때만 보낸다(보드가 쓰기를 오류 없이 무시하는 고장 — 2026-09-23 · 09-30).
+    # 이 키를 모르는 옛 Pi 는 무시한다.
+    recover_base: bool = False
 
     def to_bytes(self) -> bytes:
         return json.dumps({
@@ -123,6 +128,7 @@ class HostCommand:
             "stop": bool(self.stop),
             "label": self.label,
             "arm_yaw_deg": float(self.arm_yaw_deg),
+            "recover_base": bool(self.recover_base),
         }, ensure_ascii=False).encode("utf-8")
 
     @classmethod
@@ -140,6 +146,9 @@ class HostCommand:
         seq = obj.get("seq", 0)
         if not isinstance(seq, int) or isinstance(seq, bool):
             raise ProtocolError(f"seq 는 정수여야 한다: {seq!r}")
+        recover = obj.get("recover_base", False)
+        if not isinstance(recover, bool):
+            raise ProtocolError(f"recover_base 는 bool 이어야 한다: {recover!r}")
         return cls(
             state=state,
             linear_x=_finite("linear_x", obj.get("linear_x", 0.0)),
@@ -149,6 +158,7 @@ class HostCommand:
             label=label,
             seq=seq,
             arm_yaw_deg=_finite("arm_yaw_deg", obj.get("arm_yaw_deg", 0.0)),
+            recover_base=recover,
         )
 
 
@@ -192,6 +202,10 @@ class PiStatus:
     watchdog: bool                    # 명령이 끊겨 정지 중인가
     ack_seq: int = 0
     detail: str = ""
+    # 차체 컨트롤러 복구 중인가, 지금까지 끝낸 복구 횟수(부팅 후). Host 는 횟수가 늘어난 것을
+    # 보고 "복구가 끝났다"를 안다 — 참/거짓 하나만 보면 패킷이 빠졌을 때 끝을 놓친다.
+    base_recovering: bool = False
+    base_recoveries: int = 0
 
     def to_bytes(self) -> bytes:
         return json.dumps({
@@ -205,6 +219,8 @@ class PiStatus:
             "base_ok": bool(self.base_ok),
             "watchdog": bool(self.watchdog),
             "detail": self.detail[:512],
+            "base_recovering": bool(self.base_recovering),
+            "base_recoveries": int(self.base_recoveries),
         }, ensure_ascii=False).encode("utf-8")
 
     @classmethod
@@ -221,6 +237,9 @@ class PiStatus:
         ack_seq = obj.get("ack_seq", 0)
         if not isinstance(ack_seq, int) or isinstance(ack_seq, bool):
             raise ProtocolError(f"ack_seq 가 정수가 아니다: {ack_seq!r}")
+        recoveries = obj.get("base_recoveries", 0)
+        if not isinstance(recoveries, int) or isinstance(recoveries, bool):
+            raise ProtocolError(f"base_recoveries 가 정수가 아니다: {recoveries!r}")
         return cls(
             boot_id=str(obj.get("boot_id", "")),
             state=state,
@@ -231,6 +250,8 @@ class PiStatus:
             watchdog=bool(obj.get("watchdog", False)),
             ack_seq=ack_seq,
             detail=str(obj.get("detail", "")),
+            base_recovering=bool(obj.get("base_recovering", False)),
+            base_recoveries=recoveries,
         )
 
 

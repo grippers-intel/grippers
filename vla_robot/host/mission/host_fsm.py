@@ -30,6 +30,7 @@ from typing import Optional
 
 from host_config import HostConfig
 from localization.pose import Pose
+from mission.base_monitor import BaseStallMonitor
 from mission.basket_target import BasketTarget, basket_target, facing_error_deg
 from planning.planner import (DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold,
                               segment_circle_clearance, wrap_deg)
@@ -136,6 +137,12 @@ class MissionFSM:
         self._job_result: Optional[JobResult] = None
         self._nudge_from: Optional[XY] = None
         self._nudge_turn_logged = False
+        # 차체 무응답 자동 복구
+        m = self.cfg.mission
+        self._stall = BaseStallMonitor(m.base_stall_s, m.base_stall_move_m, m.base_stall_turn_deg)
+        self._recover_started: Optional[float] = None
+        self._recover_baseline: Optional[int] = None
+        self._recover_in_a_row = 0
         # 상자 앞에 선 자리에서 팔이 메워야 할 좌우 각도. PLACE 명령에 실린다.
         self.place_arm_yaw_deg = 0.0
         self._now = 0.0
@@ -164,7 +171,59 @@ class MissionFSM:
     # ------------------------------------------------------------------ 본체
     def step(self, pose: Pose, piece_map: PieceMap, pi_status: Optional[PiStatus],
              now: float) -> HostCommand:
+        """한 사이클. 차체가 명령을 무시하면(탑뷰로 판단) Pi 에 컨트롤러 복구를 맡기고 기다린다."""
         self._now = now
+        if self._recover_started is not None and not self.estop:
+            waiting = self._wait_base_recovery(pi_status)
+            if waiting is not None:
+                return waiting
+        cmd = self._step_states(pose, piece_map, pi_status, now)
+        if self._stall.update(now, cmd, pose):
+            return self._start_base_recovery(pi_status)
+        if self._stall.moved_since_reset:
+            # 복구 뒤 실제로 움직였다 — 연속 실패 횟수를 되돌린다.
+            self._recover_in_a_row = 0
+        return cmd
+
+    def _start_base_recovery(self, pi_status: Optional[PiStatus]) -> HostCommand:
+        m = self.cfg.mission
+        if self._recover_in_a_row >= m.base_recover_max:
+            self._halt(f"차체가 명령을 따르지 않는다 — 자동 복구 {self._recover_in_a_row}번 뒤에도. "
+                       f"차체 전원·배선을 확인할 것")
+            return self._stop("halted")
+        self._recover_started = self._now
+        self._recover_baseline = pi_status.base_recoveries if pi_status is not None else None
+        self._log(f"차체 무응답 — 움직임 명령 {m.base_stall_s:.1f}s 동안 위치가 그대로다. "
+                  f"Pi 에 컨트롤러 복구 요청({self._recover_in_a_row + 1}/{m.base_recover_max})")
+        self._clear_nav()
+        self.last_cmd_text = "base recovery"
+        return HostCommand(WIRE_STATE.get(self.state, State.IDLE), stop=True,
+                           label=self.target_label or "", recover_base=True)
+
+    def _wait_base_recovery(self, pi_status: Optional[PiStatus]) -> Optional[HostCommand]:
+        """복구 중이면 정지 + 요청을 계속 싣는다. 끝났으면 None(하던 일로 돌아간다)."""
+        m = self.cfg.mission
+        if pi_status is not None:
+            if self._recover_baseline is None:
+                self._recover_baseline = pi_status.base_recoveries
+            elif pi_status.base_recoveries > self._recover_baseline and not pi_status.base_recovering:
+                self._recover_started = None
+                self._recover_in_a_row += 1
+                self._stall.reset()
+                self._reset_motion()
+                self._log(f"차체 컨트롤러 복구 완료 — 하던 {self.state.name} 을 이어간다")
+                return None
+        if self._now - self._recover_started > m.base_recover_timeout_s:
+            self._recover_started = None
+            self._halt(f"차체 복구가 {m.base_recover_timeout_s:.0f}s 안에 끝나지 않았다")
+            return self._stop("halted")
+        self._clear_nav()
+        self.last_cmd_text = "base recovery (wait)"
+        return HostCommand(WIRE_STATE.get(self.state, State.IDLE), stop=True,
+                           label=self.target_label or "", recover_base=True)
+
+    def _step_states(self, pose: Pose, piece_map: PieceMap, pi_status: Optional[PiStatus],
+                     now: float) -> HostCommand:
         if self.estop:
             self._clear_nav()
             self.last_cmd_text = "ESTOP"
@@ -306,7 +365,11 @@ class MissionFSM:
         assert self.dest_xy is not None
         m = self.cfg.mission
         r = self.cfg.planner.carry_ignore_radius_m
-        obstacles = [p for pts in pmap.values() for p in pts if _dist(p, pose.xy) > r]
+        # 쥐고 있는 기물은 로봇 옆에서 계속 검출된다 — 그것만 뺀다. **라벨이 같은 것만**이다.
+        # 2026-09-30: 반경만으로 빼다가 box 기물에 30 cm 안으로 다가가자 그것까지 빠져,
+        # 계획기가 box 를 뚫고 가는 길을 내고 그대로 밀고 갔다.
+        obstacles = [p for label, pts in pmap.items() for p in pts
+                     if not (label == self.target_label and _dist(p, pose.xy) <= r)]
         lead_in = self._lead_in_xy(obstacles)
         if lead_in is not None:
             goal = lead_in

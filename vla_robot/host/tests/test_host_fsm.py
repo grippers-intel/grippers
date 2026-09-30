@@ -289,3 +289,19 @@ def test_nudge_gives_up_when_it_never_reaches_the_front(cfg):
     moved = cfg.mission.nudge_max_m + 0.01
     fsm.step(P(1.00, 1.00 - moved), {}, S(), 0.1)               # 멀어진 채 한계까지
     assert fsm.state == HostState.CARRY_TO_DEST and fsm.place_tries == 1
+
+
+def test_carry_still_avoids_other_pieces_next_to_the_robot(cfg):
+    """쥔 기물(라벨)만 뺀다. 2026-09-30: 30 cm 안의 box 까지 빠져 box 를 밀고 지나갔다."""
+    fsm = MissionFSM(cfg)
+    _setup_place(fsm)                      # queen 을 쥐고 basket 으로
+    fsm._enter(HostState.CARRY_TO_DEST)
+    robot = (1.00, 0.70)
+    near = {"queen": [(1.03, 0.72)],       # 쥐고 있는 것 — 빠져야 한다
+            "box": [(1.00, 0.92)]}         # 22 cm 앞의 다른 기물 — 남아야 한다
+    fsm.step(P(*robot), near, S(), 0.0)
+    path = fsm.nav_path
+    assert path is not None
+    from planning.planner import segment_circle_clearance
+    for a, b in zip(path, path[1:]):
+        assert segment_circle_clearance(a, b, (1.00, 0.92))[0] >= fsm._planner.safe - 1e-6

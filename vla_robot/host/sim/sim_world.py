@@ -79,7 +79,17 @@ class SimWorld:
         self._job_arm_yaw = 0.0                             # 작업을 시작시킨 명령의 각도
         self._result: Optional[JobResult] = None
         self._detail = ""
+        # 차체 고장 흉내: 보드가 쓰기를 조용히 무시한다(2026-09-23 · 09-30). recover_base 를
+        # 받으면 recover_s 뒤에 풀린다 — 실제 Pi 의 컨트롤러 재기동과 같은 모양이다.
+        self.base_dead = False
+        self.recover_s = 3.0
+        self._recovering_until: Optional[float] = None
+        self.base_recoveries = 0
         self.link = _SimLink(self)
+
+    def fail_base(self) -> None:
+        """지금부터 바퀴가 명령을 무시한다."""
+        self.base_dead = True
 
     # -- 세계 --------------------------------------------------------------
     def update(self) -> None:
@@ -88,8 +98,13 @@ class SimWorld:
         self._t = now
         if self._job is not None and now >= self._job[1]:
             self._finish_job()
+        if self._recovering_until is not None and now >= self._recovering_until:
+            self._recovering_until = None
+            self.base_dead = False
+            self.base_recoveries += 1
         watchdog = self._last_cmd_t is None or now - self._last_cmd_t > self.watchdog_s
-        vx, vy, wz = (0.0, 0.0, 0.0) if (watchdog or self._job is not None) else self._vel
+        dead = self.base_dead or self._recovering_until is not None
+        vx, vy, wz = (0.0, 0.0, 0.0) if (watchdog or dead or self._job is not None) else self._vel
         th = math.radians(self.yaw_deg)
         self.x += (vx * math.cos(th) - vy * math.sin(th)) * dt
         self.y += (vx * math.sin(th) + vy * math.cos(th)) * dt
@@ -118,6 +133,8 @@ class SimWorld:
         now = self.clock()
         self._last_cmd_t = now
         self._seq = cmd.seq
+        if cmd.recover_base and self._recovering_until is None:
+            self._recovering_until = now + self.recover_s
         if cmd.state == State.ESTOP:
             if self._job is not None:
                 self._result = JobResult(self._job_id, self._job[0], False, "cancelled by ESTOP")
@@ -196,7 +213,9 @@ class SimWorld:
         watchdog = self._last_cmd_t is None or now - self._last_cmd_t > self.watchdog_s
         return PiStatus(boot_id=self.boot_id, state=self.pi_state, busy=self._job is not None,
                         job_id=self._job_id, result=self._result, base_ok=True,
-                        watchdog=watchdog, ack_seq=self._seq, detail=self._detail)
+                        watchdog=watchdog, ack_seq=self._seq, detail=self._detail,
+                        base_recovering=self._recovering_until is not None,
+                        base_recoveries=self.base_recoveries)
 
 
 class _SimLink:

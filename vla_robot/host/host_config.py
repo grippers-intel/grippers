@@ -228,6 +228,14 @@ class MissionConfig:
     place_timeout_s: float = 60.0
     # 경로가 없어 이만큼 서 있으면 APPROACH 는 기물 보류, CARRY 는 HALTED.
     blocked_timeout_s: float = 10.0
+    # 차체 무응답 자동 복구(2026-09-30). 움직임 명령을 base_stall_s 동안 보냈는데 탑뷰상
+    # base_stall_move_m · base_stall_turn_deg 도 안 움직이면 Pi 에 컨트롤러 복구를 요청한다.
+    # 복구한 뒤에도 연달아 base_recover_max 번 무응답이면 HALTED(그때는 전원·배선 문제).
+    base_stall_s: float = 1.5
+    base_stall_move_m: float = 0.01
+    base_stall_turn_deg: float = 2.0
+    base_recover_timeout_s: float = 45.0
+    base_recover_max: int = 2
 
 
 @dataclass(frozen=True)

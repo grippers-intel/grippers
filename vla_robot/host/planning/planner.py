@@ -329,10 +329,18 @@ class GridPathPlanner:
         for x0, x1, y0, y1 in self._active_keepouts(robot_xy):
             free &= ~((self._gx > x0) & (self._gx < x1) & (self._gy > y0) & (self._gy < y1))
         for (ox, oy), r in zip(obstacles, radii):
-            if math.hypot(ox - robot_xy[0], oy - robot_xy[1]) <= 1e-6:
+            d = math.hypot(ox - robot_xy[0], oy - robot_xy[1])
+            if d <= 1e-6:
                 continue
+            if d < r:
+                # 이미 회피구역 안이다(막 집은 직후, 밀려 들어온 경우). 막으면 빠져나올 칸이 없어
+                # "길 없음"이 된다. **지금보다 가까워지는 칸만** 막는다 — 멀어지거나 옆으로는 간다.
+                r = max(d - self.ESCAPE_SLACK_M, 0.0)
             free &= ((self._gx - ox) ** 2 + (self._gy - oy) ** 2) >= r * r
         return free
+
+    #: 회피구역 안에서 출발할 때, 격자 칸 위치 차이만큼은 가까워져도 봐준다.
+    ESCAPE_SLACK_M = 0.01
 
     def _passable(self, flat, i, j, di, dj, s_idx) -> bool:
         x2, y2 = i + di, j + dj
@@ -418,8 +426,13 @@ class GridPathPlanner:
         return cells
 
     def _smooth(self, pts: list[XY], obstacles, robot_xy: XY) -> list[XY]:
-        """string pulling. 출발점이 이미 회피구역 안인 장애물은 시선 검사에서 뺀다."""
-        obs = [o for o in obstacles if math.hypot(o[0] - robot_xy[0], o[1] - robot_xy[1]) > self.safe]
+        """string pulling. 격자 경로를 시선이 닿는 만큼 곧게 편다.
+
+        출발점이 이미 어떤 기물의 회피구역 안이어도 그 기물을 **빼지 않는다.** 빼면 곧게 편
+        첫 구간이 그 기물을 관통할 수 있다(2026-09-30: box 를 밀고 지나갔다). 빼지 않으면
+        출발점에서의 시선은 막히므로 격자 경로의 다음 칸(= 바깥으로 나가는 칸)을 그대로 쓴다.
+        """
+        obs = list(obstacles)
         rects = self._active_keepouts(robot_xy)
         if not obs and not any(segment_hits_rect(pts[0], pts[-1], r) for r in rects):
             return [pts[0], pts[-1]]

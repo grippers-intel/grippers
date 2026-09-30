@@ -32,6 +32,11 @@ base:
   reject_mixed_rotation: true
   watchdog_s: 0.5
   publish_hz: 20.0
+  # 자동 복구: 보드가 쓰기를 조용히 무시하는 고장(09-23·09-30). Host 가 탑뷰로 감지해 요청하면
+  # 컨트롤러 노드를 다시 띄운다. 사람이 부저로 진단하던 것을 대신한다.
+  recover_script: /grippers/vla_deploy/vla_robot/tools/ops/rrc_recover.sh
+  recover_timeout_s: 40.0
+  recover_cooldown_s: 5.0
 
 link:
   bind_ip: 0.0.0.0

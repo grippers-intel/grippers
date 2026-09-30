@@ -103,3 +103,13 @@ def test_arm_yaw_must_be_finite():
     raw = json.dumps({"v": 1, "state": State.PLACE, "arm_yaw_deg": "left"}).encode("utf-8")
     with pytest.raises(ProtocolError):
         HostCommand.from_bytes(raw)
+
+
+def test_recovery_fields_round_trip_and_default_off():
+    from vla_common.protocol import HostCommand, PiStatus
+    cmd = HostCommand("CARRY", stop=True, recover_base=True)
+    assert HostCommand.from_bytes(cmd.to_bytes()).recover_base is True
+    assert HostCommand.from_bytes(HostCommand("IDLE").to_bytes()).recover_base is False
+    st = PiStatus("b", "IDLE", False, 0, None, True, False, base_recovering=True, base_recoveries=3)
+    back = PiStatus.from_bytes(st.to_bytes())
+    assert back.base_recovering is True and back.base_recoveries == 3

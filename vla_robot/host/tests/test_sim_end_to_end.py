@@ -131,3 +131,45 @@ def test_a_too_short_arm_does_not_deliver(cfg):
     fsm = _run_mission(short, world)
     assert len(world.pieces_in_box("basket")) == 0
     assert fsm.state == HostState.HALTED
+
+
+# ---------------------------------------------------------------------------
+# 차체 무응답 자동 복구 (2026-09-30 실기: 보드가 쓰기를 조용히 무시했다)
+# ---------------------------------------------------------------------------
+def test_base_that_stops_responding_is_recovered_and_the_mission_finishes(cfg):
+    """운반 도중 바퀴가 명령을 무시하기 시작한다 — Host 가 알아채 복구를 요청하고 이어간다."""
+    world = SimWorld(cfg, clock=FakeClock(), seed=3)
+    fsm = MissionFSM(cfg)
+    clock = world.clock
+    failed = False
+    for _ in range(8000):
+        clock.t += 0.1
+        world.update()
+        world.link.send(fsm.step(world.pose(), world.piece_map(), world.link.latest_status(), clock.t))
+        if not failed and fsm.state == HostState.CARRY_TO_DEST:
+            world.fail_base()
+            failed = True
+        if len(world.pieces_in_box("basket")) == 2:
+            break
+    assert failed
+    assert world.base_recoveries == 1, "복구를 한 번 요청해야 한다"
+    assert sorted(world.pieces_in_box("basket")) == ["queen", "star"]
+    assert any("복구 완료" in e for e in fsm.events) or world.base_recoveries == 1
+
+
+def test_base_that_never_recovers_halts_with_a_reason(cfg):
+    """복구해도 계속 안 움직이면(전원·배선) 무한히 반복하지 않고 멈춰서 사람을 부른다."""
+    world = SimWorld(cfg, clock=FakeClock(), seed=3)
+    world.recover_s = 1.0
+    fsm = MissionFSM(cfg)
+    clock = world.clock
+    for _ in range(3000):
+        clock.t += 0.1
+        world.base_dead = True               # 복구가 끝나도 다시 죽는다
+        world.update()
+        world.link.send(fsm.step(world.pose(), world.piece_map(), world.link.latest_status(), clock.t))
+        if fsm.state == HostState.HALTED:
+            break
+    assert fsm.state == HostState.HALTED
+    assert "차체가 명령을 따르지 않는다" in fsm.halt_reason
+    assert world.base_recoveries == cfg.mission.base_recover_max

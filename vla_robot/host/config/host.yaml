@@ -159,6 +159,13 @@ mission:
   grasp_timeout_s: 120.0
   place_timeout_s: 60.0
   blocked_timeout_s: 10.0          # 길이 없어 서 있으면: APPROACH=보류, CARRY=HALTED
+  # 차체 무응답 자동 복구: 움직이라고 1.5 s 보냈는데 1 cm · 2° 도 안 움직이면 Pi 에 컨트롤러
+  # 재기동을 요청한다(보드가 쓰기를 조용히 무시하는 고장, 09-23·09-30). 연달아 2번이면 HALTED.
+  base_stall_s: 1.5
+  base_stall_move_m: 0.01
+  base_stall_turn_deg: 2.0
+  base_recover_timeout_s: 45.0
+  base_recover_max: 2
 
 link:
   bind_ip: 0.0.0.0
