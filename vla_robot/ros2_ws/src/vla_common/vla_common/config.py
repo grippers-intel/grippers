@@ -130,6 +130,13 @@ class BaseConfig:
     # 이 시간 동안 Host 명령이 없으면 정지한다.
     watchdog_s: float = 0.5
     publish_hz: float = 20.0
+    # 차체 컨트롤러 자동 복구(2026-09-30). 보드가 Pi 의 쓰기를 **오류 없이 무시**하는 고장이
+    # 있다(09-23 · 09-30). Host 가 "명령했는데 안 움직인다"를 탑뷰로 알아채 HostCommand.recover_base
+    # 로 요청하면, 이 스크립트로 컨트롤러 노드를 다시 띄운다(포트를 다시 열면 보드가 리셋된다).
+    recover_script: str = "/grippers/vla_deploy/vla_robot/tools/ops/rrc_recover.sh"
+    recover_timeout_s: float = 40.0
+    # 연달아 요청이 와도 이 간격 안에서는 다시 하지 않는다(한 번에 ~15 s 걸린다).
+    recover_cooldown_s: float = 5.0
 
 
 @dataclass(frozen=True)

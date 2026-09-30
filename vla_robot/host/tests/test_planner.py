@@ -165,3 +165,15 @@ def test_robot_that_stopped_too_close_can_still_leave(cfg):
     assert point_in_rect(robot, (x0, x1, y0, y1))
     _sub, _corner, blocked = p.update(robot, (0.60, 0.80), [])
     assert blocked != "blocked"
+
+
+def test_path_never_cuts_through_a_piece_the_robot_is_already_close_to(cfg):
+    """출발점이 이미 기물의 회피구역 안이어도, 편 경로가 그 기물을 관통하지 않는다."""
+    p = _planner(cfg)
+    piece = (1.00, 0.85)
+    robot = (1.00, 0.72)                   # 13 cm — safe(0.16) 안
+    _sub, _corner, blocked = p.update(robot, (1.00, 1.20), [piece])
+    assert blocked != "blocked"
+    for a, b in zip(p.last_path, p.last_path[1:]):
+        d, _t = segment_circle_clearance(a, b, piece)
+        assert d >= math.dist(robot, piece) - p.ESCAPE_SLACK_M - 1e-6, "기물 쪽으로 더 파고들면 안 된다"

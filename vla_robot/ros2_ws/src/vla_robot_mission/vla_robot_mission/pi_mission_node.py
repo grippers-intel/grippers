@@ -48,6 +48,7 @@ from vla_common.protocol import State
 from vla_robot_interfaces.action import MoveToPose, RunVlaGrasp
 from vla_robot_interfaces.msg import RobotStatus
 from vla_robot_interfaces.srv import GetArmState, SetGripper
+from vla_robot_mission.base_recovery import BaseRecovery
 from vla_robot_mission.pi_mission_core import PiMissionCore
 from vla_robot_mission.udp_link import UdpLink
 
@@ -386,6 +387,8 @@ class PiMissionNode(Node):
             bcfg.watchdog_s, self.boot_id, self.jobs)
         self.link = UdpLink(lcfg.bind_ip, lcfg.command_port, lcfg.status_port, lcfg.fixed_host_ip,
                             log=lambda m: self.get_logger().info(m))
+        self.recovery = BaseRecovery(bcfg.recover_script, bcfg.recover_timeout_s, bcfg.recover_cooldown_s,
+                                     log=lambda m: self.get_logger().warn(m))
 
         cb = ReentrantCallbackGroup()
         self._twist_pub = self.create_publisher(Twist, bcfg.cmd_vel_topic, 10)
@@ -431,15 +434,21 @@ class PiMissionNode(Node):
         if incoming is not None:
             cmd, received_at = incoming
             self.core.on_command(cmd, received_at)
+            if getattr(cmd, "recover_base", False):
+                self.recovery.request()           # 이미 도는 중·쿨다운이면 알아서 무시한다
         out = self.core.step(now, self._base_alive(now))
 
         twist = Twist()
-        twist.linear.x = out.motion.linear_x
-        twist.linear.y = out.motion.linear_y
-        twist.angular.z = out.motion.angular_z
+        if not self.recovery.recovering:          # 컨트롤러를 다시 띄우는 동안은 정지만 낸다
+            twist.linear.x = out.motion.linear_x
+            twist.linear.y = out.motion.linear_y
+            twist.angular.z = out.motion.angular_z
         self._twist_pub.publish(twist)
 
-        st = out.status
+        st = replace(out.status, base_recovering=self.recovery.recovering,
+                     base_recoveries=self.recovery.count)
+        if st.base_recovering:
+            st = replace(st, detail="차체 컨트롤러 복구 중")
         if st.state != self._last_state_logged:
             self.get_logger().info(f"상태 {self._last_state_logged} -> {st.state} {st.detail}")
             self._last_state_logged = st.state
@@ -462,12 +471,24 @@ class PiMissionNode(Node):
     def shutdown(self) -> None:
         self.jobs.cancel()
         for _ in range(3):
-            self._twist_pub.publish(Twist())
+            try:
+                self._twist_pub.publish(Twist())
+            except Exception as exc:  # noqa: BLE001 — 종료 경로
+                print(f"[pi_mission_node] 종료 정지 명령 실패: {exc}", flush=True)
+                break
         self.link.close()
 
 
 def main(args=None) -> None:
-    rclpy.init(args=args)
+    # rclpy 의 SIGINT 처리기는 컨텍스트부터 닫는다 — 그러면 아래 finally 에서 보내는 **마지막
+    # 정지 명령**이 "publisher's context is invalid" 로 실패한다(2026-09-30 로그). 주행 중에
+    # 스택을 내리면 바퀴가 돌던 속도가 남는다. 그래서 SIGINT 는 파이썬이 KeyboardInterrupt 로
+    # 받게 두고, 정지를 먼저 보낸 뒤 우리가 컨텍스트를 닫는다.
+    try:
+        from rclpy.signals import SignalHandlerOptions
+        rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    except ImportError:  # pragma: no cover — 옛 rclpy
+        rclpy.init(args=args)
     node = PiMissionNode()
     executor = MultiThreadedExecutor(num_threads=6)
     executor.add_node(node)
@@ -477,6 +498,7 @@ def main(args=None) -> None:
         pass
     finally:
         node.shutdown()
+        executor.shutdown()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

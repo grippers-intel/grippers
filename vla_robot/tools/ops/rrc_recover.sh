@@ -3,6 +3,7 @@
 #
 #   bash tools/ops/rrc_recover.sh          # 진단(부저)만
 #   bash tools/ops/rrc_recover.sh --fix    # 노드를 다시 띄운다
+#   bash tools/ops/rrc_recover.sh --fix auto   # pi_mission_node 가 자동 복구로 부를 때(로그 표시용)
 #
 ## 증상 (2026-09-23 실기에서 확인)
 #
@@ -52,8 +53,11 @@ pkill -9 -f "ros_robot_controller/lib/ros_robot_controller" 2>/dev/null || true
 sleep 1
 
 # 부팅 자동 실행분과 같은 모양으로 띄운다(래퍼를 덧대지 않는다 — preflight 가 개수를 센다).
+# 로그는 **덧붙인다** — 다음에 또 멈추면 직전의 쓰기 실패·재연결 기록을 봐야 원인을 좁힌다.
+# (부팅 자동 실행분의 출력은 어디에도 남지 않아 09-23·09-30 고장의 직전 기록이 없다.)
+echo "=== $(date '+%F %T') 재기동 (${2:-수동})" >> /tmp/rrc.log
 setsid bash -lc "export ROS_DOMAIN_ID=$DOMAIN && $SETUP && \
-  exec ros2 run ros_robot_controller ros_robot_controller" >/tmp/rrc.log 2>&1 &
+  exec ros2 run ros_robot_controller ros_robot_controller" >>/tmp/rrc.log 2>&1 &
 sleep 8
 echo "후: $(count_nodes) 개   (로그 /tmp/rrc.log)"
 beep
