@@ -122,6 +122,9 @@ class MissionFSM:
         self.search_reason: Optional[str] = None
         self.ready_to_advance = False
         self.place_tries = 0
+        self.grasp_tries = 0
+        self.grasp_face_err_deg: Optional[float] = None
+        self._in_grasp_zone = False
         self.skipped: list[tuple[XY, float]] = []
         self.last_result: Optional[JobResult] = None
         self._advance_requested = False
@@ -215,6 +218,7 @@ class MissionFSM:
             self.dest_box = self.cfg.mission.piece_dest_box[label]
             self.dest_xy = self._box_front_xy(self.dest_box)
             self.place_tries = 0
+            self.grasp_tries = 0
             self._log(f"target {label} @ ({xy[0]:.2f},{xy[1]:.2f}) -> {self.dest_box}")
             self._enter(HostState.APPROACH_PIECE)
             return self._step_approach(pose, pmap, pi_status)
@@ -222,15 +226,29 @@ class MissionFSM:
 
     def _step_approach(self, pose: Pose, pmap: PieceMap, pi_status) -> HostCommand:
         assert self.target_xy is not None
+        m = self.cfg.mission
+        self._refresh_target(pmap)
         obstacles = [p for pts in pmap.values() for p in pts if _dist(p, self.target_xy) > 0.05]
         dist = _dist(pose.xy, self.target_xy)
-        self.ready_to_advance = dist <= self.cfg.mission.grasp_trigger_dist_m
-        if self.ready_to_advance:
+        # 파지 구역: 들어갈 때는 트리거 거리, 나갈 때는 거기에 히스테리시스를 더한다.
+        limit = m.grasp_trigger_dist_m + (m.grasp_zone_hysteresis_m if self._in_grasp_zone else 0.0)
+        self._in_grasp_zone = dist <= limit
+        if self._in_grasp_zone:
             self._clear_nav()
+            # 정면으로 볼 때까지 제자리에서 돈다. 거리만 보고 잡으면 정책이 옆에 있는 기물을
+            # 못 잡는다(2026-09-30: 18° · 30° 어긋난 채 시작해 둘 다 실패, 7° 는 성공).
+            bearing = math.degrees(math.atan2(self.target_xy[1] - pose.y, self.target_xy[0] - pose.x))
+            self.grasp_face_err_deg = wrap_deg(bearing - pose.yaw_deg)
+            self.ready_to_advance = abs(self.grasp_face_err_deg) <= m.grasp_face_tol_deg
+            if not self.ready_to_advance:
+                cmd = self._rotate(self.grasp_face_err_deg)
+                self.last_cmd_text = f"face piece {self.grasp_face_err_deg:+.0f}도"
+                return cmd
             if self._should_advance():
                 self._enter(HostState.GRASP)
                 return self._step_grasp(pi_status)
-            return self._stop("approach (ready)")
+            return self._stop(f"approach (ready, {self.grasp_face_err_deg:+.0f}도)")
+        self.ready_to_advance = False
         cmd = self._drive_to(pose, self.target_xy, obstacles)
         if self._blocked_too_long():
             # 손이 비었으니 이 기물은 보류하고 다른 기물을 치우면 길이 열릴 수 있다.
@@ -256,7 +274,15 @@ class MissionFSM:
                 return self._stop("grasp timeout")
         if self._job_result is not None:
             if not self._job_result.ok:
-                # 손이 비어 있으니 보류하고 다음 기물로 간다. 같은 자리 재시도는 같은 결과일 공산이 크다.
+                if self.grasp_tries < m.grasp_retry_max:
+                    # 바로 다시 잡지 않는다 — 같은 관측이면 같은 결과다. 접근 단계로 돌아가
+                    # 탑뷰로 기물 위치를 다시 읽고(건드려 밀렸을 수 있다) 정면을 다시 맞춘다.
+                    self.grasp_tries += 1
+                    self._log(f"GRASP retry {self.grasp_tries}/{m.grasp_retry_max}: "
+                              f"위치를 다시 보고 정면을 맞춘 뒤 다시 잡는다")
+                    self._enter(HostState.APPROACH_PIECE)
+                    return self._stop("grasp failed — re-approach")
+                # 재시도까지 실패했다. 보류하고 다음 기물로 간다.
                 self._skip_target(f"grasp failed: {self._job_result.detail}")
                 return self._stop("grasp failed")
             self.ready_to_advance = True
@@ -409,9 +435,24 @@ class MissionFSM:
 
     def _rotate(self, yaw_error_deg: float) -> HostCommand:
         # yaw_error = 목표 - 현재, 반시계가 +. 부호가 곧 회전 방향이다.
+        # 오차가 작을수록 느리게 돈다 — 한 속도(0.5 rad/s)로는 지연 동안 허용치를 넘어가
+        # 좌우로 떨었다(2026-09-30). 데드밴드 아래로는 내리지 않는다.
+        d = self.cfg.drive
         sign = 1.0 if yaw_error_deg >= 0 else -1.0
+        scale = min(1.0, abs(yaw_error_deg) / max(d.rotation_slow_deg, 1e-6))
+        speed = max(d.rotation_min_rad_s, d.rotation_rad_s * scale)
         self.last_cmd_text = "yaw+" if sign > 0 else "yaw-"
-        return HostCommand(WIRE_STATE[self.state], angular_z=sign * self.cfg.drive.rotation_rad_s)
+        return HostCommand(WIRE_STATE[self.state], angular_z=sign * speed)
+
+    def _refresh_target(self, pmap: PieceMap) -> None:
+        """목표 기물 위치를 탑뷰로 갱신한다. 같은 라벨이 target_track_m 안에 있으면 그것이다.
+        안 보이면 마지막 위치를 그대로 쓴다(팔이나 차체가 가렸을 수 있다)."""
+        if self.target_xy is None or not self.target_label:
+            return
+        near = [p for p in pmap.get(self.target_label, [])
+                if _dist(p, self.target_xy) <= self.cfg.mission.target_track_m]
+        if near:
+            self.target_xy = min(near, key=lambda p: _dist(p, self.target_xy))
 
     def _stop(self, why: str) -> HostCommand:
         self.last_cmd_text = f"stop: {why}"
@@ -420,6 +461,7 @@ class MissionFSM:
     def _enter(self, state: HostState) -> None:
         self.state = state
         self.ready_to_advance = False
+        self._in_grasp_zone = False
         if state in (HostState.GRASP, HostState.PLACE):
             self._job_armed = False
             self._job_result = None
@@ -461,6 +503,8 @@ class MissionFSM:
         self.dest_box = None
         self.dest_xy = None
         self.place_tries = 0
+        self.grasp_tries = 0
+        self.grasp_face_err_deg = None
 
     def _skip_target(self, why: str) -> None:
         """좌표를 보류 목록에 남긴다. 안 남기면 같은 기물을 또 "가장 가까운 것"으로 골라

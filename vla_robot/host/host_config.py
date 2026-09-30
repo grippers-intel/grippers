@@ -146,7 +146,13 @@ class PlannerConfig:
 @dataclass(frozen=True)
 class DriveConfig:
     linear_mps: float = 0.15
+    # 제자리 회전 최고 속도. 오차가 rotation_slow_deg 아래면 비례로 줄이되 rotation_min_rad_s
+    # 아래로는 안 내린다(데드밴드 아래면 안 돈다).
+    # 2026-09-30 실기: 0.5 고정으로는 지연 ~0.35 s 동안 9~11° 더 돌아 ±5° 허용치를 번갈아
+    # 넘으며 25초 동안 좌우로 떨었다.
     rotation_rad_s: float = 0.5
+    rotation_min_rad_s: float = 0.25
+    rotation_slow_deg: float = 30.0
     nudge_mps: float = 0.15
 
 
@@ -155,6 +161,17 @@ class MissionConfig:
     cycle_hz: float = 10.0
     # 기준점은 ArUco 마커 중심이다(그리퍼는 마커보다 0.15 m 앞).
     grasp_trigger_dist_m: float = 0.35
+    # 파지 구역에 들어온 뒤 이만큼 더 멀어져야 구역을 벗어난 것으로 본다. 제자리에서 기물을
+    # 향해 도는 동안 마커가 몇 cm 흔들려 들락날락하지 않게.
+    grasp_zone_hysteresis_m: float = 0.05
+    # 파지 전에 기물을 정면으로 봐야 한다. 2026-09-30 실기: 거리만 보고 파지해 18° · 30° 어긋난
+    # 채 시작했고 둘 다 실패했다(같은 날 7° 에서는 성공).
+    grasp_face_tol_deg: float = 6.0
+    # 파지에 실패하면 바로 다음 기물로 가지 않는다. 탑뷰로 위치를 다시 읽고, 정면을 다시
+    # 맞춘 뒤 이 횟수만큼 더 잡아 본다. 그래도 안 되면 보류한다.
+    grasp_retry_max: int = 1
+    # 접근 중 목표 기물 위치를 탑뷰로 갱신할 때, 같은 라벨의 이 반경 안 검출을 같은 기물로 본다.
+    target_track_m: float = 0.10
     place_trigger_dist_m: float = 0.35
     # 상자 앞면에서 정차점(마커)까지. ⚠️ **물리 한계라 줄일 수 없다.**
     # 2026-09-23 실측: 마커 중심에서 차체 맨 앞까지 0.13 m. 그래서 0.15 로 서면 차체 앞이
@@ -265,6 +282,11 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
             raise ConfigError(f"mission.{name} 는 양수여야 한다")
     if not 0 < m.max_arm_yaw_deg <= 90:
         raise ConfigError("mission.max_arm_yaw_deg 는 0 초과 90 이하여야 한다")
+    if m.grasp_retry_max < 0 or m.grasp_face_tol_deg <= 0:
+        raise ConfigError("mission.grasp_retry_max >= 0, grasp_face_tol_deg > 0")
+    d = cfg.drive
+    if not 0 < d.rotation_min_rad_s <= d.rotation_rad_s:
+        raise ConfigError("drive.rotation_min_rad_s 는 0 초과 rotation_rad_s 이하여야 한다")
     return replace(
         cfg,
         cameras=replace(cfg.cameras, calib_dir=_resolve(cfg.cameras.calib_dir)),

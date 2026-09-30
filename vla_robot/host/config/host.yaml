@@ -108,12 +108,21 @@ drive:
   # ⚠️ 데드밴드가 배터리 전압을 따라 오른다(8.4V: 0.10 겨우, 8.0V: 0.10 안 움직임).
   #    Pi 가 0.15 m/s, 0.5 rad/s 로 자르므로 그보다 크게 줘도 소용없다.
   linear_mps: 0.15
+  # 회전은 오차에 비례(30° 아래부터 줄임), 최저 0.25. 0.5 고정으로는 목표 근처에서 좌우로 떨었다.
+  # ⚠️ 0.25 는 잠정 — 회전 데드밴드를 실측하면 고칠 것.
   rotation_rad_s: 0.5
+  rotation_min_rad_s: 0.25
+  rotation_slow_deg: 30.0
   nudge_mps: 0.15
 
 mission:
   cycle_hz: 10.0
   grasp_trigger_dist_m: 0.35       # 마커 중심 기준 (마커 -0.15- 그리퍼 -0.20- 물체)
+  grasp_zone_hysteresis_m: 0.05
+  # 파지 전 정면 맞추기 · 실패 시 다시 보고 재시도 (2026-09-30: 18°·30° 어긋난 채 파지해 둘 다 실패)
+  grasp_face_tol_deg: 6.0
+  grasp_retry_max: 1
+  target_track_m: 0.10
   place_trigger_dist_m: 0.35
   # ⚠️ 물리 한계 — 마커에서 차체 앞까지 0.13 m(2026-09-23 실측)라 여기 서면 차체 앞이
   # 상자에서 2 cm 떨어진다. 정차점 = (0.990, 1.330), planner.box_keepout_front_m 경계와 같다.
