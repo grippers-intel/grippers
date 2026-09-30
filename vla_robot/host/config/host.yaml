@@ -79,9 +79,13 @@ tracker:
 planner:
   cell_m: 0.025                    # 0.05 는 벽 옆 8 cm 통로가 사라져 "경로 없음"
   robot_radius_wall_m: 0.20
-  robot_radius_piece_m: 0.14
-  piece_obstacle_radius_m: 0.06
-  obstacle_margin_m: 0.05
+  # 기물 회피 = 기물 중심에서 로봇 마커 중심까지 이 셋의 합(0.18). 2026-09-30 실기에서 0.25 로는
+  # 기물 6개가 40~60 cm 간격으로 있을 때 상자까지 길이 없어 HALTED — star-box 51 cm 사이가 1 cm.
+  # 차체 폭 20 cm -> 반폭 10 cm + 2 cm. 기물은 40 mm(반지름 2 cm) + 여유 1 cm.
+  # ⚠️ 제자리 회전은 차체 대각선 반지름으로 돈다 — 차체 길이를 재면 다시 볼 것.
+  robot_radius_piece_m: 0.12
+  piece_obstacle_radius_m: 0.03
+  obstacle_margin_m: 0.03
   # 마커 중심이 설 수 있는 앞뒤 범위 = 장판 거의 전체. 앞뒤 끝 띠는 카메라가 로봇 마커를
   # 못 본다(1.60 m 에서 앞 0.25 미만 · 뒤 1.58 초과) — 그래서 뺐다.
   drive_area_y: [0.25, 1.575]
