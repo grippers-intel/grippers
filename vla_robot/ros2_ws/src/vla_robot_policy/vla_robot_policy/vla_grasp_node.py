@@ -7,7 +7,8 @@
       -> arm/execute_chunk 로 재생 -> 반복
 
 - 카메라와 시리얼을 직접 열지 않는다(각 소유 노드의 토픽/서비스만 쓴다).
-- 재시도 감지: 어중간하게 내려왔다가(< retry_dip_deg) **다시 뻗으면** 두 번째 시도로 보고 즉시 끝낸다.
+- 재시도 감지: 최고점에서 retry_drop_deg 이상 내려왔다가 골짜기에서 retry_rise_deg 이상
+  **다시 오르면** 두 번째 시도로 보고 골짜기에서 끝낸다(상대값 — 절대값은 저점마다 빗나갔다).
   같은 자리에서 반복해 봐야 관측이 같아 결과도 같다 — 재시도는 Host 몫이다. max_chunks 는 최후 안전장치.
 - 완료 판정: shoulder_lift 가 한 번 뻗었다가(> extended_lift_deg) 다시 접히면(< returned_lift_deg)
   끝. 학습 118회차 중 117회차에서 맞았다(2026-09-04). **"물체를 집었다"가 아니다** —
@@ -32,7 +33,7 @@ from sensor_msgs.msg import Image
 
 from vla_common.arm_units import GRIPPER_INDEX, SHOULDER_LIFT_INDEX
 from vla_common.config import load_robot_config
-from vla_common.grasp_cycle import scan_cycle
+from vla_common.grasp_cycle import CYCLE_START, scan_cycle
 from vla_robot_interfaces.action import ExecuteJointChunk, RunVlaGrasp
 from vla_robot_interfaces.srv import GetArmState
 
@@ -184,9 +185,8 @@ class VlaGraspNode(Node):
             timeout_s = req.timeout_s if req.timeout_s > 0 else self.pcfg.timeout_s
             started = time.monotonic()
             chunks, prev = 0, None
-            # 재시도 감지용. above = 지금 뻗어 있는가, attempts = 뻗기 시작한 횟수.
-            # scan_cycle 에 이어서 넘기는 상태 (above, ever, dip_min, dip_idx)
-            cycle = (False, False, None, 0)
+            # scan_cycle 에 청크마다 이어서 넘기는 상태(최고점·골짜기 등)
+            cycle = CYCLE_START
             feedback = RunVlaGrasp.Feedback()
             try:
                 while True:
@@ -220,7 +220,8 @@ class VlaGraspNode(Node):
                     lift_cmd = np.asarray(chunk)[:, SHOULDER_LIFT_INDEX]
                     cycle, stop_at, reason = scan_cycle(
                         lift_cmd, cycle, self.pcfg.extended_lift_deg,
-                        self.pcfg.retry_dip_deg, self.pcfg.returned_lift_deg)
+                        self.pcfg.retry_drop_deg, self.pcfg.retry_rise_deg,
+                        self.pcfg.returned_lift_deg)
                     self.get_logger().info(
                         f"청크 {chunks + 1} 명령 lift 처음 {lift_cmd[0]:.0f} 최소 {lift_cmd.min():.0f} "
                         f"최대 {lift_cmd.max():.0f} 끝 {lift_cmd[-1]:.0f}"
@@ -249,7 +250,7 @@ class VlaGraspNode(Node):
                     except GraspAborted as exc:
                         self.get_logger().warn(f"완료 판정용 읽기 실패, 다음 청크에서 다시: {exc}")
                         continue
-                    # 청크마다 lift 를 남긴다 — 재시도 문턱(retry_dip_deg)을 실측으로 정하려면
+                    # 청크마다 lift 를 남긴다 — 재시도 문턱(retry_drop/rise_deg)을 실측으로 정하려면
                     # 실패 회차에서 이 값이 어디까지 내려갔다 올라오는지를 봐야 한다.
                     self.get_logger().info(f"청크 {chunks} 실측 lift {lift:.1f}")
             except GraspAborted as exc:

@@ -44,19 +44,78 @@ def test_grasp_ok_goes_to_carry(cfg):
     assert cmd.state == State.CARRY
 
 
-def test_grasp_failure_skips_target(cfg):
+def _no_retry(cfg):
+    from dataclasses import replace
+    return replace(cfg, mission=replace(cfg.mission, grasp_retry_max=0))
+
+
+def test_grasp_failure_reapproaches_before_giving_up(cfg):
+    """실패하면 바로 다음 기물로 가지 않는다 — 위치를 다시 보고 정면을 맞춘 뒤 한 번 더."""
+    assert cfg.mission.grasp_retry_max == 1
     fsm = MissionFSM(cfg)
+    _into_grasp(fsm, S())
+    cmd = fsm.step(P(0.9, 0.6), PM, S(job_id=1, result=JobResult(1, State.GRASP, False, "empty")), 0.5)
+    assert fsm.state == HostState.APPROACH_PIECE and fsm.target_label == "queen"
+    assert fsm.grasp_tries == 1 and not fsm.skipped
+    assert cmd.stop
+    # 기물이 건드려져 4 cm 밀렸다 — 탑뷰로 새 위치를 읽고 그쪽을 향해 돈다
+    moved = {"queen": [(0.95, 0.9)], "star": PM["star"]}
+    cmd = fsm.step(P(0.9, 0.6), moved, S(job_id=1), 0.6)
+    assert fsm.target_xy == (0.95, 0.9)
+    assert fsm.state == HostState.APPROACH_PIECE and cmd.angular_z < 0     # 오른쪽(시계)으로
+    # 정면을 맞추면 다시 잡는다
+    fsm.step(P(0.9, 0.6, yaw=80.6), moved, S(job_id=1), 0.7)
+    assert fsm.state == HostState.GRASP
+    # 두 번째도 실패하면 그때 보류하고 star 로 간다
+    fsm.step(P(0.9, 0.6, yaw=80.6), moved, S(job_id=2, result=JobResult(2, State.GRASP, False)), 0.8)
+    assert fsm.state == HostState.SEARCH_TARGET and len(fsm.skipped) == 1
+    fsm.step(P(0.9, 0.6), moved, S(job_id=2), 0.9)
+    assert fsm.target_label == "star"
+
+
+def test_grasp_failure_skips_target_without_retry(cfg):
+    fsm = MissionFSM(_no_retry(cfg))
     _into_grasp(fsm, S())
     cmd = fsm.step(P(0.9, 0.6), PM, S(job_id=1, result=JobResult(1, State.GRASP, False, "empty")), 0.5)
     assert fsm.state == HostState.SEARCH_TARGET
     assert cmd.state == State.IDLE and cmd.stop
     assert len(fsm.skipped) == 1
-    # 보류된 queen 대신 star 를 고른다
     fsm.step(P(0.9, 0.6), PM, S(job_id=1, result=JobResult(1, State.GRASP, False)), 0.6)
     assert fsm.target_label == "star"
 
 
+def test_does_not_grasp_until_it_faces_the_piece(cfg):
+    """2026-09-30 실기: 거리만 보고 18° · 30° 어긋난 채 잡기 시작해 둘 다 실패했다."""
+    fsm = MissionFSM(cfg)
+    cmd = fsm.step(P(0.9, 0.6, yaw=60.0), PM, S(), 0.0)     # 0.3 m 안이지만 30° 어긋남
+    assert fsm.state == HostState.APPROACH_PIECE
+    assert cmd.angular_z > 0 and cmd.linear_x == 0            # 반시계로 돌아 기물을 본다
+    assert fsm.grasp_face_err_deg == pytest.approx(30.0)
+    fsm.step(P(0.9, 0.6, yaw=86.0), PM, S(), 0.1)             # 4° — 허용치 안
+    assert fsm.state == HostState.GRASP
+
+
+def test_grasp_zone_has_hysteresis(cfg):
+    """돌면서 마커가 몇 cm 흔들려도 파지 구역을 들락날락하지 않는다."""
+    fsm = MissionFSM(cfg)
+    fsm.step(P(0.9, 0.6, yaw=40.0), PM, S(), 0.0)             # 구역 안(0.30 m), 돌기 시작
+    cmd = fsm.step(P(0.9, 0.53, yaw=50.0), PM, S(), 0.1)      # 0.37 m — 트리거 밖, 히스테리시스 안
+    assert cmd.linear_x == 0 and cmd.angular_z > 0           # 전진하지 않고 계속 돈다
+
+
+def test_rotation_slows_near_the_target_heading(cfg):
+    fsm = MissionFSM(cfg)
+    d = cfg.drive
+    big = fsm._rotate(90.0).angular_z
+    small = fsm._rotate(20.0).angular_z
+    tiny = fsm._rotate(-1.0).angular_z
+    assert big == pytest.approx(d.rotation_rad_s)
+    assert d.rotation_min_rad_s < small < big
+    assert tiny == pytest.approx(-d.rotation_min_rad_s)
+
+
 def test_skip_expires(cfg):
+    cfg = _no_retry(cfg)
     fsm = MissionFSM(cfg)
     _into_grasp(fsm, S())
     fsm.step(P(0.9, 0.6), {"queen": PM["queen"]}, S(job_id=1, result=JobResult(1, State.GRASP, False)), 1.0)

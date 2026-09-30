@@ -66,11 +66,13 @@ policy:
   n_action_steps: 0
   fps: 30.0
   timeout_s: 45.0
-  max_chunks: 8                    # 최후 안전장치. 실제 중단은 아래 retry_dip_deg 재시도 감지가 한다
+  max_chunks: 8                    # 최후 안전장치. 실제 중단은 아래 재시도 감지가 한다
   extended_lift_deg: -50.0
   returned_lift_deg: -95.0
-  retry_dip_deg: -60.0             # 여기까지 내려왔다가 다시 뻗으면 2차 시도 → 즉시 실패 종료
-                                   # 실측: 시도 사이 저점 -66 · 성공 복귀 -103
+  # 재시도 감지(상대값, 2026-09-30): 최고점에서 60° 이상 내려왔다가 골짜기에서 30° 이상
+  # 다시 오르면 2차 시도 → 골짜기에서 끝낸다. 절대값 -60 은 저점 -58 회차를 놓쳤다.
+  retry_drop_deg: 60.0
+  retry_rise_deg: 30.0
   max_frame_age_s: 1.0
   min_frame_change: 0.5
 
