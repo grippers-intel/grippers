@@ -304,6 +304,10 @@ class MissionFSM:
             self.grasp_face_err_deg = wrap_deg(bearing - pose.yaw_deg)
             self.ready_to_advance = abs(self.grasp_face_err_deg) <= m.grasp_face_tol_deg
             if not self.ready_to_advance:
+                if self._near_box_front(pose):
+                    # 2026-09-30: 놓은 직후 정차점(상자 2 cm 앞)에서 knight 를 향해 156° 를 돌았다.
+                    # 상자 앞에서는 돌기 전에 먼저 물러난다.
+                    return self._back_away_from_box(pose, "back off to face piece")
                 cmd = self._rotate(self.grasp_face_err_deg)
                 self.last_cmd_text = f"face piece {self.grasp_face_err_deg:+.0f}도"
                 return cmd
