@@ -382,3 +382,19 @@ def test_carry_still_avoids_other_pieces_next_to_the_robot(cfg):
     from planning.planner import segment_circle_clearance
     for a, b in zip(path, path[1:]):
         assert segment_circle_clearance(a, b, (1.00, 0.92))[0] >= fsm._planner.safe - 1e-6
+
+
+def test_after_placing_backs_off_before_facing_a_nearby_piece(cfg):
+    """2026-09-30: 놓은 직후 정차점에서 파지 구역 안 knight 를 향해 156° 제자리 회전했다."""
+    fsm = MissionFSM(cfg)
+    pm = {"knight": [(1.16, 1.08)]}
+    cmd = fsm.step(P(0.975, 1.330, yaw=103.0), pm, S(), 0.0)
+    cmd = fsm.step(P(0.975, 1.330, yaw=103.0), pm, S(), 0.1)
+    assert fsm.state == HostState.APPROACH_PIECE
+    assert cmd.angular_z == 0 and fsm.last_cmd_text == "back off to face piece"
+    assert _world_velocity(cmd, 103.0)[1] < 0
+    # 물러나면 그 자리에서 돈다
+    front_y = cfg.arena.boxes["basket"][1] - cfg.arena.box_size[1] / 2
+    y = front_y - cfg.mission.box_turn_clear_m - 0.005
+    cmd = fsm.step(P(0.975, y, yaw=103.0), pm, S(), 0.2)
+    assert cmd.angular_z < 0
