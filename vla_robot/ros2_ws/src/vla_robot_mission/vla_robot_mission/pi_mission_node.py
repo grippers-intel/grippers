@@ -71,6 +71,11 @@ class JobFailed(Exception):
     pass
 
 
+#: 파지 뒤 그리퍼가 idle 개도보다 이만큼(%p) 넘게 열려 있을 때만 "복귀 전 닫기"를 한다.
+#: 오늘 쥔 기물은 9.9~26.8%, 빈손으로 닫힌 턱은 ~10% — 정책이 턱을 연 채 끝난 경우만 잡는다.
+GRIPPER_LEFT_OPEN_PCT = 20.0
+
+
 class RosJobRunner:
     """팔 작업을 백그라운드 스레드에서 순서대로 실행한다."""
 
@@ -295,12 +300,21 @@ class RosJobRunner:
         # 놓치지 않고, 오히려 운반 중에 더 단단히 문다.
         #
         # 이 정렬은 판정의 전제이기도 하다 — 기준 프레임과 **같은 개도**여야 비교가 성립한다.
+        #
+        # 단, **이미 닫혀 있으면 건드리지 않는다.** 정책이 끝까지 닫아 물체를 조이고 있는데 idle 의
+        # 개도(6.9%)로 다시 맞추면 목표가 올라가 조이는 힘이 줄어든다(2026-09-30 soccer 낙하).
         start_pose = self._poses.get(mcfg.start_pose)
         if start_pose is not None:
+            idle_open = start_pose.values[GRIPPER_INDEX]
             try:
-                self._set_gripper(start_pose.values[GRIPPER_INDEX], "복귀 전 그리퍼 닫기")
-            except JobFailed as exc:
-                self._node.get_logger().warn(f"그리퍼 정렬 실패, 그대로 복귀한다: {exc}")
+                now_open = float(self._arm_state().policy_state[GRIPPER_INDEX])
+            except JobFailed:
+                now_open = None
+            if now_open is None or now_open > idle_open + GRIPPER_LEFT_OPEN_PCT:
+                try:
+                    self._set_gripper(idle_open, "복귀 전 그리퍼 닫기")
+                except JobFailed as exc:
+                    self._node.get_logger().warn(f"그리퍼 정렬 실패, 그대로 복귀한다: {exc}")
 
         # 성공·실패와 무관하게 **먼저 집으로 돌린다.** 정책은 사이클 끝(복귀 문턱이나 재시도
         # 골짜기)에서 멈추므로 팔이 공중에 남고, 그대로 두면 다음 작업이

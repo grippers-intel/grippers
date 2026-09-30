@@ -71,6 +71,8 @@ class ArmDriverNode(Node):
         acfg = self.cfg.arm
         self.calib = ArmCalibration.load(acfg.calibration_file)
         self.poses = load_poses(acfg.poses_file)
+        # 마지막으로 서보에 보낸 목표(raw). 기동 시에는 없다 — 첫 _hold_here 가 실제 위치로 채운다.
+        self._goal_raw: Optional[list[int]] = None
         self.get_logger().info(
             f"설정 {path} / 캘리브레이션 {acfg.calibration_file} / 포즈 {sorted(self.poses)}")
 
@@ -144,9 +146,31 @@ class ArmDriverNode(Node):
     def _read_policy(self) -> list[float]:
         return self.calib.raw_to_policy(self._read_raw())
 
-    def _hold_here(self) -> None:
-        raw = self._read_raw()
+    def _write_goals(self, raw) -> None:
+        """목표 위치를 쓰고 기억한다. 그리퍼는 **보낸 목표**가 실제 위치와 다를 수 있다(아래)."""
+        raw = [int(v) for v in raw]
         self.bus.write_goal_positions(dict(zip(SERVO_IDS, raw)))
+        self._goal_raw = raw
+
+    def _hold_here(self) -> None:
+        """지금 자세에서 멈춘다. 그리퍼만은 마지막으로 보낸 목표를 유지한다 — 물체를 쥐고 있으면
+        실제 위치가 목표보다 벌어져 있으니, 실제 위치를 목표로 쓰면 조이던 힘이 풀려 놓친다."""
+        raw = self._read_raw()
+        if self._goal_raw is not None:
+            raw[GRIPPER_INDEX] = self._goal_raw[GRIPPER_INDEX]
+        self._write_goals(raw)
+
+    def _start_policy(self) -> list[float]:
+        """보간의 시작점(정책 단위). 관절은 실제 위치, **그리퍼는 마지막으로 보낸 목표**.
+
+        2026-09-30 실기: 파지 뒤 idle 로 돌아오며 그리퍼를 유지(gripper_mode=1)했는데 soccer 를
+        떨어뜨렸다. 정책은 턱을 끝까지 닫으라고 했지만 공에 막혀 10% 에 멈춰 있었고, 시작점을
+        실제 위치(10%)로 잡아 목표를 거기로 다시 쓰자 조이던 힘이 풀려 턱이 살짝 벌어졌다.
+        """
+        start = self._read_policy()
+        if self._goal_raw is not None:
+            start[GRIPPER_INDEX] = self.calib.raw_to_policy(self._goal_raw)[GRIPPER_INDEX]
+        return start
 
     def _check_voltage(self) -> None:
         v = self.bus.read_voltage(SERVO_IDS[0])
@@ -214,7 +238,7 @@ class ArmDriverNode(Node):
             self._check_voltage()
             self._check_temperature()
             target = min(100.0, max(0.0, float(req.percent)))
-            start = self._read_policy()
+            start = self._start_policy()
             goal = list(start)
             goal[GRIPPER_INDEX] = target
             span = abs(target - start[GRIPPER_INDEX])
@@ -250,6 +274,8 @@ class ArmDriverNode(Node):
     def _on_set_torque(self, req, res):
         try:
             if req.data:
+                # 토크가 꺼져 있던 동안 보낸 목표는 의미가 없다 — 실제 위치로 잡는다.
+                self._goal_raw = None
                 self._hold_here()
             ok = self.bus.set_torque(SERVO_IDS, bool(req.data))
             res.success, res.message = ok, ("토크 켬" if req.data else "토크 끔 — 팔이 처질 수 있다")
@@ -316,7 +342,7 @@ class ArmDriverNode(Node):
                     if abs(delta) > max_step_raw:
                         goal[i] = last[i] + (max_step_raw if delta > 0 else -max_step_raw)
                         was_clamped = True
-                self.bus.write_goal_positions(dict(zip(SERVO_IDS, goal)))
+                self._write_goals(goal)
                 last = goal
                 sent = step + 1
                 clamped_steps += int(was_clamped)
@@ -361,7 +387,7 @@ class ArmDriverNode(Node):
             s = k / n
             s = s * s * (3.0 - 2.0 * s)
             point = [a + (b - a) * s for a, b in zip(start, goal)]
-            self.bus.write_goal_positions(dict(zip(SERVO_IDS, self.calib.policy_to_raw(point))))
+            self._write_goals(self.calib.policy_to_raw(point))
             if feedback is not None:
                 feedback(k / n)
             remaining = started + k / rate - time.monotonic()
@@ -391,7 +417,7 @@ class ArmDriverNode(Node):
             self._check_voltage()
             self._check_temperature()
             self.bus.set_goal_velocity(SERVO_IDS, 0)
-            start = self._read_policy()
+            start = self._start_policy()
             if req.gripper_mode == 1:
                 target[GRIPPER_INDEX] = start[GRIPPER_INDEX]
             span = max(abs(b - a) for a, b in zip(start[:GRIPPER_INDEX], target[:GRIPPER_INDEX]))
