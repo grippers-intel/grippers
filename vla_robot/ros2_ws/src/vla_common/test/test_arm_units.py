@@ -83,3 +83,11 @@ def test_with_base_yaw_rejects_nonfinite_and_short():
         with_base_yaw([0.0] * 6, float("nan"), 15.0)
     with pytest.raises(ValueError):
         with_base_yaw([0.0] * 5, 1.0, 15.0)
+
+
+def test_hot_servos_ignores_impossible_readings():
+    """2026-09-30: servo 2 가 한 번 150°C 로 읽혀 파지가 중단됐다. 읽기 오류는 버린다."""
+    from vla_common.arm_units import hot_servos
+    hot, bogus = hot_servos([(1, 35), (2, 150), (3, 0), (4, None), (5, 61), (6, 60)], 60.0, 100.0)
+    assert hot == ["servo 5 61°C", "servo 6 60°C"]
+    assert bogus == ["servo 2 150°C"]

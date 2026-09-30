@@ -31,7 +31,7 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 
-from vla_common.arm_units import GRIPPER_INDEX, SHOULDER_LIFT_INDEX
+from vla_common.arm_units import GRIPPER_INDEX, SHOULDER_LIFT_INDEX, hot_servos
 from vla_common.config import load_robot_config
 from vla_common.grasp_cycle import CYCLE_START, scan_cycle
 from vla_robot_interfaces.action import ExecuteJointChunk, RunVlaGrasp
@@ -66,6 +66,7 @@ class VlaGraspNode(Node):
         self.pcfg = robot.policy
         self.gcfg = robot.gripper_cam
         self.max_temp_c = robot.arm.max_servo_temp_c
+        self.valid_temp_c = robot.arm.servo_temp_valid_max_c
         self.check = robot.grasp_check
         self.runner = self._make_runner()
 
@@ -144,8 +145,10 @@ class VlaGraspNode(Node):
         """청크 사이마다 본다. 파지는 청크를 여러 번 도는 긴 동작이라, 시작할 때만 보면
         도중에 달궈지는 것을 놓친다. 서보 자체 보호(70°C 근처)가 걸리면 토크가 끊겨
         팔이 떨어지므로 그 앞에서 멈춘다."""
-        hot = [f"servo {i + 1} {t}°C" for i, t in enumerate(state.temperature_c)
-               if t and t >= self.max_temp_c]
+        hot, bogus = hot_servos(((i + 1, t) for i, t in enumerate(state.temperature_c)),
+                                self.max_temp_c, self.valid_temp_c)
+        if bogus:
+            self.get_logger().warn(f"서보 온도 읽기 오류로 보고 무시: {', '.join(bogus)}")
         if hot:
             raise GraspAborted(f"서보 온도 상한({self.max_temp_c:.0f}°C) 초과: {', '.join(hot)}")
 

@@ -97,12 +97,13 @@ def test_arm_reach_clears_the_rim_but_not_the_box(cfg):
 
 
 def test_a_shorter_arm_still_lands_inside(cfg):
-    """실측(0.32 m)보다 짧은 팔(0.25 m)로도 기물이 테두리 안에 떨어져야 한다.
+    """실측(0.32 m)보다 4 cm 짧은 팔(0.28 m)로도 기물이 테두리 안에 떨어져야 한다.
 
-    정차가 덜 붙는 쪽으로 place_arrive_tol_m(0.06) 까지 벌어질 수 있으므로, 도달거리에
-    그만큼 여유가 있는지 보는 것이다.
+    정차가 덜 붙는 쪽으로 place_arrive_tol_m 까지 벌어지고 팔 base 를 place_turn_to_deg 까지
+    틀 수 있으므로, 도달거리에 그만큼 여유가 있는지 보는 것이다. 정차점을 상자에서 0.22 m 로
+    물린 뒤(2026-09-30 저녁) 필요한 도달거리는 (0.22 + 0.04) / cos 12° = 0.266 m 다.
     """
-    world = SimWorld(cfg, clock=FakeClock(), seed=3, place_reach_m=0.25)
+    world = SimWorld(cfg, clock=FakeClock(), seed=3, place_reach_m=0.28)
     _run_mission(cfg, world)
     assert len(world.pieces_in_box("basket")) == 2
     edge = cfg.arena.boxes["basket"][1] - cfg.arena.box_size[1] / 2.0

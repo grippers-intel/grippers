@@ -14,6 +14,7 @@ arm:
   torque_on_start: true
   min_voltage_v: 10.5
   max_servo_temp_c: 60.0        # 이 온도 이상이면 이동 거부 (STS3215 자체 보호는 70°C 근처)
+  servo_temp_valid_max_c: 100.0 # 이보다 높게 읽히면 읽기 오류로 보고 무시(09-30 servo 2 150°C)
   max_step_deg: 5.0
   max_chunk_steps: 500
   chunk_acceleration: 30
