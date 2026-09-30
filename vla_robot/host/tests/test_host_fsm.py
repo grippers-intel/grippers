@@ -159,10 +159,10 @@ def _setup_place(fsm):
 def _place_attempt_from_face(fsm, prev_status, t):
     """상자 정면까지 직진해서 붙고, 남는 각도는 팔이 맡는다(차체 정렬 없음)."""
     assert fsm.state == HostState.NUDGE_BOX
-    cmd = fsm.step(P(0.990, 1.230), {}, prev_status, t)         # 아직 멀다 -> 전진
+    cmd = fsm.step(P(0.990, 1.160), {}, prev_status, t)         # 아직 멀다 -> 전진
     assert cmd.state == State.APPROACH_BOX and cmd.linear_x > 0
-    # dest_xy(0.990, 1.330) 에서 place_arrive_tol_m 안 = 정차 완료
-    cmd = fsm.step(P(0.990, 1.320), {}, prev_status, t + 0.2)
+    # dest_xy(0.990, 1.260) 에서 place_arrive_tol_m 안 = 정차 완료
+    cmd = fsm.step(P(0.990, 1.250), {}, prev_status, t + 0.2)
     assert fsm.state == HostState.PLACE and cmd.state == State.PLACE
 
 
@@ -224,61 +224,54 @@ def test_place_carries_the_residual_angle_for_the_arm(cfg):
     _setup_place(fsm)
     fsm._enter(HostState.NUDGE_BOX)
     # dest_xy 에서 1.5 cm 왼쪽으로 치우쳐 서고 정북을 본다(허용 거리 오차 안)
-    cmd = fsm.step(P(0.975, 1.330, yaw=90.0), {}, S(), 0.0)
+    cmd = fsm.step(P(0.975, 1.260, yaw=90.0), {}, S(), 0.0)
     assert fsm.state == HostState.PLACE
     assert cmd.state == State.PLACE and cmd.stop
     assert cmd.angular_z == 0                                   # 제자리 회전 없음
     # 목표가 내 오른쪽에 있으니 팔은 시계방향(-)으로 튼다. 한계 15도 안이다
     assert -15.0 < cmd.arm_yaw_deg < 0.0
     # 명령이 반복돼도 같은 각도가 계속 실린다
-    assert fsm.step(P(0.975, 1.330, yaw=90.0), {}, S(), 0.1).arm_yaw_deg == cmd.arm_yaw_deg
+    assert fsm.step(P(0.975, 1.260, yaw=90.0), {}, S(), 0.1).arm_yaw_deg == cmd.arm_yaw_deg
 
 
-def test_never_turns_the_body_right_next_to_the_box(cfg):
-    """팔이 못 메우는 각도면 차체를 돌리되, 정차점(상자 2 cm 앞)에서는 돌지 않고 먼저 물러난다.
-    2026-09-30 rook: 정차점에서 돌다가 모서리로 상자를 쳤고 뒤 카메라까지 밀렸다."""
+def test_stop_point_is_far_enough_to_turn_in_place(cfg):
+    """2026-09-30 저녁: 정차점을 상자에서 0.22 m 로 물렸다. 허용치만큼 더 붙어 서도
+    제자리 회전(차체 반대각)이 상자에 닿지 않아야 한다 — 그래서 상자 앞 후진이 필요 없다."""
+    c, m = cfg.planner, cfg.mission
+    half_diag = math.hypot(c.robot_width_m / 2, c.robot_length_m / 2)
+    assert m.box_approach_margin_m - m.place_min_gap_m >= half_diag
+    # 덜 붙어 서도 팔이 테두리를 넘는다
+    assert m.arm_reach_m > m.box_approach_margin_m + m.place_arrive_tol_m
+
+
+def test_turns_the_body_at_the_stop_point_when_the_arm_cannot_cover(cfg):
+    """팔이 못 메우는 각도면 정차점에서 그대로 돈다 — 물러나지 않는다."""
     fsm = MissionFSM(cfg)
     _setup_place(fsm)
     fsm._enter(HostState.NUDGE_BOX)
-    cmd = fsm.step(P(0.990, 1.330, yaw=40.0), {}, S(), 0.0)       # 정차는 했지만 50도 틀어짐
+    dx, dy = fsm.dest_xy
+    cmd = fsm.step(P(dx, dy, yaw=40.0), {}, S(), 0.0)             # 정차는 했지만 50도 틀어짐
     assert fsm.state == HostState.NUDGE_BOX
-    assert cmd.linear_x < 0 and cmd.angular_z == 0                # 돌지 않고 뒤로
-    # 상자 입구에서 box_turn_clear_m 밖으로 나오면 그때 돈다
-    front_y = cfg.arena.boxes["basket"][1] - cfg.arena.box_size[1] / 2
-    y = front_y - cfg.mission.box_turn_clear_m - 0.005
-    cmd = fsm.step(P(0.990, y, yaw=40.0), {}, S(), 0.1)
-    assert cmd.angular_z > 0 and cmd.linear_x == 0
+    assert cmd.angular_z > 0 and cmd.linear_x == 0 and cmd.linear_y == 0
+    cmd = fsm.step(P(dx, dy, yaw=78.0), {}, S(), 0.1)             # 12도 — 팔 한계 안이지만
+    assert cmd.angular_z > 0 and fsm.state == HostState.NUDGE_BOX  # 돌기 시작했으면 5도까지 돈다
+    fsm.step(P(dx, dy, yaw=87.0), {}, S(), 0.2)
+    assert fsm.state == HostState.PLACE
     # 같은 사유는 한 번만 기록한다(예전엔 매 사이클 찍혀 수백 줄이 쌓였다)
     assert sum("arm cannot cover" in e for e in fsm.events) == 1
 
 
-def test_carry_goes_to_the_lead_in_point_first(cfg):
-    """운반은 정차점 바로 앞 진입점까지 — 거기서 상자를 향해 똑바로 올라간다."""
+def test_carry_goes_straight_to_the_stop_point(cfg):
+    """집은 뒤 가운데 진입점을 거치지 않고 정차점으로 곧장 간다(2026-09-30 저녁 요청)."""
     fsm = MissionFSM(cfg)
     _setup_place(fsm)
     fsm._enter(HostState.CARRY_TO_DEST)
+    fsm.step(P(0.60, 1.10, yaw=0.0), {}, S(), 0.0)
+    assert fsm.nav_goal == pytest.approx(fsm.dest_xy)
+    # 트리거 거리 안이면 바로 상자 앞 단계로
     dx, dy = fsm.dest_xy
-    lead = (dx, dy - cfg.mission.box_lead_in_m)
-    fsm.step(P(0.40, 0.60, yaw=0.0), {}, S(), 0.0)
-    assert fsm.nav_goal == pytest.approx(lead)
-    # 정차점 트리거(0.35) 안이어도 진입점에 닿기 전에는 넘어가지 않는다
-    fsm.step(P(dx + 0.20, dy - 0.10, yaw=90.0), {}, S(), 0.1)
-    assert fsm.state == HostState.CARRY_TO_DEST
-    fsm.step(P(lead[0] + 0.02, lead[1], yaw=150.0), {}, S(), 0.2)
+    fsm.step(P(dx + 0.20, dy - 0.10, yaw=150.0), {}, S(), 0.1)
     assert fsm.state == HostState.NUDGE_BOX
-    # 진입점에서는 상자에서 충분히 멀어 제자리에서 돈다(물러나지 않는다)
-    cmd = fsm.step(P(lead[0] + 0.02, lead[1], yaw=150.0), {}, S(), 0.3)
-    assert cmd.angular_z < 0 and cmd.linear_x == 0
-
-
-def test_carry_falls_back_to_the_stop_point_when_the_lead_in_is_blocked(cfg):
-    fsm = MissionFSM(cfg)
-    _setup_place(fsm)
-    fsm._enter(HostState.CARRY_TO_DEST)
-    dx, dy = fsm.dest_xy
-    piece_on_lead_in = {"star": [(dx + 0.05, dy - cfg.mission.box_lead_in_m)]}
-    fsm.step(P(0.40, 0.60, yaw=0.0), piece_on_lead_in, S(), 0.0)
-    assert fsm.nav_goal == pytest.approx((dx, dy))
 
 
 def test_nudge_gives_up_when_it_never_reaches_the_front(cfg):
@@ -300,27 +293,13 @@ def _world_velocity(cmd, yaw_deg):
             cmd.linear_x * math.sin(th) + cmd.linear_y * math.cos(th))
 
 
-@pytest.mark.parametrize("yaw", [40.0, 130.0, 158.0, -20.0])
-def test_backs_straight_away_from_the_box_whatever_the_heading(cfg, yaw):
-    """2026-09-30: 158°(옆)로 선 채 차체 방향으로 후진해 간격이 안 늘고 "물러나기 <-> 밀기"를
-    되풀이했다. 메카넘으로 상자에서 곧장 멀어진다(-y), 돌지 않는다."""
-    fsm = MissionFSM(cfg)
-    _setup_place(fsm)
-    fsm._enter(HostState.NUDGE_BOX)
-    dx, dy = fsm.dest_xy
-    cmd = fsm.step(P(dx + 0.01, dy, yaw=yaw), {}, S(), 0.0)
-    assert cmd.angular_z == 0
-    wx, wy = _world_velocity(cmd, yaw)
-    assert wy == pytest.approx(-cfg.drive.nudge_mps) and wx == pytest.approx(0.0, abs=1e-9)
-
-
 def test_too_close_backs_away_sideways_too(cfg):
     fsm = MissionFSM(cfg)
     _setup_place(fsm)
     fsm._enter(HostState.NUDGE_BOX)
     dx, dy = fsm.dest_xy
-    cmd = fsm.step(P(dx, dy + 0.05, yaw=100.0), {}, S(), 0.0)       # 5 cm 더 붙었다
-    assert fsm.last_cmd_text == "back off"
+    cmd = fsm.step(P(dx, dy + cfg.mission.place_min_gap_m + 0.02, yaw=100.0), {}, S(), 0.0)  # 지나쳤다
+    assert fsm.last_cmd_text.endswith("back off") and cmd.angular_z == 0
     wx, wy = _world_velocity(cmd, 100.0)
     assert wy < 0 and abs(wx) < 1e-9
 
@@ -343,31 +322,6 @@ def test_nudge_times_out_back_to_carry(cfg):
     assert fsm.state == HostState.CARRY_TO_DEST and fsm.place_tries == 1
 
 
-def test_lead_in_moves_further_out_when_a_piece_blocks_it(cfg):
-    """2026-09-30 실기: knight(정차점에서 +0.18, -0.26)가 25 cm 진입점을 막아 정차점으로 곧장
-    갔다. 더 앞의 진입점을 쓴다."""
-    fsm = MissionFSM(cfg)
-    _setup_place(fsm)
-    fsm._enter(HostState.CARRY_TO_DEST)
-    dx, dy = fsm.dest_xy
-    knight = {"knight": [(dx + 0.18, dy - 0.26)]}
-    fsm.step(P(0.40, 0.60, yaw=0.0), knight, S(), 0.0)
-    gx, gy = fsm.nav_goal
-    assert gx == pytest.approx(dx)
-    assert cfg.mission.box_lead_in_m < dy - gy <= cfg.mission.box_lead_in_max_m + 1e-9
-
-
-def test_leaving_the_box_never_turns_in_front_of_it(cfg):
-    """놓은 뒤 다음 기물로 떠날 때도 입구 앞에서는 먼저 물러난다."""
-    fsm = MissionFSM(cfg)
-    dx, dy = 0.990, 1.330
-    cmd = fsm.step(P(dx, dy, yaw=90.0), {"queen": [(0.40, 0.60)]}, S(), 0.0)
-    assert fsm.state == HostState.APPROACH_PIECE
-    assert cmd.angular_z == 0
-    wx, wy = _world_velocity(cmd, 90.0)
-    assert wy < 0
-
-
 def test_carry_still_avoids_other_pieces_next_to_the_robot(cfg):
     """쥔 기물(라벨)만 뺀다. 2026-09-30: 30 cm 안의 box 까지 빠져 box 를 밀고 지나갔다."""
     fsm = MissionFSM(cfg)
@@ -384,17 +338,11 @@ def test_carry_still_avoids_other_pieces_next_to_the_robot(cfg):
         assert segment_circle_clearance(a, b, (1.00, 0.92))[0] >= fsm._planner.safe - 1e-6
 
 
-def test_after_placing_backs_off_before_facing_a_nearby_piece(cfg):
-    """2026-09-30: 놓은 직후 정차점에서 파지 구역 안 knight 를 향해 156° 제자리 회전했다."""
+def test_after_placing_turns_toward_a_nearby_piece_in_place(cfg):
+    """놓은 자리(정차점)에서 곧장 다음 기물 쪽으로 돈다 — 물러나지 않는다."""
     fsm = MissionFSM(cfg)
-    pm = {"knight": [(1.16, 1.08)]}
-    cmd = fsm.step(P(0.975, 1.330, yaw=103.0), pm, S(), 0.0)
-    cmd = fsm.step(P(0.975, 1.330, yaw=103.0), pm, S(), 0.1)
+    pm = {"knight": [(1.16, 1.00)]}
+    fsm.step(P(0.975, 1.260, yaw=103.0), pm, S(), 0.0)
+    cmd = fsm.step(P(0.975, 1.260, yaw=103.0), pm, S(), 0.1)
     assert fsm.state == HostState.APPROACH_PIECE
-    assert cmd.angular_z == 0 and fsm.last_cmd_text == "back off to face piece"
-    assert _world_velocity(cmd, 103.0)[1] < 0
-    # 물러나면 그 자리에서 돈다
-    front_y = cfg.arena.boxes["basket"][1] - cfg.arena.box_size[1] / 2
-    y = front_y - cfg.mission.box_turn_clear_m - 0.005
-    cmd = fsm.step(P(0.975, y, yaw=103.0), pm, S(), 0.2)
-    assert cmd.angular_z < 0
+    assert cmd.angular_z < 0 and cmd.linear_x == 0 and cmd.linear_y == 0

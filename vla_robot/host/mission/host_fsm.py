@@ -33,7 +33,7 @@ from localization.pose import Pose
 from mission.base_monitor import BaseStallMonitor
 from mission.basket_target import BasketTarget, basket_target, facing_error_deg
 from planning.planner import (DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold,
-                              segment_circle_clearance, wrap_deg)
+                              wrap_deg)
 from vla_common.protocol import HostCommand, JobResult, JobTracker, PiStatus, State
 
 XY = tuple[float, float]
@@ -304,10 +304,6 @@ class MissionFSM:
             self.grasp_face_err_deg = wrap_deg(bearing - pose.yaw_deg)
             self.ready_to_advance = abs(self.grasp_face_err_deg) <= m.grasp_face_tol_deg
             if not self.ready_to_advance:
-                if self._near_box_front(pose):
-                    # 2026-09-30: 놓은 직후 정차점(상자 2 cm 앞)에서 knight 를 향해 156° 를 돌았다.
-                    # 상자 앞에서는 돌기 전에 먼저 물러난다.
-                    return self._back_away_from_box(pose, "back off to face piece")
                 cmd = self._rotate(self.grasp_face_err_deg)
                 self.last_cmd_text = f"face piece {self.grasp_face_err_deg:+.0f}도"
                 return cmd
@@ -360,14 +356,11 @@ class MissionFSM:
         return HostCommand(State.GRASP, stop=True, label=self.target_label or "")
 
     def _step_carry(self, pose: Pose, pmap: PieceMap) -> HostCommand:
-        """상자 **앞 진입점**(정차점에서 box_lead_in_m 아래)까지 간다.
+        """집은 자리에서 상자 정차점(dest_xy)으로 곧장 간다.
 
-        2026-09-30 실기: 정차점으로 곧장 오면 온 방향 그대로 도착해 상자와 최대 75° 어긋났고,
-        정차점에서 차체를 돌리다 모서리로 상자를 쳤다(카메라까지 밀렸다). 진입점은 상자에서
-        충분히 떨어져 있어 거기서 도는 것은 안전하고, 거기서부터는 상자를 향해 똑바로 올라가므로
-        도착하면 거의 정면이다 — 남는 몇 도는 팔의 base 가 맡는다.
-        진입점이 기물에 막혀 있으면 더 앞(-y)에서 찾고, 다 막히면 예전처럼 정차점으로 곧장 간다
-        (그때도 상자 옆에서는 돌지 않는다).
+        2026-09-30 저녁: 한동안 정차점 앞 진입점(가운데 지점)을 거쳐 올라가게 했는데, 상자 옆에서
+        집어도 가운데로 내려갔다가 다시 올라와 동작이 길었다. 정차점을 상자에서 0.22 m 로 물려
+        거기서 돌아도 상자에 닿지 않게 했으므로 진입점 없이 곧장 간다.
         """
         assert self.dest_xy is not None
         m = self.cfg.mission
@@ -377,20 +370,14 @@ class MissionFSM:
         # 계획기가 box 를 뚫고 가는 길을 내고 그대로 밀고 갔다.
         obstacles = [p for label, pts in pmap.items() for p in pts
                      if not (label == self.target_label and _dist(p, pose.xy) <= r)]
-        lead_in = self._lead_in_xy(obstacles)
-        if lead_in is not None:
-            goal = lead_in
-            self.ready_to_advance = _dist(pose.xy, lead_in) <= m.lead_in_arrive_m
-        else:
-            goal = self.dest_xy
-            self.ready_to_advance = _dist(pose.xy, self.dest_xy) <= m.place_trigger_dist_m
+        self.ready_to_advance = _dist(pose.xy, self.dest_xy) <= m.place_trigger_dist_m
         if self.ready_to_advance:
             self._clear_nav()
             if self._should_advance():
                 self._enter(HostState.NUDGE_BOX)
                 return self._step_nudge(pose, None)
             return self._stop("carry (ready)")
-        cmd = self._drive_to(pose, goal, obstacles)
+        cmd = self._drive_to(pose, self.dest_xy, obstacles)
         if self._blocked_too_long():
             # 물체를 든 채라 보류할 곳이 없다. 사람을 부른다.
             self._halt(f"no path to {self.dest_box} for {self.cfg.mission.blocked_timeout_s:.0f}s")
@@ -415,46 +402,47 @@ class MissionFSM:
             self._nudge_start_dist = _dist(pose.xy, self.dest_xy)
         moved = _dist(pose.xy, self._nudge_from)
         if self._now - self._nudge_started > m.nudge_timeout_s:
-            # 2026-09-30: 옆으로 도착해 "물러나기 <-> 밀기"를 끝없이 되풀이했다. 여기서 더 버티지
-            # 않고 운반 단계로 돌아간다 — 진입점부터 다시 올라온다.
+            # 2026-09-30: 상자 앞에서 "물러나기 <-> 밀기"를 끝없이 되풀이한 적이 있다. 여기서 더
+            # 버티지 않고 운반 단계로 돌아가 다시 접근한다.
             return self._nudge_missed(f"no stand-off after {m.nudge_timeout_s:.0f}s at the box")
-        # 정차점은 dest_xy 다 — 상자 앞 0.15 m, 금지 구역 바로 밖이고 차체가 상자에 닿지 않는
-        # 자리다. **더 붙지 않는다**: 팔이 모자라면 차를 밀어 넣는 게 아니라 팔을 재야 한다
+        # 정차점은 dest_xy 다 — 상자 앞 box_approach_margin_m(0.22), 금지 구역 바로 밖이고
+        # 거기서 제자리 회전해도 차체가 상자에 닿지 않는 자리다. **더 붙지 않는다**: 팔이 모자라면 차를 밀어 넣는 게 아니라 팔을 재야 한다
         # (2026-09-23 시뮬에서 조준점까지 붙였더니 차가 주행 구역 밖으로 나가 다음 경로를
         # 못 찾았다). 거리 허용치를 좁게 두는 이유는 앞뒤 오차를 아무도 못 메우기 때문이다.
         # 앞뒤는 **비대칭**으로 본다 — 덜 붙는 쪽은 팔 길이(0.32 m)가 메워 주지만,
-        # 더 붙는 쪽은 차체 앞이 상자에 닿는다(정차점에서 간격이 2 cm 뿐이다).
+        # 더 붙는 쪽은 place_min_gap_m 을 넘으면 돌 때 차체가 상자에 닿는다.
         gap = target.distance(pose.xy) - target.distance(self.dest_xy)   # + 면 덜 붙었다
         dist = _dist(pose.xy, self.dest_xy)
         residual = facing_error_deg(target, pose.xy, pose.yaw_deg)
         close = -m.place_min_gap_m <= gap <= m.place_arrive_tol_m
         self.place_arm_yaw_deg = residual
-        self.ready_to_advance = close and abs(residual) <= m.max_arm_yaw_deg
+        # 차체를 돌리기 시작했으면 팔 한계 바로 안(14.x°)에서 멈추지 말고 place_turn_to_deg 까지
+        # 맞춘다 — 시뮬에서 팔이 매번 한계 끝에서 투하했다.
+        limit = m.place_turn_to_deg if self._nudge_turn_logged else m.max_arm_yaw_deg
+        self.ready_to_advance = close and abs(residual) <= limit
         if self.ready_to_advance:
             if self._should_advance():
                 self._enter(HostState.PLACE)
                 return self._step_place(pi_status)
             return self._stop(f"at box (arm {residual:+.1f}도)")
         if gap < -m.place_min_gap_m:
-            # 너무 붙었다. 이대로 팔을 펴면 차체가 상자를 민다 — 뒤로 조금 뺀다.
-            return self._back_away_from_box(pose, "back off")
-        if close and abs(residual) > m.max_arm_yaw_deg:
-            # 팔이 못 메우는 각도다. 이때만 차체를 돌린다 — 단, **상자 옆에서는 돌지 않는다.**
-            # 정차점은 차체 앞이 상자에서 2 cm 라 제자리 회전 모서리(반지름 16 cm)가 상자를
-            # 친다(2026-09-30 rook). 돌아도 닿지 않는 거리까지 먼저 물러난다.
+            # 정차점을 크게 지나쳤다(드문 경우). 여기서 돌면 차체가 상자에 닿고, 시퀀서는 뒤에 있는
+            # 정차점을 보려고 180° 돌려 한다 — 돌지 않고 상자에서 곧장 물러난다.
+            return self._back_away_from_box(pose, "overshoot — back off")
+        if close and abs(residual) > limit:
+            # 팔이 못 메우는 각도다. 이때만 정차점에서 차체를 돌린다(돌아도 상자에 닿지 않는 자리다).
             if not self._nudge_turn_logged:
                 self._nudge_turn_logged = True
                 self._log(f"arm cannot cover {residual:+.1f}도 (limit ±{m.max_arm_yaw_deg:.0f}) — "
-                          f"back off to {m.box_turn_clear_m:.2f} m, then turn the body")
-            return self._turn_clear_of_box(pose, residual)
-        # 진입점이 멀수록(최대 box_lead_in_max_m) 올라가는 거리도 길다 — 그만큼은 허용한다.
+                          f"turn the body at the stop point")
+            return self._rotate(residual)
+        # 멀리서 시작했으면 올라가는 거리도 길다 — 그만큼은 허용한다.
         if moved >= max(m.nudge_max_m, self._nudge_start_dist + 0.15):
             # 이만큼 밀고도 정면에 못 섰다. 더 밀면 상자를 친다.
             return self._nudge_missed(f"nudge {moved:.2f}m and still {gap:+.2f}m off the stand-off")
         nav = self._drive.update(pose.xy, pose.yaw_deg, self.dest_xy)
         if nav.mode == DriveMode.ROTATE:
-            # 올라가다 방향을 고쳐야 할 때도 상자 옆이면 먼저 물러난다.
-            return self._turn_clear_of_box(pose, nav.yaw_error_deg)
+            return self._rotate(nav.yaw_error_deg)
         if nav.mode == DriveMode.STOP:
             # 시퀀서가 직진<->회전 사이에 한 사이클 세운다. 그 한 박자를 지킨다.
             return self._stop("nudge (settle)")
@@ -471,25 +459,9 @@ class MissionFSM:
         self._enter(HostState.CARRY_TO_DEST)
         return self._stop("nudge missed")
 
-    def _box_front_gap(self, pose: Pose) -> Optional[float]:
-        """로봇 마커에서 **앞에 있는** 상자 입구 면까지(앞뒤). 상자는 입구가 -y 를 향한다.
-        상자 앞(좌우로 차체 회전 반지름만큼 넓게)이 아니면 None."""
-        bw, bl, _bh = self.cfg.arena.box_size
-        best = None
-        for bx, by, _yaw in self.cfg.arena.boxes.values():
-            if abs(pose.x - bx) > bw / 2.0 + self._planner.turn_safe:
-                continue
-            gap = (by - bl / 2.0) - pose.y
-            if best is None or gap < best:
-                best = gap
-        return best
-
-    def _near_box_front(self, pose: Pose) -> bool:
-        gap = self._box_front_gap(pose)
-        return gap is not None and gap < self.cfg.mission.box_turn_clear_m
-
     def _back_away_from_box(self, pose: Pose, why: str) -> HostCommand:
         """상자에서 **곧장 멀어지는 쪽(-y)**으로 옆걸음 섞어 물러난다 — 차체가 어디를 보든.
+        정차점을 지나쳤을 때만 쓴다.
 
         2026-09-30: 158°(옆)로 선 채 차체 방향으로 후진했더니 상자와의 간격이 거의 안 늘어
         "물러나기 <-> 밀기"를 되풀이했다. 메카넘이라 차체를 돌리지 않고 -y 로 갈 수 있다.
@@ -499,29 +471,6 @@ class MissionFSM:
         th = math.radians(pose.yaw_deg)
         self.last_cmd_text = why
         return HostCommand(WIRE_STATE[self.state], linear_x=-v * math.sin(th), linear_y=-v * math.cos(th))
-
-    def _turn_clear_of_box(self, pose: Pose, yaw_error_deg: float) -> HostCommand:
-        """제자리 회전이 필요하면: 상자에서 box_turn_clear_m 안쪽이면 먼저 물러나고, 밖이면 돈다."""
-        if self._near_box_front(pose):
-            return self._back_away_from_box(pose, "back off to turn")
-        return self._rotate(yaw_error_deg)
-
-    def _lead_in_xy(self, obstacles: list[XY]) -> Optional[XY]:
-        """상자 앞 진입점. box_lead_in_m 부터 box_lead_in_max_m 까지 가까운 것부터 보고,
-        그 자리(돈다)나 거기서 정차점까지 올라가는 선이 기물에 막히지 않은 첫 점. 다 막히면 None."""
-        assert self.dest_xy is not None
-        m = self.cfg.mission
-        dx, dy = self.dest_xy
-        pl = self._planner
-        d = m.box_lead_in_m
-        while d <= m.box_lead_in_max_m + 1e-9:
-            p = (dx, dy - d)
-            if all(_dist(o, p) >= pl.turn_safe                                     # 진입점에서 돈다
-                   and segment_circle_clearance(p, self.dest_xy, o)[0] >= pl.safe   # 곧장 올라간다
-                   for o in obstacles):
-                return p
-            d += m.box_lead_in_step_m
-        return None
 
     def _step_place(self, pi_status: Optional[PiStatus]) -> HostCommand:
         self._clear_nav()
@@ -571,8 +520,7 @@ class MissionFSM:
             self.last_cmd_text = "forward" + (f" ({blocked})" if blocked else "")
             return HostCommand(WIRE_STATE[self.state], linear_x=self.cfg.drive.linear_mps)
         if nav.mode == DriveMode.ROTATE:
-            # 어느 단계든 상자 입구 앞에서는 돌지 않는다(놓은 직후 떠날 때도, 재접근할 때도).
-            return self._turn_clear_of_box(pose, nav.yaw_error_deg)
+            return self._rotate(nav.yaw_error_deg)
         return self._stop("stop" + (f" ({blocked})" if blocked else ""))
 
     def _blocked_too_long(self) -> bool:
