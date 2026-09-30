@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import math
+
 import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -131,7 +133,7 @@ class PlannerConfig:
     # 상자 둘레 진입 금지. 좌우·뒤는 로봇 반경, 앞은 정차점까지.
     # 주행 구역 상한이 상자를 막아 주던 것을 주행 구역을 넓히면서 이것으로 바꿨다.
     box_keepout_side_m: float = 0.20
-    box_keepout_front_m: float = 0.15
+    box_keepout_front_m: float = 0.22
     waypoint_step_m: float = 0.15
     axis_leg_tolerance_m: float = 0.03
     yaw_tolerance_deg: float = 5.0
@@ -173,26 +175,14 @@ class MissionConfig:
     # 접근 중 목표 기물 위치를 탑뷰로 갱신할 때, 같은 라벨의 이 반경 안 검출을 같은 기물로 본다.
     target_track_m: float = 0.10
     place_trigger_dist_m: float = 0.35
-    # 상자 앞 진입점 = 정차점에서 이만큼 앞(-y). 운반은 여기까지 오고, 여기서 상자를 향해 돈 뒤
-    # 똑바로 올라가 정차한다 — 도착할 때 거의 정면이라 남는 각도는 팔 base 가 맡는다.
-    # 상자 입구에서 0.15 + 0.25 = 0.40 m 라 여기서 도는 것은 안전하다.
-    box_lead_in_m: float = 0.25
-    # 그 진입점이 기물에 막히면 box_lead_in_step_m 씩 더 앞에서 찾는다(box_lead_in_max_m 까지).
-    # 2026-09-30: 25 cm 진입점이 knight 에 막혀 정차점으로 곧장 갔고, 옆으로 도착해 상자 앞에서 맴돌았다.
-    box_lead_in_max_m: float = 0.55
-    box_lead_in_step_m: float = 0.10
-    lead_in_arrive_m: float = 0.05
-    # 상자 입구에서 로봇 마커까지 이 거리 안에서는 제자리 회전을 하지 않는다 — 먼저 물러난다.
-    # 회전 반지름 0.16(차체 20 x 25 cm) + 여유 0.04. 정차점(0.15)에서 돌다가 상자를 쳤다(09-30).
-    box_turn_clear_m: float = 0.20
-    # 상자 앞면에서 정차점(마커)까지. ⚠️ **물리 한계라 줄일 수 없다.**
-    # 2026-09-23 실측: 마커 중심에서 차체 맨 앞까지 0.13 m. 그래서 0.15 로 서면 차체 앞이
-    # 상자에서 2 cm 떨어진 자리다. planner.box_keepout_front_m 의 앞쪽 경계도 같은 지점이다
-    # (마커 1.330 -> 차체 앞 1.460 -> 상자 입구 1.480).
+    # 상자 앞면에서 정차점(마커)까지. planner.box_keepout_front_m 의 앞쪽 경계도 같은 지점이다.
+    # 마커는 차체 중앙쯤이다(마커 -> 차체 앞 0.13 m, 2026-09-23 실측).
     #
-    # 정차 허용치 ±0.02 가 나오는 곳도 여기다 — 덜 붙으면 팔이 테두리를 못 넘고
-    # (실측 짧은 쪽 0.17 - 0.02 = 0.15), 더 붙으면 차체가 상자에 닿는다.
-    box_approach_margin_m: float = 0.15
+    # 2026-09-30 저녁: 0.15 -> 0.22. 0.15 는 차체 앞이 상자에서 2 cm 라 정차점에서 돌다가 모서리로
+    # 상자를 쳤고, 그걸 피하려고 넣은 진입점 경유·상자 앞 후진이 오히려 동작을 길게 만들었다.
+    # 이제 정차점(허용치만큼 더 붙은 자리까지)에서 제자리 회전해도 차체 반대각(0.16)이 상자에
+    # 닿지 않는다 — 로드 시 검사한다. 팔은 그만큼 덜 깊게 넣지만 테두리는 넘는다(_check_reach).
+    box_approach_margin_m: float = 0.22
     # --- 바구니 투입 목표 (mission/basket_target.py, 도면 2026-09-05) ---
     # 상자 입구 안쪽의 투입 목표 사각형: 가로 ±3 cm · 안쪽 3 cm.
     insert_half_width_m: float = 0.03
@@ -209,17 +199,19 @@ class MissionConfig:
     # 앞뒤 오차는 아무도 못 메운다 — 팔 길이는 고정이다. 그래서 따로, 좁게 잡는다.
     # 정차 판정은 **앞뒤로 비대칭**이다. 제약이 양쪽에서 다르기 때문이다.
     #   덜 붙는 쪽: 팔이 짧아지는 만큼 얕게 떨어진다. 도달거리 0.32 m 에 테두리까지
-    #              0.15 m 이므로 6 cm 덜 붙어도 테두리를 7 cm 넘는다 — 여유가 크다.
-    #   더 붙는 쪽: 차체 앞이 마커보다 0.13 m 앞이라 정차점에서 상자까지 **2 cm** 뿐이다.
-    #              넘어가면 차가 상자를 민다 — 여기가 진짜 한계다.
-    place_arrive_tol_m: float = 0.06        # 덜 붙어도 되는 한도
-    place_min_gap_m: float = 0.02           # 더 붙어도 되는 한도(차체-상자 간격)
+    #              0.22 m 이므로 4 cm 덜 붙어도 턱이 테두리를 6 cm 넘는다.
+    #   더 붙는 쪽: 정차점에서 차체 앞과 상자 사이가 9 cm 다. 5 cm 더 붙어도 제자리 회전
+    #              (반대각 0.16)이 상자에 닿지 않는다(0.22 - 0.05 = 0.17).
+    place_arrive_tol_m: float = 0.04        # 덜 붙어도 되는 한도
+    place_min_gap_m: float = 0.05           # 더 붙어도 되는 한도
     # 판정 목표 중심보다 이만큼 더 안쪽을 겨눈다. 정차 거리 오차가 그대로 앞뒤 오차가
     # 되므로 허용치보다 커야 한다 — 덜 붙어도 테두리 안쪽에 떨어지게 하는 여유다.
     place_aim_margin_m: float = 0.04
     # 팔의 base 로 메울 수 있는 좌우 각도 한계. Pi 의 place.max_base_yaw_deg 와 같은 값.
     # 이 밖이면 그때만 차체를 돌린다.
     max_arm_yaw_deg: float = 15.0
+    # 그 한계를 넘어 차체를 돌릴 때는 남는 각도가 이 안이 될 때까지 돈다.
+    place_turn_to_deg: float = 5.0
     # 상자 앞에서 앞으로 밀어 볼 수 있는 최대 거리. 여기까지 가도 정면에 못 서면
     # 다시 접근한다(place_tries 가 오른다).
     nudge_max_m: float = 0.40
@@ -304,13 +296,13 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
             raise ConfigError(f"mission.{name} 는 양수여야 한다")
     if not 0 < m.max_arm_yaw_deg <= 90:
         raise ConfigError("mission.max_arm_yaw_deg 는 0 초과 90 이하여야 한다")
-    if m.box_turn_clear_m <= m.box_approach_margin_m:
-        # 정차점에서도 돌 수 있다는 뜻이 된다 — 그게 상자를 친 원인이었다.
-        raise ConfigError("mission.box_turn_clear_m 는 box_approach_margin_m 보다 커야 한다")
-    if m.box_lead_in_m < m.box_turn_clear_m - m.box_approach_margin_m:
-        raise ConfigError("mission.box_lead_in_m 가 너무 짧다 — 진입점에서 돌면 상자에 닿는다")
-    if m.box_lead_in_max_m < m.box_lead_in_m or m.box_lead_in_step_m <= 0:
-        raise ConfigError("mission.box_lead_in_max_m >= box_lead_in_m, box_lead_in_step_m > 0")
+    if not 0 < m.place_turn_to_deg <= m.max_arm_yaw_deg:
+        raise ConfigError("mission.place_turn_to_deg 는 0 초과 max_arm_yaw_deg 이하여야 한다")
+    half_diag = math.hypot(pl.robot_width_m / 2.0, pl.robot_length_m / 2.0)
+    if m.box_approach_margin_m - m.place_min_gap_m < half_diag:
+        # 정차점에서 제자리 회전하면 차체 모서리가 상자를 친다(2026-09-30 rook, 정차점 0.15).
+        raise ConfigError(f"mission.box_approach_margin_m - place_min_gap_m 는 차체 반대각 "
+                          f"{half_diag:.3f} m 이상이어야 한다 — 정차점에서 돌면 상자에 닿는다")
     if m.nudge_timeout_s <= 0:
         raise ConfigError("mission.nudge_timeout_s 는 양수여야 한다")
     if m.grasp_retry_max < 0 or m.grasp_face_tol_deg <= 0:
