@@ -65,7 +65,7 @@ def test_no_wall_occlusion_when_the_camera_sits_on_the_wall(cfg):
 
 
 def test_wall_does_not_block_what_is_above_it(cfg):
-    """로봇 마커는 0.27 m 에 떠 있어 같은 자리라도 가벽 위로 보인다."""
+    """로봇 마커는 약 0.28 m 에 떠 있어 같은 자리라도 가벽 위로 보인다."""
     C, _R, _t = check_coverage.camera_pose("A", 0.9, 0.0, 1.30, 42.8, cfg.arena.wall_y)
     target = np.array([0.9, 0.35, cfg.aruco.robot_marker_height_m])
     assert not check_coverage.wall_blocks(C, target, cfg.arena.wall_y, 0.25)

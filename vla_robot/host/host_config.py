@@ -51,7 +51,7 @@ class ArucoConfig:
     # 검은 테두리 바깥 변 길이(m). 흰 여백은 뺀다.
     robot_marker_size_m: float = 0.080
     # 바닥에서 로봇 마커 중심까지(m). 10 mm 틀리면 위치가 약 13 mm 밀린다.
-    robot_marker_height_m: float = 0.270
+    robot_marker_height_m: float = 0.282   # 2026-09-30 줄자 28 cm · 교차법 281.7 mm
     floor_marker_size_m: float = 0.120
     # 종이 좌우 변을 장판 좌우 끝에 붙인 자리(배치도 REV.2, 2026-09-29).
     floor_markers: dict[int, tuple[float, float]] = field(default_factory=lambda: {
