@@ -130,6 +130,10 @@ class MissionFSM:
         self.grasp_tries = 0
         self.grasp_face_err_deg: Optional[float] = None
         self._in_grasp_zone = False
+        self._creep = 0                 # 파지 거리 맞추기: +1 앞으로, -1 뒤로, 0 서 있음
+        self._creep_stopped_at: Optional[float] = None
+        self._creep_tries = 0
+        self._creep_cmds = 0
         self.skipped: list[tuple[XY, float]] = []
         self.last_result: Optional[JobResult] = None
         self._advance_requested = False
@@ -301,26 +305,74 @@ class MissionFSM:
         self._in_grasp_zone = dist <= limit
         if self._in_grasp_zone:
             self._clear_nav()
-            # 정면으로 볼 때까지 제자리에서 돈다. 거리만 보고 잡으면 정책이 옆에 있는 기물을
-            # 못 잡는다(2026-09-30: 18° · 30° 어긋난 채 시작해 둘 다 실패, 7° 는 성공).
             bearing = math.degrees(math.atan2(self.target_xy[1] - pose.y, self.target_xy[0] - pose.x))
             self.grasp_face_err_deg = wrap_deg(bearing - pose.yaw_deg)
-            self.ready_to_advance = abs(self.grasp_face_err_deg) <= m.grasp_face_tol_deg
-            if not self.ready_to_advance:
+            # 앞뒤로 맞추는 중이면 그것부터 끝낸다(정면을 본 채 곧장 움직이므로 방향은 거의 그대로다).
+            creep = self._creep_to_range(dist)
+            if creep is not None:
+                return creep
+            # 정면으로 볼 때까지 제자리에서 돈다. 거리만 보고 잡으면 정책이 옆에 있는 기물을
+            # 못 잡는다(2026-09-30: 18° · 30° 어긋난 채 시작해 둘 다 실패, 7° 는 성공).
+            if abs(self.grasp_face_err_deg) > m.grasp_face_tol_deg:
+                self.ready_to_advance = False
                 cmd = self._rotate(self.grasp_face_err_deg)
                 self.last_cmd_text = f"face piece {self.grasp_face_err_deg:+.0f}도"
                 return cmd
+            # 정면을 봤으면 거리를 범위 안으로. 앞뒤로 움직였으면 선 뒤 잠깐 기다렸다 다시 잰다.
+            if self._creep_stopped_at is not None and self._now - self._creep_stopped_at < m.grasp_settle_s:
+                self.ready_to_advance = False
+                return self._stop(f"grasp range (settle, {dist:.3f} m)")
+            in_range = m.grasp_dist_min_m <= dist <= m.grasp_dist_max_m
+            if not in_range and self._creep_tries < self.CREEP_TRIES:
+                self._creep = 1 if dist > m.grasp_dist_max_m else -1
+                self._creep_tries += 1
+                self._creep_cmds = 0
+                creep = self._creep_to_range(dist)
+                if creep is not None:
+                    return creep
+            self.ready_to_advance = True
             if self._should_advance():
+                if not in_range:
+                    self._log(f"grasp range: {dist:.3f} m after {self.CREEP_TRIES} tries — grasp here")
                 self._enter(HostState.GRASP)
                 return self._step_grasp(pi_status)
             return self._stop(f"approach (ready, {self.grasp_face_err_deg:+.0f}도)")
         self.ready_to_advance = False
+        self._creep, self._creep_stopped_at, self._creep_tries = 0, None, 0
         cmd = self._drive_to(pose, self.target_xy, obstacles)
         if self._blocked_too_long():
             # 손이 비었으니 이 기물은 보류하고 다른 기물을 치우면 길이 열릴 수 있다.
             self._skip_target(f"no path for {self.cfg.mission.blocked_timeout_s:.0f}s")
             return self._stop("approach blocked")
         return cmd
+
+    #: 파지 거리 맞추기 최대 횟수. 넘으면 그 자리에서 잡는다(맴돌지 않게).
+    CREEP_TRIES = 4
+
+    def _creep_to_range(self, dist: float) -> Optional[HostCommand]:
+        """파지 거리 범위의 가운데로 천천히 앞(+1)·뒤(-1)로 간다. 끝났거나 할 일이 없으면 None.
+
+        멈추라고 해도 명령 지연 동안 더 가므로(09-30: 트리거 0.30 에서 멈췄는데 0.25 에 섰다)
+        속도 x grasp_creep_lead_s 만큼 미리 멈춘다. 멈춘 시각을 적어 두고 grasp_settle_s 뒤에 다시 잰다.
+        """
+        if self._creep == 0:
+            return None
+        m = self.cfg.mission
+        v = self.cfg.drive.nudge_mps
+        mid = (m.grasp_dist_min_m + m.grasp_dist_max_m) / 2.0
+        lead = v * m.grasp_creep_lead_s
+        done = (dist - lead <= mid) if self._creep > 0 else (dist + lead >= mid)
+        # 범위를 몇 mm 만 벗어났으면 "미리 멈추기"가 곧바로 참이라 한 번도 안 움직이고 멈춤·대기만
+        # 되풀이했다(시뮬 700 s). 시작했으면 적어도 한 사이클은 움직인다.
+        if done and self._creep_cmds > 0:
+            self._creep = 0
+            self._creep_stopped_at = self._now
+            self.ready_to_advance = False
+            return self._stop(f"grasp range (settle, {dist:.3f} m)")
+        self.ready_to_advance = False
+        self._creep_cmds += 1
+        self.last_cmd_text = f"grasp range {'fwd' if self._creep > 0 else 'back'} ({dist:.3f} m)"
+        return HostCommand(WIRE_STATE[self.state], linear_x=self._creep * v, label=self.target_label or "")
 
     def _step_grasp(self, pi_status: Optional[PiStatus]) -> HostCommand:
         self._clear_nav()
@@ -589,6 +641,10 @@ class MissionFSM:
         self.state = state
         self.ready_to_advance = False
         self._in_grasp_zone = False
+        self._creep = 0
+        self._creep_stopped_at = None
+        self._creep_tries = 0
+        self._creep_cmds = 0
         if state in (HostState.GRASP, HostState.PLACE):
             self._job_armed = False
             self._job_result = None
