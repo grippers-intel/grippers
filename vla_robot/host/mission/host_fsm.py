@@ -31,7 +31,8 @@ from typing import Optional
 from host_config import HostConfig
 from localization.pose import Pose
 from mission.basket_target import BasketTarget, basket_target, facing_error_deg
-from planning.planner import DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold, wrap_deg
+from planning.planner import (DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold,
+                              segment_circle_clearance, wrap_deg)
 from vla_common.protocol import HostCommand, JobResult, JobTracker, PiStatus, State
 
 XY = tuple[float, float]
@@ -134,6 +135,7 @@ class MissionFSM:
         self._job_started = 0.0
         self._job_result: Optional[JobResult] = None
         self._nudge_from: Optional[XY] = None
+        self._nudge_turn_logged = False
         # 상자 앞에 선 자리에서 팔이 메워야 할 좌우 각도. PLACE 명령에 실린다.
         self.place_arm_yaw_deg = 0.0
         self._now = 0.0
@@ -293,18 +295,32 @@ class MissionFSM:
         return HostCommand(State.GRASP, stop=True, label=self.target_label or "")
 
     def _step_carry(self, pose: Pose, pmap: PieceMap) -> HostCommand:
+        """상자 **앞 진입점**(정차점에서 box_lead_in_m 아래)까지 간다.
+
+        2026-09-30 실기: 정차점으로 곧장 오면 온 방향 그대로 도착해 상자와 최대 75° 어긋났고,
+        정차점에서 차체를 돌리다 모서리로 상자를 쳤다(카메라까지 밀렸다). 진입점은 상자에서
+        충분히 떨어져 있어 거기서 도는 것은 안전하고, 거기서부터는 상자를 향해 똑바로 올라가므로
+        도착하면 거의 정면이다 — 남는 몇 도는 팔의 base 가 맡는다.
+        진입점이 기물에 막혀 있으면 예전처럼 정차점으로 곧장 간다(그때도 상자 옆에서는 돌지 않는다).
+        """
         assert self.dest_xy is not None
+        m = self.cfg.mission
         r = self.cfg.planner.carry_ignore_radius_m
         obstacles = [p for pts in pmap.values() for p in pts if _dist(p, pose.xy) > r]
-        dist = _dist(pose.xy, self.dest_xy)
-        self.ready_to_advance = dist <= self.cfg.mission.place_trigger_dist_m
+        lead_in = self._lead_in_xy(obstacles)
+        if lead_in is not None:
+            goal = lead_in
+            self.ready_to_advance = _dist(pose.xy, lead_in) <= m.lead_in_arrive_m
+        else:
+            goal = self.dest_xy
+            self.ready_to_advance = _dist(pose.xy, self.dest_xy) <= m.place_trigger_dist_m
         if self.ready_to_advance:
             self._clear_nav()
             if self._should_advance():
                 self._enter(HostState.NUDGE_BOX)
                 return self._step_nudge(pose, None)
             return self._stop("carry (ready)")
-        cmd = self._drive_to(pose, self.dest_xy, obstacles)
+        cmd = self._drive_to(pose, goal, obstacles)
         if self._blocked_too_long():
             # 물체를 든 채라 보류할 곳이 없다. 사람을 부른다.
             self._halt(f"no path to {self.dest_box} for {self.cfg.mission.blocked_timeout_s:.0f}s")
@@ -349,9 +365,14 @@ class MissionFSM:
             self.last_cmd_text = "back off"
             return HostCommand(WIRE_STATE[self.state], linear_x=-self.cfg.drive.nudge_mps)
         if close and abs(residual) > m.max_arm_yaw_deg:
-            # 팔이 못 메우는 각도다. 이때만 차체를 돌린다 — 한계 안으로만 넣는다.
-            self._log(f"arm cannot cover {residual:+.1f}도 (limit ±{m.max_arm_yaw_deg:.0f}) — turning the body")
-            return self._rotate(residual)
+            # 팔이 못 메우는 각도다. 이때만 차체를 돌린다 — 단, **상자 옆에서는 돌지 않는다.**
+            # 정차점은 차체 앞이 상자에서 2 cm 라 제자리 회전 모서리(반지름 16 cm)가 상자를
+            # 친다(2026-09-30 rook). 돌아도 닿지 않는 거리까지 먼저 물러난다.
+            if not self._nudge_turn_logged:
+                self._nudge_turn_logged = True
+                self._log(f"arm cannot cover {residual:+.1f}도 (limit ±{m.max_arm_yaw_deg:.0f}) — "
+                          f"back off to {m.box_turn_clear_m:.2f} m, then turn the body")
+            return self._turn_clear_of_box(pose, residual)
         if moved >= m.nudge_max_m:
             # 이만큼 밀고도 정면에 못 섰다. 더 밀면 상자를 친다.
             self.place_tries += 1
@@ -364,12 +385,39 @@ class MissionFSM:
             return self._stop("nudge missed")
         nav = self._drive.update(pose.xy, pose.yaw_deg, self.dest_xy)
         if nav.mode == DriveMode.ROTATE:
-            return self._rotate(nav.yaw_error_deg)
+            # 올라가다 방향을 고쳐야 할 때도 상자 옆이면 먼저 물러난다.
+            return self._turn_clear_of_box(pose, nav.yaw_error_deg)
         if nav.mode == DriveMode.STOP:
             # 시퀀서가 직진<->회전 사이에 한 사이클 세운다. 그 한 박자를 지킨다.
             return self._stop("nudge (settle)")
         self.last_cmd_text = "nudge"
         return HostCommand(WIRE_STATE[self.state], linear_x=self.cfg.drive.nudge_mps)
+
+    def _box_front_gap(self, pose: Pose) -> float:
+        """로봇 마커에서 상자 입구 면까지(앞뒤). 상자는 입구가 -y 를 향한다."""
+        assert self.dest_box is not None
+        _bx, by, _yaw = self.cfg.arena.boxes[self.dest_box]
+        return (by - self.cfg.arena.box_size[1] / 2.0) - pose.y
+
+    def _turn_clear_of_box(self, pose: Pose, yaw_error_deg: float) -> HostCommand:
+        """제자리 회전이 필요하면: 상자에서 box_turn_clear_m 안쪽이면 먼저 뒤로, 밖이면 돈다."""
+        if self._box_front_gap(pose) < self.cfg.mission.box_turn_clear_m:
+            self.last_cmd_text = "back off to turn"
+            return HostCommand(WIRE_STATE[self.state], linear_x=-self.cfg.drive.nudge_mps)
+        return self._rotate(yaw_error_deg)
+
+    def _lead_in_xy(self, obstacles: list[XY]) -> Optional[XY]:
+        """상자 앞 진입점. 그 자리나 거기서 정차점까지 올라가는 선이 기물에 막히면 None."""
+        assert self.dest_xy is not None
+        dx, dy = self.dest_xy
+        p = (dx, dy - self.cfg.mission.box_lead_in_m)
+        pl = self._planner
+        for o in obstacles:
+            if _dist(o, p) < pl.turn_safe:                      # 진입점에서 돈다
+                return None
+            if segment_circle_clearance(p, self.dest_xy, o)[0] < pl.safe:   # 거기서 곧장 올라간다
+                return None
+        return p
 
     def _step_place(self, pi_status: Optional[PiStatus]) -> HostCommand:
         self._clear_nav()
@@ -467,6 +515,7 @@ class MissionFSM:
             self._job_result = None
         if state == HostState.NUDGE_BOX:
             self._nudge_from = None
+            self._nudge_turn_logged = False
         self._reset_motion()
 
     def _go_back(self) -> None:

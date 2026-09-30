@@ -124,6 +124,11 @@ mission:
   grasp_retry_max: 1
   target_track_m: 0.10
   place_trigger_dist_m: 0.35
+  # 상자 앞: 운반은 정차점 0.25 앞 진입점까지 → 거기서 상자를 향해 돌고 → 똑바로 올라가 정차.
+  # 상자 입구 0.20 안에서는 제자리 회전 금지(먼저 물러남). 09-30: 정차점에서 돌다 상자를 쳤다.
+  box_lead_in_m: 0.25
+  lead_in_arrive_m: 0.05
+  box_turn_clear_m: 0.20
   # ⚠️ 물리 한계 — 마커에서 차체 앞까지 0.13 m(2026-09-23 실측)라 여기 서면 차체 앞이
   # 상자에서 2 cm 떨어진다. 정차점 = (0.990, 1.330), planner.box_keepout_front_m 경계와 같다.
   box_approach_margin_m: 0.15

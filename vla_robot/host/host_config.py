@@ -173,6 +173,14 @@ class MissionConfig:
     # 접근 중 목표 기물 위치를 탑뷰로 갱신할 때, 같은 라벨의 이 반경 안 검출을 같은 기물로 본다.
     target_track_m: float = 0.10
     place_trigger_dist_m: float = 0.35
+    # 상자 앞 진입점 = 정차점에서 이만큼 앞(-y). 운반은 여기까지 오고, 여기서 상자를 향해 돈 뒤
+    # 똑바로 올라가 정차한다 — 도착할 때 거의 정면이라 남는 각도는 팔 base 가 맡는다.
+    # 상자 입구에서 0.15 + 0.25 = 0.40 m 라 여기서 도는 것은 안전하다.
+    box_lead_in_m: float = 0.25
+    lead_in_arrive_m: float = 0.05
+    # 상자 입구에서 로봇 마커까지 이 거리 안에서는 제자리 회전을 하지 않는다 — 먼저 물러난다.
+    # 회전 반지름 0.16(차체 20 x 25 cm) + 여유 0.04. 정차점(0.15)에서 돌다가 상자를 쳤다(09-30).
+    box_turn_clear_m: float = 0.20
     # 상자 앞면에서 정차점(마커)까지. ⚠️ **물리 한계라 줄일 수 없다.**
     # 2026-09-23 실측: 마커 중심에서 차체 맨 앞까지 0.13 m. 그래서 0.15 로 서면 차체 앞이
     # 상자에서 2 cm 떨어진 자리다. planner.box_keepout_front_m 의 앞쪽 경계도 같은 지점이다
@@ -282,6 +290,11 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
             raise ConfigError(f"mission.{name} 는 양수여야 한다")
     if not 0 < m.max_arm_yaw_deg <= 90:
         raise ConfigError("mission.max_arm_yaw_deg 는 0 초과 90 이하여야 한다")
+    if m.box_turn_clear_m <= m.box_approach_margin_m:
+        # 정차점에서도 돌 수 있다는 뜻이 된다 — 그게 상자를 친 원인이었다.
+        raise ConfigError("mission.box_turn_clear_m 는 box_approach_margin_m 보다 커야 한다")
+    if m.box_lead_in_m < m.box_turn_clear_m - m.box_approach_margin_m:
+        raise ConfigError("mission.box_lead_in_m 가 너무 짧다 — 진입점에서 돌면 상자에 닿는다")
     if m.grasp_retry_max < 0 or m.grasp_face_tol_deg <= 0:
         raise ConfigError("mission.grasp_retry_max >= 0, grasp_face_tol_deg > 0")
     d = cfg.drive
