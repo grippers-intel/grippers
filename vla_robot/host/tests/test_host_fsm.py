@@ -253,9 +253,9 @@ def test_turns_the_body_at_the_stop_point_when_the_arm_cannot_cover(cfg):
     cmd = fsm.step(P(dx, dy, yaw=40.0), {}, S(), 0.0)             # 정차는 했지만 50도 틀어짐
     assert fsm.state == HostState.NUDGE_BOX
     assert cmd.angular_z > 0 and cmd.linear_x == 0 and cmd.linear_y == 0
-    cmd = fsm.step(P(dx, dy, yaw=78.0), {}, S(), 0.1)             # 12도 — 팔 한계 안이지만
-    assert cmd.angular_z > 0 and fsm.state == HostState.NUDGE_BOX  # 돌기 시작했으면 5도까지 돈다
-    fsm.step(P(dx, dy, yaw=87.0), {}, S(), 0.2)
+    cmd = fsm.step(P(dx, dy, yaw=76.0), {}, S(), 0.1)             # 14도 — 팔 한계 안이지만
+    assert cmd.angular_z > 0 and fsm.state == HostState.NUDGE_BOX  # 돌기 시작했으면 12도 안까지
+    fsm.step(P(dx, dy, yaw=80.0), {}, S(), 0.2)                   # 10도 — 정면까진 안 맞춘다
     assert fsm.state == HostState.PLACE
     # 같은 사유는 한 번만 기록한다(예전엔 매 사이클 찍혀 수백 줄이 쌓였다)
     assert sum("arm cannot cover" in e for e in fsm.events) == 1
@@ -346,3 +346,29 @@ def test_after_placing_turns_toward_a_nearby_piece_in_place(cfg):
     cmd = fsm.step(P(0.975, 1.260, yaw=103.0), pm, S(), 0.1)
     assert fsm.state == HostState.APPROACH_PIECE
     assert cmd.angular_z < 0 and cmd.linear_x == 0 and cmd.linear_y == 0
+
+
+def test_keeps_driving_when_the_way_ahead_is_clear(cfg):
+    """2026-09-30 저녁: 주변이 비었는데도 12° 틀어질 때마다 멈춰 돌아 직진·회전을 되풀이했다.
+    앞길이 비어 있으면 yaw_enter_clear_deg 까지는 계속 직진한다."""
+    fsm = MissionFSM(cfg)
+    pm = {"queen": [(0.90, 1.20)]}
+    fsm.step(P(0.90, 0.40, yaw=90.0), pm, S(), 0.0)
+    cmd = fsm.step(P(0.90, 0.40, yaw=90.0), pm, S(), 0.1)
+    assert fsm.state == HostState.APPROACH_PIECE and cmd.linear_x > 0
+    off = (cfg.planner.yaw_enter_deg + cfg.planner.yaw_enter_clear_deg) / 2     # 12 과 25 사이
+    for t in (0.2, 0.3, 0.4):
+        cmd = fsm.step(P(0.90, 0.45, yaw=90.0 - off), pm, S(), t)
+        assert cmd.linear_x > 0 and cmd.angular_z == 0 and not cmd.stop
+
+
+def test_still_turns_early_when_a_piece_is_on_the_way(cfg):
+    """앞길에 기물이 걸리면 지금처럼 12° 에서 멈춰 돈다."""
+    fsm = MissionFSM(cfg)
+    pm = {"queen": [(0.90, 1.20)], "star": [(0.72, 0.80)]}
+    fsm.step(P(0.90, 0.40, yaw=90.0), pm, S(), 0.0)
+    fsm.step(P(0.90, 0.40, yaw=90.0), pm, S(), 0.1)
+    off = (cfg.planner.yaw_enter_deg + cfg.planner.yaw_enter_clear_deg) / 2     # 왼쪽(star 쪽)으로 틀어짐
+    cmd = fsm.step(P(0.90, 0.45, yaw=90.0 + off), pm, S(), 0.2)
+    cmd = fsm.step(P(0.90, 0.45, yaw=90.0 + off), pm, S(), 0.3)
+    assert cmd.angular_z != 0 or cmd.stop

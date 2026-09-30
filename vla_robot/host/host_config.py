@@ -138,6 +138,11 @@ class PlannerConfig:
     axis_leg_tolerance_m: float = 0.03
     yaw_tolerance_deg: float = 5.0
     yaw_enter_deg: float = 12.0
+    # 앞길(지금 방향으로 부분목표까지)에 기물·금지 구역·벽이 없으면 이만큼 틀어질 때까지는 멈춰
+    # 돌지 않고 계속 직진한다. 부분목표가 no_turn_near_m 안이면(지나치는 중) 뒤로 가지 않는 한
+    # 돌지 않는다. 2026-09-30 저녁: 주변이 비었는데도 직진 -> 좌/우 회전을 되풀이해 오래 걸렸다.
+    yaw_enter_clear_deg: float = 25.0
+    no_turn_near_m: float = 0.15
     min_heading_dist_m: float = 0.05
     obstacle_hold_cycles: int = 8
     obstacle_match_m: float = 0.06
@@ -211,7 +216,7 @@ class MissionConfig:
     # 이 밖이면 그때만 차체를 돌린다.
     max_arm_yaw_deg: float = 15.0
     # 그 한계를 넘어 차체를 돌릴 때는 남는 각도가 이 안이 될 때까지 돈다.
-    place_turn_to_deg: float = 5.0
+    place_turn_to_deg: float = 12.0
     # 상자 앞에서 앞으로 밀어 볼 수 있는 최대 거리. 여기까지 가도 정면에 못 서면
     # 다시 접근한다(place_tries 가 오른다).
     nudge_max_m: float = 0.40
