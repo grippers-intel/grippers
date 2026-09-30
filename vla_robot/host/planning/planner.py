@@ -15,10 +15,13 @@
 
 ## 왜 기물을 차체 모양으로 피하는가 (safe / turn_safe)
 차는 직진과 제자리 회전만 한다. 직진할 때 기물을 스칠 수 있는 건 차체 옆면(반폭)이고,
-제자리에서 돌 때는 대각선 반지름의 원 전체다. 예전에는 로봇을 한 원으로 보고 기물마다
-큰 쪽(회전)을 칠해 두었는데, 2026-09-30 실기에서 51 cm 떨어진 기물 사이가 막혀 HALTED 가
-났다. 지금은 직진 여유로 길을 찾고, **꺾이는 점**만 회전 여유를 확인해 모자라면 그 기물만
-넓혀 다시 찾는다.
+제자리에서 돌 때는 차체 사각형이 도는 각도만큼 쓸고 지나간다. 예전에는 로봇을 한 원으로
+보고 기물마다 큰 쪽(회전)을 칠해 두었는데, 2026-09-30 실기에서 51 cm 떨어진 기물 사이가
+막혀 HALTED 가 났다. 지금은 직진 여유로 길을 찾고, **꺾이는 점**에서 실제로 도는 각도만큼
+차체 사각형을 돌려 보아 기물에 닿으면 그 기물만 넓혀 다시 찾는다.
+
+2026-09-30 저녁: 처음엔 꺾이는 점마다 한 바퀴 원(대각 반지름) 전체를 비웠는데, 20° 만 꺾는
+점도 기물 옆이면 막혀 경로가 최대 1.8 배로 늘었다("널널한데 먼 길로 돈다"). 도는 각도만 본다.
 
 ## 왜 상자 둘레를 막는가 (box_keepout)
 2026-09-29 배치도 REV.2 에서 주행 구역을 장판 거의 전체로 넓혔다. 그전에는 주행 구역
@@ -253,21 +256,27 @@ class GridPathPlanner:
         reused = self._reuse(robot_xy, target_xy, obstacles, now)
         if reused is not None:
             return reused
-        # 먼저 직진 여유(safe)로 길을 찾는다. 그 길의 꺾이는 점이 어떤 기물에 회전 여유
-        # (turn_safe)보다 가까우면 **그 기물만** 넓혀서 다시 찾는다.
-        wide: set[int] = set()
-        for _ in range(self.TURN_PASSES):
+        # 먼저 직진 여유(safe)로 길을 찾는다. 그 길의 꺾이는 점에서 도는 차체가 어떤 기물에
+        # 닿으면 **그 기물만** 넓혀서 다시 찾는다.
+        # 넓히는 것은 TURN_STEP_M 씩, 필요한 만큼만(최대 turn_safe). 한 번에 turn_safe 로 키우면
+        # 꺾이는 점이 기물에서 20 cm 밖으로 밀려 먼 길로 돌았다(2026-09-30 저녁).
+        wide: dict[int, float] = {}
+        for n_pass in range(self.TURN_PASSES):
             planned = self._plan(robot_xy, target_xy, obstacles, wide)
             if planned[0] == "done":
                 self._cache = None
                 return planned[1]
             _, pts, unreachable = planned
-            bad = self._turn_conflicts(pts, obstacles, robot_xy) - wide
+            bad = {i for i in self._turn_conflicts(pts, obstacles, robot_xy, target_xy)
+                   if wide.get(i, self.safe) < self.turn_safe - 1e-9}
             if not bad:
                 if not unreachable and now is not None:
                     self._cache = (target_xy, obstacles, list(pts), now)
                 return self._emit(pts, robot_xy, target_xy, unreachable)
-            wide |= bad
+            # 마지막 두 번은 한 번에 turn_safe 로 — 조금씩 넓히다 횟수가 모자라 "길 없음"이 되지 않게.
+            step = self.TURN_STEP_M if n_pass < self.TURN_PASSES - 2 else self.turn_safe
+            for i in bad:
+                wide[i] = min(wide.get(i, self.safe) + step, self.turn_safe)
         # 넓혀도 꺾을 자리가 안 나온다 — 그 길로 가면 돌다가 기물을 친다.
         self._cache = None
         return robot_xy, None, "blocked"
@@ -303,13 +312,14 @@ class GridPathPlanner:
             return None
         return self._emit(rest, robot_xy, target_xy, False)
 
-    #: 꺾이는 점 검사 후 다시 찾는 횟수. 기물마다 한 번씩 넓히므로 몇 번이면 수렴한다.
-    TURN_PASSES = 5
+    #: 꺾이는 점 검사 후 다시 찾는 횟수와 한 번에 넓히는 폭.
+    TURN_PASSES = 8
+    TURN_STEP_M = 0.02
 
-    def _radii(self, n: int, wide: set[int]) -> list[float]:
-        return [self.turn_safe if i in wide else self.safe for i in range(n)]
+    def _radii(self, n: int, wide: dict[int, float]) -> list[float]:
+        return [wide.get(i, self.safe) for i in range(n)]
 
-    def _plan(self, robot_xy: XY, target_xy: XY, obstacles: list[XY], wide: set[int]):
+    def _plan(self, robot_xy: XY, target_xy: XY, obstacles: list[XY], wide: dict[int, float]):
         """("done", 결과) 또는 ("path", 편 경로, unreachable)."""
         radii = self._radii(len(obstacles), wide)
         free = self._free_grid(obstacles, robot_xy, radii)
@@ -328,19 +338,61 @@ class GridPathPlanner:
         # 꺾이는 점은 격자 칸이라 넓힌 기물에서는 이미 turn_safe 밖이다.
         return "path", self._smooth([self._pos(*c) for c in cells], obstacles, robot_xy), unreachable
 
-    def _turn_conflicts(self, pts: list[XY], obstacles: list[XY], robot_xy: XY) -> set[int]:
+    #: 꺾이는 점에 도착할 때·떠날 때 방향 오차. DriveSequencer 가 12° 까지는 직진을 이어 간다.
+    TURN_SLACK_DEG = 12.0
+    TURN_SAMPLE_DEG = 3.0
+
+    def _turn_conflicts(self, pts: list[XY], obstacles: list[XY], robot_xy: XY,
+                        target_xy: Optional[XY] = None) -> set[int]:
         """꺾이는 점(출발점 제외)에서 제자리 회전하면 닿는 기물의 번호.
 
-        출발점은 뺀다 — 이미 거기 서 있고, 막 집은 기물 옆처럼 피할 수 없는 경우가 있다.
+        들어오는 방향 -> 나가는 방향(짧은 쪽)으로 도는 동안 차체 사각형이 쓸고 지나가는 영역만
+        본다. 마지막 점에서 나가는 방향은 목표를 향하는 방향이다(FSM 이 기물·정차점을 향해 돈다).
+        목표가 그 점과 거의 같으면 어디로 돌지 모르므로 한 바퀴 전체로 본다. 출발점은 뺀다 —
+        이미 거기 서 있고, 막 집은 기물 옆처럼 피할 수 없는 경우가 있다.
         """
         bad = set()
-        for v in pts[1:]:
+        n = len(pts)
+        for k in range(1, n):
+            v = pts[k]
+            nxt = pts[k + 1] if k < n - 1 else target_xy
+            sweep = None
+            if nxt is not None and math.dist(nxt, v) > 0.03:
+                h_in = math.degrees(math.atan2(v[1] - pts[k - 1][1], v[0] - pts[k - 1][0]))
+                h_out = math.degrees(math.atan2(nxt[1] - v[1], nxt[0] - v[0]))
+                sweep = (h_in, wrap_deg(h_out - h_in))
             for i, o in enumerate(obstacles):
-                if math.hypot(o[0] - robot_xy[0], o[1] - robot_xy[1]) <= self.safe:
+                if i in bad or math.hypot(o[0] - robot_xy[0], o[1] - robot_xy[1]) <= self.safe:
                     continue            # 출발할 때 이미 안에 있던 기물(집은 직후)
-                if math.hypot(v[0] - o[0], v[1] - o[1]) < self.turn_safe - 1e-9:
+                if math.hypot(v[0] - o[0], v[1] - o[1]) >= self.turn_safe - 1e-9:
+                    continue            # 한 바퀴 돌아도 안 닿는다
+                if sweep is None or self._sweep_hits(v, sweep[0], sweep[1], o):
                     bad.add(i)
         return bad
+
+    def _sweep_hits(self, v: XY, h0: float, delta: float, o: XY) -> bool:
+        """v 에 선 차체가 방위 h0 에서 delta 만큼(앞뒤로 TURN_SLACK_DEG 더) 도는 동안 기물 o 가
+        차체 사각형(+여유 pad)에 들어오는가."""
+        c = self.cfg
+        pad = c.piece_obstacle_radius_m + c.obstacle_margin_m
+        hl, hw = c.robot_length_m / 2.0, c.robot_width_m / 2.0
+        dx, dy = o[0] - v[0], o[1] - v[1]
+        if abs(delta) > 180.0 - self.TURN_SLACK_DEG:
+            span = (-180.0, 180.0)                      # 어느 쪽으로 돌지 모른다 — 한 바퀴
+            h0 = 0.0
+        else:
+            sgn = 1.0 if delta >= 0 else -1.0
+            lo, hi = sorted((-sgn * self.TURN_SLACK_DEG, delta + sgn * self.TURN_SLACK_DEG))
+            span = (lo, hi)
+        steps = max(1, int(math.ceil((span[1] - span[0]) / self.TURN_SAMPLE_DEG)))
+        for s in range(steps + 1):
+            h = math.radians(h0 + span[0] + (span[1] - span[0]) * s / steps)
+            ch, sh = math.cos(h), math.sin(h)
+            lx, ly = dx * ch + dy * sh, -dx * sh + dy * ch        # 차체 좌표(앞 x, 왼쪽 y)
+            ex, ey = max(abs(lx) - hl, 0.0), max(abs(ly) - hw, 0.0)
+            if math.hypot(ex, ey) < pad:
+                return True
+        return False
 
     def _emit(self, pts: list[XY], robot_xy: XY, target_xy: XY, unreachable: bool):
         self.last_path = pts
