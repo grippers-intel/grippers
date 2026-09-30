@@ -177,3 +177,56 @@ def test_path_never_cuts_through_a_piece_the_robot_is_already_close_to(cfg):
     for a, b in zip(p.last_path, p.last_path[1:]):
         d, _t = segment_circle_clearance(a, b, piece)
         assert d >= math.dist(robot, piece) - p.ESCAPE_SLACK_M - 1e-6, "기물 쪽으로 더 파고들면 안 된다"
+
+
+# ---------------------------------------------------------------------------
+# 경로 재사용 — 계산 한 번이 ~100 ms 라 매 사이클 새로 짜면 루프가 4.5 Hz 로 떨어졌다(09-30)
+# ---------------------------------------------------------------------------
+def _counting(p):
+    calls = []
+    orig = p._plan
+
+    def plan(*a, **k):
+        calls.append(1)
+        return orig(*a, **k)
+    p._plan = plan
+    return calls
+
+
+def test_reuses_the_path_while_nothing_changes(cfg):
+    p = _planner(cfg)
+    calls = _counting(p)
+    obstacle = [(0.9, 0.8)]
+    p.update((0.9, 0.45), (0.9, 1.2), obstacle, now=0.0)
+    n = len(calls)
+    first = list(p.last_path)
+    # 경로 첫 구간을 따라 조금 갔다
+    a, b = first[0], first[1]
+    t = 0.03 / math.dist(a, b)
+    robot = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+    sub, _c, blocked = p.update(robot, (0.9, 1.2), [(0.905, 0.80)], now=0.3)
+    assert len(calls) == n, "기물·목표가 그대로면 다시 짜지 않는다"
+    assert blocked == "piece" and p.last_path[0] == robot and p.last_path[1:] == first[1:]
+
+
+def test_replans_when_things_change(cfg):
+    p = _planner(cfg)
+    calls = _counting(p)
+    p.update((0.9, 0.45), (0.9, 1.2), [(0.9, 0.8)], now=0.0)
+    n = len(calls)
+    p.update((0.9, 0.45), (0.9, 1.2), [(0.9, 0.8), (1.3, 1.0)], now=0.1)     # 기물이 늘었다
+    assert len(calls) > n
+    n = len(calls)
+    p.update((0.9, 0.45), (0.9, 1.2), [(0.9, 0.8), (1.3, 1.0)], now=0.2 + p.REPLAN_S)   # 오래됐다
+    assert len(calls) > n
+    n = len(calls)
+    p.update((1.3, 0.45), (0.9, 1.2), [(0.9, 0.8), (1.3, 1.0)], now=0.3 + p.REPLAN_S)   # 경로 밖
+    assert len(calls) > n
+
+
+def test_no_reuse_without_a_clock(cfg):
+    p = _planner(cfg)
+    calls = _counting(p)
+    p.update((0.9, 0.45), (0.9, 1.2), [(0.9, 0.8)])
+    p.update((0.9, 0.45), (0.9, 1.2), [(0.9, 0.8)])
+    assert len(calls) >= 2

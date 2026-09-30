@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from localization.pose import Pose
@@ -286,9 +288,84 @@ def test_nudge_gives_up_when_it_never_reaches_the_front(cfg):
     fsm._enter(HostState.NUDGE_BOX)
     fsm.step(P(1.00, 1.00), {}, S(), 0.0)                       # 출발점 기록 + 전진
     assert fsm.state == HostState.NUDGE_BOX
-    moved = cfg.mission.nudge_max_m + 0.01
+    start = math.dist((1.00, 1.00), fsm.dest_xy)                 # 올라갈 거리만큼은 허용한다
+    moved = max(cfg.mission.nudge_max_m, start + 0.15) + 0.01
     fsm.step(P(1.00, 1.00 - moved), {}, S(), 0.1)               # 멀어진 채 한계까지
     assert fsm.state == HostState.CARRY_TO_DEST and fsm.place_tries == 1
+
+
+def _world_velocity(cmd, yaw_deg):
+    th = math.radians(yaw_deg)
+    return (cmd.linear_x * math.cos(th) - cmd.linear_y * math.sin(th),
+            cmd.linear_x * math.sin(th) + cmd.linear_y * math.cos(th))
+
+
+@pytest.mark.parametrize("yaw", [40.0, 130.0, 158.0, -20.0])
+def test_backs_straight_away_from_the_box_whatever_the_heading(cfg, yaw):
+    """2026-09-30: 158°(옆)로 선 채 차체 방향으로 후진해 간격이 안 늘고 "물러나기 <-> 밀기"를
+    되풀이했다. 메카넘으로 상자에서 곧장 멀어진다(-y), 돌지 않는다."""
+    fsm = MissionFSM(cfg)
+    _setup_place(fsm)
+    fsm._enter(HostState.NUDGE_BOX)
+    dx, dy = fsm.dest_xy
+    cmd = fsm.step(P(dx + 0.01, dy, yaw=yaw), {}, S(), 0.0)
+    assert cmd.angular_z == 0
+    wx, wy = _world_velocity(cmd, yaw)
+    assert wy == pytest.approx(-cfg.drive.nudge_mps) and wx == pytest.approx(0.0, abs=1e-9)
+
+
+def test_too_close_backs_away_sideways_too(cfg):
+    fsm = MissionFSM(cfg)
+    _setup_place(fsm)
+    fsm._enter(HostState.NUDGE_BOX)
+    dx, dy = fsm.dest_xy
+    cmd = fsm.step(P(dx, dy + 0.05, yaw=100.0), {}, S(), 0.0)       # 5 cm 더 붙었다
+    assert fsm.last_cmd_text == "back off"
+    wx, wy = _world_velocity(cmd, 100.0)
+    assert wy < 0 and abs(wx) < 1e-9
+
+
+def test_nudge_times_out_back_to_carry(cfg):
+    fsm = MissionFSM(cfg)
+    _setup_place(fsm)
+    fsm._enter(HostState.CARRY_TO_DEST)
+    fsm.step(P(0.40, 0.60, yaw=0.0), {}, S(), 0.0)
+    fsm._enter(HostState.NUDGE_BOX)
+    dx, dy = fsm.dest_xy
+    t = 0.1
+    k = 0
+    while t < cfg.mission.nudge_timeout_s - 0.5:                     # 상자 앞에서 왔다갔다 맴돈다
+        k += 1
+        fsm.step(P(dx, dy - 0.10 - 0.03 * (k % 2), yaw=160.0), {}, S(), t)
+        assert fsm.state == HostState.NUDGE_BOX
+        t += 0.5
+    fsm.step(P(dx, dy - 0.10, yaw=160.0), {}, S(), cfg.mission.nudge_timeout_s + 0.2)
+    assert fsm.state == HostState.CARRY_TO_DEST and fsm.place_tries == 1
+
+
+def test_lead_in_moves_further_out_when_a_piece_blocks_it(cfg):
+    """2026-09-30 실기: knight(정차점에서 +0.18, -0.26)가 25 cm 진입점을 막아 정차점으로 곧장
+    갔다. 더 앞의 진입점을 쓴다."""
+    fsm = MissionFSM(cfg)
+    _setup_place(fsm)
+    fsm._enter(HostState.CARRY_TO_DEST)
+    dx, dy = fsm.dest_xy
+    knight = {"knight": [(dx + 0.18, dy - 0.26)]}
+    fsm.step(P(0.40, 0.60, yaw=0.0), knight, S(), 0.0)
+    gx, gy = fsm.nav_goal
+    assert gx == pytest.approx(dx)
+    assert cfg.mission.box_lead_in_m < dy - gy <= cfg.mission.box_lead_in_max_m + 1e-9
+
+
+def test_leaving_the_box_never_turns_in_front_of_it(cfg):
+    """놓은 뒤 다음 기물로 떠날 때도 입구 앞에서는 먼저 물러난다."""
+    fsm = MissionFSM(cfg)
+    dx, dy = 0.990, 1.330
+    cmd = fsm.step(P(dx, dy, yaw=90.0), {"queen": [(0.40, 0.60)]}, S(), 0.0)
+    assert fsm.state == HostState.APPROACH_PIECE
+    assert cmd.angular_z == 0
+    wx, wy = _world_velocity(cmd, 90.0)
+    assert wy < 0
 
 
 def test_carry_still_avoids_other_pieces_next_to_the_robot(cfg):

@@ -177,6 +177,10 @@ class MissionConfig:
     # 똑바로 올라가 정차한다 — 도착할 때 거의 정면이라 남는 각도는 팔 base 가 맡는다.
     # 상자 입구에서 0.15 + 0.25 = 0.40 m 라 여기서 도는 것은 안전하다.
     box_lead_in_m: float = 0.25
+    # 그 진입점이 기물에 막히면 box_lead_in_step_m 씩 더 앞에서 찾는다(box_lead_in_max_m 까지).
+    # 2026-09-30: 25 cm 진입점이 knight 에 막혀 정차점으로 곧장 갔고, 옆으로 도착해 상자 앞에서 맴돌았다.
+    box_lead_in_max_m: float = 0.55
+    box_lead_in_step_m: float = 0.10
     lead_in_arrive_m: float = 0.05
     # 상자 입구에서 로봇 마커까지 이 거리 안에서는 제자리 회전을 하지 않는다 — 먼저 물러난다.
     # 회전 반지름 0.16(차체 20 x 25 cm) + 여유 0.04. 정차점(0.15)에서 돌다가 상자를 쳤다(09-30).
@@ -219,6 +223,8 @@ class MissionConfig:
     # 상자 앞에서 앞으로 밀어 볼 수 있는 최대 거리. 여기까지 가도 정면에 못 서면
     # 다시 접근한다(place_tries 가 오른다).
     nudge_max_m: float = 0.40
+    # 상자 앞 단계(NUDGE)가 이만큼 걸리면 거기서 맴도는 것이다 — 운반 단계로 돌아가 다시 접근한다.
+    nudge_timeout_s: float = 25.0
     piece_dest_box: dict[str, str] = field(default_factory=lambda: {
         label: "basket" for label in ("queen", "knight", "rook", "star", "soccer", "box")})
     skip_radius_m: float = 0.10
@@ -303,6 +309,10 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
         raise ConfigError("mission.box_turn_clear_m 는 box_approach_margin_m 보다 커야 한다")
     if m.box_lead_in_m < m.box_turn_clear_m - m.box_approach_margin_m:
         raise ConfigError("mission.box_lead_in_m 가 너무 짧다 — 진입점에서 돌면 상자에 닿는다")
+    if m.box_lead_in_max_m < m.box_lead_in_m or m.box_lead_in_step_m <= 0:
+        raise ConfigError("mission.box_lead_in_max_m >= box_lead_in_m, box_lead_in_step_m > 0")
+    if m.nudge_timeout_s <= 0:
+        raise ConfigError("mission.nudge_timeout_s 는 양수여야 한다")
     if m.grasp_retry_max < 0 or m.grasp_face_tol_deg <= 0:
         raise ConfigError("mission.grasp_retry_max >= 0, grasp_face_tol_deg > 0")
     d = cfg.drive

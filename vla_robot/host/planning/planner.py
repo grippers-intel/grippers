@@ -228,9 +228,11 @@ class GridPathPlanner:
                                          self.y0 + np.arange(self.ny) * self.cell)
         self.keepouts = box_keepout_rects(arena_cfg, c.box_keepout_side_m, c.box_keepout_front_m)
         self.last_path: Optional[list[XY]] = None
+        self._cache = None
 
     def reset(self) -> None:
         self.last_path = None
+        self._cache = None
 
     def _pos(self, i: int, j: int) -> XY:
         return (self.x0 + i * self.cell, self.y0 + j * self.cell)
@@ -240,25 +242,66 @@ class GridPathPlanner:
         j = int(round((p[1] - self.y0) / self.cell))
         return (min(max(i, 0), self.nx - 1), min(max(j, 0), self.ny - 1))
 
-    def update(self, robot_xy: XY, target_xy: XY, obstacles=()) -> tuple[XY, Optional[XY], Optional[str]]:
+    def update(self, robot_xy: XY, target_xy: XY, obstacles=(),
+               now: Optional[float] = None) -> tuple[XY, Optional[XY], Optional[str]]:
         self.last_path = None
         if math.hypot(target_xy[0] - robot_xy[0], target_xy[1] - robot_xy[1]) <= self.cfg.axis_leg_tolerance_m:
             return target_xy, None, None
         obstacles = list(obstacles)
+        # 계산 한 번이 ~100 ms 라 매 사이클 새로 짜면 10 Hz 루프가 4.5 Hz 로 떨어진다(2026-09-30
+        # 운반 중 실측). 기물·목표가 그대로고 로봇이 경로 위에 있으면 지난 경로를 이어 쓴다.
+        reused = self._reuse(robot_xy, target_xy, obstacles, now)
+        if reused is not None:
+            return reused
         # 먼저 직진 여유(safe)로 길을 찾는다. 그 길의 꺾이는 점이 어떤 기물에 회전 여유
         # (turn_safe)보다 가까우면 **그 기물만** 넓혀서 다시 찾는다.
         wide: set[int] = set()
         for _ in range(self.TURN_PASSES):
             planned = self._plan(robot_xy, target_xy, obstacles, wide)
             if planned[0] == "done":
+                self._cache = None
                 return planned[1]
             _, pts, unreachable = planned
             bad = self._turn_conflicts(pts, obstacles, robot_xy) - wide
             if not bad:
+                if not unreachable and now is not None:
+                    self._cache = (target_xy, obstacles, list(pts), now)
                 return self._emit(pts, robot_xy, target_xy, unreachable)
             wide |= bad
         # 넓혀도 꺾을 자리가 안 나온다 — 그 길로 가면 돌다가 기물을 친다.
+        self._cache = None
         return robot_xy, None, "blocked"
+
+    #: 지난 경로를 이어 쓰는 조건
+    REPLAN_S = 1.0          # 적어도 이만큼마다 새로 짠다
+    REUSE_MOVE_M = 0.03     # 기물·목표가 이만큼 넘게 움직이면 새로 짠다
+    REUSE_OFF_PATH_M = 0.05  # 로봇이 경로에서 이만큼 넘게 벗어나면 새로 짠다
+
+    def _reuse(self, robot_xy: XY, target_xy: XY, obstacles: list[XY], now: Optional[float]):
+        c = self._cache
+        if c is None or now is None:
+            return None
+        goal, obs, pts, at = c
+        if now - at > self.REPLAN_S or math.dist(goal, target_xy) > self.REUSE_MOVE_M:
+            return None
+        if len(obs) != len(obstacles) or any(
+                min((math.dist(o, p) for p in obs), default=9.9) > self.REUSE_MOVE_M for o in obstacles):
+            return None
+        # 로봇이 경로(지난 출발점부터의 꺾은선) 위에 있는가, 어느 구간에 있는가
+        best, seg = 9.9, 0
+        for k, (a, b) in enumerate(zip(pts, pts[1:])):
+            d, _t = segment_circle_clearance(a, b, robot_xy)
+            if d < best:
+                best, seg = d, k
+        if best > self.REUSE_OFF_PATH_M:
+            return None
+        rest = [robot_xy] + list(pts[seg + 1:])
+        rects = self._active_keepouts(robot_xy)
+        a, b = rest[0], rest[1]
+        if any(segment_circle_clearance(a, b, o)[0] < self.safe for o in obstacles
+               if math.dist(o, robot_xy) >= self.safe) or any(segment_hits_rect(a, b, r) for r in rects):
+            return None
+        return self._emit(rest, robot_xy, target_xy, False)
 
     #: 꺾이는 점 검사 후 다시 찾는 횟수. 기물마다 한 번씩 넓히므로 몇 번이면 수렴한다.
     TURN_PASSES = 5
