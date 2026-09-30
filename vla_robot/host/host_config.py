@@ -167,9 +167,17 @@ class DriveConfig:
 class MissionConfig:
     cycle_hz: float = 10.0
     # 기준점은 ArUco 마커 중심이다(그리퍼는 마커보다 0.15 m 앞).
-    # 2026-09-30 실기: 0.33 m 이상에서 시작한 파지 3번 모두 빈손, 0.27~0.31 m 6번 모두 성공
-    # (정면 오차는 둘 다 1~4°) — 0.35 -> 0.30.
-    grasp_trigger_dist_m: float = 0.30
+    # 파지는 **거리 범위** [grasp_dist_min_m, grasp_dist_max_m] 안에서만 시작한다.
+    # 2026-09-30 실기: 0.27~0.31 m 에서 시작한 6번 모두 성공, 0.33 m 이상 3번·0.25 m 3번 모두 빈손
+    # (정면 오차는 모두 1~4°). 트리거 한 점(0.35 -> 0.30)으로는 멈추는 동안 ~5 cm 더 가서 0.25 에
+    # 섰다 — 그래서 트리거는 "멈춰서 맞추기 시작"하는 거리이고, 범위 밖이면 천천히 앞뒤로 맞춘다.
+    grasp_trigger_dist_m: float = 0.33
+    grasp_dist_min_m: float = 0.26
+    grasp_dist_max_m: float = 0.31
+    # 앞뒤로 맞출 때 멈추라고 하고도 더 가는 만큼을 미리 뺀다(속도 x 이 시간). 멈춘 뒤에는
+    # grasp_settle_s 동안 기다렸다가 다시 잰다(흔들리는 위치로 판단하지 않게).
+    grasp_creep_lead_s: float = 0.25
+    grasp_settle_s: float = 0.5
     # 파지 구역에 들어온 뒤 이만큼 더 멀어져야 구역을 벗어난 것으로 본다. 제자리에서 기물을
     # 향해 도는 동안 마커가 몇 cm 흔들려 들락날락하지 않게.
     grasp_zone_hysteresis_m: float = 0.05
@@ -314,6 +322,10 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
         raise ConfigError("mission.nudge_timeout_s 는 양수여야 한다")
     if m.grasp_retry_max < 0 or m.grasp_face_tol_deg <= 0:
         raise ConfigError("mission.grasp_retry_max >= 0, grasp_face_tol_deg > 0")
+    if not 0 < m.grasp_dist_min_m < m.grasp_dist_max_m <= m.grasp_trigger_dist_m:
+        raise ConfigError("mission: 0 < grasp_dist_min_m < grasp_dist_max_m <= grasp_trigger_dist_m")
+    if m.grasp_creep_lead_s < 0 or m.grasp_settle_s < 0:
+        raise ConfigError("mission.grasp_creep_lead_s / grasp_settle_s 는 음수일 수 없다")
     d = cfg.drive
     if not 0 < d.rotation_min_rad_s <= d.rotation_rad_s:
         raise ConfigError("drive.rotation_min_rad_s 는 0 초과 rotation_rad_s 이하여야 한다")

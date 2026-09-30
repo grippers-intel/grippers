@@ -101,8 +101,64 @@ def test_grasp_zone_has_hysteresis(cfg):
     """돌면서 마커가 몇 cm 흔들려도 파지 구역을 들락날락하지 않는다."""
     fsm = MissionFSM(cfg)
     fsm.step(P(0.9, 0.62, yaw=40.0), PM, S(), 0.0)             # 구역 안(0.28 m), 돌기 시작
-    cmd = fsm.step(P(0.9, 0.57, yaw=50.0), PM, S(), 0.1)      # 0.33 m — 트리거 밖, 히스테리시스 안
+    cmd = fsm.step(P(0.9, 0.55, yaw=50.0), PM, S(), 0.1)      # 0.35 m — 트리거 밖, 히스테리시스 안
     assert cmd.linear_x == 0 and cmd.angular_z > 0           # 전진하지 않고 계속 돈다
+
+
+# ---------------------------------------------------------------------------
+# 파지 거리는 범위로 — 2026-09-30: 0.27~0.31 6/6 성공, 0.33 이상·0.25 는 모두 빈손
+# ---------------------------------------------------------------------------
+def test_creeps_forward_into_the_grasp_range_then_settles(cfg):
+    m = cfg.mission
+    fsm = MissionFSM(cfg)
+    far = 0.9 - m.grasp_trigger_dist_m + 0.005                  # 트리거 바로 안, 범위(0.31) 밖
+    fsm.step(P(0.9, far), PM, S(), 0.0)
+    cmd = fsm.step(P(0.9, far), PM, S(), 0.1)
+    assert fsm.state == HostState.APPROACH_PIECE
+    assert cmd.linear_x > 0 and cmd.angular_z == 0 and not cmd.stop     # 정면이니 곧장 앞으로
+    cmd = fsm.step(P(0.9, 0.61), PM, S(), 0.2)                  # 0.29 m — 가운데 근처, 멈춘다
+    assert cmd.stop and fsm.state == HostState.APPROACH_PIECE
+    fsm.step(P(0.9, 0.61), PM, S(), 0.2 + m.grasp_settle_s / 2)  # 서서 기다린다
+    assert fsm.state == HostState.APPROACH_PIECE
+    fsm.step(P(0.9, 0.61), PM, S(), 0.3 + m.grasp_settle_s)      # 다시 재니 범위 안 -> 파지
+    assert fsm.state == HostState.GRASP
+
+
+def test_backs_off_when_too_close_to_grasp(cfg):
+    m = cfg.mission
+    fsm = MissionFSM(cfg)
+    fsm.step(P(0.9, 0.68), PM, S(), 0.0)                        # 0.22 m — 너무 가깝다
+    cmd = fsm.step(P(0.9, 0.68), PM, S(), 0.1)
+    assert fsm.state == HostState.APPROACH_PIECE
+    assert cmd.linear_x < 0 and cmd.angular_z == 0
+    cmd = fsm.step(P(0.9, 0.64), PM, S(), 0.3)                  # 0.26 m — 미리 멈춘다(지연만큼)
+    assert cmd.stop
+    fsm.step(P(0.9, 0.62), PM, S(), 0.4 + m.grasp_settle_s)      # 0.28 m 에 섰다 -> 파지
+    assert fsm.state == HostState.GRASP
+
+
+def test_a_few_mm_outside_the_range_still_moves_and_never_loops(cfg):
+    """시뮬 재현: 0.314 m 에서 "미리 멈추기"가 곧바로 참이라 한 번도 안 움직이고 700 s 동안
+    멈춤·대기만 되풀이했다. 시작하면 한 사이클은 움직이고, CREEP_TRIES 번 뒤에는 그 자리에서 잡는다."""
+    fsm = MissionFSM(cfg)
+    y = 0.9 - (cfg.mission.grasp_dist_max_m + 0.004)
+    moved, t = 0, 0.0
+    while fsm.state != HostState.GRASP and t < 20.0:
+        cmd = fsm.step(P(0.9, y), PM, S(), t)                    # 바퀴가 안 먹는 경우까지 가정
+        moved += cmd.linear_x > 0
+        t += 0.1
+    assert moved >= 1
+    assert fsm.state == HostState.GRASP
+    assert t < 10.0
+    assert any("grasp here" in e for e in fsm.events)
+
+
+def test_faces_the_piece_before_adjusting_the_distance(cfg):
+    """정면부터 — 비스듬히 앞뒤로 가면 거리가 아니라 옆으로 움직인다."""
+    fsm = MissionFSM(cfg)
+    fsm.step(P(0.9, 0.68, yaw=60.0), PM, S(), 0.0)              # 0.22 m, 30° 어긋남
+    cmd = fsm.step(P(0.9, 0.68, yaw=60.0), PM, S(), 0.1)
+    assert cmd.angular_z > 0 and cmd.linear_x == 0
 
 
 def test_rotation_slows_near_the_target_heading(cfg):
