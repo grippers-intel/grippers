@@ -18,13 +18,16 @@
 set -u
 
 fail=0
-n=$(pgrep -fc "ros_robot_controller" || true)
-printf 'ros_robot_controller 프로세스: %s개\n' "$n"
+# 실제 노드 실행 파일만 센다(명령줄이 그 경로로 **시작**하는 것). "ros_robot_controller" 가 들어간
+# 아무 명령줄이나 세면 `ros2 run` 래퍼는 물론, 이 스크립트를 부른 `bash -lc "... /ros_robot_controller/battery"`
+# 같은 셸까지 세어 "중복"으로 오판했다(2026-09-30).
+node_pat='^[^ ]*python3? [^ ]*/ros_robot_controller/lib/ros_robot_controller/ros_robot_controller'
+n=$(pgrep -fc "$node_pat" || true)
+printf 'ros_robot_controller 노드: %s개\n' "$n"
 if [ "$n" -eq 0 ]; then
   echo "  ⚠️ 없음 — 차체 명령이 바퀴까지 못 간다"; fail=1
-elif [ "$n" -gt 2 ]; then
-  # `ros2 run` 래퍼 + 실제 노드로 2개까지는 정상이다.
-  echo "  ⚠️ 중복 의심 — 아래에서 부팅 자동 실행분만 남기고 정리할 것"; pgrep -fa "ros_robot_controller"; fail=1
+elif [ "$n" -gt 1 ]; then
+  echo "  ⚠️ 중복 — 아래에서 부팅 자동 실행분만 남기고 정리할 것"; pgrep -fa "$node_pat"; fail=1
 else
   echo "  정상"
 fi
