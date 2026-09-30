@@ -99,6 +99,8 @@ planner:
   axis_leg_tolerance_m: 0.03
   yaw_tolerance_deg: 5.0
   yaw_enter_deg: 12.0              # 회전 복귀 문턱. 하나로 쓰면 좌우로 떤다
+  yaw_enter_clear_deg: 25.0        # 앞길이 비어 있으면 이만큼 틀어질 때까지 계속 직진(09-30 저녁)
+  no_turn_near_m: 0.15             # 부분목표가 이 안이면 뒤로 가지 않는 한 다시 돌지 않는다
   min_heading_dist_m: 0.05
   obstacle_hold_cycles: 8
   obstacle_match_m: 0.06
@@ -141,7 +143,7 @@ mission:
   place_min_gap_m: 0.05         # 더 붙어도 되는 한도 — 그래도 제자리 회전이 상자에 안 닿는다
   place_aim_margin_m: 0.04      # 판정 목표보다 이만큼 더 안쪽을 겨눈다(허용치보다 커야 한다)
   max_arm_yaw_deg: 15.0         # Pi 의 place.max_base_yaw_deg 와 같은 값. 밖이면 차체를 돌린다
-  place_turn_to_deg: 5.0        # 차체를 돌리게 되면 남는 각도가 이 안이 될 때까지 돈다
+  place_turn_to_deg: 12.0       # 차체를 돌리게 되면 이 안까지만 돈다(나머지는 팔). 정면까진 안 맞춘다
   nudge_max_m: 0.40             # 이만큼 밀고도 정면에 못 서면 재접근
   nudge_timeout_s: 25.0         # 상자 앞에서 이만큼 맴돌면 운반 단계로 돌아가 재접근
   piece_dest_box:                  # 상자가 하나라 전부 같은 곳으로 간다

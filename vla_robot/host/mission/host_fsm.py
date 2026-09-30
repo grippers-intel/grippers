@@ -33,7 +33,7 @@ from localization.pose import Pose
 from mission.base_monitor import BaseStallMonitor
 from mission.basket_target import BasketTarget, basket_target, facing_error_deg
 from planning.planner import (DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold,
-                              wrap_deg)
+                              segment_circle_clearance, segment_hits_rect, wrap_deg)
 from vla_common.protocol import HostCommand, JobResult, JobTracker, PiStatus, State
 
 XY = tuple[float, float]
@@ -416,8 +416,8 @@ class MissionFSM:
         residual = facing_error_deg(target, pose.xy, pose.yaw_deg)
         close = -m.place_min_gap_m <= gap <= m.place_arrive_tol_m
         self.place_arm_yaw_deg = residual
-        # 차체를 돌리기 시작했으면 팔 한계 바로 안(14.x°)에서 멈추지 말고 place_turn_to_deg 까지
-        # 맞춘다 — 시뮬에서 팔이 매번 한계 끝에서 투하했다.
+        # 차체를 돌리기 시작했으면 팔 한계 바로 안(14.x°)이 아니라 place_turn_to_deg(12°)까지 돈다.
+        # 정면(0°)까지는 맞추지 않는다 — 나머지는 팔 base 가 맡는다(2026-09-30 저녁 요청).
         limit = m.place_turn_to_deg if self._nudge_turn_logged else m.max_arm_yaw_deg
         self.ready_to_advance = close and abs(residual) <= limit
         if self.ready_to_advance:
@@ -512,7 +512,7 @@ class MissionFSM:
     def _drive_to(self, pose: Pose, goal: XY, obstacles: list[XY]) -> HostCommand:
         held = self._obstacles.update(obstacles)
         sub_goal, _corner, blocked = self._planner.update(pose.xy, goal, held, now=self._now)
-        nav = self._drive.update(pose.xy, pose.yaw_deg, sub_goal)
+        nav = self._drive.update(pose.xy, pose.yaw_deg, sub_goal, self._enter_deg(pose, sub_goal, held))
         self.nav_goal = goal
         self.nav_path = self._planner.last_path
         self.blocked_by = blocked
@@ -522,6 +522,29 @@ class MissionFSM:
         if nav.mode == DriveMode.ROTATE:
             return self._rotate(nav.yaw_error_deg)
         return self._stop("stop" + (f" ({blocked})" if blocked else ""))
+
+    def _enter_deg(self, pose: Pose, sub_goal: XY, obstacles) -> Optional[float]:
+        """직진 중 다시 돌기 시작하는 문턱. 앞길이 비어 있으면 넓힌다(None = 기본 12°).
+
+        앞길 = 지금 방향으로 부분목표까지의 거리만큼 곧장 간 선. 그 선이 기물(직진 여유)·상자
+        금지 구역·주행 구역 밖에 닿지 않으면, 조금 틀어진 채 가도 부딪힐 것이 없다 — 어긋난 만큼은
+        계획기가 지금 자리에서 다시 짠 경로가 메운다. 부분목표 바로 앞(지나치는 중)에서는 뒤로
+        가는 게 아니면 돌지 않는다.
+        """
+        c = self.cfg.planner
+        pl = self._planner
+        dist = _dist(pose.xy, sub_goal)
+        th = math.radians(pose.yaw_deg)
+        ahead = (pose.x + dist * math.cos(th), pose.y + dist * math.sin(th))
+        if not (pl.x0 <= ahead[0] <= pl.x1 and pl.y0 <= ahead[1] <= pl.y1):
+            return None
+        if any(segment_hits_rect(pose.xy, ahead, r) for r in pl._active_keepouts(pose.xy)):
+            return None
+        if any(segment_circle_clearance(pose.xy, ahead, o)[0] < pl.safe for o in obstacles):
+            return None
+        if dist < c.no_turn_near_m:
+            return 90.0
+        return c.yaw_enter_clear_deg
 
     def _blocked_too_long(self) -> bool:
         """길이 없어 제자리에 선 채(blocked) blocked_timeout_s 가 지났는가.
