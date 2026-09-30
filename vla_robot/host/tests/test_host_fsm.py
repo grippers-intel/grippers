@@ -232,13 +232,51 @@ def test_place_carries_the_residual_angle_for_the_arm(cfg):
     assert fsm.step(P(0.975, 1.330, yaw=90.0), {}, S(), 0.1).arm_yaw_deg == cmd.arm_yaw_deg
 
 
-def test_body_turns_only_when_the_arm_cannot_cover(cfg):
-    """팔 한계(±15도)를 넘는 각도에서만 차체를 돌린다."""
+def test_never_turns_the_body_right_next_to_the_box(cfg):
+    """팔이 못 메우는 각도면 차체를 돌리되, 정차점(상자 2 cm 앞)에서는 돌지 않고 먼저 물러난다.
+    2026-09-30 rook: 정차점에서 돌다가 모서리로 상자를 쳤고 뒤 카메라까지 밀렸다."""
     fsm = MissionFSM(cfg)
     _setup_place(fsm)
     fsm._enter(HostState.NUDGE_BOX)
     cmd = fsm.step(P(0.990, 1.330, yaw=40.0), {}, S(), 0.0)       # 정차는 했지만 50도 틀어짐
-    assert fsm.state == HostState.NUDGE_BOX and cmd.angular_z != 0
+    assert fsm.state == HostState.NUDGE_BOX
+    assert cmd.linear_x < 0 and cmd.angular_z == 0                # 돌지 않고 뒤로
+    # 상자 입구에서 box_turn_clear_m 밖으로 나오면 그때 돈다
+    front_y = cfg.arena.boxes["basket"][1] - cfg.arena.box_size[1] / 2
+    y = front_y - cfg.mission.box_turn_clear_m - 0.005
+    cmd = fsm.step(P(0.990, y, yaw=40.0), {}, S(), 0.1)
+    assert cmd.angular_z > 0 and cmd.linear_x == 0
+    # 같은 사유는 한 번만 기록한다(예전엔 매 사이클 찍혀 수백 줄이 쌓였다)
+    assert sum("arm cannot cover" in e for e in fsm.events) == 1
+
+
+def test_carry_goes_to_the_lead_in_point_first(cfg):
+    """운반은 정차점 바로 앞 진입점까지 — 거기서 상자를 향해 똑바로 올라간다."""
+    fsm = MissionFSM(cfg)
+    _setup_place(fsm)
+    fsm._enter(HostState.CARRY_TO_DEST)
+    dx, dy = fsm.dest_xy
+    lead = (dx, dy - cfg.mission.box_lead_in_m)
+    fsm.step(P(0.40, 0.60, yaw=0.0), {}, S(), 0.0)
+    assert fsm.nav_goal == pytest.approx(lead)
+    # 정차점 트리거(0.35) 안이어도 진입점에 닿기 전에는 넘어가지 않는다
+    fsm.step(P(dx + 0.20, dy - 0.10, yaw=90.0), {}, S(), 0.1)
+    assert fsm.state == HostState.CARRY_TO_DEST
+    fsm.step(P(lead[0] + 0.02, lead[1], yaw=150.0), {}, S(), 0.2)
+    assert fsm.state == HostState.NUDGE_BOX
+    # 진입점에서는 상자에서 충분히 멀어 제자리에서 돈다(물러나지 않는다)
+    cmd = fsm.step(P(lead[0] + 0.02, lead[1], yaw=150.0), {}, S(), 0.3)
+    assert cmd.angular_z < 0 and cmd.linear_x == 0
+
+
+def test_carry_falls_back_to_the_stop_point_when_the_lead_in_is_blocked(cfg):
+    fsm = MissionFSM(cfg)
+    _setup_place(fsm)
+    fsm._enter(HostState.CARRY_TO_DEST)
+    dx, dy = fsm.dest_xy
+    piece_on_lead_in = {"star": [(dx + 0.05, dy - cfg.mission.box_lead_in_m)]}
+    fsm.step(P(0.40, 0.60, yaw=0.0), piece_on_lead_in, S(), 0.0)
+    assert fsm.nav_goal == pytest.approx((dx, dy))
 
 
 def test_nudge_gives_up_when_it_never_reaches_the_front(cfg):
