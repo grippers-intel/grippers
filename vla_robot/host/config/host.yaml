@@ -127,6 +127,8 @@ mission:
   # 상자 앞: 운반은 정차점 0.25 앞 진입점까지 → 거기서 상자를 향해 돌고 → 똑바로 올라가 정차.
   # 상자 입구 0.20 안에서는 제자리 회전 금지(먼저 물러남). 09-30: 정차점에서 돌다 상자를 쳤다.
   box_lead_in_m: 0.25
+  box_lead_in_max_m: 0.55          # 막히면 0.10 씩 더 앞에서 진입점을 찾는다(09-30 knight)
+  box_lead_in_step_m: 0.10
   lead_in_arrive_m: 0.05
   box_turn_clear_m: 0.20
   # ⚠️ 물리 한계 — 마커에서 차체 앞까지 0.13 m(2026-09-23 실측)라 여기 서면 차체 앞이
@@ -146,6 +148,7 @@ mission:
   place_aim_margin_m: 0.04      # 판정 목표보다 이만큼 더 안쪽을 겨눈다(허용치보다 커야 한다)
   max_arm_yaw_deg: 15.0         # Pi 의 place.max_base_yaw_deg 와 같은 값. 밖이면 차체를 돌린다
   nudge_max_m: 0.40             # 이만큼 밀고도 정면에 못 서면 재접근
+  nudge_timeout_s: 25.0         # 상자 앞에서 이만큼 맴돌면 운반 단계로 돌아가 재접근
   piece_dest_box:                  # 상자가 하나라 전부 같은 곳으로 간다
     queen: basket
     knight: basket
