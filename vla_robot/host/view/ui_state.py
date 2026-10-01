@@ -4,8 +4,10 @@ UI 의 app.js 는 "파이썬이 만든 state 를 DOM 에 반영만 한다" — �
 모양은 UI 목업(mock.js build())과 같다: screen · run · status · map · pieces · robot · path ·
 tray · notice · card ... 를 채운다.
 
-지금 run_host 는 **명령 없이 보이는 기물을 전부 상자에 정리**한다. 그래서 대기/접수(음성·명령)
-화면 대신 실행 화면을 주로 쓰고, 입력창·마이크는 "아직 연결 전" 알림만 띄운다(Claude 지시 연동 때 채운다).
+입력창의 문장은 CommandDesk(mission/commands.py)가 Claude 로 해석해 FSM 지시(Order)로 넘긴다.
+- instruction.mode auto: 보이는 기물을 모두 정리하고, 지시가 오면 그것부터
+- instruction.mode instructed: 지시가 있을 때만 움직인다(없으면 대기 화면)
+마이크(음성)는 아직 연결 전 — 알림만 띄운다.
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ PIECE_KO = {"rook": "룩", "soccer": "공", "queen": "퀸", "knight": "나이트
 LEGEND_ORDER = ["box", "soccer", "star", "queen", "knight", "rook"]
 DEST_KO = "바구니"
 AUTO_QUOTE = "“보이는 기물을 모두 바구니에 정리합니다”"
+HINTS = ["예: 퀸을 바구니에 넣어줘", "체스 말만 전부 정리해줘", "공 하나 치워줘", "자유롭게 움직이는 말 정리해"]
 
 # 상태 -> (한국어, 영어, 단계, 톤). 문구는 목업 mock.js 의 T 표를 따른다.
 PHASE = {
@@ -128,10 +131,42 @@ class UiState:
         return "", 0.0
 
     # ------------------------------------------------------------------
-    def build(self, pose, pmap, fsm, pi_status, link_age_s: float, hz: float, hands=()) -> dict:
+    def _idle(self, now: float, waiting: bool) -> dict:
+        k = int(now / 2.4) % len(HINTS)
+        if waiting:
+            hints = [HINTS[(k + i) % len(HINTS)] for i in range(3)]
+        else:
+            hints = ["기물을 작업 구역에 놓으면 바로 정리를 시작합니다",
+                     HINTS[k], "Esc 비상 정지 · d 디버그 · l 범례"]
+        return {"label": "READY", "placeholder": "무엇을 시킬까요?", "hints": hints,
+                "dots": len(HINTS), "dot": k}
+
+    @staticmethod
+    def _command(desk) -> dict:
+        if desk is None or desk.phase != "interpreting":
+            return {}
+        return {"text": f"“{desk.text}”", "interp_text": "해석 중 · 대상 탐색…", "interp_code": "Interpreting",
+                "echo": desk.text, "action": "mic", "partial": desk.text, "hint": ""}
+
+    def _done(self, finished, elapsed: int, waiting: bool) -> dict:
+        sub = f"소요 {elapsed}초 · " + ("다음 명령을 말해 주세요" if waiting else "다음 기물을 놓으면 이어서 정리합니다")
+        if finished:
+            order, outcome = finished
+            names = "·".join(PIECE_KO.get(lb, lb) for lb in order.labels)
+            if outcome == "absent":
+                return {"title": f"{josa(names, 'i')} 보이지 않아 끝냈습니다", "sub": sub}
+            if order.done == 1:
+                return {"title": f"{josa(names, 'eul')} {DEST_KO}에 넣었습니다", "sub": sub}
+            return {"title": f"{names} {order.done}개를 {DEST_KO}에 넣었습니다", "sub": sub}
+        return {"title": f"기물 {self.done}개를 모두 옮겼습니다", "sub": sub}
+
+    def build(self, pose, pmap, fsm, pi_status, link_age_s: float, hz: float, hands=(), desk=None) -> dict:
         cfg = self.cfg
         now = time.monotonic()
         st = fsm.state
+        if desk is not None and desk.note is not None:
+            self.notify(*desk.note)
+            desk.note = None
 
         # 완료 개수 — 성공한 PLACE 작업 번호를 한 번씩만 센다.
         r = fsm.last_result
@@ -153,10 +188,17 @@ class UiState:
                     target_id = best["id"]
         held = {"id": "held", "label": fsm.target_label} if (st in HELD_STATES and fsm.target_label) else None
 
-        # 화면: 기물이 하나도 없으면 대기(처음) 또는 완료(옮긴 뒤), 그 밖에는 실행 화면
+        # 화면: 해석 중 -> 접수 · 움직이는 중/지시 있음 -> 실행 · 할 일 없음 -> 완료(옮긴 뒤) 또는 대기
         searching = st == HostState.SEARCH_TARGET
-        if searching and not live and not fsm.estop:
-            screen = "done" if self.done else "idle"
+        order = getattr(fsm, "order", None)
+        finished = getattr(fsm, "finished_order", None)
+        waiting = searching and order is None and getattr(fsm, "command_mode", "auto") == "instructed"
+        if desk is not None and desk.phase == "interpreting":
+            screen = "command"
+        elif fsm.estop or not searching or order is not None:
+            screen = "run"
+        elif waiting or not live:
+            screen = "done" if (finished or self.done) else "idle"
         else:
             screen = "run"
         ko, en, step, tone = PHASE.get(st, ("", st.name, "", "accent"))
@@ -167,7 +209,7 @@ class UiState:
         target_ko = PIECE_KO.get(fsm.target_label or "", fsm.target_label or "기물")
         if target_id or held:
             tgt = {"label": fsm.target_label or "", "title": f"대상 · {fsm.target_label}",
-                   "reason": f"가장 가까운 기물 · {target_ko}",
+                   "reason": (f"명령에 지정된 기물 · {target_ko}" if order else f"가장 가까운 기물 · {target_ko}"),
                    "distance": (f"{_dist(pose.xy, fsm.target_xy):.2f} m"
                                 if pose.ok and fsm.target_xy else "—")}
         else:
@@ -182,7 +224,7 @@ class UiState:
             elif pi_status is None or link_age_s > 2.0:
                 notice = {"text": "Pi 상태가 오지 않습니다 — 명령은 콘솔/UDP 로만 나갑니다",
                           "code": "LINK", "tone": "caution"}
-            elif searching and fsm.search_reason and live:
+            elif searching and fsm.search_reason and live and not waiting:
                 notice = {"text": search_reason_ko(fsm.search_reason), "code": "SEARCH", "tone": "accent"}
 
         card = None
@@ -197,6 +239,8 @@ class UiState:
                     "title": "멈췄습니다 — 확인이 필요합니다",
                     "detail": fsm.halt_reason or "", "rows": [],
                     "actions": [{"id": "reset", "label": "초기화", "primary": True}]}
+        elif desk is not None:
+            card = desk.card()
 
         grip_state = "closed" if held else ("closing" if st == HostState.GRASP else "open")
         cnt: dict[str, int] = {}
@@ -220,19 +264,14 @@ class UiState:
 
         return {
             "screen": screen, "mode": en, "tone": tone, "recording": False, "level": 0.0,
-            "idle": {"label": "READY",
-                     "placeholder": "무엇을 시킬까요?",
-                     "hints": ["기물을 작업 구역에 놓으면 바로 정리를 시작합니다",
-                               "명령 입력은 아직 연결 전입니다",
-                               "Esc 비상 정지 · d 디버그 · l 범례"],
-                     "dots": 1, "dot": 0},
-            "command": {},
-            "run": {"quote": AUTO_QUOTE, "mode": "target" if searching else "status"},
+            "idle": self._idle(now, waiting),
+            "command": self._command(desk),
+            "run": {"quote": f"“{order.text}”" if order else AUTO_QUOTE,
+                    "mode": "target" if searching else "status"},
             "target": tgt,
             "status": {"ko": ko, "en": en, "step": step, "metric": metric, "progress": progress,
                        "grip": st in (HostState.GRASP, HostState.PLACE)},
-            "done": {"title": f"기물 {self.done}개를 모두 옮겼습니다",
-                     "sub": f"소요 {elapsed}초 · 다음 기물을 놓으면 이어서 정리합니다"},
+            "done": self._done(finished, elapsed, waiting),
             "detail": {"x": f"{pose.x:.3f}" if pose.ok else None, "y": f"{pose.y:.3f}" if pose.ok else None,
                        "yaw": f"{pose.yaw_deg:.1f}" if pose.ok else None,
                        "cmd": (fsm.last_cmd_text or "—")[:14], "target": fsm.target_label,

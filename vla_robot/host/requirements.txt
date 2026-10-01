@@ -14,3 +14,6 @@ pytest>=8.0
 # 손 검출(tools/hand_probe.py) 시험용. numpy·opencv·protobuf 를 바꾸지 않는다(1.0.1 확인).
 # 모델: models/hand_landmarker.task (hand_probe.py 설명의 주소)
 mediapipe==1.0.1
+
+# 사람 지시 해석(mission/instruction.py, Claude API). 키는 ANTHROPIC_API_KEY 환경변수 — 파일에 두지 않는다.
+anthropic==1.11.0

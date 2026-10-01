@@ -49,9 +49,23 @@ python tools/udp_teleop.py --pi-ip 192.168.0.7  # ArUco 없이 Pi 주행/팔 작
 - 실행 화면: 지도(로봇·기물·경로·바구니·손) + 단계(1/4 접근 → 2/4 집기 → 3/4 운반 → 4/4 놓기)와 진행률
 - 트레이: 비상 정지(해제는 카드의 "초기화 후 재개") · AUTO/MANUAL · Reset(두 번) · Prev/Next
 - 키: `Esc` 비상 정지 · `→`/`←` 다음/이전(수동) · `d` 디버그(x·y·yaw·명령·대상·그립) · `l` 범례
-- 입력창·마이크는 **아직 연결 전**(알림만) — Claude 지시 연동 때 채운다
+- **입력창 = 사람 지시**(아래 "지시"). 마이크(음성)는 아직 연결 전 — 알림만
 - UI 파일은 팀원 원본을 그대로 두고 `arena.js` 의 `vla_robot:` 주석 자리만 고쳤다(장판 1.98×1.83 · 손 표시).
   상태 문구는 `view/ui_state.py`, 서버·창은 `view/web_view.py`, 브라우저 쪽 연결은 `ui/host_bridge.js`.
+
+### 지시 (Claude API)
+
+입력창에 문장을 쓰면 `mission/instruction.py` 가 Claude(`claude-opus-5-5`, effort low)로
+**어떤 기물(라벨 여럿 가능) · 하나/전부 · 정리(바구니)/가져오기**를 해석하고, FSM 이 그 기물만 고른다.
+예: "퀸을 바구니에 넣어줘" · "체스 말만 전부 정리해줘" · "자유롭게 움직이는 말 정리해".
+라벨은 그 순간 작업 구역에 보이는 것 중에서만 고른다. 해석을 못 하면 카드에 이유와 함께 보이는 기물 목록이 떠서 직접 고를 수 있다.
+
+- **키**: `ANTHROPIC_API_KEY` **사용자 환경변수**(파일·저장소에 두지 않는다). 없으면 입력할 때 카드로 알린다.
+  PowerShell: `[Environment]::SetEnvironmentVariable('ANTHROPIC_API_KEY', '<키>', 'User')` → 터미널을 새로 연다.
+- **확인**: `python tools/try_instruction.py "체스 말만 전부 정리해줘"` (부를 때마다 요금)
+- **모드**(`instruction.mode`): `auto` = 보이는 기물을 모두 정리하되 지시가 오면 그것부터 ·
+  `instructed` = 지시가 있을 때만 움직인다. 초기화(Reset)는 지시도 취소한다.
+- **가져오기**("가져와")는 해석은 되지만 손 전달이 붙기 전까지는 바구니에 넣는다(화면에 알림).
 
 예전 OpenCV 지도는 `--view cv`(또는 `view.kind: cv`). 키: `q` 종료 · `space` ESTOP 래치(`r` 로만 해제) ·
 `r` 리셋 · `n` 다음(수동) · `p` 이전 · `m` 수동/자동 전환
