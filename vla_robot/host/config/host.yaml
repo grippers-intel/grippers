@@ -213,5 +213,9 @@ link:
   stop_burst: 8
 
 view:
-  px_per_m: 350.0
-  panel_width_px: 380
+  # web: 팀원 시연 UI(ui/grippers-ui.html)를 크롬/엣지 앱 창으로 — run_host 가 127.0.0.1:web_port 로 상태를 준다.
+  # cv : 예전 OpenCV 지도 창(디버그용). 명령줄 --view 로 바꿀 수 있다.
+  kind: web
+  web_port: 8765
+  px_per_m: 350.0                  # cv 전용
+  panel_width_px: 380              # cv 전용
