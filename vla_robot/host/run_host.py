@@ -140,12 +140,12 @@ def main() -> int:
                 pmap = tracker.update(obs, t0)
                 hobs = []
                 if hand_detector.ok:
-                    for idx, cam, frame in zip(indices, cams, frames):
+                    for idx, frame in zip(indices, frames):
                         if frame is not None:
                             hand_detector.submit(idx, frame)
-                        hobs.append(hand_observations(cam, hand_detector.latest(idx), cfg.hands,
-                                                      cfg.arena))
-                hands = hand_tracker.update(hobs, t0).get("hand", [])
+                    hobs = hand_observations(cams, [hand_detector.latest(i) for i in indices],
+                                             cfg.hands, cfg.arena)
+                hands = hand_tracker.update([hobs], t0).get("hand", [])
                 spots = sorted(nearest_spot(h) for h in hands)
                 if spots != hand_spots:     # 손이 생기거나 사라지거나 자리를 옮길 때만 찍는다
                     print("[hands] " + (", ".join(f"{nearest_spot(h)} ({h[0]:.2f},{h[1]:.2f})"

@@ -1,4 +1,4 @@
-"""손 검출 후처리: 가장자리 거르기 · 높이 평면 좌표 · 지속 시간 확인 · 설정 검증.
+"""손 검출 후처리: 가장자리 거르기 · 두 카메라 교차/높이 평면 좌표 · 지속 시간 확인 · 설정 검증.
 MediaPipe 자체는 부르지 않는다(검출 결과 HandSighting 을 직접 만든다)."""
 from dataclasses import replace
 
@@ -8,7 +8,7 @@ import pytest
 import host_config
 from localization.aruco_localizer import Camera, approx_camera_matrix, floor_object_points
 from perception.hands import (HAND_LABEL, HandDetector, HandSighting, hand_observations,
-                              in_hand_zone, make_hand_tracker, nearest_spot)
+                              in_hand_zone, locate_hands, make_hand_tracker, nearest_spot)
 from tests.test_localizer_synthetic import _camera_pose, _project
 
 
@@ -37,11 +37,15 @@ def test_nearest_spot():
     assert nearest_spot(None) == "-"
 
 
-def _synthetic_cam(cfg):
-    """뒤 카메라(1.6 m)와 같은 자리. 바닥 마커로 외부파라미터를 푼다."""
+FRONT = ((1.02, -0.03, 1.59), (0.99, 1.10, 0.0))     # 실측 외부파라미터와 비슷한 자리
+BACK = ((0.96, 1.91, 1.58), (0.99, 0.70, 0.0))
+
+
+def _synthetic_cam(cfg, where=BACK, name="cam1"):
+    """바닥 마커로 외부파라미터를 푼 합성 카메라와 (K, R, t)."""
     K = approx_camera_matrix(1280, 720, 70.4)
-    R, t = _camera_pose((0.96, 1.91, 1.58), (0.99, 0.70, 0.0))
-    cam = Camera("cam1", K, np.zeros((5, 1)), cfg.aruco, calibrated=True)
+    R, t = _camera_pose(*where)
+    cam = Camera(name, K, np.zeros((5, 1)), cfg.aruco, calibrated=True)
     det = {mid: _project(K, R, t, pts) for mid, pts in floor_object_points(cfg.aruco).items()}
     assert cam.solve_extrinsics(det)
     return cam, K, R, t
@@ -55,15 +59,62 @@ def _sighting_at(K, R, t, x, y, z, score=0.9):
     return HandSighting(pts, score)
 
 
-def test_hand_observation_uses_hand_height(cfg):
+def _two_cams(cfg):
+    return _synthetic_cam(cfg, FRONT, "cam0"), _synthetic_cam(cfg, BACK, "cam1")
+
+
+def test_single_camera_uses_hand_height(cfg):
     cam, K, R, t = _synthetic_cam(cfg)
     z = cfg.hands.hand_z_m
-    obs = hand_observations(cam, [_sighting_at(K, R, t, 0.99, 0.12, z)], cfg.hands, cfg.arena)
-    assert len(obs) == 1 and obs[0].label == HAND_LABEL
+    obs = hand_observations([cam], [[_sighting_at(K, R, t, 0.99, 0.12, z)]], cfg.hands, cfg.arena)
+    assert len(obs) == 1 and obs[0].label == HAND_LABEL and obs[0].cam_name == "cam1"
     assert abs(obs[0].x - 0.99) < 0.005 and abs(obs[0].y - 0.12) < 0.005
-    # 같은 픽셀을 바닥으로 풀면 카메라에서 먼 쪽으로 크게 밀린다 — 높이 평면이 필요한 이유
+    # 같은 픽셀을 바닥으로 풀면 카메라에서 먼 쪽으로 크게 밀린다 — 높이가 필요한 이유
     floor = cam.pixels_to_plane(_sighting_at(K, R, t, 0.99, 0.12, z).palm.reshape(1, 2), 0.0)
     assert floor[0, 1] < 0.12 - 0.15
+
+
+@pytest.mark.parametrize("z", [0.20, 0.32, 0.45, 0.60])
+def test_two_cameras_triangulate_any_height(cfg, z):
+    """10-01 실기: 45 cm 로 든 손 하나가 높이 고정 풀이로 y 0.76 / 1.00 두 개가 됐다."""
+    (c0, K0, R0, t0), (c1, K1, R1, t1) = _two_cams(cfg)
+    s0, s1 = _sighting_at(K0, R0, t0, 0.075, 0.915, z), _sighting_at(K1, R1, t1, 0.075, 0.915, z)
+    pts = locate_hands([c0, c1], [[s0], [s1]], cfg.hands)
+    assert len(pts) == 1 and pts[0].cams == "cam0+cam1"
+    assert abs(pts[0].x - 0.075) < 0.005 and abs(pts[0].y - 0.915) < 0.005 and abs(pts[0].z - z) < 0.005
+    obs = hand_observations([c0, c1], [[s0], [s1]], cfg.hands, cfg.arena)
+    assert len(obs) == 1
+
+
+def test_fixed_height_would_split_a_raised_hand(cfg):
+    """교차를 안 하면 생기는 일: 든 손을 낮은 평면으로 풀면 각 카메라가 자기에게서 먼 쪽으로
+    민다 — 앞 카메라는 뒤로, 뒤 카메라는 앞으로. 실측(0.76 / 1.00)과 같은 크기로 갈라진다."""
+    (c0, K0, R0, t0), (c1, K1, R1, t1) = _two_cams(cfg)
+    z = cfg.hands.hand_z_m
+    y0 = c0.pixels_to_plane(_sighting_at(K0, R0, t0, 0.075, 0.915, 0.45).palm.reshape(1, 2), z)[0, 1]
+    y1 = c1.pixels_to_plane(_sighting_at(K1, R1, t1, 0.075, 0.915, 0.45).palm.reshape(1, 2), z)[0, 1]
+    assert y0 - y1 > cfg.hands.merge_dist_m
+
+
+def test_two_hands_stay_two(cfg):
+    (c0, K0, R0, t0), (c1, K1, R1, t1) = _two_cams(cfg)
+    z = 0.35
+    left = (0.075, 0.915, z)
+    right = (1.905, 0.915, z)
+    pts = locate_hands([c0, c1],
+                       [[_sighting_at(K0, R0, t0, *left), _sighting_at(K0, R0, t0, *right)],
+                        [_sighting_at(K1, R1, t1, *right), _sighting_at(K1, R1, t1, *left)]],
+                       cfg.hands)
+    got = sorted((round(p.x, 2), round(p.y, 2)) for p in pts)
+    assert got == [(0.07, 0.92), (1.9, 0.92)] or got == [(0.08, 0.92), (1.9, 0.92)]
+    assert all(p.cams == "cam0+cam1" for p in pts)
+
+
+def test_hand_seen_by_one_camera_only(cfg):
+    (c0, K0, R0, t0), (c1, K1, R1, t1) = _two_cams(cfg)
+    s1 = _sighting_at(K1, R1, t1, 0.99, 0.12, cfg.hands.hand_z_m)
+    pts = locate_hands([c0, c1], [[], [s1]], cfg.hands)
+    assert len(pts) == 1 and pts[0].cams == "cam1" and pts[0].z == cfg.hands.hand_z_m
 
 
 def test_hand_observation_filters(cfg):
@@ -71,16 +122,18 @@ def test_hand_observation_filters(cfg):
     z = cfg.hands.hand_z_m
     middle = _sighting_at(K, R, t, 0.99, 0.90, z)              # 작업 구역 가운데
     weak = _sighting_at(K, R, t, 0.075, 0.915, z, score=0.2)   # 확신도 낮음
-    assert hand_observations(cam, [middle, weak], cfg.hands, cfg.arena) == []
+    assert hand_observations([cam], [[middle, weak]], cfg.hands, cfg.arena) == []
     unready = Camera("x", K, np.zeros((5, 1)), cfg.aruco)
-    assert hand_observations(unready, [_sighting_at(K, R, t, 0.99, 0.12, z)], cfg.hands, cfg.arena) == []
+    assert hand_observations([unready], [[_sighting_at(K, R, t, 0.99, 0.12, z)]], cfg.hands,
+                             cfg.arena) == []
+    assert hand_observations([cam], [None], cfg.hands, cfg.arena) == []
 
 
 def test_hand_needs_confirm_time(cfg):
     cam, K, R, t = _synthetic_cam(cfg)
     tracker = make_hand_tracker(cfg.hands, cfg.tracker)
     s = _sighting_at(K, R, t, 0.075, 0.915, cfg.hands.hand_z_m)
-    obs = [hand_observations(cam, [s], cfg.hands, cfg.arena)]
+    obs = [hand_observations([cam], [[s]], cfg.hands, cfg.arena)]
     assert tracker.update(obs, 0.0).get(HAND_LABEL) is None
     assert tracker.update(obs, cfg.hands.confirm_s * 0.5).get(HAND_LABEL) is None
     hands = tracker.update(obs, cfg.hands.confirm_s + 0.05)[HAND_LABEL]
