@@ -119,6 +119,7 @@ drive:
   # 파지·투입 직전 회전으로 멈췄으면 반대로 0.3 rad/s · 0.3 s — 회전 뒤 정차 소음(10-01)이 멎었다. 0 = 끔
   unwind_rad_s: 0.3
   unwind_s: 0.3
+  unwind_clear_s: 1.0              # 회전 뒤 직진·후진이 1 s 넘게 이어져야 반대 회전을 건너뛴다(10-01 star)
 
 mission:
   cycle_hz: 10.0

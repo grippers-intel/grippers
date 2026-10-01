@@ -124,6 +124,26 @@ def test_unwind_after_turning_then_grasp_without_turning_again(cfg):
     _run_until(fsm, HostState.GRASP, P(0.9, 0.62, yaw=83.0), PM, S(), t)
 
 
+def test_a_short_creep_after_turning_does_not_cancel_the_unwind(cfg):
+    """10-01 star: 정면 회전 → 1~2 cm 후진(거리 맞추기) → 파지 동안 다시 울었다. 짧은 후진으로는
+    회전 뒤 버팀이 안 풀린다 — 파지 전에 반대로 짧게 돈다."""
+    m = cfg.mission
+    fsm = MissionFSM(cfg)
+    fsm.step(P(0.9, 0.68, yaw=60.0), PM, S(), 0.0)               # 0.22 m, 30° 어긋남 — 먼저 돈다
+    fsm.step(P(0.9, 0.68, yaw=60.0), PM, S(), 0.1)
+    t, unwound, seen_back = 0.2, False, False
+    y = 0.68
+    while fsm.state != HostState.GRASP and t < 5.0:
+        cmd = fsm.step(P(0.9, y, yaw=88.0), PM, S(), t)
+        if cmd.linear_x < 0:
+            seen_back = True
+            y = 0.62                                              # 몇 사이클 만에 범위 안으로
+        if cmd.angular_z < 0 and seen_back:
+            unwound = True
+        t += 0.1
+    assert seen_back and unwound and fsm.state == HostState.GRASP
+
+
 def test_no_unwind_when_the_last_move_was_straight(cfg):
     fsm = MissionFSM(cfg)
     fsm.step(P(0.9, 0.62), PM, S(), 0.0)
