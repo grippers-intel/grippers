@@ -9,7 +9,7 @@
 
 UI 버튼 -> MapView 키와 같은 action 문자열: estop · reset · next · prev · toggle_manual.
 입력창 문장(submit)·카드 버튼(dismiss · pick_label)은 CommandDesk 가 받는다(Claude 해석 -> FSM 지시).
-창을 닫아도 run_host 는 돈다 — 끝내려면 터미널에서 Ctrl+C.
+창에서 q(입력창 밖) = run_host 종료(창도 닫힌다). 창을 X 로 닫으면 run_host 는 돈다 — 그때는 터미널에서 Ctrl+C.
 """
 from __future__ import annotations
 
@@ -33,7 +33,8 @@ UI_DIR = Path(__file__).resolve().parents[1] / "ui"
 UI_HTML = UI_DIR / "grippers-ui.html"
 BRIDGE_JS = UI_DIR / "host_bridge.js"
 # 이벤트 -> run_host action (MapView.KEYMAP 과 같은 이름)
-ACTIONS = {"estop": "estop", "reset": "reset", "next": "next", "prev": "prev", "toggle_mode": "toggle_manual"}
+ACTIONS = {"estop": "estop", "reset": "reset", "next": "next", "prev": "prev", "toggle_mode": "toggle_manual",
+           "quit": "quit"}   # q 키(host_bridge.js) — run_host 를 끝내고 창도 닫는다
 
 
 def _browser_candidates() -> list[str]:
@@ -50,19 +51,41 @@ def _browser_candidates() -> list[str]:
     return [shutil.which(n) or "" for n in ("google-chrome", "chromium", "chromium-browser", "microsoft-edge")]
 
 
-def open_app_window(url: str) -> str:
-    """주소창 없는 세로 창. 어떤 브라우저로 열었는지 돌려준다."""
+def _profile_dir() -> Path:
+    return Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".cache") / "vla_robot_ui" / "profile"
+
+
+def close_app_windows() -> int:
+    """전용 프로필(vla_robot_ui)로 뜬 크롬/엣지 창을 모두 닫는다. 개인 브라우저는 프로필이 달라 건드리지 않는다.
+    윈도우 크롬은 처음 띄운 프로세스가 창을 다른 프로세스에 넘기고 빠지므로 그 하나만 끝내서는 안 닫힌다(2026-10-02)."""
+    marker = "vla_robot_ui"
+    try:
+        if sys.platform.startswith("win"):
+            cmd = ("$n=0; Get-CimInstance Win32_Process | Where-Object { ($_.Name -in 'chrome.exe','msedge.exe') "
+                   f"-and $_.CommandLine -match '{marker}' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId "
+                   "-Force -ErrorAction SilentlyContinue; $n++ }; $n")
+            out = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True,
+                                 text=True, timeout=10).stdout.strip()
+            return int(out or 0)
+        subprocess.run(["pkill", "-f", marker], timeout=5)
+    except Exception:  # noqa: BLE001 — 종료 경로, 실패해도 run_host 종료는 막지 않는다
+        pass
+    return 0
+
+
+def open_app_window(url: str):
+    """주소창 없는 세로 창. (어떤 브라우저로 열었는지, 창 프로세스 또는 None)."""
     for exe in _browser_candidates():
         if exe and Path(exe).exists():
-            profile = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".cache") / "vla_robot_ui" / "profile"
+            profile = _profile_dir()
             profile.mkdir(parents=True, exist_ok=True)
-            subprocess.Popen([exe, f"--app={url}", f"--user-data-dir={profile}",
-                              "--window-size=460,860", "--window-position=80,40",
-                              "--no-first-run", "--no-default-browser-check"],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return Path(exe).stem
+            proc = subprocess.Popen([exe, f"--app={url}", f"--user-data-dir={profile}",
+                                     "--window-size=460,860", "--window-position=80,40",
+                                     "--no-first-run", "--no-default-browser-check"],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return Path(exe).stem, proc
     webbrowser.open(url)
-    return "default browser"
+    return "default browser", None
 
 
 class _Server(ThreadingHTTPServer):
@@ -137,8 +160,11 @@ class WebView:
         self._httpd = _Server(("127.0.0.1", port), Handler)
         self.url = f"http://127.0.0.1:{self._httpd.server_address[1]}/"
         threading.Thread(target=self._httpd.serve_forever, name="web-view", daemon=True).start()
-        how = open_app_window(self.url) if open_window else "not opened"
-        print(f"[view] 시연 UI: {self.url} ({how}) — 창을 닫아도 run_host 는 돈다, 끝내려면 Ctrl+C")
+        # 다시 띄울 때 창이 쌓이지 않게 — 남아 있던 시연 창을 닫고 새로 연다. close() 에서도 닫는다(2026-10-02).
+        if open_window:
+            close_app_windows()
+        how, self._window = open_app_window(self.url) if open_window else ("not opened", None)
+        print(f"[view] 시연 UI: {self.url} ({how}) — 창에서 q = 종료 (창을 X 로 닫으면 Ctrl+C 로 끝낼 것)")
 
     def update(self, pose, piece_map, fsm, pi_status, link_age_s: float, hz: float,
                hands=()) -> Optional[str]:
@@ -193,3 +219,5 @@ class WebView:
             self._httpd.server_close()
         except Exception:  # noqa: BLE001 — 종료 경로
             pass
+        if self._window is not None:
+            close_app_windows()                 # 전용 프로필 창만 — 개인 크롬과 별개

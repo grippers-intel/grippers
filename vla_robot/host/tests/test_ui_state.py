@@ -109,5 +109,7 @@ def test_web_view_serves_ui_state_and_events(cfg):
         assert json.loads(_get(view.url + "state"))["card"] is None
         _post(view.url + "event", {"action": "card_action", "payload": "reset"})
         assert view.update(pose, {}, fsm, None, 0.0, 10.0) == "reset"
+        _post(view.url + "event", {"action": "quit", "payload": None})        # q 키
+        assert view.update(pose, {}, fsm, None, 0.0, 10.0) == "quit"
     finally:
         view.close()
