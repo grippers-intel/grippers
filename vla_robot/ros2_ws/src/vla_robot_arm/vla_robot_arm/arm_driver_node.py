@@ -53,6 +53,9 @@ POSE_ARRIVE_TOL = 3.0
 #: 물체를 쥐었는지는 grasp_check 가 따로 보므로 이 값이 느슨해도 잃는 것이 없다.
 POSE_ARRIVE_TOL_GRIPPER = 8.0
 POSE_SETTLE_MAX_S = 2.0
+#: 마지막 목표를 보낸 지 이 시간 안이면 다음 보간을 그 목표에서 이어 간다(_start_policy).
+#: 파지 정책이 끝나고 idle 이동이 시작되기까지 ~0.5 s 걸린다.
+GOAL_FRESH_S = 1.0
 GRIPPER_SETTLE_MAX_S = 2.0
 
 
@@ -73,6 +76,7 @@ class ArmDriverNode(Node):
         self.poses = load_poses(acfg.poses_file)
         # 마지막으로 서보에 보낸 목표(raw). 기동 시에는 없다 — 첫 _hold_here 가 실제 위치로 채운다.
         self._goal_raw: Optional[list[int]] = None
+        self._goal_at = 0.0
         self.get_logger().info(
             f"설정 {path} / 캘리브레이션 {acfg.calibration_file} / 포즈 {sorted(self.poses)}")
 
@@ -151,6 +155,7 @@ class ArmDriverNode(Node):
         raw = [int(v) for v in raw]
         self.bus.write_goal_positions(dict(zip(SERVO_IDS, raw)))
         self._goal_raw = raw
+        self._goal_at = time.monotonic()
 
     def _hold_here(self) -> None:
         """지금 자세에서 멈춘다. 그리퍼만은 마지막으로 보낸 목표를 유지한다 — 물체를 쥐고 있으면
@@ -166,7 +171,14 @@ class ArmDriverNode(Node):
         2026-09-30 실기: 파지 뒤 idle 로 돌아오며 그리퍼를 유지(gripper_mode=1)했는데 soccer 를
         떨어뜨렸다. 정책은 턱을 끝까지 닫으라고 했지만 공에 막혀 10% 에 멈춰 있었고, 시작점을
         실제 위치(10%)로 잡아 목표를 거기로 다시 쓰자 조이던 힘이 풀려 턱이 살짝 벌어졌다.
+
+        방금(GOAL_FRESH_S 안) 목표를 보내던 중이면 **관절도** 보낸 목표에서 이어 간다.
+        2026-10-01 실기: soccer 파지를 접는 도중(lift −40°)에 끊은 뒤 idle 로 옮기자 3번(팔꿈치)이
+        버벅였다. 움직이는 서보는 명령보다 ~8° 늦게 따라오는데, 실제 위치에서 보간을 시작하면 첫
+        목표들이 서보가 가던 지점보다 뒤라 관절이 잠깐 거꾸로 당겨진다.
         """
+        if self._goal_raw is not None and time.monotonic() - self._goal_at < GOAL_FRESH_S:
+            return self.calib.raw_to_policy(self._goal_raw)
         start = self._read_policy()
         if self._goal_raw is not None:
             start[GRIPPER_INDEX] = self.calib.raw_to_policy(self._goal_raw)[GRIPPER_INDEX]
