@@ -231,6 +231,22 @@ handover:
   hand_wait_s: 20.0                # 정차점에서 손이 안 보이면 이만큼 기다린 뒤 바구니로
   arrive_tol_m: 0.08
 
+voice:
+  # 시연 UI 마이크 버튼 = 노트북 내장 마이크 -> faster-whisper(오프라인) -> 들은 문장 확인 -> 전송 -> Claude 해석.
+  # 모델: models/whisper-small (464 MB, 저장소 밖) — 받기: python tools/try_voice.py --download
+  enabled: true
+  model_dir: models/whisper-small
+  language: ko
+  threads: 8                       # 한 문장 ~2.6 s (10-01 노트북, 한국어 합성 음성 6문장)
+  beam_size: 1
+  prompt: "퀸, 룩, 나이트, 별, 축구공, 공, 상자, 바구니, 체스 말, 가져와, 정리해, 넣어줘, 치워줘"
+  calib_s: 0.3                     # 마이크를 연 직후 이만큼 주변 소음을 잰다
+  speech_ratio: 3.0
+  min_rms: 0.01
+  silence_s: 0.9                   # 말이 끝나고 이만큼 조용하면 자동으로 멈춘다
+  no_speech_s: 5.0
+  max_s: 8.0
+
 instruction:
   # 사람 지시 -> Claude(claude-opus-5-5)가 대상 라벨·개수·의도(정리/가져오기)로 해석. 시연 UI 입력창으로 받는다.
   # 키는 ANTHROPIC_API_KEY 환경변수(사용자 환경변수로 한 번 등록) — 여기·저장소에 두지 않는다.

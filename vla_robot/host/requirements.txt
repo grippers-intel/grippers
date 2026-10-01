@@ -17,3 +17,7 @@ mediapipe==1.0.1
 
 # 사람 지시 해석(mission/instruction.py, Claude API). 키는 ANTHROPIC_API_KEY 환경변수 — 파일에 두지 않는다.
 anthropic==1.11.0
+
+# 음성 지시(voice/voice_input.py) — 노트북 내장 마이크 + 오프라인 인식. 모델은 tools/try_voice.py --download
+faster-whisper==1.2.1
+sounddevice>=0.5

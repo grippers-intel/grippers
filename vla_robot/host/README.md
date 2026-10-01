@@ -49,7 +49,7 @@ python tools/udp_teleop.py --pi-ip 192.168.0.7  # ArUco 없이 Pi 주행/팔 작
 - 실행 화면: 지도(로봇·기물·경로·바구니·손) + 단계(1/4 접근 → 2/4 집기 → 3/4 운반 → 4/4 놓기)와 진행률
 - 트레이: 비상 정지(해제는 카드의 "초기화 후 재개") · AUTO/MANUAL · Reset(두 번) · Prev/Next
 - 키: `Esc` 비상 정지 · `→`/`←` 다음/이전(수동) · `d` 디버그(x·y·yaw·명령·대상·그립) · `l` 범례
-- **입력창 = 사람 지시**(아래 "지시"). 마이크(음성)는 아직 연결 전 — 알림만
+- **입력창·마이크 = 사람 지시**(아래 "지시"). 마이크는 노트북 내장 마이크 → whisper(오프라인) → 들은 문장 확인 → 전송
 - UI 파일은 팀원 원본을 그대로 두고 `arena.js` 의 `vla_robot:` 주석 자리만 고쳤다(장판 1.98×1.83 · 손 표시).
   상태 문구는 `view/ui_state.py`, 서버·창은 `view/web_view.py`, 브라우저 쪽 연결은 `ui/host_bridge.js`.
 
@@ -72,6 +72,17 @@ python tools/udp_teleop.py --pi-ip 192.168.0.7  # ArUco 없이 Pi 주행/팔 작
   `place.handover_wait_s`(1 s) 기다린 뒤 연다. 정차점에서 손이 `hand_wait_s`(20 s) 동안 안 보이면 바구니로 간다.
   ⚠️ handover 자세는 **아직 실측 전**(`measured: false`) — 재기 전에는 건네기가 실패로 끝나고 재시도 뒤 멈춘다.
 - 시뮬에서 손 두기: `python run_host.py --sim --sim-hand L2` (지시는 입력창으로 — Claude 키 필요)
+
+### 음성 (노트북 마이크)
+
+마이크 버튼(또는 `Space`)을 누르고 말하면 말이 끝날 때 자동으로 멈추고(`voice.silence_s` 0.9 s),
+`voice/voice_input.py` 가 faster-whisper(small, int8, CPU — 한 문장 ~2.6 s)로 글자로 바꾼다. 들은 문장이 접수 화면에
+뜨면 **전송**을 눌러야 해석으로 간다(whisper 는 비슷한 소리의 다른 낱말을 낸다 — 확인 단계가 안전장치).
+
+- 모델: `models/whisper-small`(464 MB, 저장소 밖) — `python tools/try_voice.py --download` 로 한 번 받는다.
+  이 노트북은 사용자 환경변수 `HF_HOME` 이 F: 드라이브를 가리켜, 도구가 그 프로세스에서만 캐시를 돌려 받는다.
+- 시험: `python tools/try_voice.py` (마이크 한 문장) · `--wav 파일.wav`
+- 인식 힌트 낱말은 `voice.prompt`. 끄려면 `voice.enabled: false`.
 
 예전 OpenCV 지도는 `--view cv`(또는 `view.kind: cv`). 키: `q` 종료 · `space` ESTOP 래치(`r` 로만 해제) ·
 `r` 리셋 · `n` 다음(수동) · `p` 이전 · `m` 수동/자동 전환

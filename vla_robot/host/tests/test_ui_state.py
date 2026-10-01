@@ -82,7 +82,10 @@ def _post(url, obj):
 
 
 def test_web_view_serves_ui_state_and_events(cfg):
-    view = WebView(cfg, port=0, open_window=False)
+    from dataclasses import replace
+    from voice.voice_input import VoiceInput
+    view = WebView(cfg, port=0, open_window=False,
+                   voice=VoiceInput(replace(cfg.voice, enabled=False)))      # 테스트에서 모델을 읽지 않는다
     try:
         page = _get(view.url)
         assert '<script src="/host_bridge.js"></script>' in page and "window.ARENA_MAT = [1.980, 1.830]" in page

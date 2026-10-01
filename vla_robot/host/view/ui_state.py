@@ -7,7 +7,8 @@ tray · notice · card ... 를 채운다.
 입력창의 문장은 CommandDesk(mission/commands.py)가 Claude 로 해석해 FSM 지시(Order)로 넘긴다.
 - instruction.mode auto: 보이는 기물을 모두 정리하고, 지시가 오면 그것부터
 - instruction.mode instructed: 지시가 있을 때만 움직인다(없으면 대기 화면)
-마이크(음성)는 아직 연결 전 — 알림만 띄운다.
+마이크 버튼은 VoiceInput(voice/voice_input.py, 노트북 내장 마이크 + whisper)이 듣고, 들은 문장을
+접수 화면에 보여 준다 — 사람이 전송을 누르면 위와 같이 해석으로 간다.
 """
 from __future__ import annotations
 
@@ -152,11 +153,19 @@ class UiState:
                 "dots": len(HINTS), "dot": k}
 
     @staticmethod
-    def _command(desk) -> dict:
-        if desk is None or desk.phase != "interpreting":
-            return {}
-        return {"text": f"“{desk.text}”", "interp_text": "해석 중 · 대상 탐색…", "interp_code": "Interpreting",
-                "echo": desk.text, "action": "mic", "partial": desk.text, "hint": ""}
+    def _command(desk, voice=None, vphase: str = "idle") -> dict:
+        if desk is not None and desk.phase == "interpreting":
+            return {"text": f"“{desk.text}”", "interp_text": "해석 중 · 대상 탐색…", "interp_code": "Interpreting",
+                    "echo": desk.text, "action": "mic", "partial": desk.text, "hint": ""}
+        if vphase == "listening":
+            return {"partial": "", "hint": "듣고 있습니다 · 말이 끝나면 자동으로 인식합니다 (다시 누르면 멈춤)"}
+        if vphase == "transcribing":
+            return {"partial": "인식 중", "hint": "인식 중입니다 · 잠시만요"}
+        if vphase == "final" and voice is not None:
+            t = voice.text
+            return {"text": f"“{t}”", "interp_text": "맞으면 전송을, 아니면 다시 말하기를 누르세요",
+                    "interp_code": "Ready", "echo": t, "action": "send", "partial": t, "hint": ""}
+        return {}
 
     def _done(self, finished, elapsed: int, waiting: bool) -> dict:
         sub = f"소요 {elapsed}초 · " + ("다음 명령을 말해 주세요" if waiting else "다음 기물을 놓으면 이어서 정리합니다")
@@ -171,13 +180,20 @@ class UiState:
             return {"title": f"{names} {order.done}개를 {where}", "sub": sub}
         return {"title": f"기물 {self.done}개를 모두 옮겼습니다", "sub": sub}
 
-    def build(self, pose, pmap, fsm, pi_status, link_age_s: float, hz: float, hands=(), desk=None) -> dict:
+    def build(self, pose, pmap, fsm, pi_status, link_age_s: float, hz: float, hands=(), desk=None,
+              voice=None) -> dict:
         cfg = self.cfg
         now = time.monotonic()
         st = fsm.state
         if desk is not None and desk.note is not None:
             self.notify(*desk.note)
             desk.note = None
+        vphase = voice.phase if voice is not None else "idle"
+        if voice is not None:
+            err = voice.take_error()
+            if err:
+                self.notify(err, "MIC", "caution")
+                vphase = "idle"
 
         # 완료 개수 — 성공한 PLACE 작업 번호를 한 번씩만 센다.
         r = fsm.last_result
@@ -205,6 +221,10 @@ class UiState:
         finished = getattr(fsm, "finished_order", None)
         waiting = searching and order is None and getattr(fsm, "command_mode", "auto") == "instructed"
         if desk is not None and desk.phase == "interpreting":
+            screen = "command"
+        elif vphase in ("listening", "transcribing"):
+            screen = "listen"
+        elif vphase == "final":
             screen = "command"
         elif fsm.estop or not searching or order is not None:
             screen = "run"
@@ -276,9 +296,12 @@ class UiState:
             led = "busy" if running else "ready"
 
         return {
-            "screen": screen, "mode": en, "tone": tone, "recording": False, "level": 0.0,
+            "screen": screen, "mode": en,
+            "tone": {"listening": "error", "transcribing": "accent", "final": "success"}.get(vphase, tone)
+            if screen in ("listen", "command") and vphase != "idle" else tone,
+            "recording": vphase == "listening", "level": voice.level if voice is not None else 0.0,
             "idle": self._idle(now, waiting),
-            "command": self._command(desk),
+            "command": self._command(desk, voice, vphase),
             "run": {"quote": f"“{order.text}”" if order else AUTO_QUOTE,
                     "mode": "target" if searching else "status"},
             "target": tgt,
