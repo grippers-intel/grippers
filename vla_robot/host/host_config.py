@@ -316,6 +316,24 @@ class HandoverConfig:
 
 
 @dataclass(frozen=True)
+class VoiceConfig:
+    """노트북 내장 마이크 -> 한국어 문장(faster-whisper, 오프라인). 시연 UI 마이크 버튼."""
+    enabled: bool = True
+    model_dir: str = "models/whisper-small"
+    language: str = "ko"
+    threads: int = 8
+    beam_size: int = 1                # 5 와 정확도 차이가 없고 0.2 s 빠르다(2026-10-01)
+    # 낱말 힌트. "퀸"을 "균"으로 듣는 일을 줄인다.
+    prompt: str = "퀸, 룩, 나이트, 별, 축구공, 공, 상자, 바구니, 체스 말, 가져와, 정리해, 넣어줘, 치워줘"
+    calib_s: float = 0.3              # 처음 이만큼으로 주변 소음 측정
+    speech_ratio: float = 3.0         # 소음의 몇 배면 말로 보나
+    min_rms: float = 0.01
+    silence_s: float = 0.9            # 말이 끝나고 이만큼 조용하면 멈춤
+    no_speech_s: float = 5.0
+    max_s: float = 8.0
+
+
+@dataclass(frozen=True)
 class InstructionConfig:
     """사람 지시(Claude API). 키는 ANTHROPIC_API_KEY 환경변수 — 설정 파일에 두지 않는다."""
     # auto = 보이는 기물을 모두 정리하고, 지시가 오면 그것부터 · instructed = 지시가 있을 때만 움직인다
@@ -348,6 +366,7 @@ class HostConfig:
     link: LinkConfig = field(default_factory=LinkConfig)
     instruction: InstructionConfig = field(default_factory=InstructionConfig)
     handover: HandoverConfig = field(default_factory=HandoverConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
     view: ViewConfig = field(default_factory=ViewConfig)
 
 
@@ -401,6 +420,9 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
             raise ConfigError(f"mission.grasp_dist_by_label.{label}: 0 < min < max 여야 한다 ({lo}, {hi})")
     if m.grasp_creep_lead_s < 0 or m.grasp_settle_s < 0:
         raise ConfigError("mission.grasp_creep_lead_s / grasp_settle_s 는 음수일 수 없다")
+    v = cfg.voice
+    if v.threads < 1 or v.beam_size < 1 or min(v.calib_s, v.silence_s, v.no_speech_s, v.max_s) <= 0:
+        raise ConfigError("voice: threads, beam_size >= 1 · 시간 값은 양수")
     ho = cfg.handover
     if not ho.spots or ho.match_radius_m <= 0 or ho.hand_wait_s < 0 or ho.arrive_tol_m <= 0:
         raise ConfigError("handover: spots 가 필요하고 match_radius_m · arrive_tol_m > 0, hand_wait_s >= 0")
@@ -433,6 +455,7 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
         detector=replace(cfg.detector, deployment_dir=_resolve(cfg.detector.deployment_dir),
                          cache_dir=_resolve(cfg.detector.cache_dir)),
         hands=replace(cfg.hands, model_path=_resolve(cfg.hands.model_path)),
+        voice=replace(cfg.voice, model_dir=_resolve(cfg.voice.model_dir)),
     )
 
 

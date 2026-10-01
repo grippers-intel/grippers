@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 from mission.commands import CommandDesk
+from voice.voice_input import VoiceInput
 from view.ui_state import UiState
 
 UI_DIR = Path(__file__).resolve().parents[1] / "ui"
@@ -70,11 +71,14 @@ class _Server(ThreadingHTTPServer):
 
 
 class WebView:
-    def __init__(self, cfg, port: Optional[int] = None, open_window: bool = True, desk=None) -> None:
+    def __init__(self, cfg, port: Optional[int] = None, open_window: bool = True, desk=None,
+                 voice=None) -> None:
         self.cfg = cfg
         self.ui = UiState(cfg)
         # 입력창 -> Claude 해석 -> FSM 지시. 키가 없어도 만들어진다(요청 때 카드로 알린다).
         self.desk = desk if desk is not None else CommandDesk(cfg)
+        # 마이크 버튼 = 노트북 내장 마이크. 모델은 뒤에서 미리 읽는다(~4 s).
+        self.voice = voice if voice is not None else VoiceInput(cfg.voice)
         self._state_json = b"{}"
         self._lock = threading.Lock()
         self._events: "queue.Queue[tuple[str, object]]" = queue.Queue()
@@ -140,7 +144,7 @@ class WebView:
                hands=()) -> Optional[str]:
         action = self._next_action(fsm, piece_map)   # 먼저 — 버튼이 띄운 알림이 이번 화면에 바로 실린다
         self.desk.update(fsm, hands)
-        state = self.ui.build(pose, piece_map, fsm, pi_status, link_age_s, hz, hands, self.desk)
+        state = self.ui.build(pose, piece_map, fsm, pi_status, link_age_s, hz, hands, self.desk, self.voice)
         body = json.dumps(state, ensure_ascii=False).encode("utf-8")
         with self._lock:
             self._state_json = body
@@ -165,9 +169,16 @@ class WebView:
                     self.desk.dismiss()
                 return ACTIONS[action]
             if action == "submit" and isinstance(payload, str):
+                self.voice.cancel()
                 self.desk.submit(payload, piece_map)
             elif action == "mic":
-                self.ui.notify("음성 입력은 아직 연결 전입니다 — 아래 입력창에 써 주세요", "MIC", "caution")
+                why = self.voice.toggle()
+                if why:
+                    self.ui.notify(why, "MIC", "caution")
+            elif action == "run":                   # 접수 화면의 전송 — 들은 문장을 해석으로
+                text = self.voice.take_final()
+                if text:
+                    self.desk.submit(text, piece_map)
             elif action == "basket":
                 self.desk.to_basket(fsm)
             elif action in ("dismiss", "retry", "cancel"):
