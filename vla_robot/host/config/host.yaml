@@ -69,6 +69,24 @@ detector:
   conf_threshold: 0.6
   empty_labels: ["No object", "Empty"]
 
+hands:
+  # 탑뷰 손 검출(MediaPipe, 2026-10-01). 손 = 가져다줄 곳(기물·장애물 아님).
+  # pip install mediapipe + models/hand_landmarker.task (tools/hand_probe.py 설명). 없으면 손 없이 돈다.
+  # full 프레임으로 9곳(앞·양옆 가장자리, 장판 위 30~35 cm) 모두 잡혔다(10-01 실측).
+  enabled: true
+  model_path: models/hand_landmarker.task
+  min_infer_interval_s: 0.2
+  min_conf: 0.5
+  num_hands: 2
+  hand_z_m: 0.32                   # 받는 자세 높이. 바닥(0)으로 풀면 수십 cm 밀린다
+  edges: [front, left, right]      # 뒤(상자 쪽)는 뒤 카메라 바로 아래라 30 cm 에서 22 % 만 보인다
+  edge_band_m: 0.35                # 가장자리에서 이 안쪽까지만 손으로 인정
+  outside_m: 0.30
+  merge_dist_m: 0.15
+  confirm_s: 1.0                   # 1 s 계속 보여야 손
+  hold_s: 1.0
+  max_hands: 2
+
 tracker:
   merge_dist_m: 0.08
   hold_s: 1.5

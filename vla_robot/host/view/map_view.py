@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 from mission.basket_target import basket_target
+from perception.hands import nearest_spot
 
 WINDOW = "vla_robot host"
 KEYMAP = {ord("q"): "quit", 27: "quit", ord(" "): "estop", ord("r"): "reset",
@@ -41,7 +42,8 @@ class MapView:
         return (int(self.margin + (x - a.wall_x[0]) * self.s),
                 int(self.margin + (a.wall_y[1] - y) * self.s))
 
-    def update(self, pose, piece_map, fsm, pi_status, link_age_s: float, hz: float) -> str | None:
+    def update(self, pose, piece_map, fsm, pi_status, link_age_s: float, hz: float,
+               hands=()) -> str | None:
         cfg = self.cfg
         a = cfg.arena
         img = np.full((self.h, self.w, 3), 30, np.uint8)
@@ -75,6 +77,12 @@ class MapView:
                 cv2.circle(img, self._px(x, y), 7, color, -1)
                 cv2.putText(img, label, (self._px(x, y)[0] + 9, self._px(x, y)[1] - 6),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+
+        # 손(가져다줄 곳) — 주황 테두리. 기물·장애물이 아니다.
+        for x, y in hands:
+            cv2.circle(img, self._px(x, y), 11, (0, 140, 255), 2)
+            cv2.putText(img, f"hand {nearest_spot((x, y))}", (self._px(x, y)[0] + 13, self._px(x, y)[1] + 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 140, 255), 1)
 
         if fsm.nav_path:
             pts = np.array([self._px(*p) for p in fsm.nav_path], np.int32)

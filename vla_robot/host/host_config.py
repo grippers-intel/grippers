@@ -109,6 +109,28 @@ class DetectorConfig:
 
 
 @dataclass(frozen=True)
+class HandConfig:
+    """탑뷰 손 검출(MediaPipe HandLandmarker). 손은 **가져다줄 곳**이다 — 기물·장애물이 아니다.
+    mediapipe 가 없으면 경고만 하고 손 없이 돈다(선택 의존성)."""
+    enabled: bool = True
+    model_path: str = "models/hand_landmarker.task"
+    # full 프레임 ~30 ms/카메라. 손은 기다리는 대상이라 자주 볼 필요가 없다.
+    min_infer_interval_s: float = 0.2
+    min_conf: float = 0.5
+    num_hands: int = 2
+    # 손바닥 중심을 이 높이 평면으로 푼다. 받는 자세(장판 위 30~35 cm, 2026-10-01).
+    hand_z_m: float = 0.32
+    # 손을 인정하는 가장자리와 띠 폭. 장판 안쪽(작업 구역)에서 잡힌 것은 버린다.
+    edges: tuple[str, ...] = ("front", "left", "right")
+    edge_band_m: float = 0.35
+    outside_m: float = 0.30               # 장판 밖으로 내민 손도 이만큼은 받는다
+    merge_dist_m: float = 0.15
+    confirm_s: float = 1.0                # 이만큼 계속 보여야 손으로 인정
+    hold_s: float = 1.0
+    max_hands: int = 2
+
+
+@dataclass(frozen=True)
 class TrackerConfig:
     merge_dist_m: float = 0.08
     hold_s: float = 1.5
@@ -290,6 +312,7 @@ class HostConfig:
     cameras: CameraConfig = field(default_factory=CameraConfig)
     detector: DetectorConfig = field(default_factory=DetectorConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
+    hands: HandConfig = field(default_factory=HandConfig)
     planner: PlannerConfig = field(default_factory=PlannerConfig)
     drive: DriveConfig = field(default_factory=DriveConfig)
     mission: MissionConfig = field(default_factory=MissionConfig)
@@ -347,6 +370,15 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
             raise ConfigError(f"mission.grasp_dist_by_label.{label}: 0 < min < max 여야 한다 ({lo}, {hi})")
     if m.grasp_creep_lead_s < 0 or m.grasp_settle_s < 0:
         raise ConfigError("mission.grasp_creep_lead_s / grasp_settle_s 는 음수일 수 없다")
+    h = cfg.hands
+    bad = set(h.edges) - {"front", "back", "left", "right"}
+    if bad:
+        raise ConfigError(f"hands.edges 는 front|back|left|right: {sorted(bad)}")
+    for name in ("min_infer_interval_s", "hand_z_m", "edge_band_m", "merge_dist_m", "hold_s"):
+        if getattr(h, name) <= 0:
+            raise ConfigError(f"hands.{name} 는 양수여야 한다")
+    if h.outside_m < 0 or h.confirm_s < 0 or h.num_hands < 1 or h.max_hands < 1:
+        raise ConfigError("hands: outside_m, confirm_s >= 0 · num_hands, max_hands >= 1")
     d = cfg.drive
     if not 0 < d.rotation_min_rad_s <= d.rotation_rad_s:
         raise ConfigError("drive.rotation_min_rad_s 는 0 초과 rotation_rad_s 이하여야 한다")
@@ -355,6 +387,7 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
         cameras=replace(cfg.cameras, calib_dir=_resolve(cfg.cameras.calib_dir)),
         detector=replace(cfg.detector, deployment_dir=_resolve(cfg.detector.deployment_dir),
                          cache_dir=_resolve(cfg.detector.cache_dir)),
+        hands=replace(cfg.hands, model_path=_resolve(cfg.hands.model_path)),
     )
 
 

@@ -38,43 +38,18 @@ import host_config  # noqa: E402
 from localization.aruco_localizer import (Camera, detect, floor_object_points,  # noqa: E402
                                           make_detector)
 from localization.cameras import open_cams, read_frames, release_all  # noqa: E402
+from perception.hands import HandSighting, make_landmarker, nearest_spot, run_landmarker  # noqa: E402
 
-# 손 촬영 계획(2026-10-01)의 손 위치 9곳, 손 중심 (m)
-HAND_SPOTS = {
-    "F1": (0.33, 0.12), "F2": (0.99, 0.12), "F3": (1.65, 0.12),
-    "L1": (0.075, 0.26), "L2": (0.075, 0.915), "L3": (0.075, 1.56),
-    "R1": (1.905, 0.26), "R2": (1.905, 0.915), "R3": (1.905, 1.56),
-}
-SPOT_RADIUS_M = 0.25
-PALM_IDX = (0, 5, 9, 13, 17)          # 손목 + 검지~새끼 뿌리
 MODEL_PATH = HOST_ROOT / "models" / "hand_landmarker.task"
 CONNECTIONS = ((0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8), (5, 9), (9, 10),
                (10, 11), (11, 12), (9, 13), (13, 14), (14, 15), (15, 16), (13, 17), (0, 17),
                (17, 18), (18, 19), (19, 20))
 
 
-def make_landmarker(num_hands: int, min_conf: float):
-    from mediapipe.tasks.python import BaseOptions, vision
+def _landmarker(num_hands: int, min_conf: float):
     if not MODEL_PATH.exists():
         raise SystemExit(f"{MODEL_PATH} 없음 — 모듈 설명의 주소에서 받아 두십시오")
-    opts = vision.HandLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path=str(MODEL_PATH)),
-        num_hands=num_hands, min_hand_detection_confidence=min_conf,
-        min_hand_presence_confidence=min_conf)
-    return vision.HandLandmarker.create_from_options(opts)
-
-
-def _run(landmarker, bgr: np.ndarray, ox: int, oy: int) -> list[dict]:
-    import mediapipe as mp
-    h, w = bgr.shape[:2]
-    rgb = np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-    res = landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
-    out = []
-    for lms, hd in zip(res.hand_landmarks, res.handedness):
-        pts = np.array([[p.x * w + ox, p.y * h + oy] for p in lms])
-        out.append({"pts": pts, "score": float(hd[0].score) if hd else 0.0,
-                    "side": hd[0].category_name if hd else "?"})
-    return out
+    return make_landmarker(MODEL_PATH, num_hands, min_conf)
 
 
 def tiles(w: int, h: int, size: int) -> list[tuple[int, int, int]]:
@@ -90,26 +65,22 @@ def tiles(w: int, h: int, size: int) -> list[tuple[int, int, int]]:
     return [(x, y, size) for y in starts(h) for x in starts(w)]
 
 
-def palm_px(hand: dict) -> np.ndarray:
-    return hand["pts"][list(PALM_IDX)].mean(axis=0)
-
-
-def merge(hands: list[dict]) -> list[dict]:
+def merge(hands: list[HandSighting]) -> list[HandSighting]:
     """조각 겹침으로 같은 손이 두 번 잡히면 점수 높은 쪽만 남긴다."""
-    kept: list[dict] = []
-    for hd in sorted(hands, key=lambda d: -d["score"]):
-        size = np.ptp(hd["pts"], axis=0).max()
-        if all(np.linalg.norm(palm_px(hd) - palm_px(k)) > 0.5 * size for k in kept):
+    kept: list[HandSighting] = []
+    for hd in sorted(hands, key=lambda d: -d.score):
+        size = np.ptp(hd.pts, axis=0).max()
+        if all(np.linalg.norm(hd.palm - k.palm) > 0.5 * size for k in kept):
             kept.append(hd)
     return kept
 
 
-def detect_hands(landmarker, frame: np.ndarray, mode: str, tile: int) -> list[dict]:
+def detect_hands(landmarker, frame: np.ndarray, mode: str, tile: int) -> list[HandSighting]:
     if mode == "full":
-        return _run(landmarker, frame, 0, 0)
+        return run_landmarker(landmarker, frame)
     found = []
     for x, y, s in tiles(frame.shape[1], frame.shape[0], tile):
-        found += _run(landmarker, frame[y:y + s, x:x + s], x, y)
+        found += run_landmarker(landmarker, frame[y:y + s, x:x + s], x, y)
     return merge(found)
 
 
@@ -132,31 +103,24 @@ def to_map(cam: Camera, px: np.ndarray, z: float):
     return None if p is None else (float(p[0, 0]), float(p[0, 1]))
 
 
-def nearest_spot(xy) -> str:
-    if xy is None:
-        return "-"
-    name, (sx, sy) = min(HAND_SPOTS.items(), key=lambda kv: np.hypot(kv[1][0] - xy[0], kv[1][1] - xy[1]))
-    return name if np.hypot(sx - xy[0], sy - xy[1]) <= SPOT_RADIUS_M else "?"
-
-
-def draw(frame: np.ndarray, hands: list[dict], labels: list[str], color) -> None:
+def draw(frame: np.ndarray, hands: list[HandSighting], labels: list[str], color) -> None:
     for hd, label in zip(hands, labels):
-        pts = hd["pts"].astype(int)
+        pts = hd.pts.astype(int)
         for a, b in CONNECTIONS:
             cv2.line(frame, tuple(pts[a]), tuple(pts[b]), color, 2)
-        c = palm_px(hd).astype(int)
+        c = hd.palm.astype(int)
         cv2.circle(frame, tuple(c), 6, color, -1)
         cv2.putText(frame, label, (c[0] + 8, c[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
 
-def describe(cam: Camera, hands: list[dict], z: float) -> tuple[list[str], list[dict]]:
+def describe(cam: Camera, hands: list[HandSighting], z: float) -> tuple[list[str], list[dict]]:
     labels, rows = [], []
     for hd in hands:
-        xy = to_map(cam, palm_px(hd), z)
+        xy = to_map(cam, hd.palm, z)
         spot = nearest_spot(xy)
-        txt = f"{spot} {hd['score']:.2f}" + ("" if xy is None else f" ({xy[0]:.2f},{xy[1]:.2f})")
+        txt = f"{spot} {hd.score:.2f}" + ("" if xy is None else f" ({xy[0]:.2f},{xy[1]:.2f})")
         labels.append(txt)
-        rows.append({"spot": spot, "score": round(hd["score"], 3),
+        rows.append({"spot": spot, "score": round(hd.score, 3),
                      "x": None if xy is None else round(xy[0], 3),
                      "y": None if xy is None else round(xy[1], 3)})
     return labels, rows
@@ -269,7 +233,7 @@ def main() -> int:
     ap.add_argument("--view-scale", type=float, default=0.6)
     args = ap.parse_args()
     cfg = host_config.load_host_config(args.config)
-    landmarker = make_landmarker(args.num_hands, args.min_conf)
+    landmarker = _landmarker(args.num_hands, args.min_conf)
     return run_live(args, cfg, landmarker) if args.live else run_images(args, cfg, landmarker)
 
 
