@@ -38,6 +38,9 @@ base:
   recover_script: /grippers/vla_deploy/vla_robot/tools/ops/rrc_recover.sh
   recover_timeout_s: 40.0
   recover_cooldown_s: 5.0
+  # 스택 기동 직후 컨트롤러 선제 재기동(10-01: 스택을 새로 띄울 때마다 첫 주행 무응답). 부저 없음.
+  recover_on_start: true
+  recover_on_start_delay_s: 3.0
 
 link:
   bind_ip: 0.0.0.0
