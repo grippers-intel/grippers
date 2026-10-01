@@ -139,6 +139,10 @@ class BaseConfig:
     recover_timeout_s: float = 40.0
     # 연달아 요청이 와도 이 간격 안에서는 다시 하지 않는다(한 번에 ~15 s 걸린다).
     recover_cooldown_s: float = 5.0
+    # 스택 기동 직후 컨트롤러를 한 번 미리 다시 띄운다(2026-10-01). 로봇 프로그램을 새로 띄울
+    # 때마다 첫 주행이 무응답이었다(완충·부저 정상이어도). 다른 노드가 다 뜰 시간을 두고 시작한다.
+    recover_on_start: bool = True
+    recover_on_start_delay_s: float = 3.0
 
 
 @dataclass(frozen=True)

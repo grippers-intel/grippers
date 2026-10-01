@@ -3,7 +3,11 @@
 #
 #   bash tools/ops/rrc_recover.sh          # 진단(부저)만
 #   bash tools/ops/rrc_recover.sh --fix    # 노드를 다시 띄운다
-#   bash tools/ops/rrc_recover.sh --fix auto   # pi_mission_node 가 자동 복구로 부를 때(로그 표시용)
+#   bash tools/ops/rrc_recover.sh --fix auto   # pi_mission_node 가 자동 복구로 부를 때 — 부저를 울리지 않는다
+#   bash tools/ops/rrc_recover.sh --fix auto-startup   # 스택 기동 직후 선제 재기동(같이 부저 없음)
+#
+# 자동 호출(auto*)에서는 부저를 끈다(2026-10-01). 스택을 띄울 때마다·복구할 때마다 울려
+# 시끄러웠고, 자동 복구의 성공은 Host 가 탑뷰로 "움직인다"를 보고 판단한다.
 #
 ## 증상 (2026-09-23 실기에서 확인)
 #
@@ -60,6 +64,9 @@ setsid bash -lc "export ROS_DOMAIN_ID=$DOMAIN && $SETUP && \
   exec ros2 run ros_robot_controller ros_robot_controller" >>/tmp/rrc.log 2>&1 &
 sleep 8
 echo "후: $(count_nodes) 개   (로그 /tmp/rrc.log)"
+case "${2:-}" in
+  auto*) exit 0 ;;          # 자동 호출 — 부저 없이 끝낸다
+esac
 beep
 echo
 echo "여전히 안 울리면 전원을 내렸다 올릴 것 — 그때는 보드 쪽 문제다."

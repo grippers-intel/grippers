@@ -417,9 +417,17 @@ class PiMissionNode(Node):
         self._last_status_sent = 0.0
         self._last_state_logged = None
         self.create_timer(1.0 / max(self.cfg.mission.cycle_hz, 1.0), self._cycle, callback_group=cb)
+        if bcfg.recover_on_start:
+            # 한 번만 — 다른 노드가 다 뜬 뒤. 도는 동안 Host 에는 base_recovering 으로 보이고 바퀴는 정지.
+            self._start_reset_timer = self.create_timer(
+                max(bcfg.recover_on_start_delay_s, 0.1), self._recover_on_start, callback_group=cb)
         self.get_logger().info(
             f"pi_mission_node 준비 boot_id={self.boot_id} UDP {lcfg.command_port}/{lcfg.status_port} "
             f"cmd_vel={bcfg.cmd_vel_topic}")
+
+    def _recover_on_start(self) -> None:
+        self._start_reset_timer.cancel()
+        self.recovery.request(startup=True)
 
     def _on_estop(self, _msg) -> None:
         self.get_logger().warn("E-STOP 래치")

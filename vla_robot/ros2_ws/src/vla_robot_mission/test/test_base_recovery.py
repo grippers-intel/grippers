@@ -40,6 +40,18 @@ def test_cooldown_ignores_repeated_requests():
     assert len(calls) == 2 and r.count == 2
 
 
+def test_startup_reset_runs_the_script_in_its_own_quiet_mode():
+    """10-01: 스택 기동 직후 선제 재기동. 스크립트는 auto* 에서 부저를 울리지 않는다."""
+    clock, calls = Clock(), []
+    r = make(clock, calls)
+    assert r.request(startup=True)
+    assert calls == [(["bash", "/x/rrc_recover.sh", "--fix", "auto-startup"], 40.0)]
+    assert r.count == 1
+    # Host 가 곧바로 복구를 요청해도 쿨다운으로 한 번만
+    clock.t += 1.0
+    assert not r.request()
+
+
 def test_timeout_still_ends_the_recovery():
     clock = Clock()
     r = BaseRecovery("/x", 40.0, 5.0, runner=lambda c, t: (-1, "40s 안에 끝나지 않았다"),

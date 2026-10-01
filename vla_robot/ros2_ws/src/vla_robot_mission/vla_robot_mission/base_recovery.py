@@ -61,8 +61,13 @@ class BaseRecovery:
         with self._lock:
             return self._count
 
-    def request(self) -> bool:
-        """복구를 시작한다. 이미 도는 중이거나 방금 끝났으면(쿨다운) 무시하고 False."""
+    def request(self, startup: bool = False) -> bool:
+        """복구를 시작한다. 이미 도는 중이거나 방금 끝났으면(쿨다운) 무시하고 False.
+
+        startup=True 는 스택 기동 직후의 **선제 재기동**이다. 2026-10-01: 로봇 프로그램을 새로 띄울
+        때마다 첫 주행이 무응답이었고(완충·부저 정상이어도), 컨트롤러를 한 번 다시 띄우면 그 뒤로는
+        정상이었다. 그래서 기동할 때 한 번 미리 한다.
+        """
         now = self._clock()
         with self._lock:
             if self._recovering:
@@ -70,15 +75,19 @@ class BaseRecovery:
             if self._last_end is not None and now - self._last_end < self.cooldown_s:
                 return False
             self._recovering = True
-        self._log("차체 컨트롤러 자동 복구 시작 — Host 가 '명령했는데 안 움직인다'를 봤다")
-        if self._background:
-            threading.Thread(target=self._run, name="base-recovery", daemon=True).start()
+        if startup:
+            self._log("차체 컨트롤러 선제 재기동 — 스택 기동 직후 첫 주행 무응답을 막는다")
         else:
-            self._run()
+            self._log("차체 컨트롤러 자동 복구 시작 — Host 가 '명령했는데 안 움직인다'를 봤다")
+        mode = "auto-startup" if startup else "auto"
+        if self._background:
+            threading.Thread(target=self._run, args=(mode,), name="base-recovery", daemon=True).start()
+        else:
+            self._run(mode)
         return True
 
-    def _run(self) -> None:
-        code, tail = self._runner(["bash", self.script, "--fix", "auto"], self.timeout_s)
+    def _run(self, mode: str = "auto") -> None:
+        code, tail = self._runner(["bash", self.script, "--fix", mode], self.timeout_s)
         with self._lock:
             self._recovering = False
             self._count += 1
