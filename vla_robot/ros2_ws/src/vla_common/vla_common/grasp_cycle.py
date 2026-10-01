@@ -31,10 +31,14 @@ CYCLE_START = (False, False, None, None, 0)
 #:   - 그 전에 청크가 끝나면 청크 끝까지(다음 청크를 추론하러 가지 않는다)
 SETTLE_RISE_DEG = 3.0
 SETTLE_FLAT_STEPS = 10
+#: 바닥까지 가는 동안 그리퍼 명령이 이만큼(%p) 넘게 열리면 그 스텝 **전에** 멈춘다.
+#: 2026-10-01 soccer: 접힌 자세에서 새로 받은 청크를 바닥까지 재생했더니, 정책이 다음 사이클을
+#: 준비하며 그리퍼를 열어 쥐고 있던 공을 놓쳤다(예전처럼 문턱에서 끊었으면 한 스텝도 안 틀었다).
+SETTLE_GRIPPER_OPEN_PCT = 2.0
 
 
 def scan_cycle(lift_cmd, state, extended_deg: float, drop_deg: float, rise_deg: float,
-               returned_deg: float):
+               returned_deg: float, gripper_cmd=None, gripper_now=None):
     """명령 궤적에서 **한 사이클이 끝나는 지점**을 찾는다.
 
     한 사이클 = 팔이 뻗었다가(> extended_deg) 돌아오는 것. 끝나는 모양이 둘이다.
@@ -45,7 +49,9 @@ def scan_cycle(lift_cmd, state, extended_deg: float, drop_deg: float, rise_deg: 
 
     둘 중 **먼저 오는 지점에서 멈춘다.** 재상승은 골짜기 바닥에서 끊으므로 팔이 다시 뻗지
     않는다. 골짜기가 이전 청크였으면 stop_at 0 — 이번 청크는 한 스텝도 재생하지 않는다.
-    복귀는 문턱을 넘은 뒤 **바닥까지** 재생한다(SETTLE_* 참고).
+    복귀는 문턱을 넘은 뒤 **바닥까지** 재생한다(SETTLE_* 참고). gripper_cmd(이 청크의 그리퍼 명령)를
+    주면 그 사이 그리퍼가 열리기 시작하는 스텝 전에 멈춘다. 기준은 문턱을 넘은 스텝의 명령과
+    gripper_now(청크를 받을 때 실측 개도) 중 **더 닫힌 쪽**이다.
 
     ⚠️ 성공·실패를 여기서 가르지 않는다. 판정은 그리퍼캠 근접 변화가 한다.
 
@@ -60,7 +66,7 @@ def scan_cycle(lift_cmd, state, extended_deg: float, drop_deg: float, rise_deg: 
                 ever, above, peak = True, True, value
             continue
         if value < returned_deg:
-            return CYCLE_START, _settle_end(lift_cmd, i), "복귀"
+            return CYCLE_START, _settle_end(lift_cmd, i, gripper_cmd, gripper_now), "복귀"
         if above:
             peak = value if peak is None else max(peak, value)
             if value < peak - drop_deg:
@@ -74,16 +80,28 @@ def scan_cycle(lift_cmd, state, extended_deg: float, drop_deg: float, rise_deg: 
     return (above, ever, peak, dip_min, -1 if dip_min is not None else 0), None, None
 
 
-def _settle_end(lift_cmd, start: int) -> int:
-    """복귀 문턱을 넘은 start 부터 바닥을 찾아, 재생할 스텝 수(바닥 스텝 포함)를 돌려준다."""
+def _settle_end(lift_cmd, start: int, gripper_cmd=None, gripper_now=None) -> int:
+    """복귀 문턱을 넘은 start 부터 바닥을 찾아, 재생할 스텝 수(바닥 스텝 포함)를 돌려준다.
+    그리퍼가 열리기 시작하는 스텝이 먼저 오면 그 스텝 전까지."""
+    limit = None
+    if gripper_cmd is not None:
+        ref = float(gripper_cmd[start])
+        if gripper_now is not None:
+            ref = min(ref, float(gripper_now))
+        limit = ref + SETTLE_GRIPPER_OPEN_PCT
+        if float(gripper_cmd[start]) > limit:
+            return start                        # 문턱 스텝부터 이미 연다 — 하나도 더 틀지 않는다
     bottom, bottom_idx = float(lift_cmd[start]), start
+    # "평평함"은 바닥과 따로 본다 — 천천히(스텝당 0.3°) 내려가는 것을 평평하다고 보면 안 된다.
+    anchor, anchor_idx = bottom, start
     for i in range(start + 1, len(lift_cmd)):
+        if limit is not None and float(gripper_cmd[i]) > limit:
+            return i
         value = float(lift_cmd[i])
-        if value < bottom - 0.5:
-            bottom, bottom_idx = value, i
-            continue
         if value < bottom:
-            bottom = value                      # 0.5° 안쪽의 미세한 하강은 바닥을 갱신만 한다
-        if value > bottom + SETTLE_RISE_DEG or i - bottom_idx >= SETTLE_FLAT_STEPS:
+            bottom, bottom_idx = value, i
+        if value < anchor - 0.5:
+            anchor, anchor_idx = value, i
+        if value > bottom + SETTLE_RISE_DEG or i - anchor_idx >= SETTLE_FLAT_STEPS:
             return bottom_idx + 1
     return len(lift_cmd)

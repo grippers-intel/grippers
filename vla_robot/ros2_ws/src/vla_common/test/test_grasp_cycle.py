@@ -65,6 +65,35 @@ def test_return_stops_at_the_bottom_before_the_next_attempt_rises():
     assert max(seq[:stop]) <= -35.0 and seq[stop - 1] == min(seq)
 
 
+def test_settling_stops_before_the_policy_opens_the_gripper():
+    """10-01 soccer: 접힌 자세에서 새로 받은 청크(-96 -> -102 -> -77)를 바닥까지 틀었더니 정책이
+    그리퍼를 열어 공을 놓쳤다. 열기 시작하는 스텝 전에 멈춘다."""
+    lift = np.concatenate([np.linspace(-96, -102, 20), np.linspace(-102, -77, 80)])
+    grip = np.concatenate([np.full(5, 8.0), np.linspace(8, 45, 15), np.full(80, 45.0)])
+    state = (True, True, 66.0, None, 0)
+    _s, stop, reason = scan_cycle(lift, state, EXT, DROP, RISE, RET, gripper_cmd=grip, gripper_now=24.0)
+    assert reason == "복귀"
+    assert stop <= 6, f"그리퍼가 열리기 전에 멈춰야 한다 (stop={stop})"
+    assert max(grip[:stop]) <= 8.0 + 2.0
+
+
+def test_settling_with_a_closed_gripper_still_reaches_the_bottom():
+    lift = np.concatenate([np.linspace(-96, -102, 20), np.linspace(-102, -77, 80)])
+    grip = np.full(100, 6.0)
+    state = (True, True, 66.0, None, 0)
+    _s, stop, reason = scan_cycle(lift, state, EXT, DROP, RISE, RET, gripper_cmd=grip, gripper_now=24.0)
+    assert reason == "복귀" and lift[stop - 1] == pytest.approx(-102.0, abs=0.4)
+
+
+def test_new_chunk_that_already_opens_at_the_threshold_plays_nothing_more():
+    """청크를 받을 때 실측 10% 인데 새 청크 첫 명령이 이미 30% — 한 스텝도 틀지 않는다."""
+    lift = np.linspace(-96, -102, 30)
+    grip = np.full(30, 30.0)
+    state = (True, True, 66.0, None, 0)
+    _s, stop, reason = scan_cycle(lift, state, EXT, DROP, RISE, RET, gripper_cmd=grip, gripper_now=10.0)
+    assert (reason, stop) == ("복귀", 0)
+
+
 def test_return_that_is_still_falling_at_the_chunk_end_plays_the_whole_chunk():
     seq = np.concatenate([ramp(-103, 70, -60), np.linspace(-60, -100, 30)])
     _state, stop, reason = run(seq)

@@ -221,10 +221,13 @@ class VlaGraspNode(Node):
                     # 여러 번 시도했는데 로그에는 한 번으로 보였다. 청크 안에는 30Hz 100스텝이
                     # 들어 있어 100배 촘촘하고, 무엇보다 **정책의 의도**가 그대로 담겨 있다.
                     lift_cmd = np.asarray(chunk)[:, SHOULDER_LIFT_INDEX]
+                    # 그리퍼 명령·실측도 넘긴다 — 복귀 바닥까지 가는 동안 그리퍼를 열면 거기서 멈춘다.
                     cycle, stop_at, reason = scan_cycle(
                         lift_cmd, cycle, self.pcfg.extended_lift_deg,
                         self.pcfg.retry_drop_deg, self.pcfg.retry_rise_deg,
-                        self.pcfg.returned_lift_deg)
+                        self.pcfg.returned_lift_deg,
+                        gripper_cmd=np.asarray(chunk)[:, GRIPPER_INDEX],
+                        gripper_now=state[GRIPPER_INDEX])
                     self.get_logger().info(
                         f"청크 {chunks + 1} 명령 lift 처음 {lift_cmd[0]:.0f} 최소 {lift_cmd.min():.0f} "
                         f"최대 {lift_cmd.max():.0f} 끝 {lift_cmd[-1]:.0f}"
