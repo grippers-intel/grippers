@@ -8,6 +8,7 @@
   (예전 matplotlib + cv2 GIL 크래시를 다시 만들지 않는다, map_view.py 머리말).
 
 UI 버튼 -> MapView 키와 같은 action 문자열: estop · reset · next · prev · toggle_manual.
+입력창 문장(submit)·카드 버튼(dismiss · pick_label)은 CommandDesk 가 받는다(Claude 해석 -> FSM 지시).
 창을 닫아도 run_host 는 돈다 — 끝내려면 터미널에서 Ctrl+C.
 """
 from __future__ import annotations
@@ -24,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 
+from mission.commands import CommandDesk
 from view.ui_state import UiState
 
 UI_DIR = Path(__file__).resolve().parents[1] / "ui"
@@ -68,9 +70,11 @@ class _Server(ThreadingHTTPServer):
 
 
 class WebView:
-    def __init__(self, cfg, port: Optional[int] = None, open_window: bool = True) -> None:
+    def __init__(self, cfg, port: Optional[int] = None, open_window: bool = True, desk=None) -> None:
         self.cfg = cfg
         self.ui = UiState(cfg)
+        # 입력창 -> Claude 해석 -> FSM 지시. 키가 없어도 만들어진다(요청 때 카드로 알린다).
+        self.desk = desk if desk is not None else CommandDesk(cfg)
         self._state_json = b"{}"
         self._lock = threading.Lock()
         self._events: "queue.Queue[tuple[str, object]]" = queue.Queue()
@@ -134,14 +138,15 @@ class WebView:
 
     def update(self, pose, piece_map, fsm, pi_status, link_age_s: float, hz: float,
                hands=()) -> Optional[str]:
-        action = self._next_action(fsm)        # 먼저 — 버튼이 띄운 알림이 이번 화면에 바로 실린다
-        state = self.ui.build(pose, piece_map, fsm, pi_status, link_age_s, hz, hands)
+        action = self._next_action(fsm, piece_map)   # 먼저 — 버튼이 띄운 알림이 이번 화면에 바로 실린다
+        self.desk.update(fsm)
+        state = self.ui.build(pose, piece_map, fsm, pi_status, link_age_s, hz, hands, self.desk)
         body = json.dumps(state, ensure_ascii=False).encode("utf-8")
         with self._lock:
             self._state_json = body
         return action
 
-    def _next_action(self, fsm) -> Optional[str]:
+    def _next_action(self, fsm, piece_map) -> Optional[str]:
         """한 사이클에 action 하나. 나머지 이벤트는 다음 사이클로."""
         while True:
             try:
@@ -155,12 +160,19 @@ class WebView:
                 self.ui.notify("정지 해제는 카드의 '초기화 후 재개' 로 합니다", "E-000", "error")
                 continue
             if action in ACTIONS:
-                if action == "reset":
+                if action == "reset":                   # 초기화 = 지시도 취소(FSM reset)
                     self.ui.reset()
+                    self.desk.dismiss()
                 return ACTIONS[action]
-            if action in ("submit", "mic"):
-                self.ui.notify("명령 입력은 아직 연결 전입니다 — 보이는 기물을 모두 정리합니다", "CMD", "caution")
-            # pick 등 나머지는 아직 쓰지 않는다
+            if action == "submit" and isinstance(payload, str):
+                self.desk.submit(payload, piece_map)
+            elif action == "mic":
+                self.ui.notify("음성 입력은 아직 연결 전입니다 — 아래 입력창에 써 주세요", "MIC", "caution")
+            elif action in ("dismiss", "retry", "cancel"):
+                self.desk.dismiss()
+            elif action == "pick_label" and isinstance(payload, str):
+                self.desk.pick_label(payload, fsm)
+            # 지도 기물 탭(pick)·run 등은 아직 쓰지 않는다
 
     def close(self) -> None:
         try:

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from enum import Enum, auto
 from typing import Optional
 
@@ -39,6 +39,17 @@ from vla_common.protocol import HostCommand, JobResult, JobTracker, PiStatus, St
 
 XY = tuple[float, float]
 PieceMap = dict[str, list[XY]]
+
+
+@dataclass
+class Order:
+    """사람의 지시 하나(Claude 가 해석). 이게 있는 동안은 이 라벨들만 고른다.
+    quantity "one" = 하나 옮기면 끝, "all" = 보이는 것이 없어질 때까지."""
+    labels: tuple[str, ...]
+    quantity: str = "one"
+    intent: str = "organize"         # organize | fetch (fetch 는 손 전달이 붙기 전까지 바구니로)
+    text: str = ""
+    done: int = 0
 
 
 class HostState(Enum):
@@ -85,6 +96,9 @@ class MissionFSM:
     def __init__(self, cfg: HostConfig, manual_mode: bool = False) -> None:
         self.cfg = cfg
         self.manual_mode = manual_mode
+        # auto = 보이는 기물을 모두 정리(지시가 오면 그것부터) · instructed = 지시가 있을 때만 움직인다
+        self.command_mode = cfg.instruction.mode
+        self.finished_order: Optional[tuple[Order, str]] = None     # (지시, "done" | "absent"), 화면용
         m = cfg.mission
         self._planner = GridPathPlanner(cfg.planner, cfg.arena,
                                         arrive_tol=min(m.grasp_trigger_dist_m, m.place_trigger_dist_m))
@@ -124,6 +138,7 @@ class MissionFSM:
         """처음부터. ESTOP 래치를 푸는 유일한 방법이다(실수로 재개되지 않게)."""
         self.state = HostState.SEARCH_TARGET
         self.estop = False
+        self.order: Optional[Order] = None              # reset = 지시 취소
         self.target_label: Optional[str] = None
         self.target_xy: Optional[XY] = None
         self.dest_box: Optional[str] = None
@@ -185,6 +200,23 @@ class MissionFSM:
 
     def request_back(self) -> None:
         self._back_requested = True
+
+    def set_order(self, order: Order) -> None:
+        """새 지시. 진행 중인 기물(집는 중·운반 중)은 끝까지 하고, 다음 대상부터 지시를 따른다."""
+        self.order = order
+        self.finished_order = None
+        self._log(f"order {'/'.join(order.labels)} x{order.quantity} ({order.intent}): {order.text}")
+
+    def cancel_order(self) -> None:
+        if self.order is not None:
+            self._log("order cancelled")
+        self.order = None
+
+    def _finish_order(self, outcome: str) -> None:
+        assert self.order is not None
+        self._log(f"order {outcome}: {'/'.join(self.order.labels)} done={self.order.done}")
+        self.finished_order = (self.order, outcome)
+        self.order = None
 
     def set_manual_mode(self, manual: bool) -> None:
         # 도중에 모드만 바꾸면 "이 상태로 계속 자동 진행?"이 애매하다. 항상 reset 과 묶는다.
@@ -302,9 +334,20 @@ class MissionFSM:
     # ------------------------------------------------------------------ 상태별
     def _step_search(self, pose: Pose, pmap: PieceMap, pi_status) -> HostCommand:
         self._clear_nav()
+        if self.order is None and self.command_mode == "instructed":
+            self.ready_to_advance = False
+            self.search_reason = "waiting for command"
+            return self._stop("waiting for command")
         skips = self._active_skips()
-        found = self._nearest_piece(pmap, pose.xy, skips)
+        labels = self.order.labels if self.order else None
+        found = self._nearest_piece(pmap, pose.xy, skips, labels)
         self.ready_to_advance = found is not None
+        if found is None and self.order is not None:
+            pending = [p for lb in self.order.labels for p in pmap.get(lb, []) if self._in_workspace(p)]
+            if not pending:
+                # 지시한 기물이 더 없다 — 하나라도 옮겼으면 완료, 아니면 "대상 없음"
+                self._finish_order("done" if self.order.done else "absent")
+                return self._stop("order finished")
         if found is None:
             in_ws = [p for pts in pmap.values() for p in pts if self._in_workspace(p)]
             if not pmap:
@@ -612,6 +655,10 @@ class MissionFSM:
             self.ready_to_advance = True
             if self._should_advance():
                 self._log(f"{self.target_label} delivered to {self.dest_box}")
+                if self.order is not None:
+                    self.order.done += 1
+                    if self.order.quantity == "one":
+                        self._finish_order("done")
                 self._clear_target()
                 self._enter(HostState.SEARCH_TARGET)
                 return self._stop("place done")
@@ -800,13 +847,16 @@ class MissionFSM:
         a = self.cfg.arena
         return a.workspace_x[0] <= p[0] <= a.workspace_x[1] and a.workspace_y[0] <= p[1] <= a.workspace_y[1]
 
-    def _nearest_piece(self, pmap: PieceMap, robot_xy: XY, skips: list[XY]) -> Optional[tuple[str, XY]]:
+    def _nearest_piece(self, pmap: PieceMap, robot_xy: XY, skips: list[XY],
+                       labels: Optional[tuple[str, ...]] = None) -> Optional[tuple[str, XY]]:
         """작업영역 안 + 목적지 상자가 있는 라벨 + 보류되지 않은 것 중 최근접.
-        y 가 작업영역 밖이면 상자 자리(이미 옮긴 것)라 뺀다."""
+        y 가 작업영역 밖이면 상자 자리(이미 옮긴 것)라 뺀다. labels 가 있으면 그 라벨만(지시)."""
         best, best_d = None, math.inf
         r = self.cfg.mission.skip_radius_m
         for label, pts in pmap.items():
             if label not in self.cfg.mission.piece_dest_box:
+                continue
+            if labels is not None and label not in labels:
                 continue
             for p in pts:
                 if not self._in_workspace(p) or any(_dist(p, s) <= r for s in skips):

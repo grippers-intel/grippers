@@ -303,6 +303,16 @@ class LinkConfig:
 
 
 @dataclass(frozen=True)
+class InstructionConfig:
+    """사람 지시(Claude API). 키는 ANTHROPIC_API_KEY 환경변수 — 설정 파일에 두지 않는다."""
+    # auto = 보이는 기물을 모두 정리하고, 지시가 오면 그것부터 · instructed = 지시가 있을 때만 움직인다
+    mode: str = "auto"
+    model: str = "claude-opus-5-5"
+    effort: str = "low"
+    timeout_s: float = 20.0
+
+
+@dataclass(frozen=True)
 class ViewConfig:
     # web = 팀원 시연 UI(ui/grippers-ui.html, 브라우저 앱 창) · cv = 예전 OpenCV 지도
     kind: str = "web"
@@ -323,6 +333,7 @@ class HostConfig:
     drive: DriveConfig = field(default_factory=DriveConfig)
     mission: MissionConfig = field(default_factory=MissionConfig)
     link: LinkConfig = field(default_factory=LinkConfig)
+    instruction: InstructionConfig = field(default_factory=InstructionConfig)
     view: ViewConfig = field(default_factory=ViewConfig)
 
 
@@ -376,6 +387,11 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
             raise ConfigError(f"mission.grasp_dist_by_label.{label}: 0 < min < max 여야 한다 ({lo}, {hi})")
     if m.grasp_creep_lead_s < 0 or m.grasp_settle_s < 0:
         raise ConfigError("mission.grasp_creep_lead_s / grasp_settle_s 는 음수일 수 없다")
+    ic = cfg.instruction
+    if ic.mode not in ("auto", "instructed"):
+        raise ConfigError(f"instruction.mode 는 auto|instructed: {ic.mode!r}")
+    if ic.effort not in ("low", "medium", "high", "xhigh", "max") or ic.timeout_s <= 0:
+        raise ConfigError("instruction.effort 는 low|medium|high|xhigh|max, timeout_s > 0")
     if cfg.view.kind not in ("web", "cv"):
         raise ConfigError(f"view.kind 는 web|cv: {cfg.view.kind!r}")
     h = cfg.hands

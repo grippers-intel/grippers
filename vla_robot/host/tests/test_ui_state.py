@@ -98,8 +98,12 @@ def test_web_view_serves_ui_state_and_events(cfg):
         _post(view.url + "event", {"action": "toggle_mode", "payload": None})
         _post(view.url + "event", {"action": "submit", "payload": "퀸 가져와"})
         assert view.update(pose, {}, fsm, None, 0.0, 10.0) == "toggle_manual"
-        assert view.update(pose, {}, fsm, None, 0.0, 10.0) is None        # submit 은 알림만
-        assert json.loads(_get(view.url + "state"))["notice"]["code"] == "CMD"
+        assert view.update(pose, {}, fsm, None, 0.0, 10.0) is None        # submit 은 해석기로
+        # 지도에 기물이 없으면 API 를 부르지 않고 바로 "기물 없음" 카드
+        assert json.loads(_get(view.url + "state"))["card"]["code"].startswith("E-201")
+        _post(view.url + "event", {"action": "card_action", "payload": "dismiss"})
+        view.update(pose, {}, fsm, None, 0.0, 10.0)
+        assert json.loads(_get(view.url + "state"))["card"] is None
         _post(view.url + "event", {"action": "card_action", "payload": "reset"})
         assert view.update(pose, {}, fsm, None, 0.0, 10.0) == "reset"
     finally:
