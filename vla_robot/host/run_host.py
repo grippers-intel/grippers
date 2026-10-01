@@ -1,5 +1,7 @@
 """Host 메인 루프 — 탑뷰 카메라 + ArUco + 검출기 -> 미션 FSM -> Pi(UDP).
 
+손 검출(MediaPipe, `hands:`)은 지금은 **지도 표시만** 한다 — FSM 에는 아직 넘기지 않는다.
+
 사용법 (host/ 에서):
     python run_host.py --sim                          # 차량·카메라 없이 전체 흐름
     python run_host.py --sim --step                   # n 키로 단계 진행
@@ -64,6 +66,7 @@ def main() -> int:
     fsm = MissionFSM(cfg, manual_mode=args.step)
     view = None
     caps, cams, piece_detector, world = [], [], None, None
+    hand_detector, hand_tracker, hands, hand_spots = None, None, [], []
 
     try:
         if args.sim:
@@ -76,6 +79,8 @@ def main() -> int:
             from localization.aruco_localizer import Camera, RobotLocalizer, detect, draw_overlay, make_detector
             from localization.cameras import open_cams, read_frames
             from perception.detector import make_detector as make_piece_detector
+            from perception.hands import (HandDetector, hand_observations, make_hand_tracker,
+                                          nearest_spot)
             from perception.piece_tracker import PieceTracker, observations_from_detections
 
             indices = args.cams if args.cams is not None else list(cfg.cameras.indices)
@@ -94,6 +99,11 @@ def main() -> int:
             print(f"[host] 검출기: {det_cfg.kind}")
             piece_detector = make_piece_detector(det_cfg, indices)
             tracker = PieceTracker(cfg.tracker)
+            hand_detector = HandDetector(cfg.hands, indices)
+            hand_tracker = make_hand_tracker(cfg.hands, cfg.tracker)
+            if hand_detector.ok:
+                print(f"[host] 손 검출: MediaPipe · 높이 {cfg.hands.hand_z_m} m · "
+                      f"가장자리 {'/'.join(cfg.hands.edges)} {cfg.hands.edge_band_m} m")
             if args.pi_ip:
                 link = UdpVehicleLink(args.pi_ip, cfg.link.command_port, cfg.link.status_port,
                                       cfg.link.bind_ip, cfg.link.stop_burst)
@@ -128,11 +138,27 @@ def main() -> int:
                     obs.append(observations_from_detections(cam, piece_detector.latest(idx),
                                                             cfg.detector.conf_threshold))
                 pmap = tracker.update(obs, t0)
-                if args.show_cams:
-                    for cam, frame, det in zip(cams, frames, dets):
+                hobs = []
+                if hand_detector.ok:
+                    for idx, cam, frame in zip(indices, cams, frames):
                         if frame is not None:
-                            cv2.imshow(cam.name, draw_overlay(frame.copy(), cam, det, pose,
-                                                              cfg.aruco.robot_marker_id))
+                            hand_detector.submit(idx, frame)
+                        hobs.append(hand_observations(cam, hand_detector.latest(idx), cfg.hands,
+                                                      cfg.arena))
+                hands = hand_tracker.update(hobs, t0).get("hand", [])
+                spots = sorted(nearest_spot(h) for h in hands)
+                if spots != hand_spots:     # 손이 생기거나 사라지거나 자리를 옮길 때만 찍는다
+                    print("[hands] " + (", ".join(f"{nearest_spot(h)} ({h[0]:.2f},{h[1]:.2f})"
+                                                  for h in hands) or "손 없음"))
+                    hand_spots = spots
+                if args.show_cams:
+                    for idx, cam, frame, det in zip(indices, cams, frames, dets):
+                        if frame is not None:
+                            over = draw_overlay(frame.copy(), cam, det, pose, cfg.aruco.robot_marker_id)
+                            for s in (hand_detector.latest(idx) or []) if hand_detector.ok else []:
+                                c = tuple(int(v) for v in s.palm)
+                                cv2.circle(over, c, 10, (0, 140, 255), 2)
+                            cv2.imshow(cam.name, over)
 
             status = link.latest_status()
             cmd = fsm.step(pose, pmap, status, t0)
@@ -140,7 +166,7 @@ def main() -> int:
 
             action = None
             if view is not None:
-                action = view.update(pose, pmap, fsm, status, link.status_age_s(), hz)
+                action = view.update(pose, pmap, fsm, status, link.status_age_s(), hz, hands)
             elif args.show_cams:
                 import cv2 as _cv2
                 action = "quit" if (_cv2.waitKey(1) & 0xFF) == ord("q") else None
@@ -152,6 +178,7 @@ def main() -> int:
                 fsm.reset()
                 if world is None:
                     tracker.reset()
+                    hand_tracker.reset()
             elif action == "next":
                 fsm.request_advance()
             elif action == "prev":
@@ -183,6 +210,8 @@ def main() -> int:
         finally:
             if piece_detector is not None:
                 piece_detector.close()
+            if hand_detector is not None:
+                hand_detector.close()
             for c in caps:
                 c.release()
             if view is not None:

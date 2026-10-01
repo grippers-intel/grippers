@@ -22,6 +22,11 @@ pip install geti-sdk==2.13.1             # 검출기를 쓸 때만
   파일이 없으면 근사값으로 돌며 큰 경고를 찍는다(수 cm 오차).
 - **Geti 모델**(87 MB, 저장소에 넣지 않음):
   `hardware\grippers_topview\geti_sdk-deployment\deployment` 폴더를 `host\models\geti_deployment` 로 복사.
+- **손 검출 모델**(선택, 7.8 MB, 저장소에 넣지 않음): `requirements.txt` 의 mediapipe +
+  `models/hand_landmarker.task`
+  (https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task).
+  없으면 경고만 하고 손 없이 돈다. 손은 지도에 주황 원("hand L2")으로만 표시한다 — 미션은 아직 쓰지 않는다.
+  카메라에서 잡히는지는 `python tools/hand_probe.py --live` 로 따로 본다.
 - **실측값**: `config/host.yaml` — 마커 높이·바닥 마커 좌표·상자 좌표·yaw_offset.
   모르는 키가 있으면 기동을 거부한다.
 
