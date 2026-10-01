@@ -145,6 +145,7 @@ class MissionFSM:
         self._unwind_until: Optional[float] = None
         self._unwind_sign = -1.0
         self._unwound = False
+        self._translating_since: Optional[float] = None
         self.skipped: list[tuple[XY, float]] = []
         self.last_result: Optional[JobResult] = None
         self._advance_requested = False
@@ -200,8 +201,15 @@ class MissionFSM:
             if waiting is not None:
                 return waiting
         cmd = self._step_states(pose, piece_map, pi_status, now)
+        # 직진·옆걸음으로 바퀴가 **충분히** 구르면 회전 뒤 버팀이 풀린다(2 s·30 cm 직진 뒤에는 조용했다).
+        # 거리 맞추기 같은 짧은 움직임은 안 된다 — 10-01 star: 회전 → 1~2 cm 후진 → 파지 동안 다시 울었다.
         if not cmd.stop and (abs(cmd.linear_x) > 1e-6 or abs(cmd.linear_y) > 1e-6):
-            self._rot_since_unwind = False      # 직진·옆걸음으로 바퀴가 구르면 회전 뒤 버팀이 풀린다
+            if self._translating_since is None:
+                self._translating_since = now
+            if now - self._translating_since >= self.cfg.drive.unwind_clear_s:
+                self._rot_since_unwind = False
+        else:
+            self._translating_since = None
         watching = self.estop or self.state in _DRIVE_HOST_STATES
         if self._runaway.update(now, cmd, pose, watching):
             self._runaway.reset()
