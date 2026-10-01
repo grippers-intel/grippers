@@ -174,6 +174,12 @@ class MissionConfig:
     grasp_trigger_dist_m: float = 0.33
     grasp_dist_min_m: float = 0.26
     grasp_dist_max_m: float = 0.31
+    # 기물별로 다른 범위 [min, max]. 없으면 위 값을 쓴다. 범위 상한이 트리거보다 크면 그 기물은
+    # 그 상한에서 멈춰 맞추기 시작한다.
+    # star: 2026-10-01 실기 0.27 m 에서 두 번 다 그리퍼가 기물을 **지나쳤다**(사용자 관찰).
+    #       09-30 에는 0.33~0.34 에서 두 번 빈손. 그 사이로 3 cm 물렸다.
+    grasp_dist_by_label: dict[str, tuple[float, float]] = field(
+        default_factory=lambda: {"star": (0.30, 0.33)})
     # 앞뒤로 맞출 때 멈추라고 하고도 더 가는 만큼을 미리 뺀다(속도 x 이 시간). 멈춘 뒤에는
     # grasp_settle_s 동안 기다렸다가 다시 잰다(흔들리는 위치로 판단하지 않게).
     grasp_creep_lead_s: float = 0.25
@@ -330,6 +336,9 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
         raise ConfigError("mission.grasp_retry_max >= 0, grasp_face_tol_deg > 0")
     if not 0 < m.grasp_dist_min_m < m.grasp_dist_max_m <= m.grasp_trigger_dist_m:
         raise ConfigError("mission: 0 < grasp_dist_min_m < grasp_dist_max_m <= grasp_trigger_dist_m")
+    for label, (lo, hi) in m.grasp_dist_by_label.items():
+        if not 0 < lo < hi:
+            raise ConfigError(f"mission.grasp_dist_by_label.{label}: 0 < min < max 여야 한다 ({lo}, {hi})")
     if m.grasp_creep_lead_s < 0 or m.grasp_settle_s < 0:
         raise ConfigError("mission.grasp_creep_lead_s / grasp_settle_s 는 음수일 수 없다")
     d = cfg.drive

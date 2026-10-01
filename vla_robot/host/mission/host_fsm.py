@@ -319,8 +319,10 @@ class MissionFSM:
         self._refresh_target(pmap)
         obstacles = [p for pts in pmap.values() for p in pts if _dist(p, self.target_xy) > 0.05]
         dist = _dist(pose.xy, self.target_xy)
-        # 파지 구역: 들어갈 때는 트리거 거리, 나갈 때는 거기에 히스테리시스를 더한다.
-        limit = m.grasp_trigger_dist_m + (m.grasp_zone_hysteresis_m if self._in_grasp_zone else 0.0)
+        lo, hi = self._grasp_range()
+        # 파지 구역: 들어갈 때는 트리거 거리(기물 범위 상한이 더 크면 그것), 나갈 때는 히스테리시스를 더한다.
+        trigger = max(m.grasp_trigger_dist_m, hi)
+        limit = trigger + (m.grasp_zone_hysteresis_m if self._in_grasp_zone else 0.0)
         self._in_grasp_zone = dist <= limit
         if self._in_grasp_zone:
             self._clear_nav()
@@ -341,9 +343,9 @@ class MissionFSM:
             if self._creep_stopped_at is not None and self._now - self._creep_stopped_at < m.grasp_settle_s:
                 self.ready_to_advance = False
                 return self._stop(f"grasp range (settle, {dist:.3f} m)")
-            in_range = m.grasp_dist_min_m <= dist <= m.grasp_dist_max_m
+            in_range = lo <= dist <= hi
             if not in_range and self._creep_tries < self.CREEP_TRIES:
-                self._creep = 1 if dist > m.grasp_dist_max_m else -1
+                self._creep = 1 if dist > hi else -1
                 self._creep_tries += 1
                 self._creep_cmds = 0
                 creep = self._creep_to_range(dist)
@@ -368,6 +370,11 @@ class MissionFSM:
     #: 파지 거리 맞추기 최대 횟수. 넘으면 그 자리에서 잡는다(맴돌지 않게).
     CREEP_TRIES = 4
 
+    def _grasp_range(self) -> tuple[float, float]:
+        """지금 목표 기물의 파지 시작 거리 범위 [min, max]. 기물별 값이 없으면 기본 범위."""
+        m = self.cfg.mission
+        return m.grasp_dist_by_label.get(self.target_label or "", (m.grasp_dist_min_m, m.grasp_dist_max_m))
+
     def _creep_to_range(self, dist: float) -> Optional[HostCommand]:
         """파지 거리 범위의 가운데로 천천히 앞(+1)·뒤(-1)로 간다. 끝났거나 할 일이 없으면 None.
 
@@ -378,7 +385,7 @@ class MissionFSM:
             return None
         m = self.cfg.mission
         v = self.cfg.drive.nudge_mps
-        mid = (m.grasp_dist_min_m + m.grasp_dist_max_m) / 2.0
+        mid = sum(self._grasp_range()) / 2.0
         lead = v * m.grasp_creep_lead_s
         done = (dist - lead <= mid) if self._creep > 0 else (dist + lead >= mid)
         # 범위를 몇 mm 만 벗어났으면 "미리 멈추기"가 곧바로 참이라 한 번도 안 움직이고 멈춤·대기만

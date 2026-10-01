@@ -153,6 +153,35 @@ def test_a_few_mm_outside_the_range_still_moves_and_never_loops(cfg):
     assert any("grasp here" in e for e in fsm.events)
 
 
+def test_star_uses_its_own_farther_grasp_range(cfg):
+    """10-01 실기: star 는 0.27 m 에서 두 번 다 그리퍼가 기물을 지나쳤다 — star 만 범위를 멀리 둔다."""
+    lo, hi = cfg.mission.grasp_dist_by_label["star"]
+    assert lo > cfg.mission.grasp_dist_min_m
+    star = {"star": [(0.9, 0.9)]}
+    fsm = MissionFSM(cfg)
+    fsm.step(P(0.9, 0.63), star, S(), 0.0)                      # 0.27 m — 기본 범위 안, star 에는 가깝다
+    cmd = fsm.step(P(0.9, 0.63), star, S(), 0.1)
+    assert fsm.target_label == "star" and fsm.state == HostState.APPROACH_PIECE
+    assert cmd.linear_x < 0                                     # 뒤로 물러나 star 범위로
+    # 같은 거리의 queen 은 그대로 잡는다
+    fsm = MissionFSM(cfg)
+    queen = {"queen": [(0.9, 0.9)]}
+    fsm.step(P(0.9, 0.63), queen, S(), 0.0)
+    fsm.step(P(0.9, 0.63), queen, S(), 0.1)
+    assert fsm.state == HostState.GRASP
+
+
+def test_star_inside_its_own_range_is_grasped_without_adjusting(cfg):
+    """star 범위 가운데에 섰으면 앞뒤로 움직이지 않고 바로 잡는다(기본 범위 밖이어도)."""
+    lo, hi = cfg.mission.grasp_dist_by_label["star"]
+    star = {"star": [(0.9, 0.9)]}
+    fsm = MissionFSM(cfg)
+    y = 0.9 - (lo + hi) / 2
+    fsm.step(P(0.9, y), star, S(), 0.0)
+    fsm.step(P(0.9, y), star, S(), 0.1)
+    assert fsm.state == HostState.GRASP
+
+
 def test_faces_the_piece_before_adjusting_the_distance(cfg):
     """정면부터 — 비스듬히 앞뒤로 가면 거리가 아니라 옆으로 움직인다."""
     fsm = MissionFSM(cfg)
