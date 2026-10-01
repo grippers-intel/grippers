@@ -23,6 +23,15 @@ from __future__ import annotations
 #: dip_idx 가 -1 이면 골짜기가 **이전 청크**에 있었다는 뜻이다.
 CYCLE_START = (False, False, None, None, 0)
 
+#: 복귀 문턱을 넘은 뒤 **바닥까지** 재생한다(2026-10-01). 문턱을 처음 넘는 순간 끊으면 정책이
+#: 아직 접는 중이라, 이어지는 idle 이동이 남은 몫을 한꺼번에 메우며 그리퍼를 "살짝 드는" 것처럼
+#: 보였다(사용자 관찰). 바닥 = 더 내려가지 않는 지점:
+#:   - 바닥에서 SETTLE_RISE_DEG 넘게 다시 오르면(다음 시도의 시작) 바닥 스텝까지
+#:   - SETTLE_FLAT_STEPS 동안 새 바닥이 안 나오면(0.5° 넘게) 거기까지
+#:   - 그 전에 청크가 끝나면 청크 끝까지(다음 청크를 추론하러 가지 않는다)
+SETTLE_RISE_DEG = 3.0
+SETTLE_FLAT_STEPS = 10
+
 
 def scan_cycle(lift_cmd, state, extended_deg: float, drop_deg: float, rise_deg: float,
                returned_deg: float):
@@ -36,10 +45,12 @@ def scan_cycle(lift_cmd, state, extended_deg: float, drop_deg: float, rise_deg: 
 
     둘 중 **먼저 오는 지점에서 멈춘다.** 재상승은 골짜기 바닥에서 끊으므로 팔이 다시 뻗지
     않는다. 골짜기가 이전 청크였으면 stop_at 0 — 이번 청크는 한 스텝도 재생하지 않는다.
+    복귀는 문턱을 넘은 뒤 **바닥까지** 재생한다(SETTLE_* 참고).
 
     ⚠️ 성공·실패를 여기서 가르지 않는다. 판정은 그리퍼캠 근접 변화가 한다.
 
     반환: (state, stop_at, reason). stop_at 이 None 이면 아직 사이클 중이다.
+    stop_at 은 재생할 스텝 수다(청크[:stop_at]).
     """
     above, ever, peak, dip_min, dip_idx = state
     for i, raw in enumerate(lift_cmd):
@@ -49,7 +60,7 @@ def scan_cycle(lift_cmd, state, extended_deg: float, drop_deg: float, rise_deg: 
                 ever, above, peak = True, True, value
             continue
         if value < returned_deg:
-            return CYCLE_START, i, "복귀"
+            return CYCLE_START, _settle_end(lift_cmd, i), "복귀"
         if above:
             peak = value if peak is None else max(peak, value)
             if value < peak - drop_deg:
@@ -61,3 +72,18 @@ def scan_cycle(lift_cmd, state, extended_deg: float, drop_deg: float, rise_deg: 
             return CYCLE_START, max(dip_idx, 0), "재상승"
     # 청크가 끝났다. 골짜기 위치는 이제 "이전 청크"다.
     return (above, ever, peak, dip_min, -1 if dip_min is not None else 0), None, None
+
+
+def _settle_end(lift_cmd, start: int) -> int:
+    """복귀 문턱을 넘은 start 부터 바닥을 찾아, 재생할 스텝 수(바닥 스텝 포함)를 돌려준다."""
+    bottom, bottom_idx = float(lift_cmd[start]), start
+    for i in range(start + 1, len(lift_cmd)):
+        value = float(lift_cmd[i])
+        if value < bottom - 0.5:
+            bottom, bottom_idx = value, i
+            continue
+        if value < bottom:
+            bottom = value                      # 0.5° 안쪽의 미세한 하강은 바닥을 갱신만 한다
+        if value > bottom + SETTLE_RISE_DEG or i - bottom_idx >= SETTLE_FLAT_STEPS:
+            return bottom_idx + 1
+    return len(lift_cmd)

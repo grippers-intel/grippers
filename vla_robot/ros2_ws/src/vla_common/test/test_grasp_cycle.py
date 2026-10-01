@@ -36,9 +36,39 @@ def test_idle_only_is_not_a_cycle():
 
 
 def test_reach_then_return_ends_the_cycle():
-    state, stop, reason = run(ramp(-103, 70, 0, -103))
+    seq = ramp(-103, 70, 0, -103)
+    state, stop, reason = run(seq)
     assert reason == "복귀" and stop is not None
-    assert ramp(-103, 70, 0, -103)[stop] < RET
+    assert seq[stop - 1] < RET
+
+
+# ---------------------------------------------------------------------------
+# 복귀는 바닥까지 (2026-10-01: 문턱에서 끊으면 idle 이동이 남은 몫을 메우며 그리퍼를 "살짝 든다")
+# ---------------------------------------------------------------------------
+def test_return_plays_down_to_the_bottom_not_just_past_the_threshold():
+    seq = np.concatenate([ramp(-103, 70, -60), np.linspace(-60, -104, 40), np.full(30, -104.0)])
+    first_below = int(np.argmax(seq < RET))
+    _state, stop, reason = run(seq)
+    assert reason == "복귀"
+    assert stop > first_below + 1, "문턱을 처음 넘는 곳에서 끊으면 안 된다"
+    assert seq[stop - 1] == pytest.approx(-104.0, abs=0.6), "바닥(-104)까지 재생"
+    assert stop < len(seq), "바닥에서 평평하면 청크 끝까지 기다리지 않는다"
+
+
+def test_return_stops_at_the_bottom_before_the_next_attempt_rises():
+    """10-01 soccer: 청크 6 이 -96 까지 내려갔다가 -88 로 다시 오른다 — 바닥 -96 에서 끊는다."""
+    seq = np.concatenate([ramp(-35, -96, n=40), ramp(-96, -88, n=20)])
+    state = (True, True, 66.0, None, 0)                    # 이미 뻗었다 내려오는 중
+    _state, stop, reason = scan_cycle(seq, state, EXT, DROP, RISE, RET)
+    assert reason == "복귀"
+    assert seq[stop - 1] == pytest.approx(-96.0, abs=0.1)
+    assert max(seq[:stop]) <= -35.0 and seq[stop - 1] == min(seq)
+
+
+def test_return_that_is_still_falling_at_the_chunk_end_plays_the_whole_chunk():
+    seq = np.concatenate([ramp(-103, 70, -60), np.linspace(-60, -100, 30)])
+    _state, stop, reason = run(seq)
+    assert reason == "복귀" and stop == len(seq)
 
 
 def test_up_down_up_inside_one_chunk_is_caught():
