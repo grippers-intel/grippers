@@ -143,9 +143,9 @@ def test_desk_flow_to_order_and_ui(cfg):
     fsm.cancel_order()
 
     desk.submit("가져와", pmap)
-    desk.update(fsm)
+    desk.update(fsm)                                   # 손이 안 보인다 -> 접수하지 않고 카드
     s = ui.build(pose, pmap, fsm, None, 0.0, 10.0, desk=desk)
-    assert fsm.order.intent == "fetch" and s["notice"]["code"] == "FETCH"
+    assert fsm.order is None and s["card"]["code"].startswith("E-220")
 
 
 def test_desk_api_error_card(cfg):
@@ -166,3 +166,102 @@ def test_missing_key_is_reported_not_raised(cfg, monkeypatch):
         monkeypatch.delenv(k, raising=False)
     r = InstructionResolver(cfg.instruction).resolve("퀸 정리해", ["queen"])
     assert not r.ok and r.error and "ANTHROPIC_API_KEY" in r.error
+
+
+# ---------------------------------------------------------------- 손에 건네기
+def _run_with_hands(cfg, clock, world, fsm, cycles, until=None):
+    dt = 1.0 / cfg.mission.cycle_hz
+    for _ in range(cycles):
+        clock.t += dt
+        world.update()
+        fsm.set_hands(world.hands)
+        world.link.send(fsm.step(world.pose(), world.piece_map(), world.link.latest_status(), clock.t))
+        if until and until():
+            return True
+    return False
+
+
+def _hand_sim(cfg, spots, seed=1):
+    cfg = replace(cfg, instruction=replace(cfg.instruction, mode="instructed"))
+    clock = FakeClock()
+    world = SimWorld(cfg, clock=clock, seed=seed, hands=[cfg.handover.spots[s][:2] for s in spots])
+    return cfg, clock, world, MissionFSM(cfg)
+
+
+def test_fetch_hands_the_piece_over(cfg):
+    for spot in ("L2", "F2", "R1"):
+        c, clock, world, fsm = _hand_sim(cfg, [spot])
+        label = sorted(world.piece_map())[0]
+        fsm.set_order(Order((label,), "one", "fetch", f"{label} 가져와"))
+        sent = []
+        orig = world.link.send
+        world.link.send = lambda cmd: (sent.append(cmd), orig(cmd))[1]
+        assert _run_with_hands(c, clock, world, fsm, 8000, until=lambda: fsm.finished_order is not None), \
+            f"{spot}: state={fsm.state.name} events={list(fsm.events)}"
+        assert world.pieces_in_box("hand") == [label], (spot, list(fsm.events))
+        assert world.pieces_in_box("basket") == []
+        assert fsm.finished_order[0].handed == 1
+        assert any(cmd.state == "PLACE" and cmd.place_pose == "handover" for cmd in sent)
+        assert label not in world.piece_map()            # 손에 건넨 기물은 장판에 없다
+
+
+def test_fetch_without_hand_waits_then_uses_basket(cfg):
+    c, clock, world, fsm = _hand_sim(cfg, ["L2"])
+    c = replace(c, handover=replace(c.handover, hand_wait_s=3.0))
+    fsm = MissionFSM(c)
+    label = sorted(world.piece_map())[0]
+    fsm.set_order(Order((label,), "one", "fetch", "가져와"))
+    # 파지까지는 손이 보이다가, 운반 중에 손을 치운다
+    dt = 1.0 / c.mission.cycle_hz
+    for _ in range(8000):
+        clock.t += dt
+        world.update()
+        if fsm.state == HostState.CARRY_TO_DEST and fsm.dest_kind == "hand":
+            world.hands = []
+        fsm.set_hands(world.hands)
+        world.link.send(fsm.step(world.pose(), world.piece_map(), world.link.latest_status(), clock.t))
+        if fsm.finished_order is not None:
+            break
+    assert world.pieces_in_box("basket") == [label], list(fsm.events)
+    assert fsm.finished_order[0].handed == 0
+    assert any("기다린다" in e for e in fsm.events) or any("바구니로" in e for e in fsm.events)
+
+
+def test_desk_fetch_needs_a_visible_hand(cfg):
+    target = "queen"
+    fake = FakeResolver({"퀸 가져와": {"matched": True, "labels": [target], "quantity": "one",
+                                    "intent": "fetch", "reply": "", "reason": ""}})
+    desk = CommandDesk(cfg, resolver=fake)
+    fsm = MissionFSM(cfg)
+    pmap = {"queen": [(0.9, 0.9)]}
+    desk.submit("퀸 가져와", pmap)
+    desk.update(fsm, hands=[])
+    card = desk.card()
+    assert card["code"].startswith("E-220") and fsm.order is None
+    desk.to_basket(fsm)
+    assert fsm.order.intent == "organize" and desk.card() is None
+    fsm.cancel_order()
+    desk.submit("퀸 가져와", pmap)
+    desk.update(fsm, hands=[(0.10, 0.90)])
+    assert fsm.order.intent == "fetch"
+
+
+def test_ui_wording_for_handover(cfg):
+    c, clock, world, fsm = _hand_sim(cfg, ["L2"])
+    ui = UiState(c)
+    label = sorted(world.piece_map())[0]
+    fsm.set_order(Order((label,), "one", "fetch", "가져와"))
+    seen = set()
+    dt = 1.0 / c.mission.cycle_hz
+    for _ in range(8000):
+        clock.t += dt
+        world.update()
+        fsm.set_hands(world.hands)
+        st = world.link.latest_status()
+        world.link.send(fsm.step(world.pose(), world.piece_map(), st, clock.t))
+        s = ui.build(world.pose(), world.piece_map(), fsm, st, 0.0, 10.0, hands=world.hands)
+        seen.add(s["status"]["en"])
+        if fsm.finished_order is not None:
+            break
+    assert {"TO_HAND", "HANDOVER"} <= seen
+    assert "손에 건넸습니다" in s["done"]["title"]

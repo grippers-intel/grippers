@@ -130,13 +130,14 @@ class RosJobRunner:
         with self._lock:
             return self._busy
 
-    def start(self, job_id: int, action: str, label: str, arm_yaw_deg: float = 0.0) -> None:
+    def start(self, job_id: int, action: str, label: str, arm_yaw_deg: float = 0.0,
+              place_pose: str = "") -> None:
         with self._lock:
             if self._busy:
                 raise RuntimeError("이미 작업 중")
             self._busy = True
         self._cancel.clear()
-        threading.Thread(target=self._run, args=(job_id, action, label, float(arm_yaw_deg)),
+        threading.Thread(target=self._run, args=(job_id, action, label, float(arm_yaw_deg), place_pose),
                          name=f"job{job_id}", daemon=True).start()
 
     def poll(self) -> Optional[tuple[int, bool, str]]:
@@ -166,16 +167,17 @@ class RosJobRunner:
             self._node.get_logger().warn(f"작업 취소 중 무시된 오류: {exc}")
 
     # -- 실행 -----------------------------------------------------------------
-    def _run(self, job_id: int, action: str, label: str, arm_yaw_deg: float = 0.0) -> None:
+    def _run(self, job_id: int, action: str, label: str, arm_yaw_deg: float = 0.0,
+             place_pose: str = "") -> None:
         log = self._node.get_logger()
         started = time.monotonic()
         try:
             log.info(f"작업 {job_id} 시작: {action} label={label or '-'} "
-                     f"arm_yaw={arm_yaw_deg:+.1f}도")
+                     f"arm_yaw={arm_yaw_deg:+.1f}도{' · ' + place_pose if place_pose else ''}")
             if action == State.GRASP:
                 detail = self._do_grasp(label)
             elif action == State.PLACE:
-                detail = self._do_place(arm_yaw_deg)
+                detail = self._do_place(arm_yaw_deg, place_pose)
             else:
                 raise JobFailed(f"모르는 작업: {action}")
             ok = True
@@ -353,7 +355,7 @@ class RosJobRunner:
                     raise JobFailed(f"그리퍼 부하가 낮다: {observed}")
         return f"파지 {grasp.chunks}청크 — {observed}"
 
-    def _do_place(self, arm_yaw_deg: float = 0.0) -> str:
+    def _do_place(self, arm_yaw_deg: float = 0.0, place_pose: str = "") -> str:
         """차는 상자 정면에 서 있다. **좌우 정렬은 차체가 아니라 팔의 base 가 한다.**
 
         트는 각도는 두 몫의 합이다.
@@ -363,9 +365,12 @@ class RosJobRunner:
         복귀 포즈는 틀지 않는다 — idle 은 정책 시작 자세라 항상 제자리여야 한다.
         """
         pcfg = self._cfg.place
-        drop = self._poses.get(pcfg.drop_pose)
+        # place_pose == "handover": 사람 손에 건네기 — 같은 흐름에서 놓는 자세만 바꾸고, 열기 전에 잠깐 기다린다.
+        handover = place_pose == "handover"
+        pose_name = pcfg.handover_pose if handover else pcfg.drop_pose
+        drop = self._poses.get(pose_name)
         if drop is None or not drop.measured:
-            raise JobFailed(f"'{pcfg.drop_pose}' 포즈가 실측되지 않았다 — tools/teach_pose.py --name {pcfg.drop_pose}")
+            raise JobFailed(f"'{pose_name}' 포즈가 실측되지 않았다 — tools/teach_pose.py --name {pose_name}")
         host_yaw = pcfg.host_yaw_sign * float(arm_yaw_deg)
         yaw = pcfg.base_yaw_deg + host_yaw
         try:
@@ -378,13 +383,16 @@ class RosJobRunner:
         self._require_known_pose()
         self._move(pcfg.carry_pose, keep_gripper=True)
         if yaw:
-            self._move_values(target, keep_gripper=True, what=f"{pcfg.drop_pose}{note}")
+            self._move_values(target, keep_gripper=True, what=f"{pose_name}{note}")
         else:
-            self._move(pcfg.drop_pose, keep_gripper=True)
+            self._move(pose_name, keep_gripper=True)
+        if handover:
+            time.sleep(pcfg.handover_wait_s)
+            self._check_cancel()
         self._set_gripper(pcfg.release_percent, "그리퍼 열기")
         time.sleep(pcfg.settle_s)
         self._move(pcfg.return_pose, keep_gripper=False)
-        return f"투하 완료{note}"
+        return f"{'건네기' if handover else '투하'} 완료{note}"
 
 
 class PiMissionNode(Node):

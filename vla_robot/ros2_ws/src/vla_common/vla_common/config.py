@@ -281,6 +281,10 @@ class PlaceConfig:
     release_percent: float = 60.0
     settle_s: float = 0.5
     return_pose: str = "idle"
+    # 사람 손에 건네기(HostCommand.place_pose == "handover"). 팔을 위로 뻗고 손목만 직각(ㄱ자)인 자세에서
+    # 연다. 도착하고 handover_wait_s 기다린 뒤 연다 — 사람이 손을 그리퍼 아래로 맞출 시간.
+    handover_pose: str = "handover"
+    handover_wait_s: float = 1.0
 
 
 @dataclass(frozen=True)

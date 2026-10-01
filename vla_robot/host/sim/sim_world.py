@@ -49,10 +49,13 @@ class SimWorld:
                  place_s: float = 2.0, grasp_reach_m: float = 0.40,
                  pos_noise_m: float = 0.002, yaw_noise_deg: float = 0.3,
                  watchdog_s: float = 0.5, seed: int = 0,
-                 place_reach_m: Optional[float] = None, honor_arm_yaw: bool = True) -> None:
+                 place_reach_m: Optional[float] = None, honor_arm_yaw: bool = True,
+                 hands: tuple = ()) -> None:
         self.cfg = cfg
         self.clock = clock
         self.pieces = [SimPiece(l, x, y) for l, x, y in pieces]
+        # 사람 손(가져다줄 곳). 손 검출이 확인한 지도 좌표처럼 쓴다. 건넨 기물은 in_box="hand".
+        self.hands: list[XY] = [tuple(h) for h in hands]
         self.x, self.y, self.yaw_deg = start
         self.grasp_s, self.place_s, self.grasp_reach_m = grasp_s, place_s, grasp_reach_m
         # 마커 중심에서 투하 지점까지. 기본은 설정값(2026-09-23 실측 0.17~0.20 의 중앙).
@@ -77,6 +80,7 @@ class SimWorld:
         self._job_id = 0
         self._job: Optional[tuple[str, float]] = None       # (action, 끝나는 시각)
         self._job_arm_yaw = 0.0                             # 작업을 시작시킨 명령의 각도
+        self._job_place_pose = ""                           # PLACE 를 시작시킨 명령의 놓는 자세
         self._result: Optional[JobResult] = None
         self._detail = ""
         # 차체 고장 흉내: 보드가 쓰기를 조용히 무시한다(2026-09-23 · 09-30). recover_base 를
@@ -87,6 +91,7 @@ class SimWorld:
         self.recover_s = 3.0
         self._recovering_until: Optional[float] = None
         self.base_recoveries = 0
+        self.hand_catch_m = 0.15                    # 손바닥이 받아 내는 반경
         self.link = _SimLink(self)
 
     def fail_base(self) -> None:
@@ -136,7 +141,7 @@ class SimWorld:
     def piece_map(self) -> dict[str, list[XY]]:
         out: dict[str, list[XY]] = {}
         for p in self.pieces:
-            if not p.held:
+            if not p.held and p.in_box != "hand":     # 손에 건넨 것은 장판 위에 없다
                 out.setdefault(p.label, []).append((p.x, p.y))
         return out
 
@@ -166,6 +171,7 @@ class SimWorld:
             self._job = (cmd.state, now + (self.grasp_s if cmd.state == State.GRASP else self.place_s))
             # 실제 Pi 도 작업을 **시작시킨 명령**의 각도를 쓴다. 이후 패킷 값은 보지 않는다.
             self._job_arm_yaw = float(cmd.arm_yaw_deg)
+            self._job_place_pose = cmd.place_pose
             self._vel = (0.0, 0.0, 0.0)
             return
         if cmd.state in State.JOB_STATES:
@@ -194,6 +200,9 @@ class SimWorld:
             if held is None:
                 self._result = JobResult(self._job_id, action, False, "gripper empty")
                 return
+            if self._job_place_pose == "handover":
+                self._finish_handover(held)
+                return
             name, (bx, by, _yaw) = min(self.cfg.arena.boxes.items(),
                                        key=lambda kv: math.hypot(kv[1][0] - self.x, kv[1][1] - self.y))
             dx, dy = self._drop_point()
@@ -211,6 +220,19 @@ class SimWorld:
                 return
             held.held, held.in_box, held.x, held.y = False, name, dx, dy
             self._result = JobResult(self._job_id, action, True, f"dropped {held.label} in {name}")
+
+    def _finish_handover(self, held: SimPiece) -> None:
+        """팔이 내민 끝(_drop_point) 아래에 손이 있으면 건넴, 없으면 바닥에 떨어진다."""
+        dx, dy = self._drop_point()
+        self.last_drop = (dx, dy)
+        self.last_arm_yaw_deg = self._job_arm_yaw
+        near = min(self.hands, key=lambda h: math.hypot(h[0] - dx, h[1] - dy), default=None)
+        if near is None or math.hypot(near[0] - dx, near[1] - dy) > self.hand_catch_m:
+            held.x, held.y, held.held = dx, dy, False
+            self._result = JobResult(self._job_id, State.PLACE, False, f"no hand under the gripper ({dx:.2f},{dy:.2f})")
+            return
+        held.held, held.in_box, held.x, held.y = False, "hand", near[0], near[1]
+        self._result = JobResult(self._job_id, State.PLACE, True, f"handed {held.label}")
 
     def _drop_point(self) -> tuple[float, float]:
         """팔이 실제로 놓는 자리.

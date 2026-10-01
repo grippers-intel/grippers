@@ -30,10 +30,12 @@ class JobRunner(Protocol):
     @property
     def busy(self) -> bool: ...
 
-    def start(self, job_id: int, action: str, label: str, arm_yaw_deg: float = 0.0) -> None:
+    def start(self, job_id: int, action: str, label: str, arm_yaw_deg: float = 0.0,
+              place_pose: str = "") -> None:
         """작업을 비동기로 시작한다. 시작할 수 없으면 예외.
 
-        arm_yaw_deg 는 PLACE 에서만 쓴다 — 상자 정면에 선 자리에서 남는 좌우 각도다.
+        arm_yaw_deg · place_pose 는 PLACE 에서만 쓴다 — 정차 자리에서 남는 좌우 각도와
+        놓는 자세("handover" = 손에 건네기, 그 밖 = 상자 투입).
         """
 
     def poll(self) -> Optional[tuple[int, bool, str]]:
@@ -95,12 +97,15 @@ class PiMissionCore:
         if self._running and self._running[0] == job_id:
             self._running = None
 
-    def _start_job(self, action: str, label: str, arm_yaw_deg: float = 0.0) -> None:
+    def _start_job(self, action: str, label: str, arm_yaw_deg: float = 0.0, place_pose: str = "") -> None:
         self._job_id += 1
         job_id = self._job_id
         self._job_actions[job_id] = action
         try:
-            self._jobs.start(job_id, action, label, arm_yaw_deg)
+            if place_pose:
+                self._jobs.start(job_id, action, label, arm_yaw_deg, place_pose)
+            else:                       # 옛 JobRunner(인자 4개)도 그대로 받는다
+                self._jobs.start(job_id, action, label, arm_yaw_deg)
             self._running = (job_id, action)
         except Exception as exc:  # noqa: BLE001 — 결과 경로를 하나로 모은다
             self._job_actions.pop(job_id, None)
@@ -128,7 +133,7 @@ class PiMissionCore:
             detail = "Host 명령 없음 — 정지" if cmd is None else "Host 명령 끊김(워치독) — 정지"
         elif cmd.state in State.JOB_STATES:
             if cmd.state != self._prev_cmd_state:
-                self._start_job(cmd.state, cmd.label, cmd.arm_yaw_deg)
+                self._start_job(cmd.state, cmd.label, cmd.arm_yaw_deg, cmd.place_pose)
             self._prev_cmd_state = cmd.state
             state = cmd.state
         else:

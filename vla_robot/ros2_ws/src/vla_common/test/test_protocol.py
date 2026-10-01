@@ -113,3 +113,14 @@ def test_recovery_fields_round_trip_and_default_off():
     st = PiStatus("b", "IDLE", False, 0, None, True, False, base_recovering=True, base_recoveries=3)
     back = PiStatus.from_bytes(st.to_bytes())
     assert back.base_recovering is True and back.base_recoveries == 3
+
+
+def test_place_pose_round_trip_and_old_packets():
+    """손에 건네기(handover). 키가 없는 옛 Host 패킷은 "" = 상자 투입이다."""
+    cmd = HostCommand("PLACE", stop=True, place_pose="handover")
+    assert HostCommand.from_bytes(cmd.to_bytes()).place_pose == "handover"
+    old = json.dumps({"v": 1, "seq": 1, "state": "PLACE"}).encode()
+    assert HostCommand.from_bytes(old).place_pose == ""
+    bad = json.dumps({"v": 1, "seq": 1, "state": "PLACE", "place_pose": "throw"}).encode()
+    with pytest.raises(ProtocolError):
+        HostCommand.from_bytes(bad)

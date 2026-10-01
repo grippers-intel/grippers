@@ -28,7 +28,9 @@ class CommandDesk:
         self.phase = "idle"
         self.text = ""
         self.result: Optional[Instruction] = None
-        self.failure: Optional[str] = None      # "unparseable" | "error" | "empty"
+        self.failure: Optional[str] = None      # "unparseable" | "error" | "empty" | "nohand"
+        self.hands: list = []                   # 매 사이클 update() 가 받는다 — "가져와"는 손이 보여야 접수
+        self._pending: Optional[Order] = None   # 손이 없어 멈춘 "가져와" 지시(카드에서 바구니로 바꿀 수 있다)
         self.visible: list[str] = []
         self.note: Optional[tuple[str, str, str]] = None   # (text, code, tone) — 한 번 띄울 알림
 
@@ -59,7 +61,8 @@ class CommandDesk:
         self._accept(fsm, Order((label,), "one", intent, self.text or label))
 
     # -- 매 사이클 ----------------------------------------------------------
-    def update(self, fsm) -> None:
+    def update(self, fsm, hands=()) -> None:
+        self.hands = list(hands)
         r = self.resolver.poll()
         if r is None:
             return
@@ -72,10 +75,22 @@ class CommandDesk:
             self.failure = "error" if r.error else "unparseable"
 
     def _accept(self, fsm, order: Order) -> None:
+        if order.intent == "fetch" and not self.hands:
+            # 손이 안 보이면 시작하지 않는다(2026-10-01 결정). 카드에서 바구니로 바꾸거나 손을 내밀고 다시.
+            self._pending = order
+            self.phase, self.failure = "failed", "nohand"
+            return
         fsm.set_order(order)
         self.phase, self.failure = "accepted", None
-        if order.intent == "fetch":
-            self.note = ("가져오기는 손 전달이 붙으면 손으로 — 지금은 바구니에 넣습니다", "FETCH", "caution")
+
+    def to_basket(self, fsm) -> None:
+        """손이 없을 때 카드의 "바구니에 넣기" — 같은 지시를 정리로 바꿔 접수."""
+        order = self._pending
+        if order is not None:
+            self._pending = None
+            order.intent = "organize"
+            fsm.set_order(order)
+            self.phase, self.failure = "accepted", None
 
     # -- 화면 ---------------------------------------------------------------
     def card(self) -> Optional[dict]:
@@ -87,6 +102,12 @@ class CommandDesk:
                     "title": "작업 구역에 기물이 없습니다",
                     "detail": "카메라에 잡히는 기물이 없습니다. 기물을 놓고 다시 말해 주세요.",
                     "rows": [], "actions": [{"id": "dismiss", "label": "확인", "primary": True}]}
+        if self.failure == "nohand":
+            return {"code": "E-220 NO_HAND", "next": "→ 손 대기", "tone": "caution", "icon": "!",
+                    "title": "손이 보이지 않습니다",
+                    "detail": "장판 앞이나 옆 가장자리에서 손바닥을 위로 펴고 1초쯤 들고 있다가 다시 말해 주세요.",
+                    "rows": [], "actions": [{"id": "basket", "label": "바구니에 넣기", "primary": True},
+                                            {"id": "dismiss", "label": "취소"}]}
         if self.failure == "error":
             return {"code": "E-402 UNPARSEABLE", "next": "→ IDLE", "tone": "error", "icon": "!",
                     "title": "명령을 해석할 수 없습니다", "detail": r.error if r else "",
