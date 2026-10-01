@@ -128,3 +128,24 @@ def test_place_carries_the_arm_yaw_from_the_host():
     core.on_command(HostCommand(State.PLACE, arm_yaw_deg=-12.5), 0.0)
     core.step(0.0, True)
     assert jobs.started == [(1, State.PLACE, "", -12.5)]
+
+
+class FakeJobsWithPose(FakeJobs):
+    def start(self, job_id, action, label, arm_yaw_deg=0.0, place_pose=""):
+        super().start(job_id, action, label, arm_yaw_deg)
+        self.place_pose = place_pose
+
+
+def test_place_pose_reaches_the_job_runner():
+    jobs = FakeJobsWithPose()
+    core = PiMissionCore(MotionLimits(0.15, 0.5), watchdog_s=0.5, boot_id="b", jobs=jobs)
+    core.on_command(HostCommand(State.PLACE, stop=True, arm_yaw_deg=3.0, place_pose="handover"), 0.0)
+    core.step(0.05, True)
+    assert jobs.started[-1][1] == State.PLACE and jobs.place_pose == "handover"
+
+
+def test_old_job_runner_still_works_for_plain_place():
+    core, jobs = make()                       # start() 가 인자 4개뿐인 옛 runner
+    core.on_command(HostCommand(State.PLACE, stop=True), 0.0)
+    core.step(0.05, True)
+    assert jobs.started[-1][1] == State.PLACE

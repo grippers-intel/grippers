@@ -31,10 +31,16 @@ PHASE = {
     HostState.GRASP: ("집는 중", "GRASP", "2 / 4 · 집기", "active"),
     HostState.CARRY_TO_DEST: (f"{DEST_KO}로 운반 중", "TRANSPORT", "3 / 4 · 운반", "active"),
     HostState.NUDGE_BOX: ("상자 앞 진입 중", "NUDGE_BOX", "3 / 4 · 운반", "active"),
+    HostState.FACE_HAND: ("손 쪽으로 맞추는 중", "FACE_HAND", "3 / 4 · 운반", "active"),
     HostState.PLACE: ("내려놓는 중", "RELEASE", "4 / 4 · 놓기", "active"),
     HostState.HALTED: ("멈춤 · 확인 필요", "HALTED", "사람 개입", "error"),
 }
-HELD_STATES = (HostState.CARRY_TO_DEST, HostState.NUDGE_BOX, HostState.PLACE)
+HELD_STATES = (HostState.CARRY_TO_DEST, HostState.NUDGE_BOX, HostState.FACE_HAND, HostState.PLACE)
+# "가져와"(손에 건네기)일 때 바뀌는 문구
+HAND_PHASE = {
+    HostState.CARRY_TO_DEST: ("손으로 가져가는 중", "TO_HAND", "3 / 4 · 운반", "active"),
+    HostState.PLACE: ("손에 건네는 중", "HANDOVER", "4 / 4 · 건네기", "active"),
+}
 NOTICE_S = 3.5
 
 
@@ -123,8 +129,12 @@ class UiState:
             return "그리퍼로 집는 중", 0.375
         if st == HostState.CARRY_TO_DEST:
             return f"{label} 적재됨", (2 + frac) / 4
-        if st == HostState.NUDGE_BOX:
+        if st in (HostState.NUDGE_BOX, HostState.FACE_HAND):
+            if st == HostState.FACE_HAND and not getattr(fsm, "hand_xy", None):
+                return f"손을 기다리는 중 · {fsm.hand_spot}", 0.75
             return f"{label} 적재됨", 0.75
+        if st == HostState.PLACE and getattr(fsm, "dest_kind", "box") == "hand":
+            return f"손 {fsm.hand_spot}", 0.875
         if st == HostState.PLACE:
             d = fsm.dest_xy
             return (f"{DEST_KO} · {d[0]:.2f}, {d[1]:.2f} m" if d else DEST_KO), 0.875
@@ -155,9 +165,10 @@ class UiState:
             names = "·".join(PIECE_KO.get(lb, lb) for lb in order.labels)
             if outcome == "absent":
                 return {"title": f"{josa(names, 'i')} 보이지 않아 끝냈습니다", "sub": sub}
+            where = "손에 건넸습니다" if order.intent == "fetch" and order.handed else f"{DEST_KO}에 넣었습니다"
             if order.done == 1:
-                return {"title": f"{josa(names, 'eul')} {DEST_KO}에 넣었습니다", "sub": sub}
-            return {"title": f"{names} {order.done}개를 {DEST_KO}에 넣었습니다", "sub": sub}
+                return {"title": f"{josa(names, 'eul')} {where}", "sub": sub}
+            return {"title": f"{names} {order.done}개를 {where}", "sub": sub}
         return {"title": f"기물 {self.done}개를 모두 옮겼습니다", "sub": sub}
 
     def build(self, pose, pmap, fsm, pi_status, link_age_s: float, hz: float, hands=(), desk=None) -> dict:
@@ -202,6 +213,8 @@ class UiState:
         else:
             screen = "run"
         ko, en, step, tone = PHASE.get(st, ("", st.name, "", "accent"))
+        if getattr(fsm, "dest_kind", "box") == "hand" and st in HAND_PHASE:
+            ko, en, step, tone = HAND_PHASE[st]
         if fsm.estop:
             ko, en, step, tone = "비상 정지", "E_STOP", "정지됨", "error"
         metric, progress = self._progress(fsm, pose, fsm.target_xy)
@@ -290,7 +303,7 @@ class UiState:
                     if fsm.nav_path and len(fsm.nav_path) >= 2 else {"pts": []},
             "grip": 1.0 if st == HostState.GRASP else 0.4,
             "show_grip": st in (HostState.GRASP, HostState.PLACE) and target_id is not None,
-            "scanning": searching and bool(live) and pose.ok,
+            "scanning": searching and bool(live) and pose.ok and not waiting,   # 지시 대기 중에는 훑지 않는다
             "obstacle": None,
             "estop": bool(fsm.estop), "pickable": False,
             "hands": [{"x": round(x, 3), "y": round(y, 3), "spot": nearest_spot((x, y))} for x, y in hands],

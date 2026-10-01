@@ -50,6 +50,7 @@ class Order:
     intent: str = "organize"         # organize | fetch (fetch 는 손 전달이 붙기 전까지 바구니로)
     text: str = ""
     done: int = 0
+    handed: int = 0                  # 그중 손에 건넨 개수(나머지는 손이 없어 바구니로)
 
 
 class HostState(Enum):
@@ -58,7 +59,8 @@ class HostState(Enum):
     GRASP = auto()             # Pi 가 VLA 로 집는 동안 대기
     CARRY_TO_DEST = auto()     # 상자 앞까지 주행
     NUDGE_BOX = auto()         # 상자 정면(dest_xy)까지 직진해 붙기
-    PLACE = auto()             # Pi 가 내려놓는 동안 대기
+    FACE_HAND = auto()         # 손 앞 정차점에서 손 쪽을 보기("가져와")
+    PLACE = auto()             # Pi 가 내려놓는(건네는) 동안 대기
     HALTED = auto()            # 물체를 든 채 갈 곳이 없다 — 사람이 개입
 
 
@@ -68,6 +70,7 @@ WIRE_STATE = {
     HostState.GRASP: State.GRASP,
     HostState.CARRY_TO_DEST: State.CARRY,
     HostState.NUDGE_BOX: State.APPROACH_BOX,
+    HostState.FACE_HAND: State.APPROACH_BOX,
     HostState.PLACE: State.PLACE,
     # 물체를 든 채 서 있기. PLACE 로 두면 Pi 가 투하를 다시 시도할 수 있다.
     HostState.HALTED: State.IDLE,
@@ -75,13 +78,15 @@ WIRE_STATE = {
 
 #: Host 가 바퀴를 움직이는 단계. 폭주는 여기서만 본다 — SEARCH·HALTED 에서는 사람이 로봇을
 #: 옮기는 일이 잦고, GRASP·PLACE 에서는 팔(마커)이 움직인다.
-_DRIVE_HOST_STATES = (HostState.APPROACH_PIECE, HostState.CARRY_TO_DEST, HostState.NUDGE_BOX)
+_DRIVE_HOST_STATES = (HostState.APPROACH_PIECE, HostState.CARRY_TO_DEST, HostState.NUDGE_BOX,
+                      HostState.FACE_HAND)
 
 _PREV = {
     HostState.APPROACH_PIECE: HostState.SEARCH_TARGET,
     HostState.GRASP: HostState.APPROACH_PIECE,
     HostState.CARRY_TO_DEST: HostState.APPROACH_PIECE,
     HostState.NUDGE_BOX: HostState.CARRY_TO_DEST,
+    HostState.FACE_HAND: HostState.CARRY_TO_DEST,
     HostState.PLACE: HostState.NUDGE_BOX,
     # HALTED 에서 "이전"은 사람이 복구했다는 뜻 — 상자 앞 접근부터 다시.
     HostState.HALTED: HostState.NUDGE_BOX,
@@ -99,6 +104,7 @@ class MissionFSM:
         # auto = 보이는 기물을 모두 정리(지시가 오면 그것부터) · instructed = 지시가 있을 때만 움직인다
         self.command_mode = cfg.instruction.mode
         self.finished_order: Optional[tuple[Order, str]] = None     # (지시, "done" | "absent"), 화면용
+        self.hands: list[XY] = []        # 탑뷰에서 확인된 손(가져다줄 곳). run_host 가 매 사이클 넣는다
         m = cfg.mission
         self._planner = GridPathPlanner(cfg.planner, cfg.arena,
                                         arrive_tol=min(m.grasp_trigger_dist_m, m.place_trigger_dist_m))
@@ -143,6 +149,14 @@ class MissionFSM:
         self.target_xy: Optional[XY] = None
         self.dest_box: Optional[str] = None
         self.dest_xy: Optional[XY] = None
+        # 목적지 종류: box = 바구니 투입 · hand = 사람 손에 건네기("가져와" 지시)
+        self.dest_kind = "box"
+        self.hand_spot: Optional[str] = None
+        self.hand_xy: Optional[XY] = None
+        self._hand_wait_since: Optional[float] = None
+        self._face_turning = False
+        self._face_arrived = False
+        self._last_pose_xy: Optional[XY] = None
         self.halt_reason: Optional[str] = None
         self.search_reason: Optional[str] = None
         self.ready_to_advance = False
@@ -201,6 +215,10 @@ class MissionFSM:
     def request_back(self) -> None:
         self._back_requested = True
 
+    def set_hands(self, hands) -> None:
+        """확인된 손 위치(지도 좌표). 손 검출이 없으면 빈 목록."""
+        self.hands = [tuple(h) for h in hands]
+
     def set_order(self, order: Order) -> None:
         """새 지시. 진행 중인 기물(집는 중·운반 중)은 끝까지 하고, 다음 대상부터 지시를 따른다."""
         self.order = order
@@ -228,6 +246,8 @@ class MissionFSM:
              now: float) -> HostCommand:
         """한 사이클. 차체가 명령을 무시하면(탑뷰로 판단) Pi 에 컨트롤러 복구를 맡기고 기다린다."""
         self._now = now
+        if pose.ok:
+            self._last_pose_xy = pose.xy
         if self._recover_started is not None and not self.estop:
             waiting = self._wait_base_recovery(pi_status)
             if waiting is not None:
@@ -329,6 +349,8 @@ class MissionFSM:
             return self._step_carry(pose, piece_map)
         if self.state == HostState.NUDGE_BOX:
             return self._step_nudge(pose, pi_status)
+        if self.state == HostState.FACE_HAND:
+            return self._step_face_hand(pose)
         raise AssertionError(self.state)
 
     # ------------------------------------------------------------------ 상태별
@@ -497,6 +519,7 @@ class MissionFSM:
                 return self._stop("grasp failed")
             self.ready_to_advance = True
             if self._should_advance():
+                self._choose_destination(self._last_pose_xy)
                 self._enter(HostState.CARRY_TO_DEST)
                 return self._stop("grasp done")
         self.last_cmd_text = "GRASP (wait)"
@@ -521,13 +544,17 @@ class MissionFSM:
         if self.ready_to_advance:
             self._clear_nav()
             if self._should_advance():
+                if self.dest_kind == "hand":
+                    self._enter(HostState.FACE_HAND)
+                    return self._step_face_hand(pose)
                 self._enter(HostState.NUDGE_BOX)
                 return self._step_nudge(pose, None)
             return self._stop("carry (ready)")
         cmd = self._drive_to(pose, self.dest_xy, obstacles)
         if self._blocked_too_long():
             # 물체를 든 채라 보류할 곳이 없다. 사람을 부른다.
-            self._halt(f"no path to {self.dest_box} for {self.cfg.mission.blocked_timeout_s:.0f}s")
+            where = self.dest_box or f"hand {self.hand_spot}"
+            self._halt(f"no path to {where} for {self.cfg.mission.blocked_timeout_s:.0f}s")
             return self._stop("halted")
         return cmd
 
@@ -650,21 +677,24 @@ class MissionFSM:
                     self._halt(f"place failed {self.place_tries} times: {self._job_result.detail}")
                     return self._stop("halted")
                 self._log(f"place retry {self.place_tries}/{m.place_retry_max}")
-                self._enter(HostState.NUDGE_BOX)
+                self._enter(HostState.FACE_HAND if self.dest_kind == "hand" else HostState.NUDGE_BOX)
                 return self._stop("place retry")
             self.ready_to_advance = True
             if self._should_advance():
-                self._log(f"{self.target_label} delivered to {self.dest_box}")
+                where = f"hand {self.hand_spot}" if self.dest_kind == "hand" else self.dest_box
+                self._log(f"{self.target_label} delivered to {where}")
                 if self.order is not None:
                     self.order.done += 1
+                    self.order.handed += int(self.dest_kind == "hand")
                     if self.order.quantity == "one":
                         self._finish_order("done")
                 self._clear_target()
                 self._enter(HostState.SEARCH_TARGET)
                 return self._stop("place done")
-        self.last_cmd_text = f"PLACE (wait, arm {self.place_arm_yaw_deg:+.1f}도)"
+        hand = self.dest_kind == "hand"
+        self.last_cmd_text = f"{'HANDOVER' if hand else 'PLACE'} (wait, arm {self.place_arm_yaw_deg:+.1f}도)"
         return HostCommand(State.PLACE, stop=True, label=self.target_label or "",
-                           arm_yaw_deg=self.place_arm_yaw_deg)
+                           arm_yaw_deg=self.place_arm_yaw_deg, place_pose="handover" if hand else "")
 
     # ------------------------------------------------------------------ 도우미
     def _drive_to(self, pose: Pose, goal: XY, obstacles: list[XY]) -> HostCommand:
@@ -780,6 +810,9 @@ class MissionFSM:
         if state in (HostState.GRASP, HostState.PLACE):
             self._job_armed = False
             self._job_result = None
+        if state == HostState.FACE_HAND:
+            self._face_turning = False
+            self._face_arrived = False
         if state == HostState.NUDGE_BOX:
             self._nudge_from = None
             self._nudge_turn_logged = False
@@ -814,11 +847,100 @@ class MissionFSM:
         self.nav_path = None
         self.blocked_by = None
 
+    # ------------------------------------------------------------------ 손에 건네기
+    def _hand_near(self, xy: XY) -> Optional[XY]:
+        r = self.cfg.handover.match_radius_m
+        near = [h for h in self.hands if _dist(h, xy) <= r]
+        return min(near, key=lambda h: _dist(h, xy)) if near else None
+
+    def _choose_destination(self, pose_xy: Optional[XY]) -> None:
+        """파지 직후. "가져와" 지시면 보이는 손(로봇에서 가장 가까운)의 위치 정차점, 아니면 바구니.
+        손이 하나도 안 보이면 바구니로 간다(지시 접수 때 손을 확인하므로 드물다)."""
+        if self.order is None or self.order.intent != "fetch":
+            return
+        spots = self.cfg.handover.spots
+        if not self.hands:
+            self._log("fetch: 손이 안 보인다 — 바구니로")
+            return
+        ref = pose_xy or self.target_xy or (0.0, 0.0)
+        hand = min(self.hands, key=lambda h: _dist(h, ref))
+        spot = min(spots, key=lambda n: _dist(hand, spots[n][:2]))
+        self.dest_kind, self.hand_spot, self.hand_xy = "hand", spot, hand
+        self.dest_box = None
+        self.dest_xy = tuple(spots[spot][2:])
+        self._log(f"fetch: 손 {spot} ({hand[0]:.2f},{hand[1]:.2f}) -> 정차 "
+                  f"({self.dest_xy[0]:.2f},{self.dest_xy[1]:.2f})")
+
+    def _to_basket(self, why: str) -> None:
+        self._log(f"{why} — 바구니로")
+        self.dest_kind, self.hand_spot, self.hand_xy = "box", None, None
+        self._hand_wait_since = None
+        self.dest_box = self.cfg.mission.piece_dest_box.get(self.target_label or "",
+                                                            next(iter(self.cfg.arena.boxes)))
+        self.dest_xy = self._box_front_xy(self.dest_box)
+        self._enter(HostState.CARRY_TO_DEST)
+
+    def _step_face_hand(self, pose: Pose) -> HostCommand:
+        """손 앞 정차점에서 손 쪽을 본다. 남는 각도(±max_arm_yaw_deg)는 팔 base 가 메운다 — 상자 투입과 같다.
+        손이 안 보이면 hand_wait_s 동안 그 자리에서 기다리고, 넘으면 바구니로 간다."""
+        self._clear_nav()
+        m, hc = self.cfg.mission, self.cfg.handover
+        assert self.hand_spot is not None and self.dest_xy is not None
+        # 운반은 정차점 place_trigger_dist_m 안에서 끝난다 — 남은 거리는 상자 앞처럼 곧장 붙는다.
+        # 한 번 붙은 뒤에는 조금(돌며 생기는 흔들림) 벗어나도 다시 움직이지 않는다.
+        dist = _dist(pose.xy, self.dest_xy)
+        if dist > (2.5 * hc.arrive_tol_m if self._face_arrived else hc.arrive_tol_m):
+            self._face_arrived = False
+            self.ready_to_advance = False
+            nav = self._drive.update(pose.xy, pose.yaw_deg, self.dest_xy)
+            if nav.mode == DriveMode.ROTATE:
+                return self._rotate(nav.yaw_error_deg)
+            if nav.mode == DriveMode.STOP:
+                return self._stop("to hand stop (settle)")
+            self.last_cmd_text = f"to hand stop ({dist:.2f} m)"
+            return HostCommand(WIRE_STATE[self.state], linear_x=self.cfg.drive.nudge_mps)
+        if not self._face_arrived:
+            self._face_arrived = True
+            self._reset_motion()
+        hand = self._hand_near(hc.spots[self.hand_spot][:2])
+        if hand is None:
+            if self._hand_wait_since is None:
+                self._hand_wait_since = self._now
+                self._log(f"handover: 손을 기다린다 ({self.hand_spot}, 최대 {hc.hand_wait_s:.0f}s)")
+            if self._now - self._hand_wait_since > hc.hand_wait_s:
+                self._to_basket(f"손이 {hc.hand_wait_s:.0f}s 동안 안 보였다")
+                return self._stop("no hand")
+            self.ready_to_advance = False
+            return self._stop(f"waiting for hand ({self.hand_spot})")
+        self._hand_wait_since = None
+        self.hand_xy = hand
+        heading = math.degrees(math.atan2(hand[1] - pose.y, hand[0] - pose.x))
+        residual = wrap_deg(heading - pose.yaw_deg)
+        self.place_arm_yaw_deg = residual
+        limit = m.place_turn_to_deg if self._face_turning else m.max_arm_yaw_deg
+        if self._unwound or self._unwind_until is not None:
+            limit = m.max_arm_yaw_deg
+        self.ready_to_advance = abs(residual) <= limit
+        if self.ready_to_advance:
+            unwind = self._unwind()
+            if unwind is not None:
+                return unwind
+            if self._should_advance():
+                self._enter(HostState.PLACE)
+                return self._step_place(None)
+            return self._stop(f"at hand (arm {residual:+.1f}도)")
+        self._face_turning = True
+        return self._rotate(residual)
+
     def _clear_target(self) -> None:
         self.target_label = None
         self.target_xy = None
         self.dest_box = None
         self.dest_xy = None
+        self.dest_kind = "box"
+        self.hand_spot = None
+        self.hand_xy = None
+        self._hand_wait_since = None
         self.place_tries = 0
         self.grasp_tries = 0
         self.grasp_face_err_deg = None

@@ -139,7 +139,7 @@ class WebView:
     def update(self, pose, piece_map, fsm, pi_status, link_age_s: float, hz: float,
                hands=()) -> Optional[str]:
         action = self._next_action(fsm, piece_map)   # 먼저 — 버튼이 띄운 알림이 이번 화면에 바로 실린다
-        self.desk.update(fsm)
+        self.desk.update(fsm, hands)
         state = self.ui.build(pose, piece_map, fsm, pi_status, link_age_s, hz, hands, self.desk)
         body = json.dumps(state, ensure_ascii=False).encode("utf-8")
         with self._lock:
@@ -168,6 +168,8 @@ class WebView:
                 self.desk.submit(payload, piece_map)
             elif action == "mic":
                 self.ui.notify("음성 입력은 아직 연결 전입니다 — 아래 입력창에 써 주세요", "MIC", "caution")
+            elif action == "basket":
+                self.desk.to_basket(fsm)
             elif action in ("dismiss", "retry", "cancel"):
                 self.desk.dismiss()
             elif action == "pick_label" and isinstance(payload, str):

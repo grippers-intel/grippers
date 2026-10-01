@@ -130,6 +130,10 @@ place:
   release_percent: 60.0
   settle_s: 0.5
   return_pose: idle
+  # 사람 손에 건네기(Host 가 place_pose=handover 로 보낼 때). 팔을 위로 다 뻗고 wrist_flex 만 직각(ㄱ자).
+  # ⚠️ arm_poses.yaml 의 handover 는 아직 measured: false — 실측 전에는 건네기 작업이 "실측되지 않았다"로 실패한다.
+  handover_pose: handover
+  handover_wait_s: 1.0             # ㄱ자에 도착한 뒤 열기 전 대기(사람이 손을 맞출 시간)
 
 mission:
   cycle_hz: 20.0

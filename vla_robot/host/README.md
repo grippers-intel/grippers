@@ -65,7 +65,13 @@ python tools/udp_teleop.py --pi-ip 192.168.0.7  # ArUco 없이 Pi 주행/팔 작
 - **확인**: `python tools/try_instruction.py "체스 말만 전부 정리해줘"` (부를 때마다 요금)
 - **모드**(`instruction.mode`): `auto` = 보이는 기물을 모두 정리하되 지시가 오면 그것부터 ·
   `instructed` = 지시가 있을 때만 움직인다. 초기화(Reset)는 지시도 취소한다.
-- **가져오기**("가져와")는 해석은 되지만 손 전달이 붙기 전까지는 바구니에 넣는다(화면에 알림).
+- **가져오기**("가져와") = 사람 손에 건네기. 지시를 받을 때 탑뷰에 손이 보여야 접수한다(없으면 카드 —
+  "바구니에 넣기"로 바꿀 수 있다). 집은 뒤 보이는 손에서 가장 가까운 위치(F1~R3)의 **정차점**
+  (`handover.spots`: [손 x, 손 y, 정차 x, 정차 y])으로 가서 손 쪽을 보고(남는 각도는 팔 base),
+  Pi 에 PLACE(`place_pose=handover`)를 보낸다. Pi 는 `arm_poses.yaml` 의 **handover**(ㄱ자) 자세로 가서
+  `place.handover_wait_s`(1 s) 기다린 뒤 연다. 정차점에서 손이 `hand_wait_s`(20 s) 동안 안 보이면 바구니로 간다.
+  ⚠️ handover 자세는 **아직 실측 전**(`measured: false`) — 재기 전에는 건네기가 실패로 끝나고 재시도 뒤 멈춘다.
+- 시뮬에서 손 두기: `python run_host.py --sim --sim-hand L2` (지시는 입력창으로 — Claude 키 필요)
 
 예전 OpenCV 지도는 `--view cv`(또는 `view.kind: cv`). 키: `q` 종료 · `space` ESTOP 래치(`r` 로만 해제) ·
 `r` 리셋 · `n` 다음(수동) · `p` 이전 · `m` 수동/자동 전환

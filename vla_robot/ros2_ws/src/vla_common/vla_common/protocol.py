@@ -49,6 +49,8 @@ COMMAND_PORT = 5005
 STATUS_PORT = 5006
 MAX_PACKET_BYTES = 4096
 MAX_LABEL_LEN = 32
+#: PLACE 에서 어떤 자세로 놓을지. "" 는 옛 Host(키 없음) = drop.
+PLACE_POSES = ("", "drop", "handover")
 
 
 class State:
@@ -116,6 +118,9 @@ class HostCommand:
     # 봤을 때만 보낸다(보드가 쓰기를 오류 없이 무시하는 고장 — 2026-09-23 · 09-30).
     # 이 키를 모르는 옛 Pi 는 무시한다.
     recover_base: bool = False
+    # PLACE 에서만 쓴다. "handover" = 사람 손에 건네기(arm_poses 의 handover 자세에서 연다),
+    # ""/"drop" = 상자 투입. 옛 Pi 는 이 키를 모르고 drop 으로 간다.
+    place_pose: str = ""
 
     def to_bytes(self) -> bytes:
         return json.dumps({
@@ -129,6 +134,7 @@ class HostCommand:
             "label": self.label,
             "arm_yaw_deg": float(self.arm_yaw_deg),
             "recover_base": bool(self.recover_base),
+            "place_pose": self.place_pose,
         }, ensure_ascii=False).encode("utf-8")
 
     @classmethod
@@ -149,6 +155,9 @@ class HostCommand:
         recover = obj.get("recover_base", False)
         if not isinstance(recover, bool):
             raise ProtocolError(f"recover_base 는 bool 이어야 한다: {recover!r}")
+        place_pose = obj.get("place_pose", "")
+        if place_pose not in PLACE_POSES:
+            raise ProtocolError(f"place_pose 가 올바르지 않다: {place_pose!r}")
         return cls(
             state=state,
             linear_x=_finite("linear_x", obj.get("linear_x", 0.0)),
@@ -159,6 +168,7 @@ class HostCommand:
             seq=seq,
             arm_yaw_deg=_finite("arm_yaw_deg", obj.get("arm_yaw_deg", 0.0)),
             recover_base=recover,
+            place_pose=place_pose,
         )
 
 

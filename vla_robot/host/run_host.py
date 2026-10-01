@@ -51,6 +51,8 @@ def main() -> int:
                     help="web = 팀원 시연 UI(브라우저 앱 창) · cv = 예전 OpenCV 지도. 기본 host.yaml view.kind")
     ap.add_argument("--show-cams", action="store_true", help="카메라 원본+ArUco 오버레이 창(디버그)")
     ap.add_argument("--step", action="store_true", help="수동 단계 모드(n 키로 진행)")
+    ap.add_argument("--sim-hand", nargs="*", default=[], metavar="SPOT",
+                    help="--sim 에서 손을 둘 위치 이름(F1~R3). 예: --sim-hand L2")
     ap.add_argument("--hz-every", type=int, default=50, help="N 사이클마다 루프 Hz 출력(0=끔)")
     ap.add_argument("--max-cycles", type=int, default=0, help="0 = 무한")
     args = ap.parse_args()
@@ -74,7 +76,11 @@ def main() -> int:
     try:
         if args.sim:
             from sim.sim_world import SimWorld
-            world = SimWorld(cfg)
+            unknown = [s for s in args.sim_hand if s not in cfg.handover.spots]
+            if unknown:
+                print(f"--sim-hand: 모르는 위치 {unknown} (가능: {', '.join(cfg.handover.spots)})")
+                return 2
+            world = SimWorld(cfg, hands=[cfg.handover.spots[s][:2] for s in args.sim_hand])
             link = world.link
             print("[host] SIM 모드 — 기물 2개를 상자로 옮기는 흐름을 흉내냅니다")
         else:
@@ -134,6 +140,7 @@ def main() -> int:
             if world is not None:
                 world.update()
                 pose, pmap = world.pose(), world.piece_map()
+                hands = list(world.hands)
             else:
                 frames = read_frames(caps)
                 dets = [{} if f is None else detect(aruco_detector, cv2.cvtColor(f, cv2.COLOR_BGR2GRAY))
@@ -169,6 +176,7 @@ def main() -> int:
                             cv2.imshow(cam.name, over)
 
             status = link.latest_status()
+            fsm.set_hands(hands)
             cmd = fsm.step(pose, pmap, status, t0)
             link.send(cmd)
 

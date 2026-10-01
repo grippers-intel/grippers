@@ -303,6 +303,19 @@ class LinkConfig:
 
 
 @dataclass(frozen=True)
+class HandoverConfig:
+    """"가져와" 지시 — 기물을 사람 손에 건넨다. 손 위치 9곳마다 [손 x, 손 y, 정차 x, 정차 y](m).
+    로봇은 정차점에 가서 손 쪽을 보고(남는 각도는 팔 base) Pi 에 PLACE(place_pose=handover)를 보낸다."""
+    spots: dict[str, tuple[float, float, float, float]] = field(default_factory=lambda: {
+        "F1": (0.33, 0.12, 0.33, 0.47), "F2": (0.99, 0.12, 0.99, 0.47), "F3": (1.65, 0.12, 1.65, 0.47),
+        "L1": (0.075, 0.26, 0.43, 0.40), "L2": (0.075, 0.915, 0.43, 0.915), "L3": (0.075, 1.56, 0.43, 1.45),
+        "R1": (1.905, 0.26, 1.55, 0.40), "R2": (1.905, 0.915, 1.55, 0.915), "R3": (1.905, 1.56, 1.55, 1.45)})
+    match_radius_m: float = 0.40      # 보이는 손을 이 거리 안의 위치로 본다
+    hand_wait_s: float = 20.0         # 정차점에서 손을 기다리는 시간. 넘으면 바구니로
+    arrive_tol_m: float = 0.08        # 정차점 도착 판정
+
+
+@dataclass(frozen=True)
 class InstructionConfig:
     """사람 지시(Claude API). 키는 ANTHROPIC_API_KEY 환경변수 — 설정 파일에 두지 않는다."""
     # auto = 보이는 기물을 모두 정리하고, 지시가 오면 그것부터 · instructed = 지시가 있을 때만 움직인다
@@ -334,6 +347,7 @@ class HostConfig:
     mission: MissionConfig = field(default_factory=MissionConfig)
     link: LinkConfig = field(default_factory=LinkConfig)
     instruction: InstructionConfig = field(default_factory=InstructionConfig)
+    handover: HandoverConfig = field(default_factory=HandoverConfig)
     view: ViewConfig = field(default_factory=ViewConfig)
 
 
@@ -387,6 +401,12 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
             raise ConfigError(f"mission.grasp_dist_by_label.{label}: 0 < min < max 여야 한다 ({lo}, {hi})")
     if m.grasp_creep_lead_s < 0 or m.grasp_settle_s < 0:
         raise ConfigError("mission.grasp_creep_lead_s / grasp_settle_s 는 음수일 수 없다")
+    ho = cfg.handover
+    if not ho.spots or ho.match_radius_m <= 0 or ho.hand_wait_s < 0 or ho.arrive_tol_m <= 0:
+        raise ConfigError("handover: spots 가 필요하고 match_radius_m · arrive_tol_m > 0, hand_wait_s >= 0")
+    for name, v in ho.spots.items():
+        if len(v) != 4:
+            raise ConfigError(f"handover.spots.{name}: [손 x, 손 y, 정차 x, 정차 y] 네 값")
     ic = cfg.instruction
     if ic.mode not in ("auto", "instructed"):
         raise ConfigError(f"instruction.mode 는 auto|instructed: {ic.mode!r}")

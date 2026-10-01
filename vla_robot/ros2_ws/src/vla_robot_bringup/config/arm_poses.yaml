@@ -35,3 +35,13 @@ poses:
     values: [2.51, -2.73, 6.59, 2.15, -0.26, 14.56]
     measured: true
     note: "상자 위 투하 자세 (2026-09-22 실측)"
+  handover:
+    # 사람 손에 건네는 자세(2026-10-01 사용자 구상): 모든 관절로 팔을 최대한 위로 뻗고 wrist_flex 만
+    # 직각으로 꺾어 그리퍼가 앞을 향하는 ㄱ자. 여기서 그리퍼를 열면 기물이 손바닥으로 떨어진다.
+    # ⚠️ 아직 재지 않았다 — values 는 idle 을 자리만 채워 둔 것이다. measured: false 라 arm_driver 가
+    #    이 자세로 움직이지 않는다(건네기 작업은 실패로 끝나고 Host 가 재시도 뒤 멈춘다).
+    #    재는 법: drop 과 같다 — /arm/set_torque false 로 손으로 ㄱ자를 잡고 /arm/get_state 로 읽기
+    #    (또는 tools/teach_pose.py --name handover).
+    values: [-5.49, -103.3, 95.82, 73.45, -0.18, 6.94]
+    measured: false
+    note: "손에 건네기 ㄱ자 (미측정)"
