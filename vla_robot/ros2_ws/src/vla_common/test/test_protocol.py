@@ -124,3 +124,13 @@ def test_place_pose_round_trip_and_old_packets():
     bad = json.dumps({"v": 1, "seq": 1, "state": "PLACE", "place_pose": "throw"}).encode()
     with pytest.raises(ProtocolError):
         HostCommand.from_bytes(bad)
+
+
+def test_voltages_round_trip_and_old_packets():
+    st = PiStatus(boot_id="b", state="IDLE", busy=False, job_id=0, result=None, base_ok=True,
+                  watchdog=False, battery_v=7.522, arm_v=11.9)
+    back = PiStatus.from_bytes(st.to_bytes())
+    assert back.battery_v == 7.522 and back.arm_v == 11.9
+    old = json.dumps({"v": 1, "boot_id": "b", "state": "IDLE", "busy": False, "job_id": 0,
+                      "result": None, "base_ok": True, "watchdog": False}).encode()
+    assert PiStatus.from_bytes(old).battery_v == 0.0          # 옛 Pi = 모름

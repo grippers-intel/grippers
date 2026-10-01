@@ -113,3 +113,18 @@ def test_web_view_serves_ui_state_and_events(cfg):
         assert view.update(pose, {}, fsm, None, 0.0, 10.0) == "quit"
     finally:
         view.close()
+
+
+def test_battery_cells_show_volts(cfg):
+    from vla_common.protocol import PiStatus
+    from view.ui_state import battery
+    assert battery(0.0, (6.8, 8.4)) == (None, None)
+    assert battery(7.6, (6.8, 8.4)) == (50, "7.60V")
+    assert battery(9.0, (6.8, 8.4))[0] == 100
+    fsm, ui, _ = _sim_states(cfg, cycles=5)
+    pose = type("P", (), {"ok": True, "x": 1.0, "y": 0.5, "yaw_deg": 90.0, "xy": (1.0, 0.5), "fresh": True})()
+    st = PiStatus(boot_id="b", state="IDLE", busy=False, job_id=0, result=None, base_ok=True, watchdog=False,
+                  battery_v=7.0, arm_v=12.0)
+    s = ui.build(pose, {}, fsm, st, 0.0, 10.0)
+    assert s["detail"]["veh_txt"] == "7.00V" and s["detail"]["arm_txt"] == "12.00V"
+    assert s["notice"]["code"] == "BATT"                     # 7.2 V 아래 = 충전 알림

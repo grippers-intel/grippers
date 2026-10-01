@@ -348,6 +348,10 @@ class ViewConfig:
     # web = 팀원 시연 UI(ui/grippers-ui.html, 브라우저 앱 창) · cv = 예전 OpenCV 지도
     kind: str = "web"
     web_port: int = 8765
+    # 배터리 칸(%) 환산: [0 %, 100 %] 전압. 차체 2S(완충 8.4, 실측 8.44→8.06 한 판), 팔 서보 전원(하한 10.5 V).
+    veh_v_range: tuple[float, float] = (6.8, 8.4)
+    arm_v_range: tuple[float, float] = (10.5, 12.6)
+    veh_low_v: float = 7.2           # 이 아래면 화면에 "충전" 알림
     px_per_m: float = 350.0          # cv 지도 전용
     panel_width_px: int = 380        # cv 지도 전용
 

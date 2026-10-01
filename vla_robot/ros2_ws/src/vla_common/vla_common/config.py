@@ -126,6 +126,8 @@ class BaseConfig:
     # 값은 안 보고 도착 시각만 본다 — 끊기면 구동계 노드가 멈춘 것이다.
     feedback_topic: str = "odom_raw"
     feedback_timeout_s: float = 1.0
+    # 벤더 컨트롤러가 내는 차체 배터리(std_msgs/UInt16, mV — 예: 7522 = 7.52 V). Host 화면 VEH 칸.
+    battery_topic: str = "/ros_robot_controller/battery"
     max_linear_mps: float = 0.15
     max_angular_rad_s: float = 0.5
     reject_mixed_rotation: bool = True

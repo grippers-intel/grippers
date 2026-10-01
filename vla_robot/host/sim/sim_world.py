@@ -92,6 +92,7 @@ class SimWorld:
         self._recovering_until: Optional[float] = None
         self.base_recoveries = 0
         self.hand_catch_m = 0.15                    # 손바닥이 받아 내는 반경
+        self.battery_v, self.arm_v = 8.10, 12.10     # 화면 배터리 칸용 가짜 전압
         self.link = _SimLink(self)
 
     def fail_base(self) -> None:
@@ -252,7 +253,8 @@ class SimWorld:
                         job_id=self._job_id, result=self._result, base_ok=True,
                         watchdog=watchdog, ack_seq=self._seq, detail=self._detail,
                         base_recovering=self._recovering_until is not None,
-                        base_recoveries=self.base_recoveries)
+                        base_recoveries=self.base_recoveries,
+                        battery_v=self.battery_v, arm_v=self.arm_v)
 
 
 class _SimLink:
