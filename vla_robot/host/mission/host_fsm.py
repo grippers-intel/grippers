@@ -139,6 +139,12 @@ class MissionFSM:
         self._creep_stopped_at: Optional[float] = None
         self._creep_tries = 0
         self._creep_cmds = 0
+        # 정차 소음 줄이기: 마지막 움직임이 회전이었는가, 그 방향, 반대 회전 진행 상태
+        self._rot_since_unwind = False
+        self._last_rot_sign = 1.0
+        self._unwind_until: Optional[float] = None
+        self._unwind_sign = -1.0
+        self._unwound = False
         self.skipped: list[tuple[XY, float]] = []
         self.last_result: Optional[JobResult] = None
         self._advance_requested = False
@@ -194,6 +200,8 @@ class MissionFSM:
             if waiting is not None:
                 return waiting
         cmd = self._step_states(pose, piece_map, pi_status, now)
+        if not cmd.stop and (abs(cmd.linear_x) > 1e-6 or abs(cmd.linear_y) > 1e-6):
+            self._rot_since_unwind = False      # 직진·옆걸음으로 바퀴가 구르면 회전 뒤 버팀이 풀린다
         watching = self.estop or self.state in _DRIVE_HOST_STATES
         if self._runaway.update(now, cmd, pose, watching):
             self._runaway.reset()
@@ -334,7 +342,9 @@ class MissionFSM:
                 return creep
             # 정면으로 볼 때까지 제자리에서 돈다. 거리만 보고 잡으면 정책이 옆에 있는 기물을
             # 못 잡는다(2026-09-30: 18° · 30° 어긋난 채 시작해 둘 다 실패, 7° 는 성공).
-            if abs(self.grasp_face_err_deg) > m.grasp_face_tol_deg:
+            # 반대 회전(_unwind)을 마친 뒤에는 다시 돌지 않는다 — 1~2° 되돌아가도 그대로 잡는다.
+            unwinding = self._unwound or self._unwind_until is not None
+            if abs(self.grasp_face_err_deg) > m.grasp_face_tol_deg and not unwinding:
                 self.ready_to_advance = False
                 cmd = self._rotate(self.grasp_face_err_deg)
                 self.last_cmd_text = f"face piece {self.grasp_face_err_deg:+.0f}도"
@@ -351,6 +361,10 @@ class MissionFSM:
                 creep = self._creep_to_range(dist)
                 if creep is not None:
                     return creep
+            # 파지 동안 오래 서 있는다 — 회전으로 멈췄으면 정차 소음이 나지 않게 반대로 짧게 돈다.
+            unwind = self._unwind()
+            if unwind is not None:
+                return unwind
             self.ready_to_advance = True
             if self._should_advance():
                 if not in_range:
@@ -360,6 +374,7 @@ class MissionFSM:
             return self._stop(f"approach (ready, {self.grasp_face_err_deg:+.0f}도)")
         self.ready_to_advance = False
         self._creep, self._creep_stopped_at, self._creep_tries = 0, None, 0
+        self._unwind_until, self._unwound = None, False
         cmd = self._drive_to(pose, self.target_xy, obstacles)
         if self._blocked_too_long():
             # 손이 비었으니 이 기물은 보류하고 다른 기물을 치우면 길이 열릴 수 있다.
@@ -500,8 +515,15 @@ class MissionFSM:
         # 차체를 돌리기 시작했으면 팔 한계 바로 안(14.x°)이 아니라 place_turn_to_deg(12°)까지 돈다.
         # 정면(0°)까지는 맞추지 않는다 — 나머지는 팔 base 가 맡는다(2026-09-30 저녁 요청).
         limit = m.place_turn_to_deg if self._nudge_turn_logged else m.max_arm_yaw_deg
+        if self._unwound or self._unwind_until is not None:
+            limit = m.max_arm_yaw_deg               # 반대 회전으로 1~2° 되돌아가도 다시 돌지 않는다
         self.ready_to_advance = close and abs(residual) <= limit
         if self.ready_to_advance:
+            # 투입 동안 서 있는다 — 회전으로 멈췄으면 반대로 짧게 돌아 정차 소음을 없앤다.
+            unwind = self._unwind()
+            if unwind is not None:
+                self.place_arm_yaw_deg = residual
+                return unwind
             if self._should_advance():
                 self._enter(HostState.PLACE)
                 return self._step_place(pi_status)
@@ -647,7 +669,34 @@ class MissionFSM:
         scale = min(1.0, abs(yaw_error_deg) / max(d.rotation_slow_deg, 1e-6))
         speed = max(d.rotation_min_rad_s, d.rotation_rad_s * scale)
         self.last_cmd_text = "yaw+" if sign > 0 else "yaw-"
+        self._rot_since_unwind, self._last_rot_sign = True, sign
         return HostCommand(WIRE_STATE[self.state], angular_z=sign * speed)
+
+    def _unwind(self) -> Optional[HostCommand]:
+        """오래 서 있기 전(파지·투입)에, 마지막 움직임이 제자리 회전이었으면 반대로 아주 짧게 돈다.
+
+        2026-10-01 실기: 제자리 회전 뒤 멈춰 있으면 바퀴가 "지잉" 하고 크게 울었다(파지 중 내내).
+        직진 뒤에는 조용했다. 회전 뒤 반대로 0.3 s 돌리자 소리가 멎었다 — 미끄러지며 돈 동안
+        바퀴 속도 제어에 쌓인 보정이 남아 네 바퀴가 서로 버티는 것으로 본다(보드 안쪽 일이라 추정).
+        끝나면 None. 이 뒤로는 정면·각도 재확인으로 다시 돌지 않는다(_unwound) — 반복하지 않게.
+        """
+        d = self.cfg.drive
+        if d.unwind_s <= 0:
+            return None
+        if self._unwind_until is None:
+            if not self._rot_since_unwind:
+                return None
+            self._unwind_until = self._now + d.unwind_s
+            self._unwind_sign = -self._last_rot_sign
+        self.ready_to_advance = False
+        if self._now < self._unwind_until:
+            self.last_cmd_text = "unwind"
+            return HostCommand(WIRE_STATE[self.state], angular_z=self._unwind_sign * d.unwind_rad_s,
+                               label=self.target_label or "")
+        self._unwind_until = None
+        self._rot_since_unwind = False
+        self._unwound = True
+        return self._stop("unwind (settle)")
 
     def _refresh_target(self, pmap: PieceMap) -> None:
         """목표 기물 위치를 탑뷰로 갱신한다. 같은 라벨이 target_track_m 안에 있으면 그것이다.
@@ -671,6 +720,8 @@ class MissionFSM:
         self._creep_stopped_at = None
         self._creep_tries = 0
         self._creep_cmds = 0
+        self._unwind_until = None
+        self._unwound = False
         if state in (HostState.GRASP, HostState.PLACE):
             self._job_armed = False
             self._job_result = None

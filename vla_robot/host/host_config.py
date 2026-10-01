@@ -161,6 +161,10 @@ class DriveConfig:
     rotation_min_rad_s: float = 0.25
     rotation_slow_deg: float = 30.0
     nudge_mps: float = 0.15
+    # 파지·투입 직전, 마지막 움직임이 제자리 회전이면 반대로 이 속도로 이 시간만큼 돈다(0 이면 끔).
+    # 2026-10-01: 회전 뒤 멈춰 있으면 바퀴가 크게 울었고, 반대로 0.3 s 돌리자 멎었다(0.3·0.6 s 시험).
+    unwind_rad_s: float = 0.3
+    unwind_s: float = 0.3
 
 
 @dataclass(frozen=True)
