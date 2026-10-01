@@ -118,7 +118,10 @@ class HandConfig:
     min_infer_interval_s: float = 0.2
     min_conf: float = 0.5
     num_hands: int = 2
-    # 손바닥 중심을 이 높이 평면으로 푼다. 받는 자세(장판 위 30~35 cm, 2026-10-01).
+    # 두 카메라가 같이 보면 광선 교차로 높이까지 푼다. 광선 사이가 이보다 멀면 다른 손이다.
+    pair_max_gap_m: float = 0.08
+    max_z_m: float = 1.0
+    # 한 카메라만 볼 때 손바닥 중심을 이 높이 평면으로 푼다. 받는 자세(장판 위 30~35 cm).
     hand_z_m: float = 0.32
     # 손을 인정하는 가장자리와 띠 폭. 장판 안쪽(작업 구역)에서 잡힌 것은 버린다.
     edges: tuple[str, ...] = ("front", "left", "right")
@@ -374,7 +377,8 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
     bad = set(h.edges) - {"front", "back", "left", "right"}
     if bad:
         raise ConfigError(f"hands.edges 는 front|back|left|right: {sorted(bad)}")
-    for name in ("min_infer_interval_s", "hand_z_m", "edge_band_m", "merge_dist_m", "hold_s"):
+    for name in ("min_infer_interval_s", "hand_z_m", "edge_band_m", "merge_dist_m", "hold_s",
+                 "pair_max_gap_m", "max_z_m"):
         if getattr(h, name) <= 0:
             raise ConfigError(f"hands.{name} 는 양수여야 한다")
     if h.outside_m < 0 or h.confirm_s < 0 or h.num_hands < 1 or h.max_hands < 1:
