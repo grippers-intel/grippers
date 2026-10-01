@@ -116,6 +116,9 @@ drive:
   rotation_min_rad_s: 0.25
   rotation_slow_deg: 30.0
   nudge_mps: 0.15
+  # 파지·투입 직전 회전으로 멈췄으면 반대로 0.3 rad/s · 0.3 s — 회전 뒤 정차 소음(10-01)이 멎었다. 0 = 끔
+  unwind_rad_s: 0.3
+  unwind_s: 0.3
 
 mission:
   cycle_hz: 10.0

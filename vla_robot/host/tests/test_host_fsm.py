@@ -65,13 +65,12 @@ def test_grasp_failure_reapproaches_before_giving_up(cfg):
     cmd = fsm.step(P(0.9, 0.62), moved, S(job_id=1), 0.6)
     assert fsm.target_xy == (0.95, 0.9)
     assert fsm.state == HostState.APPROACH_PIECE and cmd.angular_z < 0     # 오른쪽(시계)으로
-    # 정면을 맞추면 다시 잡는다
-    fsm.step(P(0.9, 0.62, yaw=80.6), moved, S(job_id=1), 0.7)
-    assert fsm.state == HostState.GRASP
+    # 정면을 맞추면(반대 회전을 짧게 한 뒤) 다시 잡는다
+    t = _run_until(fsm, HostState.GRASP, P(0.9, 0.62, yaw=80.6), moved, S(job_id=1), 0.7)
     # 두 번째도 실패하면 그때 보류하고 star 로 간다
-    fsm.step(P(0.9, 0.62, yaw=80.6), moved, S(job_id=2, result=JobResult(2, State.GRASP, False)), 0.8)
+    fsm.step(P(0.9, 0.62, yaw=80.6), moved, S(job_id=2, result=JobResult(2, State.GRASP, False)), t)
     assert fsm.state == HostState.SEARCH_TARGET and len(fsm.skipped) == 1
-    fsm.step(P(0.9, 0.62), moved, S(job_id=2), 0.9)
+    fsm.step(P(0.9, 0.62), moved, S(job_id=2), t + 0.1)
     assert fsm.target_label == "star"
 
 
@@ -93,7 +92,42 @@ def test_does_not_grasp_until_it_faces_the_piece(cfg):
     assert fsm.state == HostState.APPROACH_PIECE
     assert cmd.angular_z > 0 and cmd.linear_x == 0            # 반시계로 돌아 기물을 본다
     assert fsm.grasp_face_err_deg == pytest.approx(30.0)
-    fsm.step(P(0.9, 0.62, yaw=86.0), PM, S(), 0.1)             # 4° — 허용치 안
+    cmd = fsm.step(P(0.9, 0.62, yaw=86.0), PM, S(), 0.1)       # 4° — 허용치 안
+    assert cmd.angular_z < 0, "회전으로 멈췄으니 반대로 짧게 돈다(정차 소음)"
+    _run_until(fsm, HostState.GRASP, P(0.9, 0.62, yaw=86.0), PM, S(), 0.2)
+
+
+def _run_until(fsm, state, pose, pmap, status, t, limit_s=1.5):
+    """같은 자세로 0.1 s 씩 돌려 state 가 될 때까지(반대 회전·정착 사이클을 지나간다)."""
+    end = t + limit_s
+    while fsm.state != state and t < end:
+        fsm.step(pose, pmap, status, t)
+        t += 0.1
+    assert fsm.state == state, f"{state} 이 안 됐다: {fsm.state} ({fsm.last_cmd_text})"
+    return t
+
+
+def test_unwind_after_turning_then_grasp_without_turning_again(cfg):
+    """10-01: 회전 뒤 멈춰 있으면 바퀴가 크게 울었다. 반대로 unwind_s 만큼 돈 뒤, 그 탓에 1~2°
+    되돌아가 허용치를 살짝 넘어도 다시 돌지 않고 잡는다(무한 반복 방지)."""
+    d = cfg.drive
+    fsm = MissionFSM(cfg)
+    fsm.step(P(0.9, 0.62, yaw=60.0), PM, S(), 0.0)
+    fsm.step(P(0.9, 0.62, yaw=86.0), PM, S(), 0.1)              # 정면 — 반대 회전 시작
+    t, signs = 0.2, []
+    while t < 0.1 + d.unwind_s:
+        cmd = fsm.step(P(0.9, 0.62, yaw=83.0), PM, S(), t)
+        signs.append(cmd.angular_z)
+        t += 0.1
+    assert signs and all(s == pytest.approx(-d.unwind_rad_s) for s in signs)
+    # 반대 회전으로 7° 어긋났다(허용치 6° 밖) — 그래도 다시 돌지 않는다
+    _run_until(fsm, HostState.GRASP, P(0.9, 0.62, yaw=83.0), PM, S(), t)
+
+
+def test_no_unwind_when_the_last_move_was_straight(cfg):
+    fsm = MissionFSM(cfg)
+    fsm.step(P(0.9, 0.62), PM, S(), 0.0)
+    fsm.step(P(0.9, 0.62), PM, S(), 0.1)
     assert fsm.state == HostState.GRASP
 
 
@@ -340,8 +374,9 @@ def test_turns_the_body_at_the_stop_point_when_the_arm_cannot_cover(cfg):
     assert cmd.angular_z > 0 and cmd.linear_x == 0 and cmd.linear_y == 0
     cmd = fsm.step(P(dx, dy, yaw=76.0), {}, S(), 0.1)             # 14도 — 팔 한계 안이지만
     assert cmd.angular_z > 0 and fsm.state == HostState.NUDGE_BOX  # 돌기 시작했으면 12도 안까지
-    fsm.step(P(dx, dy, yaw=80.0), {}, S(), 0.2)                   # 10도 — 정면까진 안 맞춘다
-    assert fsm.state == HostState.PLACE
+    cmd = fsm.step(P(dx, dy, yaw=80.0), {}, S(), 0.2)             # 10도 — 정면까진 안 맞춘다
+    assert cmd.angular_z < 0, "회전으로 멈췄으니 투입 전에 반대로 짧게 돈다"
+    _run_until(fsm, HostState.PLACE, P(dx, dy, yaw=80.0), {}, S(), 0.3)
     # 같은 사유는 한 번만 기록한다(예전엔 매 사이클 찍혀 수백 줄이 쌓였다)
     assert sum("arm cannot cover" in e for e in fsm.events) == 1
 
