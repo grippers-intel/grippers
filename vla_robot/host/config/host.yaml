@@ -261,5 +261,9 @@ view:
   # cv : 예전 OpenCV 지도 창(디버그용). 명령줄 --view 로 바꿀 수 있다.
   kind: web
   web_port: 8765
+  # 디버그 패널(d) 배터리 칸. Pi 가 보내는 전압(V)을 [0 %, 100 %] 구간으로 바꿔 막대로, 글자는 전압 그대로.
+  veh_v_range: [6.8, 8.4]          # 차체 2S — 완충 8.4 (10-01 실측 8.44 -> 한 판 뒤 8.06)
+  arm_v_range: [10.5, 12.6]        # 팔 서보 전원 — arm.min_voltage_v 10.5 가 0 %
+  veh_low_v: 7.2                   # 이 아래면 "충전" 알림
   px_per_m: 350.0                  # cv 전용
   panel_width_px: 380              # cv 전용

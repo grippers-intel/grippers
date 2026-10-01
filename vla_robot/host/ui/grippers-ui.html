@@ -1398,8 +1398,8 @@ function renderPanels(s) {
     $("detailGrid").innerHTML = cells.map(([k, v, u, cls]) =>
       `<div><div class="dk">${k}</div><div class="dv ${cls}">${v == null ? "—" : v}` +
       (u ? `<u>${u}</u>` : "") + `</div></div>`).join("");
-    setBatt("battVeh", "battVehTxt", d.veh);
-    setBatt("battArm", "battArmTxt", d.arm);
+    setBatt("battVeh", "battVehTxt", d.veh, d.veh_txt);   // vla_robot: 글자는 전압(V)
+    setBatt("battArm", "battArmTxt", d.arm, d.arm_txt);
   }
   if (onLegend) {
     const items = s.legend || [];
@@ -1414,12 +1414,12 @@ function renderPanels(s) {
   }
 }
 
-function setBatt(barId, txtId, v) {
+function setBatt(barId, txtId, v, label) {
   const bar = $(barId), txt = $(txtId);
   if (v == null) { bar.style.width = "0%"; bar.style.background = "#3A4757"; txt.textContent = "—"; return; }
   bar.style.width = Math.max(0, Math.min(100, v)) + "%";
   bar.style.background = v < 20 ? "#FF4D4D" : v < 40 ? "#FFA53D" : "#3DE8B0";
-  txt.textContent = Math.round(v) + "%";
+  txt.textContent = label || (Math.round(v) + "%");
 }
 
 /* ── 알림 배너 · 차단 카드 ──────────────────────────────────── */

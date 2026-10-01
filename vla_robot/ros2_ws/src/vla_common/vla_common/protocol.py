@@ -216,6 +216,10 @@ class PiStatus:
     # 보고 "복구가 끝났다"를 안다 — 참/거짓 하나만 보면 패킷이 빠졌을 때 끝을 놓친다.
     base_recovering: bool = False
     base_recoveries: int = 0
+    # 전압(V). 0 = 모름(옛 Pi · 아직 못 읽음). 차체 = 벤더 /ros_robot_controller/battery(mV),
+    # 팔 = 서보 버스 전압(arm/get_state). 시연 UI 의 VEH / ARM 칸에 뜬다(2026-10-02).
+    battery_v: float = 0.0
+    arm_v: float = 0.0
 
     def to_bytes(self) -> bytes:
         return json.dumps({
@@ -231,6 +235,8 @@ class PiStatus:
             "detail": self.detail[:512],
             "base_recovering": bool(self.base_recovering),
             "base_recoveries": int(self.base_recoveries),
+            "battery_v": round(float(self.battery_v), 3),
+            "arm_v": round(float(self.arm_v), 3),
         }, ensure_ascii=False).encode("utf-8")
 
     @classmethod
@@ -262,6 +268,8 @@ class PiStatus:
             detail=str(obj.get("detail", "")),
             base_recovering=bool(obj.get("base_recovering", False)),
             base_recoveries=recoveries,
+            battery_v=_finite("battery_v", obj.get("battery_v", 0.0)),
+            arm_v=_finite("arm_v", obj.get("arm_v", 0.0)),
         )
 
 

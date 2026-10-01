@@ -37,7 +37,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
-from std_msgs.msg import Empty
+from std_msgs.msg import Empty, UInt16
 from std_srvs.srv import Trigger
 
 from vla_common.arm_units import GRIPPER_INDEX, with_base_yaw
@@ -395,6 +395,10 @@ class RosJobRunner:
         return f"{'건네기' if handover else '투하'} 완료{note}"
 
 
+ARM_VOLT_POLL_S = 10.0       # 팔 서보 전압 읽는 주기(작업 중에는 건너뛴다)
+VOLT_STALE_S = 30.0          # 이보다 오래된 전압은 모름(0)으로 보낸다
+
+
 class PiMissionNode(Node):
     def __init__(self) -> None:
         super().__init__("pi_mission_node")
@@ -421,6 +425,12 @@ class PiMissionNode(Node):
         self._born = time.monotonic()
         if Odometry is not None:
             self.create_subscription(Odometry, bcfg.feedback_topic, self._on_feedback, 10, callback_group=cb)
+        # 전압 — Host 화면 VEH / ARM 칸. 오래된 값(VOLT_STALE_S)은 0(모름)으로 보낸다.
+        self._battery_v, self._battery_at = 0.0, None
+        self._arm_v, self._arm_at = 0.0, None
+        self.create_subscription(UInt16, bcfg.battery_topic, self._on_battery, 1, callback_group=cb)
+        self._arm_state_cli = self.create_client(GetArmState, "arm/get_state", callback_group=cb)
+        self.create_timer(ARM_VOLT_POLL_S, self._poll_arm_voltage, callback_group=cb)
 
         self._last_status_sent = 0.0
         self._last_state_logged = None
@@ -447,6 +457,29 @@ class PiMissionNode(Node):
 
     def _on_feedback(self, _msg) -> None:
         self._feedback_at = time.monotonic()
+
+    def _on_battery(self, msg) -> None:
+        self._battery_v, self._battery_at = msg.data / 1000.0, time.monotonic()
+
+    def _poll_arm_voltage(self) -> None:
+        """팔 작업 중에는 묻지 않는다 — 서보 버스를 정책 스트리밍과 나눠 쓰지 않게. 비동기라 기다리지 않는다."""
+        if self.jobs.busy or not self._arm_state_cli.service_is_ready():
+            return
+
+        def done(fut) -> None:
+            try:
+                res = fut.result()
+            except Exception:  # noqa: BLE001 — 화면 표시용, 놓쳐도 된다
+                return
+            if res is not None and res.ok and res.voltage_v > 0:
+                self._arm_v, self._arm_at = float(res.voltage_v), time.monotonic()
+
+        self._arm_state_cli.call_async(GetArmState.Request()).add_done_callback(done)
+
+    def _volts(self, now: float) -> tuple[float, float]:
+        fresh = lambda at: at is not None and now - at <= VOLT_STALE_S  # noqa: E731
+        return (self._battery_v if fresh(self._battery_at) else 0.0,
+                self._arm_v if fresh(self._arm_at) else 0.0)
 
     def _base_alive(self, now: float) -> bool:
         if self._twist_pub.get_subscription_count() == 0:
@@ -475,8 +508,9 @@ class PiMissionNode(Node):
             twist.angular.z = out.motion.angular_z
         self._twist_pub.publish(twist)
 
+        battery_v, arm_v = self._volts(now)
         st = replace(out.status, base_recovering=self.recovery.recovering,
-                     base_recoveries=self.recovery.count)
+                     base_recoveries=self.recovery.count, battery_v=battery_v, arm_v=arm_v)
         if st.base_recovering:
             st = replace(st, detail="차체 컨트롤러 복구 중")
         if st.state != self._last_state_logged:

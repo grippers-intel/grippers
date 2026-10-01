@@ -75,6 +75,15 @@ def search_reason_ko(reason: Optional[str]) -> Optional[str]:
     return reason
 
 
+def battery(v: float, rng) -> tuple:
+    """(막대 %, 글자). 0 V = 모름(옛 Pi·아직 못 읽음) -> (None, None) 이면 화면은 "—"."""
+    if not v or v <= 0:
+        return None, None
+    lo, hi = rng
+    pct = max(0.0, min(100.0, (v - lo) / max(hi - lo, 1e-6) * 100.0))
+    return round(pct), f"{v:.2f}V"
+
+
 def _dist(a, b) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
@@ -275,6 +284,10 @@ class UiState:
         elif desk is not None:
             card = desk.card()
 
+        veh_pct, veh_txt = battery(getattr(pi_status, "battery_v", 0.0), cfg.view.veh_v_range)
+        arm_pct, arm_txt = battery(getattr(pi_status, "arm_v", 0.0), cfg.view.arm_v_range)
+        if notice is None and veh_txt and pi_status.battery_v < cfg.view.veh_low_v:
+            notice = {"text": f"차체 배터리 {veh_txt} — 충전이 필요합니다", "code": "BATT", "tone": "caution"}
         grip_state = "closed" if held else ("closing" if st == HostState.GRASP else "open")
         cnt: dict[str, int] = {}
         for p in live:
@@ -311,7 +324,8 @@ class UiState:
             "detail": {"x": f"{pose.x:.3f}" if pose.ok else None, "y": f"{pose.y:.3f}" if pose.ok else None,
                        "yaw": f"{pose.yaw_deg:.1f}" if pose.ok else None,
                        "cmd": (fsm.last_cmd_text or "—")[:14], "target": fsm.target_label,
-                       "grip": grip_state, "veh": None, "arm": None},
+                       "grip": grip_state, "veh": veh_pct, "arm": arm_pct,
+                       "veh_txt": veh_txt, "arm_txt": arm_txt},
             "legend": [{"label": lb, "ko": PIECE_KO[lb], "n": cnt.get(lb, 0)} for lb in LEGEND_ORDER],
             "map": {"boxes": boxes,
                     "markers": [[x, y, mid] for mid, (x, y) in sorted(cfg.aruco.floor_markers.items())],
