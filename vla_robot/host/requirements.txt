@@ -10,3 +10,7 @@ pytest>=8.0
 
 # --detector geti 일 때만 (Python 3.11, 기존 검증 버전)
 # geti-sdk==2.13.1
+
+# 손 검출(tools/hand_probe.py) 시험용. numpy·opencv·protobuf 를 바꾸지 않는다(1.0.1 확인).
+# 모델: models/hand_landmarker.task (hand_probe.py 설명의 주소)
+mediapipe==1.0.1
