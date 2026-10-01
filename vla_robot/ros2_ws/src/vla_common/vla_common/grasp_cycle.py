@@ -19,9 +19,10 @@
 """
 from __future__ import annotations
 
-#: scan_cycle 에 처음 넘기는 상태: (above, ever, peak, dip_min, dip_idx)
-#: dip_idx 가 -1 이면 골짜기가 **이전 청크**에 있었다는 뜻이다.
-CYCLE_START = (False, False, None, None, 0)
+#: scan_cycle 에 처음 넘기는 상태: (above, ever, peak, dip_min, dip_idx, grip_min)
+#: dip_idx 가 -1 이면 골짜기가 **이전 청크**에 있었다는 뜻이다. grip_min 은 최고점에서 내려오기
+#: 시작한 뒤의 가장 닫힌 그리퍼 명령이다(아직 없으면 None). 5개짜리 옛 상태도 받는다.
+CYCLE_START = (False, False, None, None, 0, None)
 
 #: 복귀 문턱을 넘은 뒤 **바닥까지** 재생한다(2026-10-01). 문턱을 처음 넘는 순간 끊으면 정책이
 #: 아직 접는 중이라, 이어지는 idle 이동이 남은 몫을 한꺼번에 메우며 그리퍼를 "살짝 드는" 것처럼
@@ -35,6 +36,12 @@ SETTLE_FLAT_STEPS = 10
 #: 2026-10-01 soccer: 접힌 자세에서 새로 받은 청크를 바닥까지 재생했더니, 정책이 다음 사이클을
 #: 준비하며 그리퍼를 열어 쥐고 있던 공을 놓쳤다(예전처럼 문턱에서 끊었으면 한 스텝도 안 틀었다).
 SETTLE_GRIPPER_OPEN_PCT = 2.0
+#: 같은 기준을 **최고점에서 내려오기 시작한 뒤 내내** 적용한다(2026-10-01 오후). soccer 를 제대로
+#: 쥐고 접던 중(−64°) 정책이 다음 시도를 준비하며 −44°로 다시 오르고 그리퍼를 열었다. 다시 오른
+#: 폭(20°)이 재상승 기준(30°)에 못 미쳐 그 청크가 끝까지 재생됐고 공이 빠졌다. 내려오는 동안
+#: 그리퍼가 열리면 그 스텝 전에 끊는다("그리퍼 열림"). 쥐었는지는 그 뒤 그리퍼캠이 판정한다.
+#: 이 구간은 정책 명령이 몇 %p 흔들려도 정상 복귀를 끊지 않게 문턱을 넓게 둔다(공을 놓친 경우 5 -> 45).
+DESCEND_GRIPPER_OPEN_PCT = 5.0
 
 
 def scan_cycle(lift_cmd, state, extended_deg: float, drop_deg: float, rise_deg: float,
@@ -55,29 +62,41 @@ def scan_cycle(lift_cmd, state, extended_deg: float, drop_deg: float, rise_deg: 
 
     ⚠️ 성공·실패를 여기서 가르지 않는다. 판정은 그리퍼캠 근접 변화가 한다.
 
+    최고점에서 drop_deg 내려온 뒤로는 그리퍼 명령도 본다 — 그때까지의 가장 닫힌 명령보다
+    DESCEND_GRIPPER_OPEN_PCT 넘게 열리면 그 스텝 전에 멈춘다("그리퍼 열림").
+
     반환: (state, stop_at, reason). stop_at 이 None 이면 아직 사이클 중이다.
     stop_at 은 재생할 스텝 수다(청크[:stop_at]).
     """
-    above, ever, peak, dip_min, dip_idx = state
+    above, ever, peak, dip_min, dip_idx, grip_min = (tuple(state) + (None,))[:6]
     for i, raw in enumerate(lift_cmd):
         value = float(raw)
+        grip = float(gripper_cmd[i]) if gripper_cmd is not None else None
         if not ever:
             if value > extended_deg:
                 ever, above, peak = True, True, value
             continue
+        if not above and grip is not None:
+            if grip_min is not None and grip > grip_min + DESCEND_GRIPPER_OPEN_PCT:
+                return CYCLE_START, i, "그리퍼 열림"
+            grip_min = grip if grip_min is None else min(grip_min, grip)
         if value < returned_deg:
-            return CYCLE_START, _settle_end(lift_cmd, i, gripper_cmd, gripper_now), "복귀"
+            ref = gripper_now if grip_min is None else (
+                grip_min if gripper_now is None else min(grip_min, float(gripper_now)))
+            return CYCLE_START, _settle_end(lift_cmd, i, gripper_cmd, ref), "복귀"
         if above:
             peak = value if peak is None else max(peak, value)
             if value < peak - drop_deg:
                 above, dip_min, dip_idx = False, value, i
+                if grip is not None:
+                    grip_min = grip
             continue
         if value < dip_min:
             dip_min, dip_idx = value, i
         if value > dip_min + rise_deg:
             return CYCLE_START, max(dip_idx, 0), "재상승"
     # 청크가 끝났다. 골짜기 위치는 이제 "이전 청크"다.
-    return (above, ever, peak, dip_min, -1 if dip_min is not None else 0), None, None
+    return (above, ever, peak, dip_min, -1 if dip_min is not None else 0, grip_min), None, None
 
 
 def _settle_end(lift_cmd, start: int, gripper_cmd=None, gripper_now=None) -> int:

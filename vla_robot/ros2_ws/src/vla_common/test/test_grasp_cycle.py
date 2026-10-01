@@ -94,6 +94,53 @@ def test_new_chunk_that_already_opens_at_the_threshold_plays_nothing_more():
     assert (reason, stop) == ("복귀", 0)
 
 
+def run_chunks_g(*chunks, gripper_now=24.0):
+    """(lift, gripper) 청크를 차례로 넣는다."""
+    state = CYCLE_START
+    for k, (lift, grip) in enumerate(chunks):
+        state, stop, reason = scan_cycle(np.asarray(lift, float), state, EXT, DROP, RISE, RET,
+                                         gripper_cmd=np.asarray(grip, float), gripper_now=gripper_now)
+        if stop is not None:
+            return k, stop, reason
+    return None, None, None
+
+
+def test_gripper_opening_while_coming_back_ends_the_cycle_before_it_opens():
+    """10-01 soccer 2차: 공을 쥐고 −64°까지 접다가 정책이 다음 시도를 준비하며 −44°로 오르고
+    그리퍼를 열었다(오른 폭 20° < 재상승 30°라 그 청크를 끝까지 틀어 공이 빠졌다)."""
+    c4 = (ramp(80, 37), np.full(40, 5.0))                     # 쥔 채 올라오기 시작
+    c5 = (ramp(55, -43), np.full(20, 5.0))
+    lift6 = np.concatenate([np.linspace(-46, -64, 30), np.linspace(-64, -44, 30)])
+    grip6 = np.concatenate([np.full(40, 5.0), np.linspace(5, 45, 20)])   # 오르는 도중 연다
+    k, stop, reason = run_chunks_g((ramp(-104, 30), np.full(20, 40.0)), (ramp(45, 74), np.full(20, 40.0)),
+                                   c4, c5, (lift6, grip6))
+    assert reason == "그리퍼 열림" and k == 4
+    assert max(grip6[:stop]) <= 5.0 + 5.0
+
+
+def test_small_gripper_jitter_while_coming_back_does_not_cut():
+    """정책 그리퍼 명령이 몇 %p 흔들리는 것으로 정상 복귀를 끊지 않는다."""
+    jitter = 4.0 + 3.0 * np.sin(np.linspace(0, 6, 20)) ** 2        # 4 ~ 7 %
+    k, stop, reason = run_chunks_g((ramp(-104, 74), np.full(20, 40.0)),
+                                   (ramp(74, 0), jitter),
+                                   (ramp(0, -104), np.full(20, 5.0)))
+    assert reason == "복귀"
+
+
+def test_closing_further_while_coming_back_is_fine():
+    """내려오는 동안 그리퍼를 더 조이는 것은 문제없다 — 정상 복귀로 끝난다."""
+    k, stop, reason = run_chunks_g((ramp(-104, 74), np.full(20, 40.0)),
+                                   (ramp(74, 0), np.linspace(10, 4, 20)),
+                                   (ramp(0, -104), np.full(20, 4.0)))
+    assert reason == "복귀"
+
+
+def test_old_five_field_state_is_still_accepted():
+    state = (True, True, 66.0, None, 0)
+    _s, stop, reason = scan_cycle(np.linspace(-90, -100, 20), state, EXT, DROP, RISE, RET)
+    assert reason == "복귀"
+
+
 def test_return_that_is_still_falling_at_the_chunk_end_plays_the_whole_chunk():
     seq = np.concatenate([ramp(-103, 70, -60), np.linspace(-60, -100, 30)])
     _state, stop, reason = run(seq)
