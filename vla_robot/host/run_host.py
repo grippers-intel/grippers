@@ -8,6 +8,7 @@
     python run_host.py --pi-ip 192.168.0.7            # 실기
     python run_host.py --pi-ip 192.168.0.7 --detector none --show-cams
     python run_host.py                                 # 카메라만 열고 명령은 콘솔에 찍기(dry run)
+    python run_host.py --sim --view cv                 # 예전 OpenCV 지도 창(기본은 팀원 시연 UI)
 
 매 사이클 명령을 **반드시 하나** 보낸다. pose 를 잃었으면 stop 이다(FSM 참고).
 """
@@ -46,6 +47,8 @@ def main() -> int:
     ap.add_argument("--detector", choices=("geti", "none"), default=None)
     ap.add_argument("--geti-device", default=None)
     ap.add_argument("--no-view", action="store_true")
+    ap.add_argument("--view", choices=("web", "cv"), default=None,
+                    help="web = 팀원 시연 UI(브라우저 앱 창) · cv = 예전 OpenCV 지도. 기본 host.yaml view.kind")
     ap.add_argument("--show-cams", action="store_true", help="카메라 원본+ArUco 오버레이 창(디버그)")
     ap.add_argument("--step", action="store_true", help="수동 단계 모드(n 키로 진행)")
     ap.add_argument("--hz-every", type=int, default=50, help="N 사이클마다 루프 Hz 출력(0=끔)")
@@ -64,7 +67,7 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, _on_sigint)
     fsm = MissionFSM(cfg, manual_mode=args.step)
-    view = None
+    view, cv_view = None, False
     caps, cams, piece_detector, world = [], [], None, None
     hand_detector, hand_tracker, hands, hand_spots = None, None, [], []
 
@@ -113,9 +116,14 @@ def main() -> int:
                 link = ConsoleLink()
                 print("[host] --pi-ip 없음 — 명령을 콘솔에만 찍습니다(dry run)")
 
+        cv_view = not args.no_view and (args.view or cfg.view.kind) == "cv"
         if not args.no_view:
-            from view.map_view import MapView
-            view = MapView(cfg)
+            if not cv_view:
+                from view.web_view import WebView
+                view = WebView(cfg)
+            else:
+                from view.map_view import MapView
+                view = MapView(cfg)
 
         period = 1.0 / cfg.mission.cycle_hz
         hz, hz_n, hz_t0, cycles = 0.0, 0, time.monotonic(), 0
@@ -167,9 +175,12 @@ def main() -> int:
             action = None
             if view is not None:
                 action = view.update(pose, pmap, fsm, status, link.status_age_s(), hz, hands)
-            elif args.show_cams:
+            if args.show_cams and not cv_view:
+                # 카메라 창은 OpenCV 라 waitKey 가 돌아야 그려진다. cv 지도는 자기가 부른다.
                 import cv2 as _cv2
-                action = "quit" if (_cv2.waitKey(1) & 0xFF) == ord("q") else None
+                key = _cv2.waitKey(1) & 0xFF
+                if view is None and key == ord("q"):
+                    action = "quit"
             if action == "quit":
                 break
             if action == "estop":
@@ -216,7 +227,7 @@ def main() -> int:
                 c.release()
             if view is not None:
                 view.close()
-            elif args.show_cams:
+            if args.show_cams and not cv_view:
                 import cv2 as _cv2
                 _cv2.destroyAllWindows()
     print(f"[host] 종료 — 마지막 상태 {fsm.state.name}")

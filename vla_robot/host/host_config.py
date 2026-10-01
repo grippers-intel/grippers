@@ -304,8 +304,11 @@ class LinkConfig:
 
 @dataclass(frozen=True)
 class ViewConfig:
-    px_per_m: float = 350.0
-    panel_width_px: int = 380
+    # web = 팀원 시연 UI(ui/grippers-ui.html, 브라우저 앱 창) · cv = 예전 OpenCV 지도
+    kind: str = "web"
+    web_port: int = 8765
+    px_per_m: float = 350.0          # cv 지도 전용
+    panel_width_px: int = 380        # cv 지도 전용
 
 
 @dataclass(frozen=True)
@@ -373,6 +376,8 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
             raise ConfigError(f"mission.grasp_dist_by_label.{label}: 0 < min < max 여야 한다 ({lo}, {hi})")
     if m.grasp_creep_lead_s < 0 or m.grasp_settle_s < 0:
         raise ConfigError("mission.grasp_creep_lead_s / grasp_settle_s 는 음수일 수 없다")
+    if cfg.view.kind not in ("web", "cv"):
+        raise ConfigError(f"view.kind 는 web|cv: {cfg.view.kind!r}")
     h = cfg.hands
     bad = set(h.edges) - {"front", "back", "left", "right"}
     if bad:
