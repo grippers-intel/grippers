@@ -9,6 +9,7 @@
     python run_host.py --pi-ip 192.168.0.7 --detector none --show-cams
     python run_host.py                                 # 카메라만 열고 명령은 콘솔에 찍기(dry run)
     python run_host.py --sim --view cv                 # 예전 OpenCV 지도 창(기본은 팀원 시연 UI)
+    python run_host.py --sim --mode instructed --sim-hand L2   # 지시를 기다리는 시뮬, 손은 L2
 
 매 사이클 명령을 **반드시 하나** 보낸다. pose 를 잃었으면 stop 이다(FSM 참고).
 """
@@ -51,6 +52,8 @@ def main() -> int:
                     help="web = 팀원 시연 UI(브라우저 앱 창) · cv = 예전 OpenCV 지도. 기본 host.yaml view.kind")
     ap.add_argument("--show-cams", action="store_true", help="카메라 원본+ArUco 오버레이 창(디버그)")
     ap.add_argument("--step", action="store_true", help="수동 단계 모드(n 키로 진행)")
+    ap.add_argument("--mode", choices=("auto", "instructed"), default=None,
+                    help="auto = 보이는 기물을 모두 정리(지시 우선) · instructed = 지시가 있을 때만. 기본 host.yaml instruction.mode")
     ap.add_argument("--sim-hand", nargs="*", default=[], metavar="SPOT",
                     help="--sim 에서 손을 둘 위치 이름(F1~R3). 예: --sim-hand L2")
     ap.add_argument("--hz-every", type=int, default=50, help="N 사이클마다 루프 Hz 출력(0=끔)")
@@ -67,6 +70,9 @@ def main() -> int:
         print(f"[config] {exc}")
         return 2
 
+    if args.mode:
+        from dataclasses import replace
+        cfg = replace(cfg, instruction=replace(cfg.instruction, mode=args.mode))
     signal.signal(signal.SIGINT, _on_sigint)
     fsm = MissionFSM(cfg, manual_mode=args.step)
     view, cv_view = None, False

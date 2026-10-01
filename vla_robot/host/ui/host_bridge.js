@@ -26,6 +26,16 @@
     },
   };
 
+  // q = run_host 종료(예전 OpenCV 지도와 같은 키). 원래 UI 에는 종료 키가 없다.
+  // 입력창에 타이핑하는 중에는 가로채지 않는다(app.js 단축키와 같은 규칙).
+  window.addEventListener("keydown", function (e) {
+    var t = e.target;
+    var typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+    if (!typing && (e.key === "q" || e.key === "Q") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      window.pywebview.api.ui_event("quit", null);
+    }
+  });
+
   var failures = 0;
   function poll() {
     fetch("/state", { cache: "no-store" })
