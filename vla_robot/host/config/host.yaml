@@ -124,6 +124,8 @@ mission:
   grasp_trigger_dist_m: 0.33
   grasp_dist_min_m: 0.26
   grasp_dist_max_m: 0.31
+  grasp_dist_by_label:             # 기물별 범위 [min, max]. 없으면 위 값
+    star: [0.30, 0.33]             # 10-01: 0.27 에서 두 번 다 그리퍼가 star 를 지나쳤다
   grasp_creep_lead_s: 0.25         # 멈추라고 해도 더 가는 만큼(속도 x 시간)을 미리 뺀다
   grasp_settle_s: 0.5              # 앞뒤로 움직인 뒤 이만큼 서서 다시 잰다
   grasp_zone_hysteresis_m: 0.05
