@@ -348,6 +348,7 @@ class ViewConfig:
     # web = 팀원 시연 UI(ui/grippers-ui.html, 브라우저 앱 창) · cv = 예전 OpenCV 지도
     kind: str = "web"
     web_port: int = 8765
+    window_height: int = 0           # 시연 창 높이(배율 적용 뒤 px). 0 = 화면 작업 영역에 맞춤
     # 배터리 칸(%) 환산: [0 %, 100 %] 전압. 차체 2S(완충 8.4, 실측 8.44→8.06 한 판), 팔 서보 전원(하한 10.5 V).
     veh_v_range: tuple[float, float] = (6.8, 8.4)
     arm_v_range: tuple[float, float] = (10.5, 12.6)
