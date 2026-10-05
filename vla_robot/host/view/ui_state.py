@@ -361,6 +361,7 @@ class UiState:
             "tray": {"manual": bool(fsm.manual_mode),
                      "auto": (not fsm.manual_mode) and running,
                      "ready": bool(fsm.manual_mode and fsm.ready_to_advance),
-                     "led": led, "estop_armed": bool(fsm.estop)},
+                     "led": led, "estop_armed": bool(fsm.estop),
+                     "map": bool(self.show_map)},
             "hz": round(hz, 1),
         }
