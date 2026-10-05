@@ -158,7 +158,9 @@ mission:
   grasp_dist_min_m: 0.26
   grasp_dist_max_m: 0.31
   grasp_dist_by_label:             # 기물별 범위 [min, max]. 없으면 위 값
-    star: [0.30, 0.33]             # 10-01: 0.27 에서 두 번 다 그리퍼가 star 를 지나쳤다
+    # 10-01: 0.27 에서 두 번 다 그리퍼가 star 를 지나쳤다 -> [0.30, 0.33]. 그때는 위치가 카메라 쪽 가장자리라
+    # ±2.3 cm 틀렸다. 10-05 반경 보정(tracker.piece_radius_by_label) 뒤 0.323 에서 "별과 거리가 멀었다"(빈손) -> 당긴다.
+    star: [0.28, 0.31]
   grasp_creep_lead_s: 0.25         # 멈추라고 해도 더 가는 만큼(속도 x 시간)을 미리 뺀다
   grasp_settle_s: 0.5              # 앞뒤로 움직인 뒤 이만큼 서서 다시 잰다
   grasp_zone_hysteresis_m: 0.05
