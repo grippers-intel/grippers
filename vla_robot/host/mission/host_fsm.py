@@ -542,14 +542,14 @@ class MissionFSM:
                      if not (label == self.target_label and _dist(p, pose.xy) <= r)]
         self.ready_to_advance = _dist(pose.xy, self.dest_xy) <= m.place_trigger_dist_m
         if self.ready_to_advance:
+            # 정차점 근처에서 상자 앞(손 앞) 맞추기로 Next 없이 넘어간다 — MANUAL 에서도 "운반" 한 단계로 본다
+            # (2026-10-05: 운반 중 / 상자 앞 진입 중이 따로 Next 를 받는 게 구분이 안 된다).
             self._clear_nav()
-            if self._should_advance():
-                if self.dest_kind == "hand":
-                    self._enter(HostState.FACE_HAND)
-                    return self._step_face_hand(pose)
-                self._enter(HostState.NUDGE_BOX)
-                return self._step_nudge(pose, None)
-            return self._stop("carry (ready)")
+            if self.dest_kind == "hand":
+                self._enter(HostState.FACE_HAND)
+                return self._step_face_hand(pose)
+            self._enter(HostState.NUDGE_BOX)
+            return self._step_nudge(pose, None)
         cmd = self._drive_to(pose, self.dest_xy, obstacles)
         if self._blocked_too_long():
             # 물체를 든 채라 보류할 곳이 없다. 사람을 부른다.

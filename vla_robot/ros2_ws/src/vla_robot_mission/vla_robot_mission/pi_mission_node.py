@@ -89,6 +89,8 @@ class RosJobRunner:
         self._state = node.create_client(GetArmState, "arm/get_state", callback_group=cb)
         self._gripper = node.create_client(SetGripper, "arm/set_gripper", callback_group=cb)
         self._hold = node.create_client(Trigger, "arm/hold", callback_group=cb)
+        # 작업 안의 단계 — PiStatus.job_stage 로 Host 화면에 간다("" = 작업 없음)
+        self.stage = ""
 
         # 파지 확인용 프레임. 판정은 **팔이 시작 자세로 돌아온 뒤** 같은 자세끼리 비교한다.
         self._frame = None
@@ -196,6 +198,7 @@ class RosJobRunner:
             self._finished = (job_id, ok, detail)
             self._busy = False
             self._active_goal = None
+            self.stage = ""
 
     def _check_cancel(self) -> None:
         if self._cancel.is_set():
@@ -381,6 +384,7 @@ class RosJobRunner:
                 f"(설정 {pcfg.base_yaw_deg:+.1f} + Host {host_yaw:+.1f})") from None
         note = f" · base {yaw:+.1f}도(설정 {pcfg.base_yaw_deg:+.1f} + Host {host_yaw:+.1f})" if yaw else ""
         self._require_known_pose()
+        self.stage = "move"
         self._move(pcfg.carry_pose, keep_gripper=True)
         if yaw:
             self._move_values(target, keep_gripper=True, what=f"{pose_name}{note}")
@@ -390,7 +394,9 @@ class RosJobRunner:
             time.sleep(pcfg.handover_wait_s)
             self._check_cancel()
         self._set_gripper(pcfg.release_percent, "그리퍼 열기")
+        self.stage = "release"                  # 여기서부터 화면의 "쥔 기물"을 지운다
         time.sleep(pcfg.settle_s)
+        self.stage = "return"
         self._move(pcfg.return_pose, keep_gripper=False)
         return f"{'건네기' if handover else '투하'} 완료{note}"
 
@@ -510,7 +516,8 @@ class PiMissionNode(Node):
 
         battery_v, arm_v = self._volts(now)
         st = replace(out.status, base_recovering=self.recovery.recovering,
-                     base_recoveries=self.recovery.count, battery_v=battery_v, arm_v=arm_v)
+                     base_recoveries=self.recovery.count, battery_v=battery_v, arm_v=arm_v,
+                     job_stage=self.jobs.stage if self.jobs.busy else "")
         if st.base_recovering:
             st = replace(st, detail="차체 컨트롤러 복구 중")
         if st.state != self._last_state_logged:
