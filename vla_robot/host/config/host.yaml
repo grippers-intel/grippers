@@ -76,7 +76,7 @@ hands:
   enabled: true
   model_path: models/hand_landmarker.task
   min_infer_interval_s: 0.2
-  min_conf: 0.5
+  min_conf: 0.4                    # 10-05 0.5 -> 0.4: 실기에서 원이 끊김. 오인식은 가장자리 구역 + 지속 시간이 거른다
   num_hands: 2
   # 두 카메라가 같은 손을 보면 광선 교차로 높이까지 푼다(10-01: 높이 고정이면 45 cm 로 든 손이
   # 앞/뒤 카메라에서 y 로 24 cm 갈라져 둘로 보였다). 광선 사이가 pair_max_gap_m 넘으면 다른 손.
@@ -84,11 +84,11 @@ hands:
   max_z_m: 1.0
   hand_z_m: 0.32                   # 한 대만 볼 때 쓰는 높이(받는 자세). 바닥(0)으로 풀면 수십 cm 밀린다
   edges: [front, left, right]      # 뒤(상자 쪽)는 뒤 카메라 바로 아래라 30 cm 에서 22 % 만 보인다
-  edge_band_m: 0.35                # 가장자리에서 이 안쪽까지만 손으로 인정
+  edge_band_m: 0.50                # 10-05 0.35 -> 0.50: 실측 손이 가장자리에서 0.25~0.34 안쪽이라 경계를 들락날락
   outside_m: 0.30
   merge_dist_m: 0.15
-  confirm_s: 1.0                   # 1 s 계속 보여야 손
-  hold_s: 1.0
+  confirm_s: 0.6                   # 10-05 1.0 -> 0.6: 이만큼 계속 보여야 손
+  hold_s: 2.0                      # 10-05 1.0 -> 2.0: 잠깐 놓쳐도 지도에서 지우지 않는다
   max_hands: 2
 
 tracker:

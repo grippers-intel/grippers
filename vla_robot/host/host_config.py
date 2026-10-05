@@ -116,7 +116,7 @@ class HandConfig:
     model_path: str = "models/hand_landmarker.task"
     # full 프레임 ~30 ms/카메라. 손은 기다리는 대상이라 자주 볼 필요가 없다.
     min_infer_interval_s: float = 0.2
-    min_conf: float = 0.5
+    min_conf: float = 0.4
     num_hands: int = 2
     # 두 카메라가 같이 보면 광선 교차로 높이까지 푼다. 광선 사이가 이보다 멀면 다른 손이다.
     pair_max_gap_m: float = 0.08
@@ -125,11 +125,11 @@ class HandConfig:
     hand_z_m: float = 0.32
     # 손을 인정하는 가장자리와 띠 폭. 장판 안쪽(작업 구역)에서 잡힌 것은 버린다.
     edges: tuple[str, ...] = ("front", "left", "right")
-    edge_band_m: float = 0.35
+    edge_band_m: float = 0.50
     outside_m: float = 0.30               # 장판 밖으로 내민 손도 이만큼은 받는다
     merge_dist_m: float = 0.15
-    confirm_s: float = 1.0                # 이만큼 계속 보여야 손으로 인정
-    hold_s: float = 1.0
+    confirm_s: float = 0.6                # 이만큼 계속 보여야 손으로 인정
+    hold_s: float = 2.0                   # 잠깐 놓쳐도 지도에서 지우지 않는다(10-05)
     max_hands: int = 2
 
 
