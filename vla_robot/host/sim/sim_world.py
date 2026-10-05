@@ -246,6 +246,12 @@ class SimWorld:
         return (self.x + self.place_reach_m * math.cos(th),
                 self.y + self.place_reach_m * math.sin(th))
 
+    def _job_stage(self, now: float) -> str:
+        """PLACE 작업의 앞 절반은 move, 뒤 절반은 release(그리퍼 연 뒤) — 실제 Pi 처럼 화면에 단계를 보낸다."""
+        if self._job is None or self._job[0] != State.PLACE:
+            return ""
+        return "release" if now >= self._job[1] - self.place_s / 2.0 else "move"
+
     def status(self) -> PiStatus:
         now = self.clock()
         watchdog = self._last_cmd_t is None or now - self._last_cmd_t > self.watchdog_s
@@ -254,7 +260,7 @@ class SimWorld:
                         watchdog=watchdog, ack_seq=self._seq, detail=self._detail,
                         base_recovering=self._recovering_until is not None,
                         base_recoveries=self.base_recoveries,
-                        battery_v=self.battery_v, arm_v=self.arm_v)
+                        battery_v=self.battery_v, arm_v=self.arm_v, job_stage=self._job_stage(now))
 
 
 class _SimLink:

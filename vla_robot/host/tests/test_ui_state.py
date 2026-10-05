@@ -163,3 +163,45 @@ def test_next_explains_why_it_does_nothing(cfg):
     fsm.set_order(Order(("queen",), "one", "organize", "퀸"))
     fsm.step(pose, {"queen": [(0.8, 1.0)]}, None, 0.2)
     assert fsm.ready_to_advance and WebView._step_blocked(fsm, "next") is None
+
+
+def test_held_piece_disappears_when_gripper_opens(cfg):
+    """PLACE 중 Pi 가 job_stage=release 를 보내면 화면에서 쥔 기물을 지운다."""
+    from vla_common.protocol import PiStatus
+    seen = []
+    clock = FakeClock()
+    world = SimWorld(cfg, clock=clock, seed=1)
+    fsm = MissionFSM(cfg)
+    ui = UiState(cfg)
+    dt = 1.0 / cfg.mission.cycle_hz
+    for _ in range(6000):
+        clock.t += dt
+        world.update()
+        st = world.link.latest_status()
+        world.link.send(fsm.step(world.pose(), world.piece_map(), st, clock.t))
+        if fsm.state == HostState.PLACE:
+            s = ui.build(world.pose(), world.piece_map(), fsm, st, 0.0, 10.0)
+            seen.append((st.job_stage if st else "", s["held"] is not None))
+        if len(world.pieces_in_box("basket")) >= 1 and seen:
+            break
+    assert ("move", True) in seen and ("release", False) in seen
+
+
+def test_manual_carry_reaches_the_box_without_an_extra_next(cfg):
+    """MANUAL: 운반 시작에 Next 한 번이면 상자 앞 맞추기까지 이어진다(운반 = 한 단계)."""
+    clock = FakeClock()
+    world = SimWorld(cfg, clock=clock, seed=1)
+    fsm = MissionFSM(cfg, manual_mode=True)
+    dt = 1.0 / cfg.mission.cycle_hz
+    states, nexts = [], 0
+    for _ in range(8000):
+        clock.t += dt
+        world.update()
+        world.link.send(fsm.step(world.pose(), world.piece_map(), world.link.latest_status(), clock.t))
+        if fsm.ready_to_advance and fsm.state != HostState.CARRY_TO_DEST:
+            fsm.request_advance()
+            nexts += 1
+        states.append(fsm.state)
+        if fsm.state == HostState.PLACE:
+            break
+    assert HostState.NUDGE_BOX in states and states[-1] == HostState.PLACE

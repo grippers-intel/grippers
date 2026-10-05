@@ -220,6 +220,9 @@ class PiStatus:
     # 팔 = 서보 버스 전압(arm/get_state). 시연 UI 의 VEH / ARM 칸에 뜬다(2026-10-02).
     battery_v: float = 0.0
     arm_v: float = 0.0
+    # 팔 작업 안의 단계(화면용). PLACE: "move"(자세로 가는 중) -> "release"(그리퍼 연 뒤) -> "return".
+    # "" = 작업 없음 · 옛 Pi. Host 는 "release" 부터 화면에서 쥔 기물을 지운다(2026-10-05).
+    job_stage: str = ""
 
     def to_bytes(self) -> bytes:
         return json.dumps({
@@ -237,6 +240,7 @@ class PiStatus:
             "base_recoveries": int(self.base_recoveries),
             "battery_v": round(float(self.battery_v), 3),
             "arm_v": round(float(self.arm_v), 3),
+            "job_stage": self.job_stage[:16],
         }, ensure_ascii=False).encode("utf-8")
 
     @classmethod
@@ -270,6 +274,7 @@ class PiStatus:
             base_recoveries=recoveries,
             battery_v=_finite("battery_v", obj.get("battery_v", 0.0)),
             arm_v=_finite("arm_v", obj.get("arm_v", 0.0)),
+            job_stage=str(obj.get("job_stage", ""))[:16],
         )
 
 

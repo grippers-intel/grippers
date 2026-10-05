@@ -31,8 +31,8 @@ PHASE = {
     HostState.APPROACH_PIECE: ("타깃으로 접근 중", "APPROACH_PIECE", "1 / 4 · 접근", "active"),
     HostState.GRASP: ("집는 중", "GRASP", "2 / 4 · 집기", "active"),
     HostState.CARRY_TO_DEST: (f"{DEST_KO}로 운반 중", "TRANSPORT", "3 / 4 · 운반", "active"),
-    HostState.NUDGE_BOX: ("상자 앞 진입 중", "NUDGE_BOX", "3 / 4 · 운반", "active"),
-    HostState.FACE_HAND: ("손 쪽으로 맞추는 중", "FACE_HAND", "3 / 4 · 운반", "active"),
+    HostState.NUDGE_BOX: (f"{DEST_KO}로 운반 중", "TRANSPORT", "3 / 4 · 운반", "active"),   # 운반과 한 단계
+    HostState.FACE_HAND: (f"{DEST_KO}로 운반 중", "TRANSPORT", "3 / 4 · 운반", "active"),
     HostState.PLACE: ("내려놓는 중", "RELEASE", "4 / 4 · 놓기", "active"),
     HostState.HALTED: ("멈춤 · 확인 필요", "HALTED", "사람 개입", "error"),
 }
@@ -40,6 +40,7 @@ HELD_STATES = (HostState.CARRY_TO_DEST, HostState.NUDGE_BOX, HostState.FACE_HAND
 # "가져와"(손에 건네기)일 때 바뀌는 문구
 HAND_PHASE = {
     HostState.CARRY_TO_DEST: ("손으로 가져가는 중", "TO_HAND", "3 / 4 · 운반", "active"),
+    HostState.FACE_HAND: ("손으로 가져가는 중", "TO_HAND", "3 / 4 · 운반", "active"),
     HostState.PLACE: ("손에 건네는 중", "HANDOVER", "4 / 4 · 건네기", "active"),
 }
 NOTICE_S = 3.5
@@ -224,7 +225,10 @@ class UiState:
                 best = min(near, key=lambda p: _dist((p["x"], p["y"]), fsm.target_xy))
                 if _dist((best["x"], best["y"]), fsm.target_xy) < 0.10:
                     target_id = best["id"]
-        held = {"id": "held", "label": fsm.target_label} if (st in HELD_STATES and fsm.target_label) else None
+        # 그리퍼를 연 뒤(Pi job_stage "release" / "return")에는 화면에서 쥔 기물을 지운다
+        released = st == HostState.PLACE and getattr(pi_status, "job_stage", "") in ("release", "return")
+        held = ({"id": "held", "label": fsm.target_label}
+                if (st in HELD_STATES and fsm.target_label and not released) else None)
 
         # 화면: 해석 중 -> 접수 · 움직이는 중/지시 있음 -> 실행 · 할 일 없음 -> 완료(옮긴 뒤) 또는 대기
         searching = st == HostState.SEARCH_TARGET

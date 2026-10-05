@@ -134,3 +134,12 @@ def test_voltages_round_trip_and_old_packets():
     old = json.dumps({"v": 1, "boot_id": "b", "state": "IDLE", "busy": False, "job_id": 0,
                       "result": None, "base_ok": True, "watchdog": False}).encode()
     assert PiStatus.from_bytes(old).battery_v == 0.0          # 옛 Pi = 모름
+
+
+def test_job_stage_round_trip():
+    st = PiStatus(boot_id="b", state="PLACE", busy=True, job_id=3, result=None, base_ok=True,
+                  watchdog=False, job_stage="release")
+    assert PiStatus.from_bytes(st.to_bytes()).job_stage == "release"
+    old = json.dumps({"v": 1, "boot_id": "b", "state": "IDLE", "busy": False, "job_id": 0,
+                      "result": None, "base_ok": True, "watchdog": False}).encode()
+    assert PiStatus.from_bytes(old).job_stage == ""
