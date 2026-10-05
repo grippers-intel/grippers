@@ -59,7 +59,8 @@ def main() -> int:
     ap.add_argument("--hz-every", type=int, default=50, help="N 사이클마다 루프 Hz 출력(0=끔)")
     ap.add_argument("--max-cycles", type=int, default=0, help="0 = 무한")
     ap.add_argument("--log-piece", default=None, metavar="LABEL",
-                    help="이 라벨의 카메라별 위치를 1 s 마다 찍는다(넓은 기물 반경 재기, 10-05 star)")
+                    help="이 라벨(쉼표로 여러 개, all = 전부)의 카메라별 위치를 1 s 마다 찍는다"
+                         "(넓은 기물 반경 재기, 10-05)")
     args = ap.parse_args()
 
     if args.sim and args.pi_ip:
@@ -165,11 +166,31 @@ def main() -> int:
                 pmap = tracker.update(obs, t0)
                 if args.log_piece and t0 - piece_log_at >= 1.0:
                     piece_log_at = t0
-                    seen = [f"{o.cam_name} ({o.x:.3f},{o.y:.3f})" for lst in obs for o in lst
-                            if o.label == args.log_piece]
-                    fused = [f"({x:.3f},{y:.3f})" for x, y in pmap.get(args.log_piece, [])]
-                    print(f"[piece] {args.log_piece} 카메라별 " + (" · ".join(seen) or "없음")
-                          + " -> 지도 " + (" ".join(fused) or "없음"), flush=True)
+                    want = args.log_piece.split(",")
+                    labels = sorted({o.label for lst in obs for o in lst} | set(pmap)) if want == ["all"] else want
+                    for label in labels:
+                        seen = [f"{o.cam_name} ({o.x:.3f},{o.y:.3f})" for lst in obs for o in lst
+                                if o.label == label]
+                        fused = [f"({x:.3f},{y:.3f})" for x, y in pmap.get(label, [])]
+                        # 두 카메라가 같은 기물을 보면 반경 추정: 각자 자기 쪽 가장자리를 보므로
+                        # p_i = 중심 + r * (카메라 i 쪽 단위벡터) -> r = |p0 - p1| / |u0 - u1| (장판 어디서든)
+                        est = ""
+                        per = {o.cam_name: o for lst in obs for o in lst if o.label == label}
+                        named = {c.name: c for c in cams if getattr(c, "center", None) is not None}
+                        if len(per) == 2 and set(per) <= set(named):
+                            (n0, o0), (n1, o1) = sorted(per.items())
+                            us = []
+                            for n, o in ((n0, o0), (n1, o1)):
+                                cx, cy = float(named[n].center[0]), float(named[n].center[1])
+                                dx, dy = cx - o.x, cy - o.y
+                                k = (dx * dx + dy * dy) ** 0.5 or 1.0
+                                us.append((dx / k, dy / k))
+                            du = ((us[0][0] - us[1][0]) ** 2 + (us[0][1] - us[1][1]) ** 2) ** 0.5
+                            gap = ((o0.x - o1.x) ** 2 + (o0.y - o1.y) ** 2) ** 0.5
+                            if du > 0.3:
+                                est = f" · 차이 {gap * 100:.1f} cm -> 반경 추정 {gap / du:.3f} m"
+                        print(f"[piece] {label} 카메라별 " + (" · ".join(seen) or "없음")
+                              + " -> 지도 " + (" ".join(fused) or "없음") + est, flush=True)
                 hobs = []
                 if hand_detector.ok:
                     for idx, frame in zip(indices, frames):
