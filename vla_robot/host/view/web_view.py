@@ -76,8 +76,8 @@ def close_app_windows() -> int:
 def window_geometry(height: int = 0) -> tuple[int, int, int, int]:
     """(너비, 높이, x, y) — 화면 배율 반영(크롬 --window-size 는 배율 적용 뒤 크기다).
     height=0 이면 화면 작업 영역(작업 표시줄 제외)에 맞춘다. 2026-10-05: 125 % 배율 노트북에서 860 높이가
-    작업 영역 816 을 넘어 아래가 잘렸다. 비율은 팀원 run-windows.bat 의 460 x 860 그대로."""
-    w0, h0, margin = 460, 860, 24
+    작업 영역 816 을 넘어 아래가 잘렸다. 비율은 팀원 run-windows.bat(460 x 860)에서 스테이지를 476 으로 넓힌 만큼 폭만 늘렸다(10-05, Map 버튼)."""
+    w0, h0, margin = 504, 860, 24      # 스테이지 476 x 768 + 창 여백(팀원 원본 432 -> 460 과 같은 28 px)
     avail = None
     if sys.platform.startswith("win"):
         try:

@@ -73,7 +73,7 @@ html, body {
 }
 #viewport { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
 #stage {
-  position: relative; width: 432px; height: 768px;
+  position: relative; width: 476px; height: 768px;   /* vla_robot: 432 -> 476, 트레이에 Map 버튼이 들어가며 줄이 넘어갔다 */
   transform: scale(var(--k, 1)); transform-origin: center center;
   background: var(--frame); border-radius: 20px; overflow: hidden;
   color: var(--t1); display: flex; flex-direction: column;
@@ -1215,7 +1215,7 @@ let prevScreen = null;
 /* ── 배율: 창 크기에 맞춰 432 x 768 스테이지를 키운다 ───────── */
 function fitStage() {
   document.documentElement.style.setProperty(
-    "--k", Math.min(window.innerWidth / 432, window.innerHeight / 768));
+    "--k", Math.min(window.innerWidth / 476, window.innerHeight / 768));   // vla_robot: 스테이지 폭 476
 }
 
 /* ── 파이썬으로 이벤트 보내기 ───────────────────────────────── */
