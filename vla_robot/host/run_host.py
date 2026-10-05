@@ -58,6 +58,8 @@ def main() -> int:
                     help="--sim 에서 손을 둘 위치 이름(F1~R3). 예: --sim-hand L2")
     ap.add_argument("--hz-every", type=int, default=50, help="N 사이클마다 루프 Hz 출력(0=끔)")
     ap.add_argument("--max-cycles", type=int, default=0, help="0 = 무한")
+    ap.add_argument("--log-piece", default=None, metavar="LABEL",
+                    help="이 라벨의 카메라별 위치를 1 s 마다 찍는다(넓은 기물 반경 재기, 10-05 star)")
     args = ap.parse_args()
 
     if args.sim and args.pi_ip:
@@ -78,6 +80,7 @@ def main() -> int:
     view, cv_view = None, False
     caps, cams, piece_detector, world = [], [], None, None
     hand_detector, hand_tracker, hands, hand_spots = None, None, [], []
+    piece_log_at = 0.0                     # --log-piece 마지막 출력 시각
 
     try:
         if args.sim:
@@ -157,8 +160,16 @@ def main() -> int:
                     if frame is not None:
                         piece_detector.submit(idx, frame)
                     obs.append(observations_from_detections(cam, piece_detector.latest(idx),
-                                                            cfg.detector.conf_threshold))
+                                                            cfg.detector.conf_threshold,
+                                                            cfg.tracker.piece_radius_by_label))
                 pmap = tracker.update(obs, t0)
+                if args.log_piece and t0 - piece_log_at >= 1.0:
+                    piece_log_at = t0
+                    seen = [f"{o.cam_name} ({o.x:.3f},{o.y:.3f})" for lst in obs for o in lst
+                            if o.label == args.log_piece]
+                    fused = [f"({x:.3f},{y:.3f})" for x, y in pmap.get(args.log_piece, [])]
+                    print(f"[piece] {args.log_piece} 카메라별 " + (" · ".join(seen) or "없음")
+                          + " -> 지도 " + (" ".join(fused) or "없음"), flush=True)
                 hobs = []
                 if hand_detector.ok:
                     for idx, frame in zip(indices, frames):
