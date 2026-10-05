@@ -48,7 +48,7 @@ from vla_common.protocol import State
 from vla_robot_interfaces.action import MoveToPose, RunVlaGrasp
 from vla_robot_interfaces.msg import RobotStatus
 from vla_robot_interfaces.srv import GetArmState, SetGripper
-from vla_robot_mission.base_recovery import BaseRecovery
+from vla_robot_mission.base_recovery import BaseRecovery, QuietResetPolicy
 from vla_robot_mission.pi_mission_core import PiMissionCore
 from vla_robot_mission.udp_link import UdpLink
 
@@ -421,6 +421,7 @@ class PiMissionNode(Node):
                             log=lambda m: self.get_logger().info(m))
         self.recovery = BaseRecovery(bcfg.recover_script, bcfg.recover_timeout_s, bcfg.recover_cooldown_s,
                                      log=lambda m: self.get_logger().warn(m))
+        self.quiet = QuietResetPolicy(bcfg.quiet_reset, bcfg.quiet_reset_on_job, bcfg.quiet_reset_idle_s)
 
         cb = ReentrantCallbackGroup()
         self._twist_pub = self.create_publisher(Twist, bcfg.cmd_vel_topic, 10)
@@ -513,6 +514,13 @@ class PiMissionNode(Node):
             twist.linear.y = out.motion.linear_y
             twist.angular.z = out.motion.angular_z
         self._twist_pub.publish(twist)
+
+        # 소음 정리 재기동(10-05): 움직인 뒤 팔 작업이 시작되거나 한동안 서 있으면 컨트롤러를 한 번 다시 띄운다.
+        # 도는 동안은 base_recovering 으로 보이고 Host 는 바퀴 명령을 내지 않고 기다린다.
+        moving = any(abs(v) > 1e-6 for v in (twist.linear.x, twist.linear.y, twist.angular.z))
+        why = self.quiet.due(now, moving, self.jobs.busy)
+        if why and (self.recovery.recovering or self.recovery.request(quiet=why)):
+            self.quiet.mark_done()             # 이미 도는 중이어도 보드는 리셋된다
 
         battery_v, arm_v = self._volts(now)
         st = replace(out.status, base_recovering=self.recovery.recovering,

@@ -61,7 +61,7 @@ class BaseRecovery:
         with self._lock:
             return self._count
 
-    def request(self, startup: bool = False) -> bool:
+    def request(self, startup: bool = False, quiet: str = "") -> bool:
         """복구를 시작한다. 이미 도는 중이거나 방금 끝났으면(쿨다운) 무시하고 False.
 
         startup=True 는 스택 기동 직후의 **선제 재기동**이다. 2026-10-01: 로봇 프로그램을 새로 띄울
@@ -77,9 +77,13 @@ class BaseRecovery:
             self._recovering = True
         if startup:
             self._log("차체 컨트롤러 선제 재기동 — 스택 기동 직후 첫 주행 무응답을 막는다")
+            mode = "auto-startup"
+        elif quiet:
+            self._log(f"차체 컨트롤러 소음 정리 재기동 — {quiet}")
+            mode = "auto-quiet"
         else:
             self._log("차체 컨트롤러 자동 복구 시작 — Host 가 '명령했는데 안 움직인다'를 봤다")
-        mode = "auto-startup" if startup else "auto"
+            mode = "auto"
         if self._background:
             threading.Thread(target=self._run, args=(mode,), name="base-recovery", daemon=True).start()
         else:
@@ -94,3 +98,42 @@ class BaseRecovery:
             self._last_end = self._clock()
             self.last_detail = f"복구 {self._count}회차 종료 코드 {code}: {tail}"
         self._log(self.last_detail)
+
+
+class QuietResetPolicy:
+    """언제 "소음 정리 재기동"을 할지 — 바퀴가 움직인 뒤 한 번.
+
+    2026-10-05 실기: 제자리 회전 뒤 멈춰 있으면 바퀴가 "지잉" 운다(반대 회전으로 대부분 줄였지만
+    크게 돈 뒤·대기 중에는 남았다). 서 있는 동안 컨트롤러를 다시 띄우자(포트를 다시 열면 보드가
+    리셋된다) 바로 멎었다 — 보드 속도 제어에 남은 값이 원인이다.
+
+    재기동은 수 초 걸리고 그동안 바퀴를 못 움직이므로, 어차피 서 있는 때에 한다:
+      - 팔 작업(파지·투하)이 시작될 때 — 팔은 다른 포트(/dev/soarm)라 영향이 없다
+      - 움직인 뒤 idle_s 넘게 서 있을 때 — 지시가 끝나 기다리는 동안 등
+    움직인 뒤 한 번만 한다(다시 움직이기 전에는 또 하지 않는다).
+    """
+
+    def __init__(self, enabled: bool, on_job: bool, idle_s: float) -> None:
+        self.enabled = enabled
+        self.on_job = on_job
+        self.idle_s = idle_s
+        self._dirty = False                    # 마지막 재기동 뒤 바퀴가 움직였나
+        self._still_since: Optional[float] = None
+
+    def due(self, now: float, moving: bool, job_busy: bool) -> str:
+        """지금 재기동할 이유("" = 아니다). 시작했으면 mark_done() 을 부를 것."""
+        if moving:
+            self._dirty, self._still_since = True, None
+            return ""
+        if not (self.enabled and self._dirty):
+            return ""
+        if self._still_since is None:
+            self._still_since = now
+        if job_busy and self.on_job:
+            return "팔 작업 시작(어차피 서 있다)"
+        if now - self._still_since >= self.idle_s:
+            return f"움직인 뒤 {self.idle_s:.0f}s 넘게 정지"
+        return ""
+
+    def mark_done(self) -> None:
+        self._dirty, self._still_since = False, None

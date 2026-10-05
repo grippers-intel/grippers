@@ -260,6 +260,16 @@ class MissionFSM:
             waiting = self._wait_base_recovery(pi_status)
             if waiting is not None:
                 return waiting
+        if (pi_status is not None and pi_status.base_recovering and not self.estop
+                and self.state in _DRIVE_HOST_STATES):
+            # Pi 가 스스로 컨트롤러를 다시 띄우는 중(기동 직후 · 소음 정리, 10-05) — 그동안 바퀴는 명령을
+            # 안 받는다. 움직이라고 내면 무응답으로 오판하므로 끝날 때까지 정지만 낸다.
+            self._stall.reset()
+            self._runaway.reset()
+            self._spin.reset()
+            self._clear_nav()
+            self.last_cmd_text = "base reset (wait)"
+            return HostCommand(WIRE_STATE[self.state], stop=True, label=self.target_label or "")
         cmd = self._step_states(pose, piece_map, pi_status, now)
         # 직진·옆걸음으로 바퀴가 **충분히** 구르면 회전 뒤 버팀이 풀린다(2 s·30 cm 직진 뒤에는 조용했다).
         # 거리 맞추기 같은 짧은 움직임은 안 된다 — 10-01 star: 회전 → 1~2 cm 후진 → 파지 동안 다시 울었다.

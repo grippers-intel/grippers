@@ -42,6 +42,11 @@ base:
   # 스택 기동 직후 컨트롤러 선제 재기동(10-01: 스택을 새로 띄울 때마다 첫 주행 무응답). 부저 없음.
   recover_on_start: true
   recover_on_start_delay_s: 3.0
+  # 소음 정리 재기동(10-05): 회전 뒤 서 있으면 바퀴가 우는데 컨트롤러를 다시 띄우면 멎었다.
+  # 움직인 뒤 팔 작업 시작 때 · 3 s 넘게 서 있을 때 한 번. 도는 동안 Host 는 바퀴 명령을 기다린다.
+  quiet_reset: true
+  quiet_reset_on_job: true
+  quiet_reset_idle_s: 3.0
 
 link:
   bind_ip: 0.0.0.0

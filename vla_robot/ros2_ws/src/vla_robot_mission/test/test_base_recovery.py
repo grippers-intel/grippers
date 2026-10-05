@@ -58,3 +58,51 @@ def test_timeout_still_ends_the_recovery():
                      clock=clock, log=lambda m: None, background=False)
     r.request()
     assert r.count == 1 and not r.recovering and "-1" in r.last_detail
+
+
+# ---------------------------------------------------------------- 소음 정리 재기동(2026-10-05)
+from vla_robot_mission.base_recovery import QuietResetPolicy  # noqa: E402
+
+
+def test_quiet_reset_runs_the_script_in_its_short_mode():
+    clock, calls = Clock(), []
+    r = make(clock, calls)
+    assert r.request(quiet="팔 작업 시작")
+    assert calls == [(["bash", "/x/rrc_recover.sh", "--fix", "auto-quiet"], 40.0)]
+    assert r.count == 1
+
+
+def _policy():
+    return QuietResetPolicy(enabled=True, on_job=True, idle_s=3.0)
+
+
+def test_quiet_reset_when_an_arm_job_starts_after_driving():
+    q = _policy()
+    assert q.due(0.0, moving=True, job_busy=False) == ""
+    assert q.due(0.1, moving=False, job_busy=False) == ""       # 막 섰다
+    assert "팔 작업" in q.due(0.2, moving=False, job_busy=True)
+    q.mark_done()
+    assert q.due(5.0, moving=False, job_busy=True) == ""        # 한 번만
+    assert q.due(30.0, moving=False, job_busy=False) == ""      # 다시 움직이기 전에는 안 한다
+
+
+def test_quiet_reset_after_standing_still_for_a_while():
+    q = _policy()
+    q.due(0.0, moving=True, job_busy=False)
+    assert q.due(1.0, moving=False, job_busy=False) == ""
+    assert q.due(3.5, moving=False, job_busy=False) == ""       # 선 지 2.5 s
+    assert "정지" in q.due(4.1, moving=False, job_busy=False)    # 선 지 3.1 s
+
+
+def test_quiet_reset_not_before_any_motion_and_retried_when_refused():
+    q = _policy()
+    assert q.due(100.0, moving=False, job_busy=True) == ""      # 기동 뒤 아직 안 움직였다
+    q.due(101.0, moving=True, job_busy=False)
+    assert q.due(105.0, moving=False, job_busy=True)            # 쿨다운 등으로 시작 못 하면 mark_done 안 함
+    assert q.due(106.0, moving=False, job_busy=True)            # 다음 사이클에 다시
+
+
+def test_quiet_reset_can_be_turned_off():
+    q = QuietResetPolicy(enabled=False, on_job=True, idle_s=3.0)
+    q.due(0.0, moving=True, job_busy=False)
+    assert q.due(10.0, moving=False, job_busy=True) == ""
