@@ -204,7 +204,7 @@ def test_a_few_mm_outside_the_range_still_moves_and_never_loops(cfg):
     assert moved >= 1
     assert fsm.state == HostState.GRASP
     assert t < 10.0
-    assert any("grasp here" in e for e in fsm.events)
+    assert any("범위 밖" in e for e in fsm.events)
 
 
 def test_star_uses_its_own_farther_grasp_range(cfg):

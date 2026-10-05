@@ -469,8 +469,11 @@ class MissionFSM:
                 return unwind
             self.ready_to_advance = True
             if self._should_advance():
-                if not in_range:
-                    self._log(f"grasp range: {dist:.3f} m after {self.CREEP_TRIES} tries — grasp here")
+                # 실제로 몇 cm 에서 잡기 시작했는지 매번 남긴다(10-05: "파지를 멀리서 시도하는 것 같다" —
+                # 범위 밖일 때만 적어서 숫자로 확인할 수 없었다). 거리 = 마커 중심 -> 기물.
+                out = "" if in_range else f" · 범위 밖(맞추기 {self.CREEP_TRIES}번 뒤 그대로)"
+                self._log(f"grasp start {self.target_label}: {dist:.3f} m (범위 {lo:.2f}-{hi:.2f}) · "
+                          f"정면 {self.grasp_face_err_deg:+.0f}° · 거리 맞추기 {self._creep_tries}번{out}")
                 self._enter(HostState.GRASP)
                 return self._step_grasp(pi_status)
             return self._stop(f"approach (ready, {self.grasp_face_err_deg:+.0f}도)")
