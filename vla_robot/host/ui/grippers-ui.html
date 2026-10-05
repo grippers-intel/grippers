@@ -576,7 +576,7 @@ window.addEventListener("unhandledrejection", function (e) {
       <div class="addrow" id="addRow">
         <input class="addfield inp" id="addField" type="text" autocomplete="off"
                spellcheck="false" placeholder="명령 추가…">
-        <div class="mono tag" id="legendToggle">범례 ⌄</div>
+        <div class="mono tag hide" id="legendToggle">범례 ⌄</div><!-- vla_robot: 범례는 Map 화면 요약 줄로 -->
       </div>
 
       <!-- Stage 3 · DETAIL 접기/펼치기 -->
@@ -1567,8 +1567,8 @@ function wire() {
   $("legendToggle").addEventListener("click", () => togglePanel("legend"));
   $("legendCollapse").addEventListener("click", () => togglePanel("legend"));
   // 트레이 우측 "v ⌃" — 디버그와 범례를 번갈아 연다.
-  $("trayExpand").addEventListener("click", () =>
-    togglePanel(panel === "detail" ? "legend" : "detail"));
+  // vla_robot: DETAIL(전압 등)만 열고 닫는다. 범례(기물 목록)는 Map 화면 요약 줄로 옮겼다(2026-10-05).
+  $("trayExpand").addEventListener("click", () => togglePanel("detail"));
 
   // Reset 은 2단 확인 — 목업 1m 의 "한 번 더 누르면 초기화".
   $("resetBtn").addEventListener("click", () => {
@@ -1595,7 +1595,7 @@ function wire() {
     else if (e.key === "ArrowRight") send("next");
     else if (e.key === "ArrowLeft") send("prev");
     else if (e.key === "d") togglePanel("detail");
-    else if (e.key === "l") togglePanel("legend");
+    // vla_robot: l(범례) 키는 뺐다 — 기물 목록은 Map 화면에 있다.
   });
 }
 
