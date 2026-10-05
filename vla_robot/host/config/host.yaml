@@ -142,7 +142,7 @@ drive:
   unwind_rad_s: 0.3
   unwind_s: 0.3
   unwind_ref_rad: 0.6              # unwind_s 가 맞았던 회전량(10-01: 0.3 rad/s x 2 s). 더 돌면 비례해서 길게
-  unwind_max_s: 0.8                # 10-05 상자 앞 54° 회전 뒤 소음 -> 길이를 회전량에 맞춘다
+  unwind_max_s: 1.2                # 10-05: 상자 앞 107° 회전 뒤 0.8 에 걸려 소음 -> 1.2 (107° = 0.93 s)
   unwind_clear_s: 1.0              # 회전 뒤 직진·후진이 1 s 넘게 이어져야 반대 회전을 건너뛴다(10-01 star)
 
 mission:
