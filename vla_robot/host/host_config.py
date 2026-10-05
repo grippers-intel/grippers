@@ -140,6 +140,8 @@ class TrackerConfig:
     confirm_s: float = 1.2
     label_decay: float = 0.85
     max_per_label: int = 2
+    # 넓은 기물의 바닥 반경(m) — 카메라에 가까운 가장자리를 중심으로 옮긴다(2026-10-05, star).
+    piece_radius_by_label: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

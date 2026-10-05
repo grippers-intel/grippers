@@ -31,10 +31,29 @@ class PieceObs:
     cam_name: str
 
 
-def observations_from_detections(cam, detections, conf_threshold: float) -> list[PieceObs]:
-    """카메라 외부파라미터가 아직 안 풀렸으면 빈 목록 — 위치를 알 수 없다."""
+def away_from_camera(cam_xy, pt_xy, r: float) -> XY:
+    """바닥 접점(카메라에 가장 가까운 가장자리)을 기물 중심으로 — 카메라에서 멀어지는 쪽으로 r 만큼.
+
+    bbox 아래쪽 중앙은 물체가 바닥에 닿는 점 중 **카메라에 가장 가까운** 점이다. 작은 기물(체스 말
+    밑면 ~2 cm)은 상관없지만 넓은 기물은 중심이 그만큼 카메라 반대쪽에 있다. 2026-10-05: 두 카메라
+    사이(장판 가운데)의 별은 보는 카메라에 따라 위치가 서로 반대로 쏠려 파지 거리가 계속 짧았다.
+    """
+    dx, dy = pt_xy[0] - cam_xy[0], pt_xy[1] - cam_xy[1]
+    n = math.hypot(dx, dy)
+    if r <= 0 or n < 1e-6:
+        return float(pt_xy[0]), float(pt_xy[1])
+    return float(pt_xy[0] + r * dx / n), float(pt_xy[1] + r * dy / n)
+
+
+def observations_from_detections(cam, detections, conf_threshold: float,
+                                 radius_by_label: dict | None = None) -> list[PieceObs]:
+    """카메라 외부파라미터가 아직 안 풀렸으면 빈 목록 — 위치를 알 수 없다.
+
+    radius_by_label: 넓은 기물의 바닥 반경(m). 바닥 접점을 그만큼 카메라 반대쪽으로 옮겨 중심으로 쓴다.
+    """
     if detections is None or cam is None or not cam.ready:
         return []
+    radius_by_label = radius_by_label or {}
     out = []
     for d in detections:
         if d.confidence < conf_threshold:
@@ -42,7 +61,12 @@ def observations_from_detections(cam, detections, conf_threshold: float) -> list
         pt = cam.pixels_to_plane(np.array([d.bottom_center]), z=0.0)
         if pt is None:
             continue
-        out.append(PieceObs(d.label, float(pt[0, 0]), float(pt[0, 1]), float(d.confidence), cam.name))
+        x, y = float(pt[0, 0]), float(pt[0, 1])
+        r = float(radius_by_label.get(d.label, 0.0))
+        center = getattr(cam, "center", None)
+        if r > 0 and center is not None:
+            x, y = away_from_camera((float(center[0]), float(center[1])), (x, y), r)
+        out.append(PieceObs(d.label, x, y, float(d.confidence), cam.name))
     return out
 
 
