@@ -205,3 +205,27 @@ def test_manual_carry_reaches_the_box_without_an_extra_next(cfg):
         if fsm.state == HostState.PLACE:
             break
     assert HostState.NUDGE_BOX in states and states[-1] == HostState.PLACE
+
+
+def test_held_stays_gone_while_manual_waits_after_place(cfg):
+    """MANUAL: 투입이 끝나고 Next 를 기다리는 동안(Pi job_stage 는 다시 "") 쥔 기물이 되살아나지 않는다."""
+    clock = FakeClock()
+    world = SimWorld(cfg, clock=clock, seed=1)
+    fsm = MissionFSM(cfg, manual_mode=True)
+    ui = UiState(cfg)
+    dt = 1.0 / cfg.mission.cycle_hz
+    waited = []
+    for _ in range(9000):
+        clock.t += dt
+        world.update()
+        st = world.link.latest_status()
+        world.link.send(fsm.step(world.pose(), world.piece_map(), st, clock.t))
+        if fsm.state == HostState.PLACE and fsm.place_released:
+            s = ui.build(world.pose(), world.piece_map(), fsm, st, 0.0, 10.0)
+            waited.append((st.job_stage, s["held"]))
+            if len(waited) > 20:
+                break
+        elif fsm.ready_to_advance:
+            fsm.request_advance()
+    assert waited and all(stage == "" for stage, _ in waited[-5:])
+    assert all(held is None for _, held in waited)

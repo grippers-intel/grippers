@@ -226,7 +226,9 @@ class UiState:
                 if _dist((best["x"], best["y"]), fsm.target_xy) < 0.10:
                     target_id = best["id"]
         # 그리퍼를 연 뒤(Pi job_stage "release" / "return")에는 화면에서 쥔 기물을 지운다
-        released = st == HostState.PLACE and getattr(pi_status, "job_stage", "") in ("release", "return")
+        # 작업이 끝난 뒤 MANUAL 에서 Next 를 기다리는 동안은 Pi 가 단계를 비워 보내므로 FSM 결과로도 본다(10-05)
+        released = st == HostState.PLACE and (
+            getattr(pi_status, "job_stage", "") in ("release", "return") or getattr(fsm, "place_released", False))
         held = ({"id": "held", "label": fsm.target_label}
                 if (st in HELD_STATES and fsm.target_label and not released) else None)
 

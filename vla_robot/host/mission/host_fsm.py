@@ -215,6 +215,12 @@ class MissionFSM:
     def request_back(self) -> None:
         self._back_requested = True
 
+    @property
+    def place_released(self) -> bool:
+        """PLACE 작업이 성공으로 끝나 기물을 놓았다 — MANUAL 에서 Next 를 기다리는 동안에도 참(화면용)."""
+        r = self._job_result
+        return self.state == HostState.PLACE and r is not None and r.ok
+
     def set_hands(self, hands) -> None:
         """확인된 손 위치(지도 좌표). 손 검출이 없으면 빈 목록."""
         self.hands = [tuple(h) for h in hands]
