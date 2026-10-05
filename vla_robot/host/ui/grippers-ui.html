@@ -886,7 +886,7 @@ class ArenaMap {
     this._held = el("path", { class: "held", fill: COLOR.success, "fill-rule": "evenodd", opacity: 0 });
     svg.appendChild(this._held);
 
-    // vla_robot: 사람 손(가져다줄 곳) — state.hands = [{x, y, spot}]. 주황(caution) 링 + 위치 이름.
+    // vla_robot: 사람 손(가져다줄 곳) — state.hands = [{x, y, spot}]. 주황(caution) 링 + "HAND".
     this._handG = el("g", {});
     svg.appendChild(this._handG);
 
@@ -1086,7 +1086,7 @@ class ArenaMap {
         x: X(h.x), y: Y(h.y) + 3, "text-anchor": "middle", fill: "#FFA53D",
         "font-family": "'JetBrains Mono',monospace", "font-size": 8,
       });
-      t.textContent = h.spot && h.spot !== "?" ? h.spot : "HAND";
+      t.textContent = "HAND";   // 위치 이름(L2 등)은 내부용 — 화면에는 공통으로 HAND(10-05)
       this._handG.appendChild(t);
     });
 
