@@ -397,7 +397,8 @@ class MissionFSM:
             self.dest_xy = self._box_front_xy(self.dest_box)
             self.place_tries = 0
             self.grasp_tries = 0
-            self._log(f"target {label} @ ({xy[0]:.2f},{xy[1]:.2f}) -> {self.dest_box}")
+            dest = "hand (파지 뒤 보이는 손)" if (self.order and self.order.intent == "fetch") else self.dest_box
+            self._log(f"target {label} @ ({xy[0]:.2f},{xy[1]:.2f}) -> {dest}")
             self._enter(HostState.APPROACH_PIECE)
             return self._step_approach(pose, pmap, pi_status)
         return self._stop("search (ready)")
