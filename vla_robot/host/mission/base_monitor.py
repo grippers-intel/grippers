@@ -100,3 +100,61 @@ class BaseRunawayMonitor:
         if now - t0 < self.window_s * 0.8:
             return False                       # 창이 아직 덜 찼다
         return math.hypot(pose.x - x0, pose.y - y0) > self.move_m
+
+
+class BaseSpinMonitor:
+    """돌라고 하지 않았는데(또는 반대로 돌라고 했는데) 로봇이 돌고 있으면 True — 회전 폭주.
+
+    같은 고장이 **회전 중에** 나면 마지막 회전 속도를 그대로 유지한다. 2026-10-05: 투하 뒤 다음
+    기물로 돌던 중 반시계 약 8°/s 로 굳었다. Host 는 yaw- / yaw+ 를 번갈아 보냈고 ESTOP 도
+    걸었지만 10 s 마다 +80° 로 계속 돌았다. 위치는 몇 cm 밖에 안 변해 BaseRunawayMonitor
+    (위치만 본다)가 못 잡았고, 보드 리셋 없이 사람이 전원을 내렸다.
+
+    회전 명령의 방향(없음 · + · -)이 바뀐 지 grace_s 가 지난 뒤, 최근 window_s 동안
+      - 회전 명령이 없는데(정지·ESTOP) turn_deg 넘게 돌았거나
+      - 명령과 **반대 방향으로** turn_deg 넘게 돌았으면
+    폭주다. 병진 중에는 보지 않는다(옆걸음·직진 중 방향 보정과 섞인다). 팔 작업 중에도 보지
+    않는다 — 마커가 팔에 붙어 있어 팔 base 가 돌면 마커 방향도 돈다.
+    """
+
+    def __init__(self, turn_deg: float, window_s: float, grace_s: float) -> None:
+        self.turn_deg = turn_deg
+        self.window_s = window_s
+        self.grace_s = grace_s
+        self.reset()
+
+    def reset(self) -> None:
+        self._sign: Optional[int] = None       # 지금 회전 명령 방향(0 = 없음). None = 새로 본다
+        self._since = 0.0
+        self._yaws: list[tuple[float, float]] = []
+
+    @staticmethod
+    def _rot_sign(cmd: HostCommand) -> int:
+        if cmd.stop or abs(cmd.angular_z) <= 1e-6:
+            return 0
+        return 1 if cmd.angular_z > 0 else -1
+
+    def update(self, now: float, cmd: HostCommand, pose: Pose, watching: bool) -> bool:
+        """watching: 지금 폭주를 볼 상태인가(주행 단계·ESTOP). 아니면 창을 비운다."""
+        translating = not cmd.stop and (abs(cmd.linear_x) > 1e-6 or abs(cmd.linear_y) > 1e-6)
+        if (not watching or cmd.state in State.JOB_STATES or translating
+                or not (pose.ok and pose.fresh)):
+            self._sign = None
+            self._yaws.clear()
+            return False
+        sign = self._rot_sign(cmd)
+        if sign != self._sign:
+            # 명령 방향이 바뀌었다(처음 보는 경우 포함) — 관성으로 이전 방향으로 더 도는 몫을 grace 로 둔다
+            self._sign, self._since = sign, now
+            self._yaws.clear()
+        self._yaws.append((now, pose.yaw_deg))
+        self._yaws = [p for p in self._yaws if now - p[0] <= self.window_s]
+        if now - self._since < self.grace_s:
+            return False
+        t0, yaw0 = self._yaws[0]
+        if now - t0 < self.window_s * 0.8:
+            return False                       # 창이 아직 덜 찼다
+        turned = wrap_deg(pose.yaw_deg - yaw0)  # + = 반시계
+        if sign == 0:
+            return abs(turned) > self.turn_deg
+        return sign * turned < -self.turn_deg

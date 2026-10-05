@@ -187,6 +187,36 @@ def test_runaway_base_is_reset_and_the_mission_finishes(cfg):
     assert sorted(world.pieces_in_box("basket")) == ["queen", "star"]
 
 
+def test_spin_runaway_is_reset_and_the_mission_finishes(cfg):
+    """2026-10-05 실기: 다음 기물로 돌던 중 반시계 ~8°/s 로 굳어 yaw-/yaw+ · ESTOP 을 모두 무시했다.
+    Host 가 "반대로(또는 안) 돌라고 했는데 돈다"를 알아채 보드 리셋을 요청하고, 미션을 끝낸다."""
+    import math
+    world = SimWorld(cfg, clock=FakeClock(), seed=3)
+    fsm = MissionFSM(cfg)
+    clock = world.clock
+    froze_at, stopped_at = None, None
+    seen = set()                               # fsm.events 는 최근 것만 남는다 — 그때그때 모은다
+    for _ in range(8000):
+        clock.t += 0.1
+        world.update()
+        cmd = fsm.step(world.pose(), world.piece_map(), world.link.latest_status(), clock.t)
+        world.link.send(cmd)
+        seen.update(list(fsm.events)[-3:])
+        if froze_at is None and fsm.state == HostState.APPROACH_PIECE and abs(cmd.angular_z) > 0                 and abs(world._vel[2]) > 0:
+            world.fail_spin(math.copysign(math.radians(8.0), cmd.angular_z))
+            froze_at = clock.t
+        if froze_at is not None and stopped_at is None and not world.runaway:
+            stopped_at = clock.t
+        if len(world.pieces_in_box("basket")) == 2:
+            break
+    assert froze_at is not None and stopped_at is not None, list(fsm.events)
+    assert any("회전 폭주" in e for e in seen), sorted(seen)
+    assert world.base_recoveries == 1
+    # 굳은 뒤 리셋까지 돈 양(8°/s x 시간): 목표 방향을 지나 반대 명령이 나올 때까지 + 판단(grace 1 s + 창 1 s)
+    assert 8.0 * (stopped_at - froze_at) < 120
+    assert sorted(world.pieces_in_box("basket")) == ["queen", "star"]
+
+
 def test_runaway_is_not_confused_with_the_arm_or_coasting(cfg):
     """팔이 펴지며 마커가 움직이는 것(GRASP/PLACE)이나 멈춘 뒤 관성으로 몇 cm 더 가는 것은 폭주가 아니다."""
     world = SimWorld(cfg, clock=FakeClock(), seed=1)

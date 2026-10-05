@@ -103,6 +103,10 @@ class SimWorld:
         """지금 속도 그대로 바퀴가 굳는다 — 이후 명령·정지·워치독을 모두 무시한다(2026-09-30 실기)."""
         self._frozen_vel = self._vel
 
+    def fail_spin(self, rad_s: float) -> None:
+        """제자리 회전 속도로 바퀴가 굳는다 — 이후 명령·정지를 모두 무시한다(2026-10-05 실기, 반시계 ~8°/s)."""
+        self._frozen_vel = (0.0, 0.0, rad_s)
+
     @property
     def runaway(self) -> bool:
         return self._frozen_vel is not None

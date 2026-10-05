@@ -31,7 +31,7 @@ from typing import Optional
 
 from host_config import HostConfig
 from localization.pose import Pose
-from mission.base_monitor import BaseRunawayMonitor, BaseStallMonitor
+from mission.base_monitor import BaseRunawayMonitor, BaseSpinMonitor, BaseStallMonitor
 from mission.basket_target import BasketTarget, basket_target, facing_error_deg
 from planning.planner import (DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold,
                               segment_circle_clearance, segment_hits_rect, wrap_deg)
@@ -193,6 +193,7 @@ class MissionFSM:
         self._stall = BaseStallMonitor(m.base_stall_s, m.base_stall_move_m, m.base_stall_turn_deg)
         self._runaway = BaseRunawayMonitor(m.base_runaway_move_m, m.base_runaway_window_s,
                                            m.base_runaway_grace_s)
+        self._spin = BaseSpinMonitor(m.base_spin_turn_deg, m.base_spin_window_s, m.base_spin_grace_s)
         self._recover_started: Optional[float] = None
         self._recover_baseline: Optional[int] = None
         self._recover_in_a_row = 0
@@ -271,15 +272,23 @@ class MissionFSM:
         else:
             self._translating_since = None
         watching = self.estop or self.state in _DRIVE_HOST_STATES
-        if self._runaway.update(now, cmd, pose, watching):
+        ran = self._runaway.update(now, cmd, pose, watching)
+        spun = self._spin.update(now, cmd, pose, watching)      # 제자리 회전 폭주(10-05)
+        if ran or spun:
             self._runaway.reset()
+            self._spin.reset()
+            m = self.cfg.mission
             if self.estop:
-                # ESTOP 인데 달린다 — 정지 명령이 안 먹는 것이다. 보드 리셋만 요청하고 ESTOP 은 유지한다.
-                self._log("차체 폭주 — ESTOP 인데 움직인다. Pi 에 컨트롤러 복구(보드 리셋) 요청")
+                # ESTOP 인데 달린다/돈다 — 정지 명령이 안 먹는 것이다. 보드 리셋만 요청하고 ESTOP 은 유지한다.
+                self._log(f"차체 폭주 — ESTOP 인데 {'움직인다' if ran else '돈다'}. Pi 에 컨트롤러 복구(보드 리셋) 요청")
                 return replace(cmd, recover_base=True)
-            return self._start_base_recovery(
-                pi_status, f"차체 폭주 — 직진을 멈췄는데 {self.cfg.mission.base_runaway_window_s:.1f}s 에 "
-                           f"{self.cfg.mission.base_runaway_move_m * 100:.0f} cm 넘게 움직인다")
+            if ran:
+                why = (f"차체 폭주 — 직진을 멈췄는데 {m.base_runaway_window_s:.1f}s 에 "
+                       f"{m.base_runaway_move_m * 100:.0f} cm 넘게 움직인다")
+            else:
+                why = (f"차체 회전 폭주 — 돌라고 하지 않았는데(또는 반대로) {m.base_spin_window_s:.1f}s 에 "
+                       f"{m.base_spin_turn_deg:.0f}° 넘게 돈다")
+            return self._start_base_recovery(pi_status, why)
         if self._stall.update(now, cmd, pose):
             return self._start_base_recovery(pi_status)
         if self._stall.moved_since_reset:
@@ -314,6 +323,7 @@ class MissionFSM:
                 self._recover_in_a_row += 1
                 self._stall.reset()
                 self._runaway.reset()
+                self._spin.reset()
                 self._reset_motion()
                 self._log(f"차체 컨트롤러 복구 완료 — 하던 {self.state.name} 을 이어간다")
                 return None
