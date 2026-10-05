@@ -512,3 +512,20 @@ def test_still_turns_early_when_a_piece_is_on_the_way(cfg):
     cmd = fsm.step(P(0.90, 0.45, yaw=90.0 + off), pm, S(), 0.2)
     cmd = fsm.step(P(0.90, 0.45, yaw=90.0 + off), pm, S(), 0.3)
     assert cmd.angular_z != 0 or cmd.stop
+
+
+def test_unwind_length_follows_how_much_it_turned(cfg):
+    """10-05 상자 앞 54° 회전 뒤 소음: 반대 회전을 돈 양에 비례해 늘리고 unwind_max_s 에서 자른다."""
+    import math
+    from mission.host_fsm import MissionFSM
+    d = cfg.drive
+    for turned_deg, want in ((20, d.unwind_s), (54, d.unwind_s * math.radians(54) / d.unwind_ref_rad),
+                             (180, d.unwind_max_s)):
+        fsm = MissionFSM(cfg)
+        fsm._now = 10.0
+        fsm._rot_since_unwind, fsm._last_rot_sign = True, 1.0
+        fsm._rot_accum = math.radians(turned_deg)
+        cmd = fsm._unwind()
+        assert cmd is not None and cmd.angular_z < 0                  # 반대 방향
+        assert abs((fsm._unwind_until - 10.0) - want) < 1e-6, turned_deg
+        assert any("unwind" in e for e in fsm.events)

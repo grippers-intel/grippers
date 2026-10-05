@@ -190,6 +190,10 @@ class DriveConfig:
     # 2026-10-01: 회전 뒤 멈춰 있으면 바퀴가 크게 울었고, 반대로 0.3 s 돌리자 멎었다(0.3·0.6 s 시험).
     unwind_rad_s: float = 0.3
     unwind_s: float = 0.3
+    # 많이 돌았으면 그만큼 길게: unwind_s 는 unwind_ref_rad(0.3 rad/s x 2 s = 0.6 rad, 10-01 시험)만큼 돈 뒤의 값.
+    # 더 돌았으면 비례해서 늘리고 unwind_max_s 에서 자른다(10-05: 상자 앞 54° 회전 뒤 소음).
+    unwind_ref_rad: float = 0.6
+    unwind_max_s: float = 0.8
     # 회전 뒤 직진·후진이 이만큼 **이어졌을 때만** 버팀이 풀렸다고 본다(짧은 거리 맞추기로는 안 풀렸다).
     unwind_clear_s: float = 1.0
 

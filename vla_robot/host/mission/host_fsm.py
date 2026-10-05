@@ -170,6 +170,7 @@ class MissionFSM:
         self._creep_cmds = 0
         # 정차 소음 줄이기: 마지막 움직임이 회전이었는가, 그 방향, 반대 회전 진행 상태
         self._rot_since_unwind = False
+        self._rot_accum = 0.0           # 반대 회전 뒤 돈 양(rad) — 반대 회전 길이를 여기에 맞춘다
         self._last_rot_sign = 1.0
         self._unwind_until: Optional[float] = None
         self._unwind_sign = -1.0
@@ -266,6 +267,7 @@ class MissionFSM:
                 self._translating_since = now
             if now - self._translating_since >= self.cfg.drive.unwind_clear_s:
                 self._rot_since_unwind = False
+                self._rot_accum = 0.0
         else:
             self._translating_since = None
         watching = self.estop or self.state in _DRIVE_HOST_STATES
@@ -761,6 +763,7 @@ class MissionFSM:
         speed = max(d.rotation_min_rad_s, d.rotation_rad_s * scale)
         self.last_cmd_text = "yaw+" if sign > 0 else "yaw-"
         self._rot_since_unwind, self._last_rot_sign = True, sign
+        self._rot_accum += speed / max(self.cfg.mission.cycle_hz, 1.0)
         return HostCommand(WIRE_STATE[self.state], angular_z=sign * speed)
 
     def _unwind(self) -> Optional[HostCommand]:
@@ -777,8 +780,11 @@ class MissionFSM:
         if self._unwind_until is None:
             if not self._rot_since_unwind:
                 return None
-            self._unwind_until = self._now + d.unwind_s
+            dur = min(d.unwind_max_s, max(d.unwind_s, d.unwind_s * self._rot_accum / max(d.unwind_ref_rad, 1e-6)))
+            self._unwind_until = self._now + dur
             self._unwind_sign = -self._last_rot_sign
+            self._log(f"unwind {'+' if self._unwind_sign > 0 else '-'} {dur:.2f}s "
+                      f"(돈 양 {math.degrees(self._rot_accum):.0f}°, {self.state.name})")
         self.ready_to_advance = False
         if self._now < self._unwind_until:
             self.last_cmd_text = "unwind"
@@ -786,6 +792,7 @@ class MissionFSM:
                                label=self.target_label or "")
         self._unwind_until = None
         self._rot_since_unwind = False
+        self._rot_accum = 0.0
         self._unwound = True
         return self._stop("unwind (settle)")
 
