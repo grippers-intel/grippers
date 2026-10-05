@@ -438,7 +438,7 @@ window.addEventListener("unhandledrejection", function (e) {
 </script>
 <!-- build.py 로 묶은 단일 파일입니다. 고칠 때는 원본 ui/ 폴더를 고치고 다시 묶으세요. -->
 <!-- vla_robot: 팀원 grippers-ui-demo(2026-10-01) 의 grippers-ui.html 을 그대로 가져왔다. 바꾼 곳은
-     arena.js 의 "vla_robot:" 주석 자리뿐이다(장판 크기 window.ARENA_MAT · 눈금 · 손 표시 · 로봇 링 축척).
+     arena.js 의 "vla_robot:" 주석 자리와 트레이의 Map 버튼뿐이다(장판 크기 window.ARENA_MAT · 눈금 · 손 표시 · 로봇 링 축척 · 배터리 글자).
      run_host 가 이 파일을 내보낼 때 head 끝에 /host_bridge.js 를 끼워 넣는다(view/web_view.py). -->
 </head>
 <body>
@@ -669,6 +669,8 @@ window.addEventListener("unhandledrejection", function (e) {
       <div class="haltnote hide" id="haltNote">모든 구동 중단됨</div>
       <div class="traygrow" id="trayGrow"></div>
       <div class="traybtns">
+        <!-- vla_robot: 대기 중에도 지도 + 장판 위 기물 목록(host_bridge.js 가 누름·점등을 맡는다) -->
+        <span class="mono tb" id="mapBtn">Map</span>
         <span class="mono tb" id="modeBtn">AUTO</span>
         <span class="mono tb" id="resetBtn">Reset</span>
         <span class="mono tb" id="prevBtn">Prev</span>

@@ -37,13 +37,23 @@
     else if (e.key === "v" || e.key === "V") window.pywebview.api.ui_event("toggle_map", null);
   });
 
+  // 트레이 Map 버튼(비상 정지와 AUTO 사이) — 대기 중에도 지도. 지도가 열려 있으면 Next 처럼 밝힌다.
+  document.addEventListener("DOMContentLoaded", function () {
+    var b = document.getElementById("mapBtn");
+    if (b) b.addEventListener("click", function () { window.pywebview.api.ui_event("toggle_map", null); });
+  });
+  function syncMapButton(s) {
+    var b = document.getElementById("mapBtn");
+    if (b && s && s.tray) b.classList.toggle("go", !!s.tray.map);
+  }
+
   var failures = 0;
   function poll() {
     fetch("/state", { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (s) {
         failures = 0;
-        if (s && window.applyHostState) window.applyHostState(s);
+        if (s && window.applyHostState) { window.applyHostState(s); syncMapButton(s); }
       })
       .catch(function () {
         // run_host 가 끝났다 — 화면에 한 줄 남기고 느리게 다시 시도한다.
