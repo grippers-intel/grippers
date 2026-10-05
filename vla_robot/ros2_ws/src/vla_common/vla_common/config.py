@@ -145,6 +145,11 @@ class BaseConfig:
     # 때마다 첫 주행이 무응답이었다(완충·부저 정상이어도). 다른 노드가 다 뜰 시간을 두고 시작한다.
     recover_on_start: bool = True
     recover_on_start_delay_s: float = 3.0
+    # 소음 정리 재기동(2026-10-05). 회전 뒤 서 있으면 바퀴가 우는데, 컨트롤러를 다시 띄우면 멎었다.
+    # 움직인 뒤 팔 작업이 시작될 때(quiet_reset_on_job) · quiet_reset_idle_s 넘게 서 있을 때 한 번 한다.
+    quiet_reset: bool = True
+    quiet_reset_on_job: bool = True
+    quiet_reset_idle_s: float = 3.0
 
 
 @dataclass(frozen=True)

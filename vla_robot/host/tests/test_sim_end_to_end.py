@@ -217,6 +217,32 @@ def test_spin_runaway_is_reset_and_the_mission_finishes(cfg):
     assert sorted(world.pieces_in_box("basket")) == ["queen", "star"]
 
 
+def test_quiet_reset_during_arm_jobs_is_waited_out(cfg):
+    """10-05: Pi 가 팔 작업 시작마다 컨트롤러를 다시 띄운다(소음 정리). 투하보다 길게 걸려도 Host 는
+    그동안 바퀴 명령을 내지 않고 기다려야 한다 — 무응답으로 오판해 복구를 요청하면 안 된다."""
+    world = SimWorld(cfg, clock=FakeClock(), seed=1)
+    world.quiet_reset_s = 4.0                       # 시뮬 투하(2 s)보다 길다
+    fsm = MissionFSM(cfg)
+    clock = world.clock
+    seen, waited = set(), 0
+    for _ in range(8000):
+        clock.t += 0.1
+        world.update()
+        cmd = fsm.step(world.pose(), world.piece_map(), world.link.latest_status(), clock.t)
+        world.link.send(cmd)
+        seen.update(list(fsm.events)[-3:])
+        if fsm.last_cmd_text == "base reset (wait)":
+            waited += 1
+            assert cmd.stop and not cmd.recover_base
+        if len(world.pieces_in_box("basket")) == 2:
+            break
+    assert sorted(world.pieces_in_box("basket")) == ["queen", "star"]
+    assert waited > 0, "투하 뒤 재기동이 끝날 때까지 기다린 적이 있어야 한다"
+    assert not any("무응답" in e or "폭주" in e for e in seen), sorted(seen)
+    # 파지 2 + 투하 2 번 재기동(마지막 투하의 것은 루프가 끝날 때 아직 도는 중일 수 있다). Host 요청 복구는 없다.
+    assert world.base_recoveries in (3, 4)
+
+
 def test_runaway_is_not_confused_with_the_arm_or_coasting(cfg):
     """팔이 펴지며 마커가 움직이는 것(GRASP/PLACE)이나 멈춘 뒤 관성으로 몇 cm 더 가는 것은 폭주가 아니다."""
     world = SimWorld(cfg, clock=FakeClock(), seed=1)

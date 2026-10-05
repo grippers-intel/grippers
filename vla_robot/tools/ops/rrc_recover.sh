@@ -5,6 +5,7 @@
 #   bash tools/ops/rrc_recover.sh --fix    # 노드를 다시 띄운다
 #   bash tools/ops/rrc_recover.sh --fix auto   # pi_mission_node 가 자동 복구로 부를 때 — 부저를 울리지 않는다
 #   bash tools/ops/rrc_recover.sh --fix auto-startup   # 스택 기동 직후 선제 재기동(같이 부저 없음)
+#   bash tools/ops/rrc_recover.sh --fix auto-quiet     # 소음 정리 재기동(10-05) — 대기를 줄여 ~6 s
 #
 # 자동 호출(auto*)에서는 부저를 끈다(2026-10-01). 스택을 띄울 때마다·복구할 때마다 울려
 # 시끄러웠고, 자동 복구의 성공은 Host 가 탑뷰로 "움직인다"를 보고 판단한다.
@@ -48,13 +49,20 @@ if [ "${1:-}" != "--fix" ]; then
   exit 0
 fi
 
+# 소음 정리 재기동은 팔 작업(투하 ~9 s) 안에 끝나도록 대기를 줄인다. 노드는 띄운 뒤 ~2 s 면
+# "start" 를 찍는다(10-05 /tmp/rrc.log). 고장 복구(auto)는 예전 그대로 넉넉히 기다린다.
+case "${2:-}" in
+  auto-quiet) T_INT=1.5; T_KILL=0.5; T_UP=4 ;;
+  *)          T_INT=4;   T_KILL=1;   T_UP=8 ;;
+esac
+
 echo "컨트롤러 노드를 다시 띄웁니다 (전: $(count_nodes) 개)"
 # SIGINT 로 내린다 — 시리얼을 닫고 나가게 한다.
 pkill -INT -f "ros_robot_controller/lib/ros_robot_controller" 2>/dev/null || true
 pkill -INT -f "ros2 run ros_robot_controller" 2>/dev/null || true
-sleep 4
+sleep "$T_INT"
 pkill -9 -f "ros_robot_controller/lib/ros_robot_controller" 2>/dev/null || true
-sleep 1
+sleep "$T_KILL"
 
 # 부팅 자동 실행분과 같은 모양으로 띄운다(래퍼를 덧대지 않는다 — preflight 가 개수를 센다).
 # 로그는 **덧붙인다** — 다음에 또 멈추면 직전의 쓰기 실패·재연결 기록을 봐야 원인을 좁힌다.
@@ -62,7 +70,7 @@ sleep 1
 echo "=== $(date '+%F %T') 재기동 (${2:-수동})" >> /tmp/rrc.log
 setsid bash -lc "export ROS_DOMAIN_ID=$DOMAIN && $SETUP && \
   exec ros2 run ros_robot_controller ros_robot_controller" >>/tmp/rrc.log 2>&1 &
-sleep 8
+sleep "$T_UP"
 echo "후: $(count_nodes) 개   (로그 /tmp/rrc.log)"
 case "${2:-}" in
   auto*) exit 0 ;;          # 자동 호출 — 부저 없이 끝낸다

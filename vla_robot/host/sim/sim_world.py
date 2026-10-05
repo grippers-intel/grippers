@@ -89,6 +89,7 @@ class SimWorld:
         # 같은 고장이 달리는 중에 나면 마지막 속도를 그대로 유지한다(정지·워치독도 안 먹는다).
         self._frozen_vel: Optional[tuple[float, float, float]] = None
         self.recover_s = 3.0
+        self.quiet_reset_s = 0.0                     # >0 이면 팔 작업 시작마다 Pi 가 컨트롤러를 다시 띄운다
         self._recovering_until: Optional[float] = None
         self.base_recoveries = 0
         self.hand_catch_m = 0.15                    # 손바닥이 받아 내는 반경
@@ -160,6 +161,10 @@ class SimWorld:
         self._seq = cmd.seq
         if cmd.recover_base and self._recovering_until is None:
             self._recovering_until = now + self.recover_s
+        if (self.quiet_reset_s > 0 and cmd.state in State.JOB_STATES and self._job is None
+                and cmd.state != self.pi_state and self._recovering_until is None):
+            # Pi 의 소음 정리 재기동(10-05): 팔 작업이 시작되면 컨트롤러를 다시 띄운다(작업보다 길 수 있다)
+            self._recovering_until = now + self.quiet_reset_s
         if cmd.state == State.ESTOP:
             if self._job is not None:
                 self._result = JobResult(self._job_id, self._job[0], False, "cancelled by ESTOP")
