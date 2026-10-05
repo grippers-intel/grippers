@@ -31,9 +31,10 @@
   window.addEventListener("keydown", function (e) {
     var t = e.target;
     var typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
-    if (!typing && (e.key === "q" || e.key === "Q") && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      window.pywebview.api.ui_event("quit", null);
-    }
+    if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "q" || e.key === "Q") window.pywebview.api.ui_event("quit", null);
+    // v = 대기 중에도 지도 + 장판 위 기물 목록 열기/닫기(원래 대기 화면엔 지도가 없다, 2026-10-05)
+    else if (e.key === "v" || e.key === "V") window.pywebview.api.ui_event("toggle_map", null);
   });
 
   var failures = 0;

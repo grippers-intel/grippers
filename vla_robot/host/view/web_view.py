@@ -228,6 +228,8 @@ class WebView:
                 text = self.voice.take_final()
                 if text:
                     self.desk.submit(text, piece_map)
+            elif action == "toggle_map":            # v 키 — 대기 중 지도 보기
+                self.ui.show_map = not self.ui.show_map
             elif action == "basket":
                 self.desk.to_basket(fsm)
             elif action in ("dismiss", "retry", "cancel"):

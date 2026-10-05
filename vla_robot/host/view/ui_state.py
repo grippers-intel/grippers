@@ -101,6 +101,8 @@ class UiState:
         self._skipped_n = 0
         self._leg_state: Optional[HostState] = None
         self._leg_start = 0.0
+        # v 키 — 대기·완료 화면에서도 지도와 장판 위 기물 목록을 본다(2026-10-05 교육장 요청)
+        self.show_map = False
 
     def reset(self) -> None:
         self.__init__(self.cfg)
@@ -241,6 +243,9 @@ class UiState:
             screen = "done" if (finished or self.done) else "idle"
         else:
             screen = "run"
+        map_view = self.show_map and screen in ("idle", "done")
+        if map_view:
+            screen = "run"
         ko, en, step, tone = PHASE.get(st, ("", st.name, "", "accent"))
         if getattr(fsm, "dest_kind", "box") == "hand" and st in HAND_PHASE:
             ko, en, step, tone = HAND_PHASE[st]
@@ -254,6 +259,14 @@ class UiState:
                    "reason": (f"명령에 지정된 기물 · {target_ko}" if order else f"가장 가까운 기물 · {target_ko}"),
                    "distance": (f"{_dist(pose.xy, fsm.target_xy):.2f} m"
                                 if pose.ok and fsm.target_xy else "—")}
+        elif map_view:
+            seen: dict[str, int] = {}
+            for p in live:
+                seen[p["label"]] = seen.get(p["label"], 0) + 1
+            parts = [f"{PIECE_KO[lb]} {seen[lb]}" for lb in LEGEND_ORDER if seen.get(lb)]
+            parts += [f"{lb} {n}" for lb, n in seen.items() if lb not in PIECE_KO]
+            tgt = {"label": "", "title": f"장판 위 기물 {len(live)}개",
+                   "reason": " · ".join(parts) if parts else "인식된 기물이 없습니다", "distance": "—"}
         else:
             tgt = {"label": "", "title": "대상 탐색 중",
                    "reason": search_reason_ko(fsm.search_reason) or "작업 영역을 훑는 중입니다", "distance": "—"}
@@ -315,7 +328,7 @@ class UiState:
             "recording": vphase == "listening", "level": voice.level if voice is not None else 0.0,
             "idle": self._idle(now, waiting),
             "command": self._command(desk, voice, vphase),
-            "run": {"quote": f"“{order.text}”" if order else AUTO_QUOTE,
+            "run": {"quote": "지도 · v 로 닫기" if map_view else (f"“{order.text}”" if order else AUTO_QUOTE),
                     "mode": "target" if searching else "status"},
             "target": tgt,
             "status": {"ko": ko, "en": en, "step": step, "metric": metric, "progress": progress,

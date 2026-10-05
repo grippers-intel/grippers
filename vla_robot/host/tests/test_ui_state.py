@@ -128,3 +128,20 @@ def test_battery_cells_show_volts(cfg):
     s = ui.build(pose, {}, fsm, st, 0.0, 10.0)
     assert s["detail"]["veh_txt"] == "7.00V" and s["detail"]["arm_txt"] == "12.00V"
     assert s["notice"]["code"] == "BATT"                     # 7.2 V 아래 = 충전 알림
+
+
+def test_map_view_while_waiting(cfg):
+    from dataclasses import replace
+    c = replace(cfg, instruction=replace(cfg.instruction, mode="instructed"))
+    fsm = MissionFSM(c)
+    ui = UiState(c)
+    pose = type("P", (), {"ok": True, "x": 1.0, "y": 0.4, "yaw_deg": 90.0, "xy": (1.0, 0.4), "fresh": True})()
+    pmap = {"queen": [(0.8, 1.0)], "knight": [(0.24, 0.69)], "star": [(1.5, 1.0)]}
+    fsm.step(pose, pmap, None, 0.1)
+    assert ui.build(pose, pmap, fsm, None, 0.0, 10.0)["screen"] == "idle"
+    ui.show_map = True
+    s = ui.build(pose, pmap, fsm, None, 0.0, 10.0)
+    assert s["screen"] == "run" and s["run"]["mode"] == "target"
+    assert s["target"]["title"] == "장판 위 기물 3개"
+    assert s["target"]["reason"] == "별 1 · 퀸 1 · 나이트 1"
+    assert not s["scanning"]
