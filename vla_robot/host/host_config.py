@@ -179,6 +179,12 @@ class PlannerConfig:
 
 @dataclass(frozen=True)
 class DriveConfig:
+    # 제자리 회전 전 주변 확인(2026-10-05): 회전 반경 안에 다른 기물이 있으면 먼저 직진·후진으로
+    # 물러나 간격을 만든 뒤 돈다(옆걸음 없음). turn_guard_max_m 넘게 물러나야 하거나 물러날 자리가
+    # 막혔으면 예전처럼 그냥 돈다(로그를 남긴다).
+    turn_guard: bool = True
+    turn_guard_mps: float = 0.08
+    turn_guard_max_m: float = 0.15
     linear_mps: float = 0.15
     # 제자리 회전 최고 속도. 오차가 rotation_slow_deg 아래면 비례로 줄이되 rotation_min_rad_s
     # 아래로는 안 내린다(데드밴드 아래면 안 돈다).
@@ -230,6 +236,9 @@ class MissionConfig:
     # 파지에 실패하면 바로 다음 기물로 가지 않는다. 탑뷰로 위치를 다시 읽고, 정면을 다시
     # 맞춘 뒤 이 횟수만큼 더 잡아 본다. 그래도 안 되면 보류한다.
     grasp_retry_max: int = 1
+    # 파지 실패 뒤 다시 접근하기 전에 서서 기다린다(2026-10-05): 그리퍼가 공을 9.5 cm 밀었는데 0.1 s 만에
+    # 옛 위치로 다시 잡아 또 실패했다. 지도가 새 위치를 잡을 시간(tracker hold 1.5 s · confirm 1.2 s).
+    grasp_retry_settle_s: float = 2.5
     # 접근 중 목표 기물 위치를 탑뷰로 갱신할 때, 같은 라벨의 이 반경 안 검출을 같은 기물로 본다.
     target_track_m: float = 0.10
     place_trigger_dist_m: float = 0.35

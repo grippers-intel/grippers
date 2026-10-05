@@ -64,9 +64,13 @@ def test_grasp_failure_reapproaches_before_giving_up(cfg):
     moved = {"queen": [(0.95, 0.9)], "star": PM["star"]}
     cmd = fsm.step(P(0.9, 0.62), moved, S(job_id=1), 0.6)
     assert fsm.target_xy == (0.95, 0.9)
+    # 10-05: 바로 움직이지 않고 지도가 새 위치를 잡을 때까지(grasp_retry_settle_s) 선다
+    assert cmd.stop and "settle" in fsm.last_cmd_text
+    t = 0.5 + cfg.mission.grasp_retry_settle_s + 0.1
+    cmd = fsm.step(P(0.9, 0.62), moved, S(job_id=1), t)
     assert fsm.state == HostState.APPROACH_PIECE and cmd.angular_z < 0     # 오른쪽(시계)으로
     # 정면을 맞추면(반대 회전을 짧게 한 뒤) 다시 잡는다
-    t = _run_until(fsm, HostState.GRASP, P(0.9, 0.62, yaw=80.6), moved, S(job_id=1), 0.7)
+    t = _run_until(fsm, HostState.GRASP, P(0.9, 0.62, yaw=80.6), moved, S(job_id=1), t + 0.1)
     # 두 번째도 실패하면 그때 보류하고 star 로 간다
     fsm.step(P(0.9, 0.62, yaw=80.6), moved, S(job_id=2, result=JobResult(2, State.GRASP, False)), t)
     assert fsm.state == HostState.SEARCH_TARGET and len(fsm.skipped) == 1
@@ -213,10 +217,10 @@ def test_star_uses_its_own_farther_grasp_range(cfg):
     assert lo > cfg.mission.grasp_dist_min_m
     star = {"star": [(0.9, 0.9)]}
     fsm = MissionFSM(cfg)
-    fsm.step(P(0.9, 0.63), star, S(), 0.0)                      # 0.27 m — 기본 범위 안, star 에는 가깝다
-    cmd = fsm.step(P(0.9, 0.63), star, S(), 0.1)
+    cmds = [fsm.step(P(0.9, 0.63), star, S(), 0.0),             # 0.27 m — 기본 범위 안, star 에는 가깝다
+            fsm.step(P(0.9, 0.63), star, S(), 0.1)]
     assert fsm.target_label == "star" and fsm.state == HostState.APPROACH_PIECE
-    assert cmd.linear_x < 0                                     # 뒤로 물러나 star 범위로
+    assert any(c.linear_x < 0 for c in cmds)                    # 뒤로 물러나 star 범위로(10-05 범위 0.28-0.31)
     # 같은 거리의 queen 은 그대로 잡는다
     fsm = MissionFSM(cfg)
     queen = {"queen": [(0.9, 0.9)]}

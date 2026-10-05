@@ -33,7 +33,7 @@ from host_config import HostConfig
 from localization.pose import Pose
 from mission.base_monitor import BaseRunawayMonitor, BaseSpinMonitor, BaseStallMonitor
 from mission.basket_target import BasketTarget, basket_target, facing_error_deg
-from planning.planner import (DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold,
+from planning.planner import (DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold, point_in_rect,
                               segment_circle_clearance, segment_hits_rect, wrap_deg)
 from vla_common.protocol import HostCommand, JobResult, JobTracker, PiStatus, State
 
@@ -173,6 +173,10 @@ class MissionFSM:
         self._rot_accum = 0.0           # 반대 회전 뒤 돈 양(rad) — 반대 회전 길이를 여기에 맞춘다
         self._last_rot_sign = 1.0
         self._unwind_until: Optional[float] = None
+        self._retry_settle_until: Optional[float] = None   # 파지 실패 뒤 다시 보기 전 대기
+        self._guard_logged = False
+        self._pose_now: Optional[Pose] = None
+        self._pmap_now: Optional[PieceMap] = None
         self._unwind_sign = -1.0
         self._unwound = False
         self._translating_since: Optional[float] = None
@@ -256,6 +260,7 @@ class MissionFSM:
         self._now = now
         if pose.ok:
             self._last_pose_xy = pose.xy
+        self._pose_now, self._pmap_now = pose, piece_map      # 회전 전 주변 확인(_turn_guard)용
         if self._recover_started is not None and not self.estop:
             waiting = self._wait_base_recovery(pi_status)
             if waiting is not None:
@@ -427,6 +432,11 @@ class MissionFSM:
         assert self.target_xy is not None
         m = self.cfg.mission
         self._refresh_target(pmap)
+        if self._retry_settle_until is not None:
+            if self._now < self._retry_settle_until:
+                self.ready_to_advance = False
+                return self._stop("grasp retry (settle — 기물 새 위치 기다림)")
+            self._retry_settle_until = None
         obstacles = [p for pts in pmap.values() for p in pts if _dist(p, self.target_xy) > 0.05]
         dist = _dist(pose.xy, self.target_xy)
         lo, hi = self._grasp_range()
@@ -545,6 +555,8 @@ class MissionFSM:
                     self._log(f"GRASP retry {self.grasp_tries}/{m.grasp_retry_max}: "
                               f"위치를 다시 보고 정면을 맞춘 뒤 다시 잡는다")
                     self._enter(HostState.APPROACH_PIECE)
+                    # 바로 다시 보지 않는다 — 밀린 기물의 새 위치가 지도에 잡힐 때까지 선다(10-05 soccer)
+                    self._retry_settle_until = self._now + m.grasp_retry_settle_s
                     return self._stop("grasp failed — re-approach")
                 # 재시도까지 실패했다. 보류하고 다음 기물로 간다.
                 self._skip_target(f"grasp failed: {self._job_result.detail}")
@@ -777,7 +789,85 @@ class MissionFSM:
             return False
         return self._now - self._blocked_since > self.cfg.mission.blocked_timeout_s
 
+    def _other_pieces(self, pose: Pose) -> list[XY]:
+        """지도 위 기물 중 목표(잡으러 가는 것)·쥔 기물을 뺀 것."""
+        r_hold = self.cfg.planner.carry_ignore_radius_m
+        holding = self.state in (HostState.CARRY_TO_DEST, HostState.NUDGE_BOX, HostState.FACE_HAND,
+                                 HostState.PLACE)
+        out = []
+        for label, pts in (self._pmap_now or {}).items():
+            for p in pts:
+                if self.target_xy is not None and not holding and _dist(p, self.target_xy) <= 0.05:
+                    continue                    # 잡으러 가는 기물(정면에 0.26 m 이상 떨어져 있다)
+                if holding and label == self.target_label and _dist(p, pose.xy) <= r_hold:
+                    continue                    # 쥐고 있는 기물(그리퍼 안에서 계속 보인다)
+                out.append(p)
+        return out
+
+    def _turn_blockers(self, pose: Pose) -> list[XY]:
+        """제자리 회전하면 차체가 쓸고 지나가는 원(대각 반지름 + 여유) 안의 기물. 목표·쥔 기물은 뺀다."""
+        return [p for p in self._other_pieces(pose) if _dist(p, pose.xy) < self._planner.turn_safe]
+
+    def _turn_guard(self) -> Optional[HostCommand]:
+        """돌기 전에 회전 반경 안의 기물에서 직진·후진으로 물러난다. 돌아도 되면 None.
+
+        2026-10-05: 바구니 앞 정차점에서 팔이 못 메우는 각도를 차체로 돌다 옆의 별에 걸렸고(밀려서
+        폭주로 오인 -> 보드 리셋 뒤 별을 쳤다), 공을 놓친 뒤 출발하며 그 자리에서 돌다 19 cm 앞의 공을
+        쳤다(출발점 회전은 계획기의 꺾는 점 검사에서 빠진다). 옆걸음은 쓰지 않는다 — 앞뒤로만 물러난다.
+        """
+        d, pose = self.cfg.drive, self._pose_now
+        if not d.turn_guard or pose is None or not (pose.ok and pose.fresh):
+            return None
+        blockers = self._turn_blockers(pose)
+        if not blockers:
+            self._guard_logged = False
+            return None
+        pl = self._planner
+        th = math.radians(pose.yaw_deg)
+        fwd = (math.cos(th), math.sin(th))
+        # 각 기물에서 turn_safe 밖으로 나가려면 앞(+)/뒤(-)로 얼마나 가야 하나 — 둘 중 짧은 쪽
+        best = None
+        for sign in (-1.0, 1.0):                 # -1 후진, +1 직진
+            need, through = 0.0, False
+            for b in blockers:
+                dx, dy = b[0] - pose.x, b[1] - pose.y
+                lx, ly = dx * fwd[0] + dy * fwd[1], -dx * fwd[1] + dy * fwd[0]   # 차체 기준 앞(+)·왼(+)
+                if sign * lx > 0.02 and abs(ly) < pl.safe:
+                    through = True              # 가는 쪽에 있다 — 그쪽으로 가면 친다
+                    break
+                reach = math.sqrt(max(pl.turn_safe ** 2 - ly ** 2, 0.0))   # 앞뒤로 이만큼 떨어지면 된다
+                # sign 쪽으로 s 만큼 가면 기물의 앞뒤 거리는 lx - sign*s -> |...| >= reach 가 되는 s
+                need = max(need, reach + sign * lx + 0.01)
+            if through:
+                continue
+            end = (pose.x + sign * need * fwd[0], pose.y + sign * need * fwd[1])
+            ok = (need <= d.turn_guard_max_m
+                  and pl.x0 <= end[0] <= pl.x1 and pl.y0 <= end[1] <= pl.y1
+                  and not any(point_in_rect(end, r) or segment_hits_rect(pose.xy, end, r)
+                              for r in pl._active_keepouts(pose.xy))
+                  and not any(segment_circle_clearance(pose.xy, end, o)[0] < pl.safe
+                              for o in self._other_pieces(pose)
+                              if o not in blockers))
+            if ok and (best is None or need < best[1]):
+                best = (sign, need)
+        if best is None:
+            if not self._guard_logged:
+                self._guard_logged = True
+                self._log(f"turn guard: 회전 반경 안 기물 {len(blockers)}개 — 앞뒤로 물러날 자리가 없어 그대로 돈다")
+            return None
+        if not self._guard_logged:
+            self._guard_logged = True
+            self._log(f"turn guard: 회전 반경 안 기물 {len(blockers)}개 — "
+                      f"{'후진' if best[0] < 0 else '직진'} {best[1] * 100:.0f} cm 뒤 돈다 ({self.state.name})")
+        self.ready_to_advance = False
+        self.last_cmd_text = f"turn guard ({'back' if best[0] < 0 else 'fwd'} {best[1] * 100:.0f} cm)"
+        return HostCommand(WIRE_STATE[self.state], linear_x=best[0] * d.turn_guard_mps,
+                           label=self.target_label or "")
+
     def _rotate(self, yaw_error_deg: float) -> HostCommand:
+        guard = self._turn_guard()
+        if guard is not None:
+            return guard
         # yaw_error = 목표 - 현재, 반시계가 +. 부호가 곧 회전 방향이다.
         # 오차가 작을수록 느리게 돈다 — 한 속도(0.5 rad/s)로는 지연 동안 허용치를 넘어가
         # 좌우로 떨었다(2026-09-30). 데드밴드 아래로는 내리지 않는다.
