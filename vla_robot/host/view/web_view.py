@@ -73,14 +73,36 @@ def close_app_windows() -> int:
     return 0
 
 
-def open_app_window(url: str):
+def window_geometry(height: int = 0) -> tuple[int, int, int, int]:
+    """(너비, 높이, x, y) — 화면 배율 반영(크롬 --window-size 는 배율 적용 뒤 크기다).
+    height=0 이면 화면 작업 영역(작업 표시줄 제외)에 맞춘다. 2026-10-05: 125 % 배율 노트북에서 860 높이가
+    작업 영역 816 을 넘어 아래가 잘렸다. 비율은 팀원 run-windows.bat 의 460 x 860 그대로."""
+    w0, h0, margin = 460, 860, 24
+    avail = None
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+            from ctypes import wintypes
+            r = wintypes.RECT()
+            ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(r), 0)   # SPI_GETWORKAREA
+            scale = ctypes.windll.shcore.GetScaleFactorForDevice(0) / 100.0 or 1.0
+            avail = int((r.bottom - r.top) / scale)
+        except Exception:  # noqa: BLE001 — 못 재면 원래 크기
+            avail = None
+    h = height or (min(h0, avail - 2 * margin) if avail else h0)
+    h = max(int(h), 480)
+    return round(h * w0 / h0), h, 80, margin
+
+
+def open_app_window(url: str, height: int = 0):
     """주소창 없는 세로 창. (어떤 브라우저로 열었는지, 창 프로세스 또는 None)."""
     for exe in _browser_candidates():
         if exe and Path(exe).exists():
             profile = _profile_dir()
             profile.mkdir(parents=True, exist_ok=True)
+            w, h, x, y = window_geometry(height)
             proc = subprocess.Popen([exe, f"--app={url}", f"--user-data-dir={profile}",
-                                     "--window-size=460,860", "--window-position=80,40",
+                                     f"--window-size={w},{h}", f"--window-position={x},{y}",
                                      "--no-first-run", "--no-default-browser-check"],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return Path(exe).stem, proc
@@ -163,7 +185,8 @@ class WebView:
         # 다시 띄울 때 창이 쌓이지 않게 — 남아 있던 시연 창을 닫고 새로 연다. close() 에서도 닫는다(2026-10-02).
         if open_window:
             close_app_windows()
-        how, self._window = open_app_window(self.url) if open_window else ("not opened", None)
+        how, self._window = (open_app_window(self.url, cfg.view.window_height) if open_window
+                             else ("not opened", None))
         print(f"[view] 시연 UI: {self.url} ({how}) — 창에서 q = 종료 (창을 X 로 닫으면 Ctrl+C 로 끝낼 것)")
 
     def update(self, pose, piece_map, fsm, pi_status, link_age_s: float, hz: float,
