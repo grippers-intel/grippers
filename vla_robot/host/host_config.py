@@ -296,6 +296,12 @@ class MissionConfig:
     base_runaway_move_m: float = 0.05
     base_runaway_window_s: float = 0.5
     base_runaway_grace_s: float = 1.0
+    # 회전 폭주 감지(2026-10-05). 같은 고장이 회전 중에 나면 제자리에서 계속 돈다(반시계 ~8°/s, ESTOP 도
+    # 안 먹었다). 위치가 거의 안 변해 위 감지로는 못 잡는다. 회전 명령 방향이 바뀐 지 base_spin_grace_s 뒤,
+    # base_spin_window_s 동안 회전 명령 없이(또는 반대로) base_spin_turn_deg 넘게 돌면 같은 복구를 요청한다.
+    base_spin_turn_deg: float = 6.0
+    base_spin_window_s: float = 1.0
+    base_spin_grace_s: float = 1.0
 
 
 @dataclass(frozen=True)

@@ -207,6 +207,11 @@ mission:
   base_runaway_move_m: 0.05
   base_runaway_window_s: 0.5
   base_runaway_grace_s: 1.0
+  # 회전 폭주 감지: 회전 명령이 바뀐 지 1 s 뒤, 1 s 동안 돌라고 안 했는데(또는 반대로) 6° 넘게 돌면 같은 복구.
+  # 10-05: 제자리에서 반시계 ~8°/s 로 굳어 yaw-/yaw+·ESTOP 을 모두 무시했다(위치 감지로는 못 잡음).
+  base_spin_turn_deg: 6.0
+  base_spin_window_s: 1.0
+  base_spin_grace_s: 1.0
 
 link:
   bind_ip: 0.0.0.0

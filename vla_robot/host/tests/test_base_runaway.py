@@ -65,3 +65,56 @@ def test_not_watched_during_arm_jobs_or_outside_drive_states():
     for k in range(40):                       # 사람이 옮기는 중(감시 안 함)
         t += 0.1
         assert not m.update(t, STOP, P(0.9 + 0.02 * k, 0.4), False)
+
+
+# ---------------------------------------------------------------- 회전 폭주(2026-10-05)
+from mission.base_monitor import BaseSpinMonitor  # noqa: E402
+
+ROT_P = HostCommand(State.APPROACH, angular_z=0.3)
+ROT_N = HostCommand(State.APPROACH, angular_z=-0.3)
+HALT = HostCommand(State.APPROACH, stop=True)
+
+
+def _spin():
+    return BaseSpinMonitor(turn_deg=6.0, window_s=1.0, grace_s=1.0)
+
+
+def _first_hit(m, cmds, rate_deg_s, yaw=0.0, t=0.0, watching=True):
+    """cmds[k] 를 보내는 동안 로봇이 rate_deg_s 로 돈다. 처음 True 가 된 k(없으면 None)."""
+    for k, c in enumerate(cmds):
+        if m.update(t, c, P(0.95, 1.25, yaw), watching):
+            return k
+        t, yaw = t + 0.1, yaw + rate_deg_s * 0.1
+    return None
+
+
+def test_spinning_on_after_estop_is_a_spin_runaway():
+    """10-05 실기: ESTOP 뒤에도 반시계 ~8°/s 로 계속 돌았다."""
+    k = _first_hit(_spin(), [HALT] * 60, 8.0)
+    assert k is not None and k <= 22            # grace 1 s + 창 1 s 안팎
+
+
+def test_spinning_against_the_command_is_a_spin_runaway():
+    """yaw- 를 보내는데 반시계로 돈다."""
+    k = _first_hit(_spin(), [ROT_N] * 60, 8.0)
+    assert k is not None and k <= 22
+
+
+def test_normal_turns_overshoot_and_reversals_are_not_a_spin_runaway():
+    m = _spin()
+    t, yaw = 0.0, 0.0
+    script = ([(ROT_P, 17.0)] * 20 + [(HALT, 6.0)] * 2 + [(HALT, 0.0)] * 20      # 돌고 서면서 조금 더 돈다
+              + [(ROT_N, -17.0)] * 10 + [(ROT_P, -10.0), (ROT_P, 0.0)]           # 반대로 돌다 뒤집기
+              + [(ROT_P, 17.0)] * 10 + [(ROT_N, 5.0)] * 3 + [(ROT_N, -17.0)] * 10  # 반대 회전(unwind)
+              + [(HALT, 0.0)] * 30)
+    for c, rate in script:
+        noise = 0.8 if int(t * 10) % 2 else -0.8                                # 탑뷰 방향 떨림 ±0.8°
+        assert not m.update(t, c, P(0.95, 1.25, yaw + noise), True), (t, c)
+        t, yaw = t + 0.1, yaw + rate * 0.1
+
+
+def test_spin_not_watched_while_translating_in_arm_jobs_or_unwatched():
+    fwd = HostCommand(State.APPROACH, linear_x=0.1)
+    assert _first_hit(_spin(), [fwd] * 40, 10.0) is None                       # 직진 중 방향 보정
+    assert _first_hit(_spin(), [HostCommand(State.PLACE, stop=True)] * 40, 10.0) is None  # 팔 base 가 돈다
+    assert _first_hit(_spin(), [HALT] * 40, 10.0, watching=False) is None      # 사람이 돌리는 중
