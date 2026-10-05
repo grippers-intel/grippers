@@ -166,11 +166,13 @@ def test_runaway_base_is_reset_and_the_mission_finishes(cfg):
     fsm = MissionFSM(cfg)
     clock = world.clock
     froze_at, stopped_at = None, None
+    seen = set()                               # fsm.events 는 최근 것만 남는다 — 그때그때 모은다
     for _ in range(8000):
         clock.t += 0.1
         world.update()
         cmd = fsm.step(world.pose(), world.piece_map(), world.link.latest_status(), clock.t)
         world.link.send(cmd)
+        seen.update(list(fsm.events)[-3:])
         if froze_at is None and fsm.state == HostState.CARRY_TO_DEST and cmd.linear_x > 0 \
                 and world._vel[0] > 0:
             world.fail_runaway()
@@ -180,7 +182,7 @@ def test_runaway_base_is_reset_and_the_mission_finishes(cfg):
         if len(world.pieces_in_box("basket")) == 2:
             break
     assert froze_at is not None and stopped_at is not None, list(fsm.events)
-    assert any("폭주" in e for e in fsm.events)
+    assert any("폭주" in e for e in seen), sorted(seen)
     assert world.base_recoveries == 1
     # 굳은 뒤 멈출 때까지: 부분목표에 닿을 때까지(최대 ~0.3 m) + 폭주 판단(grace 1 s + 창 0.5 s)
     assert math.dist(froze_at, stopped_at) < 0.6
