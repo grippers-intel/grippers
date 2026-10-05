@@ -212,6 +212,11 @@ class WebView:
                 # 해제는 초기화(r)로만 — 실수로 재개되지 않게(FSM reset 주석). 카드의 버튼을 쓰게 한다.
                 self.ui.notify("정지 해제는 카드의 '초기화 후 재개' 로 합니다", "E-000", "error")
                 continue
+            if action in ("next", "prev"):
+                why = self._step_blocked(fsm, action)
+                if why:                                 # 눌러도 안 넘어가는 이유를 보여 준다(10-05: "Next 가 안 된다")
+                    self.ui.notify(why, "STEP", "caution")
+                    continue
             if action in ACTIONS:
                 if action == "reset":                   # 초기화 = 지시도 취소(FSM reset)
                     self.ui.reset()
@@ -237,6 +242,20 @@ class WebView:
             elif action == "pick_label" and isinstance(payload, str):
                 self.desk.pick_label(payload, fsm)
             # 지도 기물 탭(pick)·run 등은 아직 쓰지 않는다
+
+    @staticmethod
+    def _step_blocked(fsm, action: str):
+        """Next/Prev 를 못 받는 이유. None = 넘겨도 된다.
+        넘길 준비가 안 됐을 때 누른 Next 를 그대로 넘기면 FSM 이 기억했다가 나중에 갑자기 진행한다."""
+        if not fsm.manual_mode:
+            return "Next·Prev 는 MANUAL 에서 한 단계씩 넘길 때 씁니다 — AUTO 를 눌러 MANUAL 로"
+        if action == "prev":
+            return None
+        if getattr(fsm, "order", None) is None and getattr(fsm, "command_mode", "auto") == "instructed"                 and fsm.state.name == "SEARCH_TARGET":
+            return "지시 대기 중 — 먼저 명령을 주세요(입력창·마이크)"
+        if not fsm.ready_to_advance:
+            return "아직 넘길 단계가 아닙니다 — Next 가 밝아지면 누르세요"
+        return None
 
     def close(self) -> None:
         try:

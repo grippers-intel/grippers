@@ -145,3 +145,21 @@ def test_map_view_while_waiting(cfg):
     assert s["target"]["title"] == "장판 위 기물 3개"
     assert s["target"]["reason"] == "별 1 · 퀸 1 · 나이트 1"
     assert not s["scanning"]
+
+
+
+def test_next_explains_why_it_does_nothing(cfg):
+    from dataclasses import replace
+    from view.web_view import WebView
+    from voice.voice_input import VoiceInput
+    c = replace(cfg, instruction=replace(cfg.instruction, mode="instructed"))
+    fsm = MissionFSM(c)
+    pose = type("P", (), {"ok": True, "x": 1.0, "y": 0.4, "yaw_deg": 90.0, "xy": (1.0, 0.4), "fresh": True})()
+    assert "MANUAL" in WebView._step_blocked(fsm, "next")
+    fsm.set_manual_mode(True)
+    fsm.step(pose, {"queen": [(0.8, 1.0)]}, None, 0.1)
+    assert "지시 대기" in WebView._step_blocked(fsm, "next")
+    from mission.host_fsm import Order
+    fsm.set_order(Order(("queen",), "one", "organize", "퀸"))
+    fsm.step(pose, {"queen": [(0.8, 1.0)]}, None, 0.2)
+    assert fsm.ready_to_advance and WebView._step_blocked(fsm, "next") is None
