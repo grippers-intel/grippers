@@ -293,6 +293,12 @@ class MissionConfig:
     basket_stop_pos_err_m: float = 0.02      # 구역 자리 검사에서 좌우로 이만큼 어긋나 서는 것까지 본다
     basket_stop_clear_m: float = 0.015       # 차체 바깥면–기물 가장자리 최소 간격
     basket_stop_zone_retry_s: float = 3.0    # 설 자리가 없으면 운반을 이으며 이만큼 다시 보고 그래도 없으면 HALTED
+    # 바구니에는 아래에서 들어간다(2026-10-07): 기물을 정차점보다 basket_low_margin_m 넘게 아래에서 잡았으면
+    # 정차점까지 방향이 정면(90°) ± basket_approach_cone_deg 안일 때만 곧장 가는 단계로 넘기고, 아니면 먼저
+    # 정차점 바로 아래 basket_pre_stop_m 지점으로 간다. 정차점 높이 근처에서 잡았으면 구역에서 로봇 쪽 자리에 선다.
+    basket_low_margin_m: float = 0.12
+    basket_approach_cone_deg: float = 15.0
+    basket_pre_stop_m: float = 0.30
     basket_stop_step_m: float = 0.02
     basket_aim_shift_max_m: float = 0.06
     # 정차점 근처(place_trigger_dist_m 안)에서 정차점까지 직선이 이만큼 계속 막혀 있으면 HALTED 로 사람을 부른다(10-07).

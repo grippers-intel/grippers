@@ -76,3 +76,14 @@ def test_assumes_the_robot_stands_tilted_and_off_by_a_little():
     assert fsm.state == HostState.CARRY_TO_DEST
     dx = fsm.dest_xy[0] - centre[0]
     assert dx <= -0.06 + 1e-9                                                  # −6 cm 이상 비켜 선다
+
+
+def test_from_the_side_at_stop_height_stands_on_the_robots_side():
+    """정차점 높이 근처(옆)에서 잡았으면 구역에서 로봇 쪽 자리에 선다 — 옆으로 가는 거리·첫 회전을 줄인다(10-07)."""
+    fsm = MissionFSM(_cfg())
+    fsm.set_order(Order(labels=("queen",)))
+    fsm.step(P(0.60, 1.00), {"queen": [(0.60, 1.20)]}, S(), 0.0)
+    centre = fsm.dest_xy
+    fsm._enter(HostState.CARRY_TO_DEST)
+    fsm.step(P(0.70, 1.22, yaw=150.0), {"queen": [(0.48, 1.30)]}, S(), 0.1)   # 정차점 높이, 왼쪽
+    assert fsm.dest_xy[1] == centre[1] and fsm.dest_xy[0] < centre[0] - 0.09   # 왼쪽 끝(−10 cm)

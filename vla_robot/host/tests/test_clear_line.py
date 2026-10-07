@@ -29,6 +29,7 @@ def test_straight_basket_approach_waits_for_a_clear_line():
     start = (dest[0], dest[1] - 0.30)                         # 정차점 30 cm 앞, 정차점을 본다
     knight = (dest[0] + 0.06, dest[1] - 0.15)                 # 직선 바로 옆 6 cm
     held = (start[0], start[1] + 0.26)                        # 쥔 퀸(그리퍼 안)
+    fsm._box_stop_chosen = True                               # 정차 구역은 가운데로 고정(직선 규칙만 본다)
     fsm.step(P(*start), {"queen": [held], "knight": [knight]}, S(), 0.1)
     assert fsm.state == HostState.CARRY_TO_DEST               # 곧장 가지 않는다
     fsm.step(P(*start), {"queen": [held], "knight": [(dest[0] + 0.40, dest[1] - 0.15)]}, S(), 0.2)
@@ -81,6 +82,7 @@ def _scene_b():
     fsm.set_order(Order(labels=("soccer",)))
     fsm.step(P(0.99, 0.50), {"soccer": [(0.99, 0.80)]}, S(), 0.0)
     fsm._enter(HostState.CARRY_TO_DEST)
+    fsm.dest_xy, fsm._box_stop_chosen = (0.95, 1.26), True   # 그때 정차 구역이 고른 자리(왼쪽 4 cm)
     pose = P(1.004, 0.920, yaw=80.8)
     held = (1.004 + 0.26 * math.cos(math.radians(80.8)), 0.920 + 0.26 * math.sin(math.radians(80.8)))
     pmap = {"soccer": [held], "box": [(1.143, 0.895)]}
@@ -96,8 +98,21 @@ def test_does_not_hand_over_when_the_first_turn_would_sweep_a_piece():
 
 def test_nudge_goes_back_to_carry_when_its_turn_would_sweep_a_piece():
     fsm, pose, pmap = _scene_b()
-    fsm.step(pose, pmap, S(), 0.1)                                           # 정차 구역 고르기
     fsm._enter(HostState.NUDGE_BOX)
+    fsm.dest_xy = (0.95, 1.26)
     cmds = [fsm.step(pose, pmap, S(), 0.2 + 0.1 * k) for k in range(3)]
     assert any("운반으로 돌아간다" in e for e in fsm.events)
-    assert all(c.angular_z == 0 for c in cmds)
+    assert cmds[0].angular_z == 0                                            # 쓸리는 그 회전은 하지 않는다
+
+
+def test_nearly_opposite_turn_keeps_its_direction():
+    """10-07: 175° 와 185° 사이에서 위치 흔들림으로 짧은 쪽이 바뀌면 돌다 뒤집힌다 — 처음 방향을 끝까지 유지."""
+    fsm = MissionFSM(_cfg())
+    fsm._now = 0.0
+    a = fsm._rotate(170.0)                                    # 반시계로 시작
+    fsm._now = 0.1
+    b = fsm._rotate(-175.0)                                   # 흔들려 반대가 짧아 보여도
+    assert a.angular_z > 0 and b.angular_z > 0                # 계속 반시계
+    fsm._now = 0.2
+    c = fsm._rotate(-40.0)                                    # 거의 다 돌았으면 짧은 쪽
+    assert c.angular_z < 0
