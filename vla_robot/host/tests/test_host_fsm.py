@@ -413,7 +413,8 @@ def test_carry_goes_straight_to_the_stop_point(cfg):
     fsm.step(P(0.60, 1.10, yaw=0.0), {}, S(), 0.0)
     # 10-07: 정차점보다 충분히 아래이고 정면 ±15° 밖이면 먼저 정차점 바로 아래 지점으로(아래에서 똑바로 들어간다)
     dx, dy = fsm.dest_xy
-    assert fsm.nav_goal == pytest.approx((dx, dy - cfg.mission.basket_pre_stop_m))
+    # 이미 정차점 30 cm 아래보다 위(y 1.10)면 내려가지 않고 지금 높이에서 옆으로(10-07 별)
+    assert fsm.nav_goal == pytest.approx((dx, max(dy - cfg.mission.basket_pre_stop_m, 1.10)))
     fsm.step(P(dx, dy - 0.30, yaw=90.0), {}, S(), 0.05)          # 바로 아래에 오면
     assert fsm.state == HostState.NUDGE_BOX                      # 곧장 들어간다
     fsm._enter(HostState.CARRY_TO_DEST)

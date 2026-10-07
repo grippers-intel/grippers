@@ -183,6 +183,8 @@ class MissionFSM:
         self._zone_blocked_since: Optional[float] = None
         self._turn_latch: Optional[tuple[float, float]] = None   # (방향, 마지막 시각) — 거의 정반대 회전 고정
         self._aim_shift = 0.0                # 바구니 정차 구역에서 비켜 선 만큼 겨누는 점도 옮긴다(m)
+        self._pre_stop: Optional[tuple[XY, XY]] = None   # (정차점, 거쳐 갈 점) — 정차점이 바뀌면 다시 정한다
+        self._other_way_logged = False
         self._pose_now: Optional[Pose] = None
         self._pmap_now: Optional[PieceMap] = None
         self._unwind_sign = -1.0
@@ -669,7 +671,12 @@ class MissionFSM:
             return self._step_nudge(pose, None)
         goal = self.dest_xy
         if low and not in_cone:
-            goal = (self.dest_xy[0], self.dest_xy[1] - m.basket_pre_stop_m)   # 정차점 바로 아래 — 거기서 위로 곧장
+            # 정차점 바로 아래 — 거기서 위로 곧장. 이미 그보다 위에 있으면 내려가지 않고 지금 높이에서 옆으로 간다
+            # (10-07 별: y 1.06 에서 잡고 0.96 까지 내려갔다 올라오며 직진·회전이 여러 번 섞였다). 한 번 정하면 고정.
+            if self._pre_stop is None or self._pre_stop[0] != self.dest_xy:
+                y = max(self.dest_xy[1] - m.basket_pre_stop_m, pose.y)
+                self._pre_stop = (self.dest_xy, (self.dest_xy[0], y))
+            goal = self._pre_stop[1]
         cmd = self._drive_to(pose, goal, obstacles)
         if self._blocked_too_long():
             # 물체를 든 채라 보류할 곳이 없다. 사람을 부른다.
@@ -844,10 +851,23 @@ class MissionFSM:
     # ------------------------------------------------------------------ 도우미
     def _drive_to(self, pose: Pose, goal: XY, obstacles: list[XY]) -> HostCommand:
         held = self._obstacles.update(obstacles)
-        sub_goal, _corner, blocked = self._planner.update(pose.xy, goal, held, now=self._now)
+        sub_goal, corner, blocked = self._planner.update(pose.xy, goal, held, now=self._now)
+        c = self.cfg.planner
+        if _dist(pose.xy, sub_goal) < c.min_heading_dist_m and _dist(sub_goal, goal) > 1e-6:
+            # 경로 중간 점이 5 cm 안이면 방향을 잴 수 없어(노이즈로 봄) 보던 방향 그대로 직진했다 — 10-07 별을 잡은 직후
+            # 바구니 반대쪽으로 5 cm. 도착 판정이 아니라 지나는 점이니 그다음 점을 보고, 없으면 그 구간 방향으로 늘린다.
+            nxt = corner
+            path = self._planner.last_path or []
+            if nxt is None and sub_goal in path and path.index(sub_goal) >= 1:
+                prev = path[path.index(sub_goal) - 1]
+                d = _dist(prev, sub_goal)
+                if d > 1e-6:
+                    ext = 2.0 * c.min_heading_dist_m
+                    nxt = (sub_goal[0] + (sub_goal[0] - prev[0]) / d * ext, sub_goal[1] + (sub_goal[1] - prev[1]) / d * ext)
+            if nxt is not None:
+                sub_goal = nxt
         enter, tol = self._enter_deg(pose, sub_goal, held), None
         narrow, inside, at_entry = self._narrow_gap(pose.xy, sub_goal, held)
-        c = self.cfg.planner
         if inside:
             # 틈 안 — 여기서 돌면 차체 모서리가 옆 기물을 쓴다. 웬만큼 틀어져도 직진으로 빠져나간다.
             enter = max(enter if enter is not None else c.yaw_enter_deg, c.narrow_hold_enter_deg)
@@ -871,12 +891,73 @@ class MissionFSM:
             self.last_cmd_text = "forward" + (f" ({blocked})" if blocked else "")
             return HostCommand(WIRE_STATE[self.state], linear_x=self.cfg.drive.linear_mps)
         if nav.mode == DriveMode.ROTATE:
-            ahead = self._forward_exit(pose, nav.yaw_error_deg, held)
-            if ahead is not None:
-                return ahead
+            turn = nav.yaw_error_deg
+            if self._turn_blocked(pose, turn, held):
+                other = turn - 360.0 if turn > 0 else turn + 360.0
+                at_basket = self._near_basket(pose)
+                # 바구니 앞에서는 앞으로 나가면 바구니 쪽이다 — 반대 방향이 비었으면 그쪽으로 돈다(10-07 사용자:
+                # 바구니 옆 기물 반대쪽으로 돌기). 그 밖에서는 앞으로 빠져나가기가 먼저(작은 회전이 자연스럽다).
+                if at_basket and not self._turn_blocked(pose, other, held):
+                    return self._rotate_other_way(turn, other)
+                ahead = self._forward_exit(pose, turn, held)
+                if ahead is not None:
+                    return ahead
+                if not at_basket and not self._turn_blocked(pose, other, held):
+                    return self._rotate_other_way(turn, other)
+                if at_basket and self._turn_min_gap(pose, other) > self._turn_min_gap(pose, turn) + 0.005:
+                    # 양쪽 다 쓸고 앞은 바구니 — 덜 붙는 쪽으로(후진 없음). 정차 구역이 돌 수 있는 자리를 먼저 고르니 드물다.
+                    return self._rotate_other_way(turn, other)
+            else:
+                self._other_way_logged = False
             self._exit_logged = False
-            return self._rotate(nav.yaw_error_deg)
+            return self._rotate(turn)
         return self._stop("stop" + (f" ({blocked})" if blocked else ""))
+
+    def _turn_blocked(self, pose: Pose, turn_deg: float, obstacles) -> bool:
+        """제자리에서 turn_deg 돌면 기물을 쓰는가 — 계획기 모서리 검사 또는 차체 사각형 간격(basket_stop_clear_m).
+
+        10-07 6기물: 바구니에서 떠나며 계획기 검사는 통과했는데 차체 사각형으로는 나이트와 −0.8 · −1.1 cm."""
+        pl = self._planner
+        if any(_dist(pose.xy, o) < pl.turn_safe
+               and pl._sweep_hits(pose.xy, pose.yaw_deg, turn_deg, o, slack_deg=self.SWEEP_SLACK_DEG)
+               for o in obstacles):
+            return True
+        return self._turn_sweeps(pose, turn_deg)
+
+    def _turn_min_gap(self, pose: Pose, turn_deg: float) -> float:
+        """제자리에서 turn_deg 도는 동안 차체–다른 기물 최소 간격(m)."""
+        c = self.cfg.planner
+        sgn = 1.0 if turn_deg >= 0 else -1.0
+        steps = max(1, int(math.ceil(abs(turn_deg))))
+        others = [o for o in self._other_pieces(pose) if _dist(pose.xy, o) < self._planner.turn_safe + 0.05]
+        return min((body_gap(pose.x, pose.y, pose.yaw_deg + sgn * abs(turn_deg) * k / steps, o, c.robot_length_m,
+                             c.robot_width_m, c.piece_obstacle_radius_m) for o in others for k in range(steps + 1)),
+                   default=1.0)
+
+    def _rotate_other_way(self, turn: float, other: float) -> HostCommand:
+        if not self._other_way_logged:
+            self._other_way_logged = True
+            self._log(f"turn other way: {turn:+.0f}° 쪽은 옆 기물을 쓴다 — 반대로 {other:+.0f}° 돈다 ({self.state.name})")
+        self._exit_logged = False
+        return self._rotate(other)
+
+    def _near_basket(self, pose: Pose) -> bool:
+        a, r = self.cfg.arena, self.cfg.mission.basket_near_m
+        w, l = a.box_size[0] / 2.0, a.box_size[1] / 2.0
+        return any(bx - w - r <= pose.x <= bx + w + r and by - l - r <= pose.y <= by + l + r
+                   for bx, by, _yaw in a.boxes.values())
+
+    def _front_hits_basket(self, at: XY, fwd: XY) -> bool:
+        """at 에 섰을 때 차체 앞면이 바구니 사각형(+ basket_front_clear_m) 안에 드는가."""
+        a, c = self.cfg.arena, self.cfg.planner
+        m = self.cfg.mission.basket_front_clear_m
+        w, l = a.box_size[0] / 2.0 + m, a.box_size[1] / 2.0 + m
+        hl, hw = c.robot_length_m / 2.0, c.robot_width_m / 2.0
+        side = (-fwd[1], fwd[0])
+        pts = [(at[0] + fwd[0] * hl + side[0] * hw * k, at[1] + fwd[1] * hl + side[1] * hw * k)
+               for k in (-1.0, -0.5, 0.0, 0.5, 1.0)]
+        return any(abs(px - bx) <= w and abs(py - by) <= l
+                   for bx, by, _yaw in a.boxes.values() for px, py in pts)
 
     def _forward_exit(self, pose: Pose, turn_deg: float, obstacles) -> Optional[HostCommand]:
         """여기서 turn_deg 만큼 돌면 차체가 옆 기물을 쓸 때, 앞이 비었으면 앞으로 빠져나간 뒤 돈다.
@@ -886,9 +967,7 @@ class MissionFSM:
         앞으로 조금 나간 뒤 돈다. 후진은 하지 않는다(10-07 사용자 결정). 앞도 막혔으면 None(그 자리에서 돈다).
         """
         pl, c, d = self._planner, self.cfg.planner, self.cfg.drive
-        hits = lambda at: [o for o in obstacles  # noqa: E731
-                           if _dist(at, o) < pl.turn_safe
-                           and pl._sweep_hits(at, pose.yaw_deg, turn_deg, o, slack_deg=self.SWEEP_SLACK_DEG)]
+        hits = lambda at: self._turn_blocked(Pose(at[0], at[1], pose.yaw_deg, True), turn_deg, obstacles)  # noqa: E731
         if not hits(pose.xy):
             return None
         pad = c.piece_obstacle_radius_m + c.obstacle_margin_m
@@ -902,6 +981,8 @@ class MissionFSM:
                 return None
             if any(segment_hits_rect(pose.xy, end, r) for r in pl._active_keepouts(pose.xy)):
                 return None
+            if self._front_hits_basket(end, fwd):
+                return None                     # 바구니 근처에선 금지 구역이 꺼져 있다 — 앞면으로 직접 본다(10-07 돌진)
             for o in obstacles:                 # 앞면에 닿는 기물이 있으면 더 못 간다
                 dx, dy = o[0] - pose.x, o[1] - pose.y
                 lx, ly = dx * fwd[0] + dy * fwd[1], -dx * fwd[1] + dy * fwd[0]
@@ -1118,6 +1199,7 @@ class MissionFSM:
             self._box_stop_chosen = False
             self._zone_blocked_since = None
             self._aim_shift = 0.0
+            self._pre_stop = None
         if state == HostState.NUDGE_BOX:
             self._nudge_from = None
             self._nudge_turn_logged = False
@@ -1334,6 +1416,13 @@ class MissionFSM:
             offsets.sort(key=lambda dx: abs(cx + dx - pose.x))
         blocker: Optional[XY] = None
         c = self.cfg.planner
+        # 넣고 떠날 때 그 자리에서 어느 쪽으로든 돌 수 있는 자리를 먼저 고른다(모서리 반경 + 기물 반경 + 간격).
+        # 10-07 6기물: −6 cm 에 서서 넣고 떠나며 도는 동안 나이트와 −0.8 · −1.1 cm(앞은 바구니, 후진 없음).
+        corner_r = math.hypot(c.robot_length_m / 2.0, c.robot_width_m / 2.0)
+        # 실제로 서는 자리는 고른 자리에서 basket_stop_pos_err_m 어긋난다(별: 0.93 고르고 0.958 에 섬) — 그만큼 더.
+        free_r = corner_r + c.piece_obstacle_radius_m + m.basket_stop_clear_m + m.basket_stop_pos_err_m
+        free = [dx for dx in offsets if all(_dist((cx + dx, cy), o) >= free_r for o in others)]
+        offsets = free + [dx for dx in offsets if dx not in free]
         for dx in offsets:
             stop = (cx + dx, cy)
             if not (pl.x0 <= stop[0] <= pl.x1):
