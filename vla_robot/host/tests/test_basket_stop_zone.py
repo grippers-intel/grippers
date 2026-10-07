@@ -68,3 +68,11 @@ def test_a_brief_blocked_map_right_after_the_grasp_does_not_halt():
     assert fsm.state == HostState.CARRY_TO_DEST
     fsm.step(P(0.99, 0.56), {"queen": [(0.99, 0.82)], "knight": [(1.106, 1.307)]}, S(), 0.3)   # 룩 유령 사라짐
     assert fsm.state == HostState.CARRY_TO_DEST and fsm.dest_xy[0] < cx
+
+
+def test_assumes_the_robot_stands_tilted_and_off_by_a_little():
+    """10-07 실기: 0.95(−4 cm)를 골랐는데 0.964 · 79° 로 서서 나이트와 1.2 cm. 자리 검사는 ±15° · 좌우 ±2 cm 까지 본다."""
+    fsm, centre = _carrying({"knight": [(1.106, 1.307)]})
+    assert fsm.state == HostState.CARRY_TO_DEST
+    dx = fsm.dest_xy[0] - centre[0]
+    assert dx <= -0.06 + 1e-9                                                  # −6 cm 이상 비켜 선다
