@@ -178,6 +178,8 @@ class MissionFSM:
         self._exit_logged = False
         self._carry_line_blocked_since: Optional[float] = None
         self._zone_wait_logged = False
+        self._box_stop_chosen = False
+        self._aim_shift = 0.0                # 바구니 정차 구역에서 비켜 선 만큼 겨누는 점도 옮긴다(m)
         self._pose_now: Optional[Pose] = None
         self._pmap_now: Optional[PieceMap] = None
         self._unwind_sign = -1.0
@@ -605,6 +607,13 @@ class MissionFSM:
         assert self.dest_xy is not None
         m = self.cfg.mission
         r = self.cfg.planner.carry_ignore_radius_m
+        if self.dest_kind != "hand" and self.dest_box and not self._box_stop_chosen and pose.ok:
+            self._box_stop_chosen = True
+            who = self._choose_box_stop(pose)
+            if who is not None:
+                self._halt(f"{self.dest_box} 앞 정차 구역(가운데 ±{m.basket_stop_zone_half_m * 100:.0f} cm)에 "
+                           f"{who} 이(가) 있어 설 자리가 없다 — 치워 주세요")
+                return self._stop("halted")
         # 쥐고 있는 기물은 로봇 옆에서 계속 검출된다 — 그것만 뺀다. **라벨이 같은 것만**이다.
         # 2026-09-30: 반경만으로 빼다가 box 기물에 30 cm 안으로 다가가자 그것까지 빠져,
         # 계획기가 box 를 뚫고 가는 길을 내고 그대로 밀고 갔다.
@@ -1041,6 +1050,9 @@ class MissionFSM:
         if state == HostState.FACE_HAND:
             self._face_turning = False
             self._face_arrived = False
+        if state == HostState.CARRY_TO_DEST:
+            self._box_stop_chosen = False
+            self._aim_shift = 0.0
         if state == HostState.NUDGE_BOX:
             self._nudge_from = None
             self._nudge_turn_logged = False
@@ -1223,9 +1235,56 @@ class MissionFSM:
         assert name is not None
         m = self.cfg.mission
         bx, by, _yaw = self.cfg.arena.boxes[name]
-        return basket_target(name, (bx, by), self.cfg.arena.box_size,
-                             m.insert_half_width_m, m.insert_inset_depth_m,
-                             m.place_aim_margin_m)
+        t = basket_target(name, (bx, by), self.cfg.arena.box_size,
+                          m.insert_half_width_m, m.insert_inset_depth_m,
+                          m.place_aim_margin_m)
+        if self._aim_shift and box is None:
+            # 정차 구역에서 좌우로 비켜 섰다 — 겨누는 점·판정 사각형도 같이 옮긴다(입구 안).
+            d = self._aim_shift
+            x0, x1, y0, y1 = t.rect
+            t = replace(t, center=(t.center[0] + d, t.center[1]), rect=(x0 + d, x1 + d, y0, y1),
+                        aim=(t.aim[0] + d, t.aim[1]))
+        return t
+
+    def _choose_box_stop(self, pose: Pose) -> Optional[str]:
+        """바구니 정차 구역에서 설 자리를 고른다. 못 고르면 막고 있는 기물 라벨, 골랐으면 None.
+
+        y 는 정차점 그대로(더 붙으면 돌 때 상자에 닿고, 덜 붙으면 팔이 테두리를 못 넘는다), x 만
+        가운데 ±basket_stop_zone_half_m 에서 basket_stop_step_m 간격으로 가운데부터 본다. 후보마다
+          - 바구니를 보고(90°) 섰을 때, 그리고 ±max_arm_yaw_deg 돌아도 차체가 다른 기물에 닿지 않는가
+        를 본다(10-07: 정차점 한 점이라 바로 옆 나이트와 바퀴가 1 cm 였다). 들어오는 길은 여기서 보지 않는다 —
+        어느 쪽에서든 직선이 비면 넘기는 운반 단계 규칙(직선 검사 · 5 s HALTED)이 맡는다.
+        """
+        m, pl = self.cfg.mission, self._planner
+        cx, cy = self._box_front_xy(self.dest_box)
+        others = self._other_pieces(pose)
+        n = int(round(m.basket_stop_zone_half_m / m.basket_stop_step_m))
+        offsets = [0.0] + [s * k * m.basket_stop_step_m for k in range(1, n + 1) for s in (-1.0, 1.0)]
+        blocker: Optional[XY] = None
+        for dx in offsets:
+            stop = (cx + dx, cy)
+            if not (pl.x0 <= stop[0] <= pl.x1):
+                continue
+            swept = [o for o in others
+                     if _dist(stop, o) < pl.turn_safe
+                     and pl._sweep_hits(stop, 90.0 - m.max_arm_yaw_deg, 2 * m.max_arm_yaw_deg, o,
+                                        slack_deg=self.SWEEP_SLACK_DEG)]
+            if swept:
+                blocker = blocker or swept[0]
+                continue
+            self.dest_xy = stop
+            self._aim_shift = max(-m.basket_aim_shift_max_m, min(m.basket_aim_shift_max_m, dx))
+            if dx:
+                self._log(f"basket stop zone: 가운데 막힘 — 좌우 {dx * 100:+.0f} cm 에 선다 "
+                          f"(겨누는 점 {self._aim_shift * 100:+.0f} cm)")
+            return None
+        return self._piece_label_at(blocker) if blocker else "기물"
+
+    def _piece_label_at(self, xy: XY) -> str:
+        for lb, pts in (self._pmap_now or {}).items():
+            if any(_dist(p, xy) < 1e-6 for p in pts):
+                return lb
+        return "기물"
 
     def _box_front_xy(self, box: str) -> XY:
         """상자 중심이 아니라 상자 앞(작업영역 쪽). 상자들은 뒤쪽 벽에 붙어 있다."""
