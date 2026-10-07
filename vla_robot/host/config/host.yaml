@@ -135,6 +135,11 @@ planner:
   yaw_tolerance_deg: 5.0
   yaw_enter_deg: 12.0              # 회전 복귀 문턱. 하나로 쓰면 좌우로 떤다
   yaw_enter_clear_deg: 25.0        # 앞길이 비어 있으면 이만큼 틀어질 때까지 계속 직진(09-30 저녁)
+  # 좁은 틈(10-07): 가는 직선이 기물의 제자리 회전 반경(0.20 m) 안을 지나면 틈 밖에서 2.5° 까지 맞추고
+  # 들어가고, 틈 안에서는 20° 까지 틀어져도 돌지 않는다(안에서 돌면 모서리가 기물을 쓴다). 후진은 없다.
+  narrow_yaw_tolerance_deg: 2.5
+  narrow_entry_enter_deg: 5.0
+  narrow_hold_enter_deg: 20.0
   no_turn_near_m: 0.15             # 부분목표가 이 안이면 뒤로 가지 않는 한 다시 돌지 않는다
   min_heading_dist_m: 0.05
   obstacle_hold_cycles: 8

@@ -174,6 +174,7 @@ class MissionFSM:
         self._last_rot_sign = 1.0
         self._unwind_until: Optional[float] = None
         self._retry_settle_until: Optional[float] = None   # 파지 실패 뒤 다시 보기 전 대기
+        self._narrow_logged = False
         self._pose_now: Optional[Pose] = None
         self._pmap_now: Optional[PieceMap] = None
         self._unwind_sign = -1.0
@@ -752,7 +753,22 @@ class MissionFSM:
     def _drive_to(self, pose: Pose, goal: XY, obstacles: list[XY]) -> HostCommand:
         held = self._obstacles.update(obstacles)
         sub_goal, _corner, blocked = self._planner.update(pose.xy, goal, held, now=self._now)
-        nav = self._drive.update(pose.xy, pose.yaw_deg, sub_goal, self._enter_deg(pose, sub_goal, held))
+        enter, tol = self._enter_deg(pose, sub_goal, held), None
+        narrow, inside = self._narrow_gap(pose.xy, sub_goal, held)
+        c = self.cfg.planner
+        if inside:
+            # 틈 안 — 여기서 돌면 차체 모서리가 옆 기물을 쓴다. 웬만큼 틀어져도 직진으로 빠져나간다.
+            enter = max(enter if enter is not None else c.yaw_enter_deg, c.narrow_hold_enter_deg)
+        elif narrow:
+            # 틈 앞 — 돌아도 되는 지금 방향을 정확히 맞춰 두면 안에서 다시 돌 일이 없다.
+            enter, tol = c.narrow_entry_enter_deg, c.narrow_yaw_tolerance_deg
+        if narrow and not self._narrow_logged:
+            self._narrow_logged = True
+            self._log(f"narrow gap ahead — 틈 밖에서 {c.narrow_yaw_tolerance_deg:.1f}° 까지 맞추고 들어간다"
+                      if not inside else "narrow gap — 틈 안에서는 돌지 않고 직진")
+        elif not narrow:
+            self._narrow_logged = False
+        nav = self._drive.update(pose.xy, pose.yaw_deg, sub_goal, enter, tol)
         self.nav_goal = goal
         self.nav_path = self._planner.last_path
         self.blocked_by = blocked
@@ -762,6 +778,18 @@ class MissionFSM:
         if nav.mode == DriveMode.ROTATE:
             return self._rotate(nav.yaw_error_deg)
         return self._stop("stop" + (f" ({blocked})" if blocked else ""))
+
+    def _narrow_gap(self, at: XY, sub_goal: XY, obstacles) -> tuple[bool, bool]:
+        """(지금 가는 직선이 좁은 틈을 지나는가, 지금 그 틈 안에 있는가).
+
+        좁은 틈 = 직진으로는 지나가지만(차체 반폭 여유 safe 이상) 제자리 회전 반경(turn_safe) 안을
+        지나는 곳. 그 안에서 돌면 모서리가 기물을 쓴다(10-05 공 · 별). 후진 없이 피하려면 틈 밖에서
+        방향을 정확히 맞추고 들어가 안에서는 돌지 않는다(10-07 사용자 결정).
+        """
+        pl = self._planner
+        narrow = any(segment_circle_clearance(at, sub_goal, o)[0] < pl.turn_safe for o in obstacles)
+        inside = any(_dist(at, o) < pl.turn_safe for o in obstacles)
+        return narrow, inside
 
     def _enter_deg(self, pose: Pose, sub_goal: XY, obstacles) -> Optional[float]:
         """직진 중 다시 돌기 시작하는 문턱. 앞길이 비어 있으면 넓힌다(None = 기본 12°).

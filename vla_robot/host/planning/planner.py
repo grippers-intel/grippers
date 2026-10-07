@@ -159,8 +159,9 @@ class DriveSequencer:
         self._after_stop = DriveMode.FORWARD
 
     def update(self, robot_xy: XY, robot_yaw_deg: float, target_xy: XY,
-               enter_deg: Optional[float] = None) -> DriveCommand:
-        """enter_deg: 직진 중 회전으로 넘어가는 문턱을 이번 사이클만 바꾼다(앞길이 비었을 때 넓힘)."""
+               enter_deg: Optional[float] = None, tol_deg: Optional[float] = None) -> DriveCommand:
+        """enter_deg: 직진 중 회전으로 넘어가는 문턱을 이번 사이클만 바꾼다(앞길이 비었을 때 넓힘,
+        좁은 틈 앞에서는 좁힘). tol_deg: 회전을 멈추는 정렬 허용치를 이번 사이클만 바꾼다(좁은 틈 앞)."""
         dx, dy = target_xy[0] - robot_xy[0], target_xy[1] - robot_xy[1]
         dist = math.hypot(dx, dy)
         if dist <= self.step:
@@ -181,8 +182,10 @@ class DriveSequencer:
             self._after_stop = DriveMode.FORWARD
             return DriveCommand(DriveMode.STOP, waypoint, target_yaw, err, dist)
 
-        aligned = abs(err) <= self.tol
-        drifted = abs(err) > (self.enter if enter_deg is None else max(enter_deg, self.enter))
+        tol = self.tol if tol_deg is None else tol_deg
+        aligned = abs(err) <= tol
+        # 문턱은 허용치보다 작아질 수 없다(같으면 좌우로 떤다). 지정이 없으면 기본 문턱.
+        drifted = abs(err) > (self.enter if enter_deg is None else max(enter_deg, tol))
         if self._mode is None:
             self._mode = DriveMode.FORWARD if aligned else DriveMode.ROTATE
         out = self._mode

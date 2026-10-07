@@ -169,6 +169,12 @@ class PlannerConfig:
     # 돌지 않고 계속 직진한다. 부분목표가 no_turn_near_m 안이면(지나치는 중) 뒤로 가지 않는 한
     # 돌지 않는다. 2026-09-30 저녁: 주변이 비었는데도 직진 -> 좌/우 회전을 되풀이해 오래 걸렸다.
     yaw_enter_clear_deg: float = 25.0
+    # 좁은 틈(2026-10-07): 지금 가는 직선이 기물의 제자리 회전 반경(turn_safe) 안을 지나면, 틈 밖에서
+    # narrow_yaw_tolerance_deg 까지 맞춘 뒤 들어가고(문턱 narrow_entry_enter_deg), 틈 안에서는
+    # narrow_hold_enter_deg 까지 틀어져도 돌지 않고 직진한다 — 틈 안에서 돌면 모서리가 기물을 쓴다.
+    narrow_yaw_tolerance_deg: float = 2.5
+    narrow_entry_enter_deg: float = 5.0
+    narrow_hold_enter_deg: float = 20.0
     no_turn_near_m: float = 0.15
     min_heading_dist_m: float = 0.05
     obstacle_hold_cycles: int = 8
