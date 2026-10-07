@@ -135,3 +135,17 @@ def test_near_waypoint_does_not_drive_straight_in_the_wrong_direction():
     pose = P(0.635, 1.062, yaw=-143.0)
     cmd = fsm._drive_to(pose, (0.93, 0.96), [(1.106, 1.307)])
     assert cmd.linear_x == 0.0                                # 직진 아님(서거나 돈다)
+
+
+def test_pre_stop_is_never_next_to_a_piece():
+    """10-07: 구역 −10 cm 아래 30 cm 점이 퀸에서 5 cm — 계획기가 그 점으로 가며 퀸을 7.7 cm 밀었다."""
+    fsm = MissionFSM(_cfg())
+    fsm.set_order(Order(labels=("rook",)))
+    pm = {"rook": [(1.20, 0.86)], "queen": [(0.90, 0.91)], "knight": [(1.106, 1.307)]}
+    fsm.step(P(1.19, 0.58, yaw=90.0), pm, S(), 0.0)
+    fsm._enter(HostState.CARRY_TO_DEST)
+    pm["rook"] = [(1.19, 0.86)]
+    fsm.step(P(1.19, 0.58, yaw=131.0), pm, S(), 0.1)
+    goal = fsm.nav_goal
+    assert goal is not None
+    assert math.dist(goal, (0.90, 0.91)) >= fsm._planner.safe

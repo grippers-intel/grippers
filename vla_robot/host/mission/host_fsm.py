@@ -674,9 +674,9 @@ class MissionFSM:
             # 정차점 바로 아래 — 거기서 위로 곧장. 이미 그보다 위에 있으면 내려가지 않고 지금 높이에서 옆으로 간다
             # (10-07 별: y 1.06 에서 잡고 0.96 까지 내려갔다 올라오며 직진·회전이 여러 번 섞였다). 한 번 정하면 고정.
             if self._pre_stop is None or self._pre_stop[0] != self.dest_xy:
-                y = max(self.dest_xy[1] - m.basket_pre_stop_m, pose.y)
-                self._pre_stop = (self.dest_xy, (self.dest_xy[0], y))
-            goal = self._pre_stop[1]
+                self._pre_stop = (self.dest_xy, self._pick_pre_stop(pose))
+            if self._pre_stop[1] is not None:
+                goal = self._pre_stop[1]
         cmd = self._drive_to(pose, goal, obstacles)
         if self._blocked_too_long():
             # 물체를 든 채라 보류할 곳이 없다. 사람을 부른다.
@@ -1080,6 +1080,27 @@ class MissionFSM:
         others = [o for o in self._other_pieces(pose) if _dist(pose.xy, o) < self._planner.turn_safe + 0.05]
         return any(body_gap(pose.x, pose.y, a, o, c.robot_length_m, c.robot_width_m, c.piece_obstacle_radius_m) < clear
                    for o in others for a in angles)
+
+    def _pick_pre_stop(self, pose: Pose) -> Optional[XY]:
+        """정차점 바로 아래 거쳐 갈 점. 기물에서 직진 여유(safe) + 2 cm 밖이고 거기서 정차점까지 직선이 빈 곳.
+
+        10-07: 정차 구역이 −10 cm 로 옮겨지자 그 아래 30 cm 점이 퀸에서 5 cm 였다 — 계획기가 그 점으로 곧장 가며
+        퀸을 7.7 cm 밀었다. 아래에서부터(지금 높이보다 낮게는 안 감) 위로 2.5 cm 씩 보고, 없으면 None(정차점으로 바로).
+        """
+        m = self.cfg.mission
+        sx, sy = self.dest_xy
+        lo = max(sy - m.basket_pre_stop_m, pose.y)
+        hi = sy - m.basket_low_margin_m
+        others = self._other_pieces(pose)
+        clear = self._planner.safe + 0.02
+        y = lo
+        while y <= hi + 1e-9:
+            pt = (sx, y)
+            if all(_dist(pt, o) >= clear for o in others) and self._line_clear(pt, self.dest_xy):
+                return pt
+            y += 0.025
+        self._log(f"pre-stop: 정차점 아래에 기물 없는 점이 없다 — 정차점으로 바로 간다")
+        return None
 
     def _carry_from_below(self, pose: Pose) -> bool:
         """바구니로 가는데 정차점보다 basket_low_margin_m 넘게 아래에 있는가(아래에서 똑바로 들어갈 수 있다)."""
