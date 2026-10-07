@@ -375,19 +375,20 @@ class GridPathPlanner:
                     bad.add(i)
         return bad
 
-    def _sweep_hits(self, v: XY, h0: float, delta: float, o: XY) -> bool:
-        """v 에 선 차체가 방위 h0 에서 delta 만큼(앞뒤로 TURN_SLACK_DEG 더) 도는 동안 기물 o 가
-        차체 사각형(+여유 pad)에 들어오는가."""
+    def _sweep_hits(self, v: XY, h0: float, delta: float, o: XY, slack_deg: Optional[float] = None) -> bool:
+        """v 에 선 차체가 방위 h0 에서 delta 만큼(앞뒤로 slack_deg, 기본 TURN_SLACK_DEG 더) 도는 동안
+        기물 o 가 차체 사각형(+여유 pad)에 들어오는가."""
+        slack = self.TURN_SLACK_DEG if slack_deg is None else slack_deg
         c = self.cfg
         pad = c.piece_obstacle_radius_m + c.obstacle_margin_m
         hl, hw = c.robot_length_m / 2.0, c.robot_width_m / 2.0
         dx, dy = o[0] - v[0], o[1] - v[1]
-        if abs(delta) > 180.0 - self.TURN_SLACK_DEG:
+        if abs(delta) > 180.0 - slack:
             span = (-180.0, 180.0)                      # 어느 쪽으로 돌지 모른다 — 한 바퀴
             h0 = 0.0
         else:
             sgn = 1.0 if delta >= 0 else -1.0
-            lo, hi = sorted((-sgn * self.TURN_SLACK_DEG, delta + sgn * self.TURN_SLACK_DEG))
+            lo, hi = sorted((-sgn * slack, delta + sgn * slack))
             span = (lo, hi)
         steps = max(1, int(math.ceil((span[1] - span[0]) / self.TURN_SAMPLE_DEG)))
         for s in range(steps + 1):
