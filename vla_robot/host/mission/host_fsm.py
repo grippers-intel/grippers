@@ -175,6 +175,7 @@ class MissionFSM:
         self._unwind_until: Optional[float] = None
         self._retry_settle_until: Optional[float] = None   # 파지 실패 뒤 다시 보기 전 대기
         self._narrow_logged = False
+        self._exit_logged = False
         self._pose_now: Optional[Pose] = None
         self._pmap_now: Optional[PieceMap] = None
         self._unwind_sign = -1.0
@@ -779,8 +780,50 @@ class MissionFSM:
             self.last_cmd_text = "forward" + (f" ({blocked})" if blocked else "")
             return HostCommand(WIRE_STATE[self.state], linear_x=self.cfg.drive.linear_mps)
         if nav.mode == DriveMode.ROTATE:
+            ahead = self._forward_exit(pose, nav.yaw_error_deg, held)
+            if ahead is not None:
+                return ahead
+            self._exit_logged = False
             return self._rotate(nav.yaw_error_deg)
         return self._stop("stop" + (f" ({blocked})" if blocked else ""))
+
+    def _forward_exit(self, pose: Pose, turn_deg: float, obstacles) -> Optional[HostCommand]:
+        """여기서 turn_deg 만큼 돌면 차체가 옆 기물을 쓸 때, 앞이 비었으면 앞으로 빠져나간 뒤 돈다.
+
+        2026-10-07: 틈 바로 너머의 공을 틈 한가운데서 잡고, 바구니 쪽으로 그 자리에서 돌다 양옆 상자·룩을
+        10 cm 씩 밀었다. 잡은 직후라 앞(기물이 있던 자리)은 비어 있다 — "직선으로 가고 도착해서 yaw" 대로
+        앞으로 조금 나간 뒤 돈다. 후진은 하지 않는다(10-07 사용자 결정). 앞도 막혔으면 None(그 자리에서 돈다).
+        """
+        pl, c, d = self._planner, self.cfg.planner, self.cfg.drive
+        hits = lambda at: [o for o in obstacles  # noqa: E731
+                           if _dist(at, o) < pl.turn_safe and pl._sweep_hits(at, pose.yaw_deg, turn_deg, o)]
+        if not hits(pose.xy):
+            return None
+        pad = c.piece_obstacle_radius_m + c.obstacle_margin_m
+        hl = c.robot_length_m / 2.0
+        th = math.radians(pose.yaw_deg)
+        fwd = (math.cos(th), math.sin(th))
+        for k in range(1, int(round(d.turn_exit_max_m / 0.01)) + 1):
+            s = 0.01 * k
+            end = (pose.x + s * fwd[0], pose.y + s * fwd[1])
+            if not (pl.x0 <= end[0] <= pl.x1 and pl.y0 <= end[1] <= pl.y1):
+                return None
+            if any(segment_hits_rect(pose.xy, end, r) for r in pl._active_keepouts(pose.xy)):
+                return None
+            for o in obstacles:                 # 앞면에 닿는 기물이 있으면 더 못 간다
+                dx, dy = o[0] - pose.x, o[1] - pose.y
+                lx, ly = dx * fwd[0] + dy * fwd[1], -dx * fwd[1] + dy * fwd[0]
+                if lx > 0 and abs(ly) < pl.safe and lx - s < hl + pad:
+                    return None
+            if not hits(end):
+                if not self._exit_logged:
+                    self._exit_logged = True
+                    self._log(f"turn exit: 여기서 {turn_deg:+.0f}° 돌면 옆 기물에 닿는다 — "
+                              f"앞으로 {s * 100:.0f} cm 나간 뒤 돈다 ({self.state.name})")
+                self.last_cmd_text = f"exit forward ({s * 100:.0f} cm)"
+                return HostCommand(WIRE_STATE[self.state], linear_x=d.linear_mps,
+                                   label=self.target_label or "")
+        return None
 
     def _narrow_gap(self, at: XY, sub_goal: XY, obstacles) -> tuple[bool, bool, bool]:
         """(지금 가는 직선이 좁은 틈을 지나는가, 지금 그 틈 안에 있는가, 틈 입구 바로 앞인가).

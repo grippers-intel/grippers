@@ -66,3 +66,33 @@ def test_does_not_keep_realigning_far_from_the_gap():
     # 입구 바로 앞이면 들어가기 전에 다시 맞춘다
     cmds = [fsm.step(P(0.95, 0.52, yaw=98.0), pmap, S(), 0.2 + 0.1 * k) for k in range(3)]
     assert any(c.angular_z != 0 for c in cmds)                               # 한 박자 서고 돈다
+
+
+def _carry_from_inside_gap(extra=None):
+    """10-07 실기 재현: 틈 바로 너머 공을 틈 한가운데서 잡았다. 쥔 공은 그리퍼 안에서 보인다."""
+    fsm = MissionFSM(_cfg())
+    fsm.set_order(Order(labels=("soccer",)))
+    fsm.step(P(0.97, 0.40), {"soccer": [(0.97, 1.11)], **GAP}, S(), 0.0)    # 목표·정차점 정해짐
+    from mission.host_fsm import HostState
+    fsm.state = HostState.CARRY_TO_DEST
+    fsm.dest_xy = (1.55, 1.20)                                              # 오른쪽으로 크게 돌아야 한다
+    pmap = {"soccer": [(0.97, 1.10)], "box": [(1.13, 0.78)], "rook": [(0.78, 0.79)], **(extra or {})}
+    return fsm, pmap
+
+
+def test_leaves_the_gap_forward_before_turning_after_a_grasp():
+    fsm, pmap = _carry_from_inside_gap()
+    cmds = [fsm.step(P(0.97, 0.82), pmap, S(), 0.1 + 0.1 * k) for k in range(4)]
+    moving = [c for c in cmds if not c.stop]
+    assert moving and moving[0].linear_x > 0 and moving[0].angular_z == 0    # 먼저 앞으로
+    assert any("turn exit" in e for e in fsm.events)
+    # 틈을 벗어나면(옆 기물이 회전 영역 밖) 돈다
+    later = [fsm.step(P(0.97, 1.05), pmap, S(), 1.0 + 0.1 * k) for k in range(4)]
+    assert any(c.angular_z != 0 for c in later)
+
+
+def test_turns_in_place_when_the_way_ahead_is_blocked_too():
+    fsm, pmap = _carry_from_inside_gap(extra={"knight": [(0.97, 1.02)]})  # 바로 앞(공 너머)에 나이트
+    cmds = [fsm.step(P(0.97, 0.82), pmap, S(), 0.1 + 0.1 * k) for k in range(4)]
+    assert not any("turn exit" in e for e in fsm.events)
+    assert all(c.linear_x <= 0 for c in cmds)                                # 앞으로 밀고 나가지 않는다
