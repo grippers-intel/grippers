@@ -52,3 +52,17 @@ def test_keeps_going_straight_inside_the_gap():
     fsm.step(P(0.95, 0.75, yaw=90.0), pmap, S(), 0.0)                       # 틈 한가운데, 바로 봄
     cmd = fsm.step(P(0.95, 0.76, yaw=105.0), pmap, S(), 0.1)                # 15° 틀어졌다(기본 문턱 12°)
     assert cmd.linear_x > 0 and cmd.angular_z == 0                           # 틈 안에서는 돌지 않는다
+
+
+def test_does_not_keep_realigning_far_from_the_gap():
+    """10-07 실기: 틈으로 가는 구간 전체에 5° 재정렬을 걸어 "조금 가고 yaw 보정"을 되풀이했다.
+    입구에서 먼 곳에서는 직진 중 8° 틀어져도 그대로 간다(어차피 돌 때만 2.5° 로 맞춘다)."""
+    fsm = MissionFSM(_cfg())
+    fsm.set_order(Order(labels=("queen",)))
+    pmap = dict(GAP, queen=[(0.95, 1.25)])
+    fsm.step(P(0.95, 0.30, yaw=90.0), pmap, S(), 0.0)                       # 틈에서 45 cm 앞, 바로 봄
+    cmd = fsm.step(P(0.95, 0.31, yaw=98.0), pmap, S(), 0.1)                 # 8° 틀어짐
+    assert cmd.linear_x > 0 and cmd.angular_z == 0
+    # 입구 바로 앞이면 들어가기 전에 다시 맞춘다
+    cmds = [fsm.step(P(0.95, 0.52, yaw=98.0), pmap, S(), 0.2 + 0.1 * k) for k in range(3)]
+    assert any(c.angular_z != 0 for c in cmds)                               # 한 박자 서고 돈다

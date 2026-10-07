@@ -174,6 +174,7 @@ class PlannerConfig:
     # narrow_hold_enter_deg 까지 틀어져도 돌지 않고 직진한다 — 틈 안에서 돌면 모서리가 기물을 쓴다.
     narrow_yaw_tolerance_deg: float = 2.5
     narrow_entry_enter_deg: float = 5.0
+    narrow_entry_zone_m: float = 0.15      # 틈 기물의 회전 반경 밖 이 거리 안 = 입구 바로 앞(여기서만 직진 중 재정렬)
     narrow_hold_enter_deg: float = 20.0
     no_turn_near_m: float = 0.15
     min_heading_dist_m: float = 0.05

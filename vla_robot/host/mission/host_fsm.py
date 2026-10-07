@@ -754,14 +754,17 @@ class MissionFSM:
         held = self._obstacles.update(obstacles)
         sub_goal, _corner, blocked = self._planner.update(pose.xy, goal, held, now=self._now)
         enter, tol = self._enter_deg(pose, sub_goal, held), None
-        narrow, inside = self._narrow_gap(pose.xy, sub_goal, held)
+        narrow, inside, at_entry = self._narrow_gap(pose.xy, sub_goal, held)
         c = self.cfg.planner
         if inside:
             # 틈 안 — 여기서 돌면 차체 모서리가 옆 기물을 쓴다. 웬만큼 틀어져도 직진으로 빠져나간다.
             enter = max(enter if enter is not None else c.yaw_enter_deg, c.narrow_hold_enter_deg)
         elif narrow:
-            # 틈 앞 — 돌아도 되는 지금 방향을 정확히 맞춰 두면 안에서 다시 돌 일이 없다.
-            enter, tol = c.narrow_entry_enter_deg, c.narrow_yaw_tolerance_deg
+            # 틈으로 가는 구간 — 어차피 돌 때(출발·꺾는 점)는 정확히 맞춘다. 직진 중 멈춰 다시 맞추는 건
+            # 입구 바로 앞에서만(10-07: 구간 전체에 걸었더니 조금 가고 돌기를 되풀이했다).
+            tol = c.narrow_yaw_tolerance_deg
+            if at_entry:
+                enter = c.narrow_entry_enter_deg
         if narrow and not self._narrow_logged:
             self._narrow_logged = True
             self._log(f"narrow gap ahead — 틈 밖에서 {c.narrow_yaw_tolerance_deg:.1f}° 까지 맞추고 들어간다"
@@ -779,17 +782,19 @@ class MissionFSM:
             return self._rotate(nav.yaw_error_deg)
         return self._stop("stop" + (f" ({blocked})" if blocked else ""))
 
-    def _narrow_gap(self, at: XY, sub_goal: XY, obstacles) -> tuple[bool, bool]:
-        """(지금 가는 직선이 좁은 틈을 지나는가, 지금 그 틈 안에 있는가).
+    def _narrow_gap(self, at: XY, sub_goal: XY, obstacles) -> tuple[bool, bool, bool]:
+        """(지금 가는 직선이 좁은 틈을 지나는가, 지금 그 틈 안에 있는가, 틈 입구 바로 앞인가).
 
         좁은 틈 = 직진으로는 지나가지만(차체 반폭 여유 safe 이상) 제자리 회전 반경(turn_safe) 안을
         지나는 곳. 그 안에서 돌면 모서리가 기물을 쓴다(10-05 공 · 별). 후진 없이 피하려면 틈 밖에서
         방향을 정확히 맞추고 들어가 안에서는 돌지 않는다(10-07 사용자 결정).
         """
         pl = self._planner
-        narrow = any(segment_circle_clearance(at, sub_goal, o)[0] < pl.turn_safe for o in obstacles)
+        gap = [o for o in obstacles if segment_circle_clearance(at, sub_goal, o)[0] < pl.turn_safe]
         inside = any(_dist(at, o) < pl.turn_safe for o in obstacles)
-        return narrow, inside
+        entry = pl.turn_safe + self.cfg.planner.narrow_entry_zone_m
+        at_entry = any(_dist(at, o) < entry for o in gap)
+        return bool(gap), inside, at_entry
 
     def _enter_deg(self, pose: Pose, sub_goal: XY, obstacles) -> Optional[float]:
         """직진 중 다시 돌기 시작하는 문턱. 앞길이 비어 있으면 넓힌다(None = 기본 12°).
