@@ -193,6 +193,7 @@ class MissionFSM:
         self._nudge_start_dist = 0.0
         self._nudge_started = 0.0
         self._nudge_turn_logged = False
+        self._arm_only_place = False        # 정차점에서 몸을 돌리면 옆 기물에 닿아 팔(±max)로만 넣는다
         # 차체 무응답 자동 복구
         m = self.cfg.mission
         self._stall = BaseStallMonitor(m.base_stall_s, m.base_stall_move_m, m.base_stall_turn_deg)
@@ -643,18 +644,21 @@ class MissionFSM:
         dist = _dist(pose.xy, self.dest_xy)
         residual = facing_error_deg(target, pose.xy, pose.yaw_deg)
         close = -m.place_min_gap_m <= gap <= m.place_arrive_tol_m
-        self.place_arm_yaw_deg = residual
+        # 팔로만 넣기로 했으면 팔 한계까지만 튼다(남는 몇 도만큼 떨어지는 점이 옆으로 간다).
+        arm = (max(-m.max_arm_yaw_deg, min(m.max_arm_yaw_deg, residual)) if self._arm_only_place
+               else residual)
+        self.place_arm_yaw_deg = arm
         # 차체를 돌리기 시작했으면 팔 한계 바로 안(14.x°)이 아니라 place_turn_to_deg(12°)까지 돈다.
         # 정면(0°)까지는 맞추지 않는다 — 나머지는 팔 base 가 맡는다(2026-09-30 저녁 요청).
         limit = m.place_turn_to_deg if self._nudge_turn_logged else m.max_arm_yaw_deg
         if self._unwound or self._unwind_until is not None:
             limit = m.max_arm_yaw_deg               # 반대 회전으로 1~2° 되돌아가도 다시 돌지 않는다
-        self.ready_to_advance = close and abs(residual) <= limit
+        self.ready_to_advance = close and (abs(residual) <= limit or self._arm_only_place)
         if self.ready_to_advance:
             # 투입 동안 서 있는다 — 회전으로 멈췄으면 반대로 짧게 돌아 정차 소음을 없앤다.
             unwind = self._unwind()
             if unwind is not None:
-                self.place_arm_yaw_deg = residual
+                self.place_arm_yaw_deg = arm
                 return unwind
             if self._should_advance():
                 self._enter(HostState.PLACE)
@@ -666,6 +670,19 @@ class MissionFSM:
             return self._back_away_from_box(pose, "overshoot — back off")
         if close and abs(residual) > limit:
             # 팔이 못 메우는 각도다. 이때만 정차점에서 차체를 돌린다(돌아도 상자에 닿지 않는 자리다).
+            # 단, 그 회전이 바구니 옆 기물을 쓸면 돌지 않는다(10-05 별 · 10-07 나이트를 쳤다).
+            turn = residual - math.copysign(m.place_turn_to_deg, residual)
+            pl = self._planner
+            near = [o for o in self._other_pieces(pose)
+                    if _dist(pose.xy, o) < pl.turn_safe and pl._sweep_hits(pose.xy, pose.yaw_deg, turn, o)]
+            if near:
+                short = abs(residual) - m.max_arm_yaw_deg
+                if short <= m.place_arm_only_max_short_deg:
+                    self._arm_only_place = True
+                    self._log(f"몸을 돌리면 바구니 옆 기물에 닿는다 — 팔로만 넣음 "
+                              f"(팔 {math.copysign(m.max_arm_yaw_deg, residual):+.0f}°, 모자란 각 {short:.1f}°)")
+                    return self._stop("arm-only place")
+                return self._nudge_missed(f"바구니 옆 기물 — 몸을 돌리면 닿고 팔로는 {short:.1f}° 모자란다")
             if not self._nudge_turn_logged:
                 self._nudge_turn_logged = True
                 self._log(f"arm cannot cover {residual:+.1f}도 (limit ±{m.max_arm_yaw_deg:.0f}) — "
@@ -972,6 +989,7 @@ class MissionFSM:
         if state == HostState.NUDGE_BOX:
             self._nudge_from = None
             self._nudge_turn_logged = False
+            self._arm_only_place = False
             self._nudge_started = self._now
         self._reset_motion()
 

@@ -282,6 +282,9 @@ class MissionConfig:
     max_arm_yaw_deg: float = 15.0
     # 그 한계를 넘어 차체를 돌릴 때는 남는 각도가 이 안이 될 때까지 돈다.
     place_turn_to_deg: float = 12.0
+    # 정차점에서 몸을 돌리면 바구니 옆 기물에 닿을 때, 팔(±max_arm_yaw_deg)로만 넣어도 되는 모자란 각의 상한.
+    # 10° 면 팔 0.32 m 끝에서 ~5.6 cm 옆 — 바구니 폭 21 cm 안. 넘으면 다시 접근(그래도 안 되면 HALTED). 10-07
+    place_arm_only_max_short_deg: float = 10.0
     # 상자 앞에서 앞으로 밀어 볼 수 있는 최대 거리. 여기까지 가도 정면에 못 서면
     # 다시 접근한다(place_tries 가 오른다).
     nudge_max_m: float = 0.40
