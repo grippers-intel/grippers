@@ -229,3 +229,13 @@ def test_held_stays_gone_while_manual_waits_after_place(cfg):
             fsm.request_advance()
     assert waited and all(stage == "" for stage, _ in waited[-5:])
     assert all(held is None for _, held in waited)
+
+
+def test_piece_states_idle_done_outside():
+    """10-07: 바구니 앞 띠의 나이트가 "done" 이라 GUI 에서 초록. 바구니 안만 done, 구역 밖은 outside(회색)."""
+    from host_config import load_host_config
+    from view.ui_state import UiState
+    ui = UiState(load_host_config(None))
+    st = {p["label"]: p["state"] for p in ui._workspace_pieces(
+        {"queen": [(0.90, 0.90)], "knight": [(1.106, 1.307)], "rook": [(0.99, 1.65)]})}
+    assert st == {"queen": "idle", "knight": "outside", "rook": "done"}

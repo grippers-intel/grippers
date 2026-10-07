@@ -114,13 +114,21 @@ class UiState:
 
     # ------------------------------------------------------------------
     def _workspace_pieces(self, pmap) -> list[dict]:
+        """기물 상태: 작업 구역 안 = "idle"(정리할 것) · 바구니(상자) 안 = "done"(초록) · 그 밖 = "outside".
+
+        10-07: 바구니 앞 띠(y 1.305 위)의 나이트가 "done" 으로 가 GUI 에서 대상처럼 초록이었다. GUI 는
+        done 과 대상만 초록으로 칠하므로, 바구니 안이 아닌 구역 밖 기물은 "outside"(회색)로 보낸다.
+        """
         a = self.cfg.arena
+        bw, bl = a.box_size[0], a.box_size[1]
+        boxes = [(bx - bw / 2.0, bx + bw / 2.0, by - bl / 2.0, by + bl / 2.0) for bx, by, _yaw in a.boxes.values()]
         out = []
         for label, pts in sorted(pmap.items()):
             for i, (x, y) in enumerate(pts):
                 inside = a.workspace_x[0] <= x <= a.workspace_x[1] and a.workspace_y[0] <= y <= a.workspace_y[1]
-                out.append({"id": f"{label}#{i}", "label": label, "x": round(x, 3), "y": round(y, 3),
-                            "state": "idle" if inside else "done"})
+                in_box = any(x0 <= x <= x1 and y0 <= y <= y1 for x0, x1, y0, y1 in boxes)
+                state = "idle" if inside else ("done" if in_box else "outside")
+                out.append({"id": f"{label}#{i}", "label": label, "x": round(x, 3), "y": round(y, 3), "state": state})
         return out
 
     def _progress(self, fsm, pose, target_xy) -> tuple[str, float]:
