@@ -58,6 +58,8 @@ def main() -> int:
                     help="--sim 에서 손을 둘 위치 이름(F1~R3). 예: --sim-hand L2")
     ap.add_argument("--hz-every", type=int, default=50, help="N 사이클마다 루프 Hz 출력(0=끔)")
     ap.add_argument("--max-cycles", type=int, default=0, help="0 = 무한")
+    ap.add_argument("--no-traj", action="store_true",
+                    help="주행 궤적 CSV(host/logs/traj_*.csv, 사이클마다 위치·명령·가장 가까운 기물 간격)를 남기지 않는다")
     ap.add_argument("--log-piece", default=None, metavar="LABEL",
                     help="이 라벨(쉼표로 여러 개, all = 전부)의 카메라별 위치를 1 s 마다 찍는다"
                          "(넓은 기물 반경 재기, 10-05)")
@@ -82,6 +84,11 @@ def main() -> int:
     caps, cams, piece_detector, world = [], [], None, None
     hand_detector, hand_tracker, hands, hand_spots = None, None, [], []
     piece_log_at = 0.0                     # --log-piece 마지막 출력 시각
+    traj = None
+    if not args.no_traj:
+        from mission.trajectory_log import TrajectoryLog
+        traj = TrajectoryLog.new(Path(__file__).resolve().parent / "logs", cfg.planner)
+        print(f"[host] 주행 궤적 기록: {traj.path}")
 
     try:
         if args.sim:
@@ -217,6 +224,8 @@ def main() -> int:
             fsm.set_hands(hands)
             cmd = fsm.step(pose, pmap, status, t0)
             link.send(cmd)
+            if traj is not None:
+                traj.row(t0, fsm, pose, cmd, pmap)
 
             action = None
             if view is not None:
@@ -265,6 +274,8 @@ def main() -> int:
             if "link" in locals():
                 link.close()
         finally:
+            if traj is not None:
+                traj.close()
             if piece_detector is not None:
                 piece_detector.close()
             if hand_detector is not None:
