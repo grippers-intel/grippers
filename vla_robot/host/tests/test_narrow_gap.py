@@ -96,3 +96,15 @@ def test_turns_in_place_when_the_way_ahead_is_blocked_too():
     cmds = [fsm.step(P(0.97, 0.82), pmap, S(), 0.1 + 0.1 * k) for k in range(4)]
     assert not any("turn exit" in e for e in fsm.events)
     assert all(c.linear_x <= 0 for c in cmds)                                # 앞으로 밀고 나가지 않는다
+
+
+def test_passing_beside_one_piece_is_not_a_gap():
+    """10-07 실기: 상자 바깥으로 15 cm 붙어 돌아가는 우회를 틈으로 봐서 5° 재정렬로 좌우로 왔다갔다 했다.
+    한쪽에만 기물이 있으면 틈이 아니다 — 평소 문턱(12°/25°)으로 간다."""
+    fsm = MissionFSM(_cfg())
+    fsm.set_order(Order(labels=("queen",)))
+    pmap = {"box": [(1.143, 0.897)], "queen": [(1.30, 1.25)]}
+    fsm.step(P(1.30, 0.55, yaw=90.0), pmap, S(), 0.0)                       # 상자 오른쪽 15.7 cm 를 지나는 직선
+    cmd = fsm.step(P(1.30, 0.62, yaw=98.0), pmap, S(), 0.1)                 # 상자 35 cm 안, 8° 틀어짐
+    assert not any("narrow gap" in e for e in fsm.events)
+    assert cmd.linear_x > 0 and cmd.angular_z == 0

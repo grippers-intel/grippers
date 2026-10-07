@@ -499,6 +499,10 @@ class MissionFSM:
             return self._stop("approach blocked")
         return cmd
 
+    #: 지금 서 있는 자리에서 실제로 돌 각도를 볼 때 앞뒤로 더 보는 여유. 계획기의 꺾는 점 검사(12°)는 도착 방향
+    #: 오차까지 넣지만, 여기서는 지금 방향을 재고 있다 — 12° 를 붙이면 5° 보정에도 "닿는다"가 나왔다(10-07).
+    SWEEP_SLACK_DEG = 3.0
+
     #: 파지 거리 맞추기 최대 횟수. 넘으면 그 자리에서 잡는다(맴돌지 않게).
     CREEP_TRIES = 4
 
@@ -674,7 +678,8 @@ class MissionFSM:
             turn = residual - math.copysign(m.place_turn_to_deg, residual)
             pl = self._planner
             near = [o for o in self._other_pieces(pose)
-                    if _dist(pose.xy, o) < pl.turn_safe and pl._sweep_hits(pose.xy, pose.yaw_deg, turn, o)]
+                    if _dist(pose.xy, o) < pl.turn_safe
+                    and pl._sweep_hits(pose.xy, pose.yaw_deg, turn, o, slack_deg=self.SWEEP_SLACK_DEG)]
             if near:
                 short = abs(residual) - m.max_arm_yaw_deg
                 if short <= m.place_arm_only_max_short_deg:
@@ -813,7 +818,8 @@ class MissionFSM:
         """
         pl, c, d = self._planner, self.cfg.planner, self.cfg.drive
         hits = lambda at: [o for o in obstacles  # noqa: E731
-                           if _dist(at, o) < pl.turn_safe and pl._sweep_hits(at, pose.yaw_deg, turn_deg, o)]
+                           if _dist(at, o) < pl.turn_safe
+                           and pl._sweep_hits(at, pose.yaw_deg, turn_deg, o, slack_deg=self.SWEEP_SLACK_DEG)]
         if not hits(pose.xy):
             return None
         pad = c.piece_obstacle_radius_m + c.obstacle_margin_m
@@ -850,11 +856,17 @@ class MissionFSM:
         방향을 정확히 맞추고 들어가 안에서는 돌지 않는다(10-07 사용자 결정).
         """
         pl = self._planner
-        gap = [o for o in obstacles if segment_circle_clearance(at, sub_goal, o)[0] < pl.turn_safe]
-        inside = any(_dist(at, o) < pl.turn_safe for o in obstacles)
+        dx, dy = sub_goal[0] - at[0], sub_goal[1] - at[1]
+        side = lambda o: (dx * (o[1] - at[1]) - dy * (o[0] - at[0])) > 0      # noqa: E731  왼쪽이면 True
+        near = [o for o in obstacles if segment_circle_clearance(at, sub_goal, o)[0] < pl.turn_safe]
+        # 틈 = 직선 **양쪽**에 기물이 있을 때만. 한쪽 옆을 붙어 지나가는 우회(10-07 상자 바깥)는 틈이 아니다 —
+        # 그걸 틈으로 봐서 5° 재정렬이 우회 내내 걸려 좌우로 왔다갔다 했다.
+        if not ({side(o) for o in near} >= {True, False}):
+            return False, False, False
+        inside = any(_dist(at, o) < pl.turn_safe for o in near)
         entry = pl.turn_safe + self.cfg.planner.narrow_entry_zone_m
-        at_entry = any(_dist(at, o) < entry for o in gap)
-        return bool(gap), inside, at_entry
+        at_entry = any(_dist(at, o) < entry for o in near)
+        return True, inside, at_entry
 
     def _enter_deg(self, pose: Pose, sub_goal: XY, obstacles) -> Optional[float]:
         """직진 중 다시 돌기 시작하는 문턱. 앞길이 비어 있으면 넓힌다(None = 기본 12°).
