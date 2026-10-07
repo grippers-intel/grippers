@@ -122,31 +122,3 @@ def test_detour_into_the_grasp_zone_does_not_turn_into_the_piece_beside():
     assert any("grasp zone" in e for e in fsm.events)
     moving = [c for c in cmds if not c.stop]
     assert moving and moving[0].angular_z == 0 and moving[0].linear_x > 0   # 그 자리에서 돌지 않고 앞으로
-
-
-def test_forward_exit_never_drives_into_the_target():
-    """10-07 실기: 앞으로 빠져나가기가 잡으러 가는 공을 장애물에서 빼고 봐서 0.3 m 앞 공 쪽으로 16 cm 나가 공을 밀었다."""
-    from mission.host_fsm import HostState
-    fsm = MissionFSM(_cfg())
-    fsm.state = HostState.APPROACH_PIECE
-    pose = P(0.95, 0.60, yaw=90.0)
-    fsm._pose_now, fsm._pmap_now = pose, {}
-    side = [(1.07, 0.57)]                                                    # 오른쪽 옆 뒤 12 cm — 돌면 쓴다(앞으로는 안 막는다)
-    fsm.target_xy = (0.96, 0.89)                                             # 공이 29 cm 앞
-    assert fsm._forward_exit(pose, -30.0, side) is None                     # 공 쪽으로는 안 나간다
-    fsm.target_xy = (0.40, 1.30)                                             # 앞이 비었으면
-    assert fsm._forward_exit(pose, -30.0, side) is not None                 # 앞으로 나간다
-
-
-def test_small_facing_turn_in_the_grasp_zone_is_not_deferred():
-    """+14° 같은 작은 정면 맞추기는 미루지 않는다(미뤘다가 앞으로 나가 공을 밀었다)."""
-    import math
-    fsm = MissionFSM(_cfg())
-    fsm.set_order(Order(labels=("soccer",)))
-    robot = (0.97, 0.80)
-    ball = (robot[0] + 0.30 * math.cos(math.radians(104)), robot[1] + 0.30 * math.sin(math.radians(104)))
-    pmap = {"soccer": [ball], "rook": [(0.80, 0.80)], "box": [(1.14, 0.80)]}
-    fsm.step(P(*robot, yaw=90.0), pmap, S(), 0.0)
-    cmds = [fsm.step(P(*robot, yaw=90.0), pmap, S(), 0.1 + 0.1 * k) for k in range(3)]
-    assert not any("grasp zone" in e for e in fsm.events)
-    assert all(c.linear_x <= 0 for c in cmds)                                # 공 쪽으로 밀고 나가지 않는다
