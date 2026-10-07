@@ -288,7 +288,9 @@ class MissionConfig:
     # 바구니 정차 구역(2026-10-07): 정차점 한 점 대신, 앞뒤(y)는 그대로 두고 좌우(x)로 ±basket_stop_zone_half_m
     # 안에서 차체가 다른 기물에 닿지 않는 자리 중 가운데에 가장 가까운 곳에 선다. 겨누는 점도 그만큼(최대
     # basket_aim_shift_max_m) 옮겨 팔을 많이 틀지 않게 한다. 구역 어디에도 못 서면 들어가기 전에 HALTED.
-    basket_stop_zone_half_m: float = 0.08
+    basket_stop_zone_half_m: float = 0.10
+    basket_stop_turn_deg: float = 5.0        # 구역 자리 검사에서 바구니 정면 ± 이 각도(방향 오차)까지 본다
+    basket_stop_clear_m: float = 0.015       # 차체 바깥면–기물 가장자리 최소 간격
     basket_stop_step_m: float = 0.02
     basket_aim_shift_max_m: float = 0.06
     # 정차점 근처(place_trigger_dist_m 안)에서 정차점까지 직선이 이만큼 계속 막혀 있으면 HALTED 로 사람을 부른다(10-07).

@@ -209,7 +209,9 @@ mission:
   carry_line_block_s: 5.0       # 10-07: 정차점 근처에서 직선이 5 s 계속 막히면 HALTED("정차점 옆 OO 치워 주세요")
   # 바구니 정차 구역(10-07): y 는 정차점 그대로, x 는 가운데 ±8 cm 안에서 차체가 기물에 안 닿는 가장 가운데 자리.
   # 입구 21 cm · 팔 끝 ±15° = ±8 cm 라 좌우로 비켜 서도 입구 안에 넣는다. 겨누는 점도 최대 6 cm 같이 옮긴다.
-  basket_stop_zone_half_m: 0.08
+  basket_stop_zone_half_m: 0.10    # 10-07 오후 0.08 -> 0.10(입구 반폭 10.5) — "조금 더 러프하게"
+  basket_stop_turn_deg: 5.0        # 자리 검사: 바구니 정면 ±5°(방향 오차)만. 정차점 몸 회전은 팔로만 넣기 규칙이 따로 본다
+  basket_stop_clear_m: 0.015       # 차체 바깥면–기물 가장자리 1.5 cm 이상이면 설 수 있다
   basket_stop_step_m: 0.02
   basket_aim_shift_max_m: 0.06
   place_arm_only_max_short_deg: 10.0   # 10-07: 몸을 돌리면 바구니 옆 기물에 닿으면 팔로만 — 모자란 각이 이 이하일 때(10° = 끝에서 ~5.6 cm)
