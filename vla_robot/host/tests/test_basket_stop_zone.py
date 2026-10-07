@@ -1,3 +1,4 @@
+import math
 """바구니 정차 구역(2026-10-07): y 는 정차점 그대로, x 는 가운데 ±8 cm 안에서 기물에 안 닿는 가장 가운데 자리."""
 from localization.pose import Pose
 from mission.host_fsm import HostState, MissionFSM, Order
@@ -87,3 +88,50 @@ def test_from_the_side_at_stop_height_stands_on_the_robots_side():
     fsm._enter(HostState.CARRY_TO_DEST)
     fsm.step(P(0.70, 1.22, yaw=150.0), {"queen": [(0.48, 1.30)]}, S(), 0.1)   # 정차점 높이, 왼쪽
     assert fsm.dest_xy[1] == centre[1] and fsm.dest_xy[0] < centre[0] - 0.09   # 왼쪽 끝(−10 cm)
+
+
+def _leaving_fsm(pose, target=(1.20, 0.90)):
+    """바구니에 넣고 다음 기물(target)로 떠나는 순간."""
+    fsm = MissionFSM(_cfg())
+    fsm.set_order(Order(labels=("queen",)))
+    fsm.step(pose, {"queen": [target], "knight": [(1.106, 1.307)]}, S(), 0.0)
+    return fsm
+
+
+def test_leaving_the_basket_never_drives_forward_into_it():
+    """10-07 6기물: 상자를 넣고 공으로 떠나며 앞으로 빠져나가기가 바구니 쪽으로 10.7 cm — 앞면이 바구니를 넘었다."""
+    pose = P(0.927, 1.262, yaw=98.5)
+    fsm = _leaving_fsm(pose, target=(0.53, 1.15))
+    for k in range(5):
+        cmd = fsm.step(pose, {"queen": [(0.53, 1.15)], "knight": [(1.106, 1.307)]}, S(), 0.1 * (k + 1))
+        assert not fsm.last_cmd_text.startswith("exit forward"), fsm.last_cmd_text
+        assert cmd.linear_x == 0.0
+
+
+def test_forward_exit_stops_short_of_the_basket_front():
+    fsm = MissionFSM(_cfg())
+    fwd = (0.0, 1.0)
+    assert fsm._front_hits_basket((0.99, 1.36), fwd)          # 앞면 1.485 > 바구니 1.48 − 2 cm
+    assert not fsm._front_hits_basket((0.99, 1.30), fwd)      # 앞면 1.425
+
+
+def test_stop_zone_prefers_a_spot_where_it_can_turn_away():
+    """나이트 옆에서 넣고 떠날 때 그 자리에서 돌 수 있는 자리(모서리 반경 밖)를 먼저 고른다."""
+    fsm = MissionFSM(_cfg())
+    fsm.set_order(Order(labels=("queen",)))
+    fsm.step(P(0.60, 1.00), {"queen": [(0.60, 1.20)], "knight": [(1.106, 1.307)]}, S(), 0.0)
+    fsm._enter(HostState.CARRY_TO_DEST)
+    fsm.step(P(0.90, 0.80, yaw=90.0), {"queen": [(0.90, 1.06)], "knight": [(1.106, 1.307)]}, S(), 0.1)
+    c = fsm.cfg.planner
+    free_r = math.hypot(c.robot_length_m / 2, c.robot_width_m / 2) + c.piece_obstacle_radius_m \
+        + fsm.cfg.mission.basket_stop_clear_m
+    assert math.dist(fsm.dest_xy, (1.106, 1.307)) >= free_r
+
+
+def test_near_waypoint_does_not_drive_straight_in_the_wrong_direction():
+    """10-07 별: 경로 다음 점이 4 cm 라 방향을 안 재고 보던 쪽(바구니 반대)으로 5 cm 직진했다."""
+    fsm = MissionFSM(_cfg())
+    fsm._now = 1.0
+    pose = P(0.635, 1.062, yaw=-143.0)
+    cmd = fsm._drive_to(pose, (0.93, 0.96), [(1.106, 1.307)])
+    assert cmd.linear_x == 0.0                                # 직진 아님(서거나 돈다)
