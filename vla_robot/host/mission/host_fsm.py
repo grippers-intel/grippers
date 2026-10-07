@@ -176,6 +176,7 @@ class MissionFSM:
         self._retry_settle_until: Optional[float] = None   # 파지 실패 뒤 다시 보기 전 대기
         self._narrow_logged = False
         self._exit_logged = False
+        self._carry_line_blocked_since: Optional[float] = None
         self._pose_now: Optional[Pose] = None
         self._pmap_now: Optional[PieceMap] = None
         self._unwind_sign = -1.0
@@ -592,8 +593,23 @@ class MissionFSM:
                      if not (label == self.target_label and _dist(p, pose.xy) <= r)]
         # 상자(손) 앞 맞추기는 계획기 없이 정차점까지 곧장 간다 — 그 직선이 기물을 스치면 넘기지 않고
         # 계획기로 더 다가간다(2026-10-05: 0.35 m 에서 넘겨 곧장 가다 정차점 옆 나이트를 쳤다).
-        self.ready_to_advance = (_dist(pose.xy, self.dest_xy) <= m.place_trigger_dist_m
-                                 and self._line_clear(pose.xy, self.dest_xy))
+        dist = _dist(pose.xy, self.dest_xy)
+        near = dist <= m.place_trigger_dist_m
+        at_stop = dist <= m.place_arrive_tol_m      # 이미 정차점에 서 있다 — 곧장 갈 거리가 없다
+        line_ok = self._line_clear(pose.xy, self.dest_xy)
+        # 10-07: 정차점 2 cm 안에 서 있는데 정차점 자체가 나이트에서 13 cm 라 "직선 막힘"으로 영원히 서 있었다.
+        self.ready_to_advance = near and (line_ok or at_stop)
+        if near and not line_ok and not at_stop:
+            if self._carry_line_blocked_since is None:
+                self._carry_line_blocked_since = self._now
+            elif self._now - self._carry_line_blocked_since > m.carry_line_block_s:
+                who = self._piece_label_near(self.dest_xy)
+                where = self.dest_box or f"hand {self.hand_spot}"
+                self._halt(f"{where} 정차점 옆 {who} 이(가) 길을 막는다 — 치워 주세요 "
+                           f"({m.carry_line_block_s:.0f}s 동안 정차점까지 직선이 막힘)")
+                return self._stop("halted")
+        else:
+            self._carry_line_blocked_since = None
         if self.ready_to_advance:
             # 정차점 근처에서 상자 앞(손 앞) 맞추기로 Next 없이 넘어간다 — MANUAL 에서도 "운반" 한 단계로 본다
             # (2026-10-05: 운반 중 / 상자 앞 진입 중이 따로 Next 를 받는 게 구분이 안 된다).
@@ -916,6 +932,14 @@ class MissionFSM:
                     continue                    # 쥐고 있는 기물(그리퍼 안에서 계속 보인다)
                 out.append(p)
         return out
+
+    def _piece_label_near(self, xy: XY) -> str:
+        """xy 에 가장 가까운 기물(목표·쥔 것 제외)의 라벨 — 사람에게 알릴 때."""
+        pose = self._pose_now
+        others = set(self._other_pieces(pose)) if pose is not None else set()
+        best = min(((lb, p) for lb, pts in (self._pmap_now or {}).items() for p in pts if p in others),
+                   key=lambda t: _dist(t[1], xy), default=None)
+        return best[0] if best else "기물"
 
     def _line_clear(self, a: XY, b: XY, slack: float = 0.0) -> bool:
         """a -> b 직선을 차체가 곧장 지나가도 기물(목표·쥔 것 제외)을 스치지 않는가."""
