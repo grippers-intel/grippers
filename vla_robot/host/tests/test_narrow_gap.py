@@ -108,3 +108,16 @@ def test_passing_beside_one_piece_is_not_a_gap():
     cmd = fsm.step(P(1.30, 0.62, yaw=98.0), pmap, S(), 0.1)                 # 상자 35 cm 안, 8° 틀어짐
     assert not any("narrow gap" in e for e in fsm.events)
     assert cmd.linear_x > 0 and cmd.angular_z == 0
+
+
+def test_detour_into_the_grasp_zone_does_not_turn_into_the_piece_beside():
+    """10-07 실기 재현: 룩을 끼고 돌아 공 0.30 m 안에 옆구리로 들어와(127°), 공 쪽(38°)으로 90° 돌다 룩을 밀었다.
+    그 회전이 룩을 쓸면 아직 잡지 않고, 앞으로 빠져나간 뒤 돈다."""
+    fsm = MissionFSM(_cfg())
+    fsm.set_order(Order(labels=("soccer",)))
+    pmap = {"soccer": [(0.93, 1.115)], "rook": [(0.825, 0.889)], "box": [(1.143, 0.897)]}
+    fsm.step(P(0.99, 0.35), pmap, S(), 0.0)                                 # 목표 고르기
+    cmds = [fsm.step(P(0.694, 0.929, yaw=127.0), pmap, S(), 0.1 + 0.1 * k) for k in range(4)]
+    assert any("grasp zone" in e for e in fsm.events)
+    moving = [c for c in cmds if not c.stop]
+    assert moving and moving[0].angular_z == 0 and moving[0].linear_x > 0   # 그 자리에서 돌지 않고 앞으로
