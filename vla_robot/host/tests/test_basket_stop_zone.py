@@ -149,3 +149,14 @@ def test_pre_stop_is_never_next_to_a_piece():
     goal = fsm.nav_goal
     assert goal is not None
     assert math.dist(goal, (0.90, 0.91)) >= fsm._planner.safe
+
+
+def test_nudge_does_not_place_from_beside_the_stop():
+    """10-07 별: 정차점 높이에서 13 cm 옆인데 바구니까지 거리만 보고 "도착" — 팔 +12.6° 로 멀리서 넣었다."""
+    fsm = MissionFSM(_cfg())
+    fsm.target_label, fsm.target_xy, fsm.dest_box = "star", (0.5, 1.19), "basket"
+    fsm.dest_xy = (0.89, 1.26)
+    fsm._enter(HostState.NUDGE_BOX)
+    fsm.step(P(0.76, 1.267, yaw=45.0), {"queen": [(1.125, 1.355)]}, S(), 0.0)
+    assert fsm.state == HostState.NUDGE_BOX
+    assert not fsm.ready_to_advance                           # 옆으로 더 가야 한다

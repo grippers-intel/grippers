@@ -302,6 +302,8 @@ class MissionConfig:
     # 바구니 근처(바구니 사각형에서 basket_near_m 안)에서는 앞으로 빠져나가기보다 반대 방향 회전을 먼저 본다.
     # 앞으로 빠져나가기는 어디서든 바구니 앞면 basket_front_clear_m 안으로는 나가지 않는다(10-07 돌진).
     basket_near_m: float = 0.35
+    # 상자 앞 맞추기의 "도착"은 바구니까지 거리만이 아니라 정차점에서 옆으로 이만큼 안이어야 한다(10-07 별: 13 cm 옆에서 넣음).
+    place_lateral_tol_m: float = 0.06
     basket_front_clear_m: float = 0.02
     basket_stop_step_m: float = 0.02
     basket_aim_shift_max_m: float = 0.06
