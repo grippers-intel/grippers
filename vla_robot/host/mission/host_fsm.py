@@ -180,6 +180,7 @@ class MissionFSM:
         self._carry_line_blocked_since: Optional[float] = None
         self._zone_wait_logged = False
         self._box_stop_chosen = False
+        self._zone_blocked_since: Optional[float] = None
         self._aim_shift = 0.0                # 바구니 정차 구역에서 비켜 선 만큼 겨누는 점도 옮긴다(m)
         self._pose_now: Optional[Pose] = None
         self._pmap_now: Optional[PieceMap] = None
@@ -609,12 +610,21 @@ class MissionFSM:
         m = self.cfg.mission
         r = self.cfg.planner.carry_ignore_radius_m
         if self.dest_kind != "hand" and self.dest_box and not self._box_stop_chosen and pose.ok:
-            self._box_stop_chosen = True
             who = self._choose_box_stop(pose)
-            if who is not None:
-                self._halt(f"{self.dest_box} 앞 정차 구역(가운데 ±{m.basket_stop_zone_half_m * 100:.0f} cm)에 "
-                           f"{who} 이(가) 있어 설 자리가 없다 — 치워 주세요")
-                return self._stop("halted")
+            if who is None:
+                self._box_stop_chosen = True
+                self._zone_blocked_since = None
+            else:
+                # 잡은 직후 지도는 흔들린다(팔이 돌아오며 카메라를 가린다) — 10-07: 지금 지도로는 −4 cm 에 서는데
+                # 잡은 순간의 지도로 막혀 HALTED. 운반을 이으며 basket_stop_zone_retry_s 동안 다시 보고 그래도 없으면 멈춘다.
+                if self._zone_blocked_since is None:
+                    self._zone_blocked_since = self._now
+                    self._log(f"basket stop zone: 지금은 설 자리가 없다({who}) — {m.basket_stop_zone_retry_s:.0f}s 동안 다시 본다")
+                elif self._now - self._zone_blocked_since > m.basket_stop_zone_retry_s:
+                    self._box_stop_chosen = True
+                    self._halt(f"{self.dest_box} 앞 정차 구역(가운데 ±{m.basket_stop_zone_half_m * 100:.0f} cm)에 "
+                               f"{who} 이(가) 있어 설 자리가 없다 — 치워 주세요")
+                    return self._stop("halted")
         # 쥐고 있는 기물은 로봇 옆에서 계속 검출된다 — 그것만 뺀다. **라벨이 같은 것만**이다.
         # 2026-09-30: 반경만으로 빼다가 box 기물에 30 cm 안으로 다가가자 그것까지 빠져,
         # 계획기가 box 를 뚫고 가는 길을 내고 그대로 밀고 갔다.
@@ -1078,6 +1088,7 @@ class MissionFSM:
             self._face_arrived = False
         if state == HostState.CARRY_TO_DEST:
             self._box_stop_chosen = False
+            self._zone_blocked_since = None
             self._aim_shift = 0.0
         if state == HostState.NUDGE_BOX:
             self._nudge_from = None
@@ -1311,7 +1322,9 @@ class MissionFSM:
                 self._log(f"basket stop zone: 가운데 막힘 — 좌우 {dx * 100:+.0f} cm 에 선다 "
                           f"(겨누는 점 {self._aim_shift * 100:+.0f} cm)")
             return None
-        return self._piece_label_at(blocker) if blocker else "기물"
+        if blocker is None:
+            return "기물"
+        return f"{self._piece_label_at(blocker)} ({blocker[0]:.2f}, {blocker[1]:.2f})"
 
     def _piece_label_at(self, xy: XY) -> str:
         for lb, pts in (self._pmap_now or {}).items():
