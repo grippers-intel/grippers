@@ -71,3 +71,32 @@ def test_blocked_line_near_the_stop_halts_and_names_the_piece():
         t += 0.1
     assert fsm.state == HostState.HALTED
     assert "knight" in fsm.halt_reason and "치워" in fsm.halt_reason
+
+
+def _scene_b():
+    """10-07 궤적 기록 B: 운반 중 (1.004, 0.920) 81°, 오른쪽 뒤 15 cm 에 상자 기물. 정차점 쪽으로 +20° 돌아야 한다."""
+    import math
+    fsm = MissionFSM(_cfg())
+    fsm.set_order(Order(labels=("soccer",)))
+    fsm.step(P(0.99, 0.50), {"soccer": [(0.99, 0.80)]}, S(), 0.0)
+    fsm._enter(HostState.CARRY_TO_DEST)
+    pose = P(1.004, 0.920, yaw=80.8)
+    held = (1.004 + 0.26 * math.cos(math.radians(80.8)), 0.920 + 0.26 * math.sin(math.radians(80.8)))
+    pmap = {"soccer": [held], "box": [(1.143, 0.895)]}
+    return fsm, pose, pmap
+
+
+def test_does_not_hand_over_when_the_first_turn_would_sweep_a_piece():
+    fsm, pose, pmap = _scene_b()
+    cmds = [fsm.step(pose, pmap, S(), 0.1 + 0.1 * k) for k in range(4)]
+    assert fsm.state == HostState.CARRY_TO_DEST                              # 넘기지 않는다
+    assert all(c.angular_z == 0 for c in cmds)                               # 그 자리에서 돌지 않는다
+
+
+def test_nudge_goes_back_to_carry_when_its_turn_would_sweep_a_piece():
+    fsm, pose, pmap = _scene_b()
+    fsm.step(pose, pmap, S(), 0.1)                                           # 정차 구역 고르기
+    fsm._enter(HostState.NUDGE_BOX)
+    cmds = [fsm.step(pose, pmap, S(), 0.2 + 0.1 * k) for k in range(3)]
+    assert any("운반으로 돌아간다" in e for e in fsm.events)
+    assert all(c.angular_z == 0 for c in cmds)
