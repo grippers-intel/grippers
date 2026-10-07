@@ -203,6 +203,7 @@ mission:
   place_aim_margin_m: 0.04      # 판정 목표보다 이만큼 더 안쪽을 겨눈다(허용치보다 커야 한다)
   max_arm_yaw_deg: 15.0         # Pi 의 place.max_base_yaw_deg 와 같은 값. 밖이면 차체를 돌린다
   place_turn_to_deg: 12.0       # 차체를 돌리게 되면 이 안까지만 돈다(나머지는 팔). 정면까진 안 맞춘다
+  carry_line_block_s: 5.0       # 10-07: 정차점 근처에서 직선이 5 s 계속 막히면 HALTED("정차점 옆 OO 치워 주세요")
   place_arm_only_max_short_deg: 10.0   # 10-07: 몸을 돌리면 바구니 옆 기물에 닿으면 팔로만 — 모자란 각이 이 이하일 때(10° = 끝에서 ~5.6 cm)
   nudge_max_m: 0.40             # 이만큼 밀고도 정면에 못 서면 재접근
   nudge_timeout_s: 25.0         # 상자 앞에서 이만큼 맴돌면 운반 단계로 돌아가 재접근

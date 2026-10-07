@@ -39,3 +39,35 @@ def test_straight_basket_approach_waits_for_a_clear_line():
 def _cfg():
     from host_config import load_host_config
     return load_host_config(None)
+
+
+def _carry_to_basket(knight):
+    fsm = MissionFSM(_cfg())
+    fsm.set_order(Order(labels=("queen",)))
+    fsm.step(P(1.0, 0.5), {"queen": [(1.0, 0.9)]}, S(), 0.0)
+    fsm.state = HostState.CARRY_TO_DEST
+    return fsm, fsm.dest_xy
+
+
+def test_at_the_stop_point_hands_over_even_if_a_piece_is_close():
+    """10-07 실기: 정차점 2 cm 안에 서 있는데 정차점이 나이트에서 13 cm 라 "직선 막힘"으로 영원히 서 있었다."""
+    fsm, dest = _carry_to_basket(None)
+    knight = (dest[0] + 0.06, dest[1] + 0.12)
+    at = (dest[0] - 0.016, dest[1] - 0.011)
+    held = (at[0], at[1] + 0.26)
+    fsm.step(P(*at), {"queen": [held], "knight": [knight]}, S(), 0.1)
+    assert fsm.state != HostState.CARRY_TO_DEST
+
+
+def test_blocked_line_near_the_stop_halts_and_names_the_piece():
+    fsm, dest = _carry_to_basket(None)
+    start = (dest[0], dest[1] - 0.30)
+    held = (start[0], start[1] + 0.26)
+    knight = (dest[0] + 0.06, dest[1] - 0.15)                 # 직선 바로 옆
+    fsm._stall.update = lambda *a, **k: False                 # 시험 로봇은 안 움직인다 — 무응답 감지는 뺀다
+    t = 0.1
+    while fsm.state == HostState.CARRY_TO_DEST and t < 10.0:
+        fsm.step(P(*start), {"queen": [held], "knight": [knight]}, S(), t)
+        t += 0.1
+    assert fsm.state == HostState.HALTED
+    assert "knight" in fsm.halt_reason and "치워" in fsm.halt_reason
