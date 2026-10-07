@@ -640,7 +640,9 @@ class MissionFSM:
         at_stop = dist <= m.place_arrive_tol_m      # 이미 정차점에 서 있다 — 곧장 갈 거리가 없다
         # 바구니에는 아래에서 들어간다(10-07): 옆에서 비스듬히 들어가면 정차점에서 크게 돌아야 하고, 그 회전이
         # 옆 기물을 쓴다. 정차점보다 충분히 아래에 있으면 정면 ±cone 안에서만 넘기고, 아니면 바로 아래 지점으로 간다.
-        low = self._carry_from_below(pose)
+        # 10-07 마지막 상자: 주변에 기물이 없는데도 가운데(0.93, 0.96)로 갔다 올라갔다 — 곧장 가서 정차점에서
+        # 도는 회전이 기물을 쓸 때만 아래에서 들어간다.
+        low = self._carry_from_below(pose) and self._straight_arrival_sweeps(pose)
         bearing = math.degrees(math.atan2(self.dest_xy[1] - pose.y, self.dest_xy[0] - pose.x))
         in_cone = (not low) or abs(wrap_deg(bearing - 90.0)) <= m.basket_approach_cone_deg
         line_ok = self._line_clear(pose.xy, self.dest_xy)
@@ -721,7 +723,8 @@ class MissionFSM:
         gap = target.distance(pose.xy) - target.distance(self.dest_xy)   # + 면 덜 붙었다
         dist = _dist(pose.xy, self.dest_xy)
         residual = facing_error_deg(target, pose.xy, pose.yaw_deg)
-        close = -m.place_min_gap_m <= gap <= m.place_arrive_tol_m
+        # 바구니까지 거리만 보면 정차점 높이에서 옆으로 13 cm 떨어져도 "도착"이었다(10-07 별, 팔 +12.6° 로 멀리서 넣음).
+        close = -m.place_min_gap_m <= gap <= m.place_arrive_tol_m and dist <= m.place_lateral_tol_m
         # 팔로만 넣기로 했으면 팔 한계까지만 튼다(남는 몇 도만큼 떨어지는 점이 옆으로 간다).
         arm = (max(-m.max_arm_yaw_deg, min(m.max_arm_yaw_deg, residual)) if self._arm_only_place
                else residual)
@@ -1080,6 +1083,20 @@ class MissionFSM:
         others = [o for o in self._other_pieces(pose) if _dist(pose.xy, o) < self._planner.turn_safe + 0.05]
         return any(body_gap(pose.x, pose.y, a, o, c.robot_length_m, c.robot_width_m, c.piece_obstacle_radius_m) < clear
                    for o in others for a in angles)
+
+    def _straight_arrival_sweeps(self, pose: Pose) -> bool:
+        """지금 자리에서 정차점으로 곧장 가면(도착 방향 = 그 직선) 정차점에서 몸을 돌릴 때 기물을 쓰는가.
+
+        팔이 ±max_arm_yaw_deg 를 메우니 그 밖만 몸으로 돈다(place_turn_to_deg 까지). 직선 자체가 막혔어도 True."""
+        m = self.cfg.mission
+        if not self._line_clear(pose.xy, self.dest_xy):
+            return True
+        b = math.degrees(math.atan2(self.dest_xy[1] - pose.y, self.dest_xy[0] - pose.x))
+        residual = facing_error_deg(self._basket(), self.dest_xy, b)
+        if abs(residual) <= m.max_arm_yaw_deg:
+            return False
+        turn = residual - math.copysign(m.place_turn_to_deg, residual)
+        return self._turn_sweeps(Pose(self.dest_xy[0], self.dest_xy[1], b, True), turn)
 
     def _pick_pre_stop(self, pose: Pose) -> Optional[XY]:
         """정차점 바로 아래 거쳐 갈 점. 기물에서 직진 여유(safe) + 2 cm 밖이고 거기서 정차점까지 직선이 빈 곳.
