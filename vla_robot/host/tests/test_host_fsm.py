@@ -411,7 +411,12 @@ def test_carry_goes_straight_to_the_stop_point(cfg):
     _setup_place(fsm)
     fsm._enter(HostState.CARRY_TO_DEST)
     fsm.step(P(0.60, 1.10, yaw=0.0), {}, S(), 0.0)
-    assert fsm.nav_goal == pytest.approx(fsm.dest_xy)
+    # 10-07: 정차점보다 충분히 아래이고 정면 ±15° 밖이면 먼저 정차점 바로 아래 지점으로(아래에서 똑바로 들어간다)
+    dx, dy = fsm.dest_xy
+    assert fsm.nav_goal == pytest.approx((dx, dy - cfg.mission.basket_pre_stop_m))
+    fsm.step(P(dx, dy - 0.30, yaw=90.0), {}, S(), 0.05)          # 바로 아래에 오면
+    assert fsm.state == HostState.NUDGE_BOX                      # 곧장 들어간다
+    fsm._enter(HostState.CARRY_TO_DEST)
     # 트리거 거리 안이면 바로 상자 앞 단계로
     dx, dy = fsm.dest_xy
     fsm.step(P(dx + 0.20, dy - 0.10, yaw=150.0), {}, S(), 0.1)

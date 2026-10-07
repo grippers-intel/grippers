@@ -21,7 +21,7 @@ def _cfg():
     return load_host_config(None)
 
 
-def _at_stop(residual_deg, knight_body=(-0.12, -0.15)):
+def _at_stop(residual_deg, knight_body=(-0.12, -0.13)):
     """정차점에 서서 바구니까지 residual_deg 남은 상태. 나이트는 차체 기준 (앞+, 왼+) 위치."""
     fsm = MissionFSM(_cfg())
     fsm.set_order(Order(labels=("soccer",)))

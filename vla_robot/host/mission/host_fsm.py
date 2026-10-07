@@ -181,6 +181,7 @@ class MissionFSM:
         self._zone_wait_logged = False
         self._box_stop_chosen = False
         self._zone_blocked_since: Optional[float] = None
+        self._turn_latch: Optional[tuple[float, float]] = None   # (방향, 마지막 시각) — 거의 정반대 회전 고정
         self._aim_shift = 0.0                # 바구니 정차 구역에서 비켜 선 만큼 겨누는 점도 옮긴다(m)
         self._pose_now: Optional[Pose] = None
         self._pmap_now: Optional[PieceMap] = None
@@ -635,12 +636,17 @@ class MissionFSM:
         dist = _dist(pose.xy, self.dest_xy)
         near = dist <= m.place_trigger_dist_m
         at_stop = dist <= m.place_arrive_tol_m      # 이미 정차점에 서 있다 — 곧장 갈 거리가 없다
+        # 바구니에는 아래에서 들어간다(10-07): 옆에서 비스듬히 들어가면 정차점에서 크게 돌아야 하고, 그 회전이
+        # 옆 기물을 쓴다. 정차점보다 충분히 아래에 있으면 정면 ±cone 안에서만 넘기고, 아니면 바로 아래 지점으로 간다.
+        low = self._carry_from_below(pose)
+        bearing = math.degrees(math.atan2(self.dest_xy[1] - pose.y, self.dest_xy[0] - pose.x))
+        in_cone = (not low) or abs(wrap_deg(bearing - 90.0)) <= m.basket_approach_cone_deg
         line_ok = self._line_clear(pose.xy, self.dest_xy)
         # 10-07: 정차점 2 cm 안에 서 있는데 정차점 자체가 나이트에서 13 cm 라 "직선 막힘"으로 영원히 서 있었다.
         # 넘기면 곧장 가는 단계가 먼저 정차점 쪽으로 제자리에서 돈다(검사 없음). 그 회전이 옆 기물을 쓸면
         # 넘기지 않고 운반(앞으로 빠져나간 뒤 돌기)을 잇는다 — 10-07 궤적: 넘긴 직후 +20° 돌며 상자 기물과 −1.9 cm.
         turn_ok = not self._approach_turn_sweeps(pose)
-        self.ready_to_advance = near and ((line_ok and turn_ok) or at_stop)
+        self.ready_to_advance = near and ((line_ok and turn_ok and in_cone) or at_stop)
         if near and not line_ok and not at_stop:
             if self._carry_line_blocked_since is None:
                 self._carry_line_blocked_since = self._now
@@ -661,7 +667,10 @@ class MissionFSM:
                 return self._step_face_hand(pose)
             self._enter(HostState.NUDGE_BOX)
             return self._step_nudge(pose, None)
-        cmd = self._drive_to(pose, self.dest_xy, obstacles)
+        goal = self.dest_xy
+        if low and not in_cone:
+            goal = (self.dest_xy[0], self.dest_xy[1] - m.basket_pre_stop_m)   # 정차점 바로 아래 — 거기서 위로 곧장
+        cmd = self._drive_to(pose, goal, obstacles)
         if self._blocked_too_long():
             # 물체를 든 채라 보류할 곳이 없다. 사람을 부른다.
             where = self.dest_box or f"hand {self.hand_spot}"
@@ -735,10 +744,7 @@ class MissionFSM:
             # 단, 그 회전이 바구니 옆 기물을 쓸면 돌지 않는다(10-05 별 · 10-07 나이트를 쳤다).
             turn = residual - math.copysign(m.place_turn_to_deg, residual)
             pl = self._planner
-            near = [o for o in self._other_pieces(pose)
-                    if _dist(pose.xy, o) < pl.turn_safe
-                    and pl._sweep_hits(pose.xy, pose.yaw_deg, turn, o, slack_deg=self.SWEEP_SLACK_DEG)]
-            if near:
+            if self._turn_sweeps(pose, turn):         # 정차 구역·상자 앞 맞추기와 같은 간격 기준
                 short = abs(residual) - m.max_arm_yaw_deg
                 if short <= m.place_arm_only_max_short_deg:
                     self._arm_only_place = True
@@ -981,11 +987,24 @@ class MissionFSM:
         return out
 
     def _turn_sweeps(self, pose: Pose, turn_deg: float) -> bool:
-        """여기서 turn_deg 만큼 제자리에서 돌면 차체가 다른 기물(목표·쥔 것 제외)을 쓰는가(실제 각 + 3°)."""
-        pl = self._planner
-        return any(_dist(pose.xy, o) < pl.turn_safe
-                   and pl._sweep_hits(pose.xy, pose.yaw_deg, turn_deg, o, slack_deg=self.SWEEP_SLACK_DEG)
-                   for o in self._other_pieces(pose))
+        """여기서 turn_deg 만큼 제자리에서 돌면(실제 각 + 3°) 차체–다른 기물 간격이 basket_stop_clear_m 아래로 가는가.
+
+        바구니·손 앞에서 쓰는 검사 — 정차 구역 자리 고르기와 **같은 기준**이다(10-07: 구역은 1.5 cm 로 골랐는데
+        여기선 계획기 여유 4 cm 로 봐서 "들어갔다 돌아가기"를 되풀이하다 HALTED)."""
+        c, clear = self.cfg.planner, self.cfg.mission.basket_stop_clear_m
+        sgn = 1.0 if turn_deg >= 0 else -1.0
+        span = abs(turn_deg) + self.SWEEP_SLACK_DEG
+        steps = max(1, int(math.ceil(span)))
+        angles = [pose.yaw_deg - sgn * self.SWEEP_SLACK_DEG + sgn * span * k / steps for k in range(steps + 1)]
+        others = [o for o in self._other_pieces(pose) if _dist(pose.xy, o) < self._planner.turn_safe + 0.05]
+        return any(body_gap(pose.x, pose.y, a, o, c.robot_length_m, c.robot_width_m, c.piece_obstacle_radius_m) < clear
+                   for o in others for a in angles)
+
+    def _carry_from_below(self, pose: Pose) -> bool:
+        """바구니로 가는데 정차점보다 basket_low_margin_m 넘게 아래에 있는가(아래에서 똑바로 들어갈 수 있다)."""
+        if self.dest_kind == "hand" or not self.dest_box or self.dest_xy is None:
+            return False
+        return pose.y < self.dest_xy[1] - self.cfg.mission.basket_low_margin_m
 
     def _approach_turn_sweeps(self, pose: Pose) -> bool:
         """곧장 가는 단계로 넘기면 먼저 정차점 쪽으로 돌 각도(정렬 허용치 넘을 때만)가 옆 기물을 쓰는가."""
@@ -1018,6 +1037,15 @@ class MissionFSM:
         # 오차가 작을수록 느리게 돈다 — 한 속도(0.5 rad/s)로는 지연 동안 허용치를 넘어가
         # 좌우로 떨었다(2026-09-30). 데드밴드 아래로는 내리지 않는다.
         d = self.cfg.drive
+        # 거의 정반대(≥ 150°)면 처음 고른 방향을 끝까지 — 175° 와 185° 사이에서 위치 흔들림(회전 중 마커 3–5 cm)으로
+        # 짧은 쪽이 바뀌어 돌다 뒤집히는 것을 막는다(10-07 "큰 쪽으로 도는 것처럼 보인다").
+        if self._turn_latch is not None and self._now - self._turn_latch[1] <= 0.5 and abs(yaw_error_deg) > 90.0 \
+                and (yaw_error_deg >= 0) != (self._turn_latch[0] > 0):
+            yaw_error_deg = yaw_error_deg - 360.0 if yaw_error_deg > 0 else yaw_error_deg + 360.0
+        if abs(yaw_error_deg) >= 150.0 and (self._turn_latch is None or self._now - self._turn_latch[1] > 0.5):
+            self._turn_latch = (1.0 if yaw_error_deg >= 0 else -1.0, self._now)
+        elif self._turn_latch is not None:
+            self._turn_latch = (self._turn_latch[0], self._now) if abs(yaw_error_deg) > 90.0 else None
         sign = 1.0 if yaw_error_deg >= 0 else -1.0
         scale = min(1.0, abs(yaw_error_deg) / max(d.rotation_slow_deg, 1e-6))
         speed = max(d.rotation_min_rad_s, d.rotation_rad_s * scale)
@@ -1301,6 +1329,9 @@ class MissionFSM:
         others = self._other_pieces(pose)
         n = int(round(m.basket_stop_zone_half_m / m.basket_stop_step_m))
         offsets = [0.0] + [s * k * m.basket_stop_step_m for k in range(1, n + 1) for s in (-1.0, 1.0)]
+        if not self._carry_from_below(pose):
+            # 정차점 높이 근처(옆)에서 왔다 — 옆으로 가는 거리와 첫 회전을 줄이게 로봇 쪽 자리부터 본다(10-07).
+            offsets.sort(key=lambda dx: abs(cx + dx - pose.x))
         blocker: Optional[XY] = None
         c = self.cfg.planner
         for dx in offsets:
