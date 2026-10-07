@@ -46,8 +46,25 @@ def test_steps_aside_from_the_knight_by_the_basket():
     assert any("stop zone" in e for e in fsm.events)
 
 
-def test_whole_zone_blocked_halts_and_names_the_piece():
+def test_whole_zone_blocked_halts_after_retrying_and_names_the_piece():
     cx, cy = 0.99, 1.26                                                         # 바구니 정차점(가운데)
+    extra = {"rook": [(cx - 0.06, cy + 0.12)], "knight": [(cx + 0.06, cy + 0.12)]}
+    fsm, _ = _carrying(extra)
+    assert fsm.state == HostState.CARRY_TO_DEST                                 # 바로 멈추지 않는다
+    fsm._stall.update = lambda *a, **k: False                                   # 시험 로봇은 안 움직인다
+    pmap = {"queen": [(0.99, 0.82)], **extra}
+    t = 0.2
+    while fsm.state == HostState.CARRY_TO_DEST and t < 6.0:
+        fsm.step(P(0.99, 0.56), pmap, S(), t)
+        t += 0.1
+    assert fsm.state == HostState.HALTED and t > 3.0                            # 3 s 다시 본 뒤
+    assert "정차 구역" in fsm.halt_reason and "치워" in fsm.halt_reason and "(" in fsm.halt_reason
+
+
+def test_a_brief_blocked_map_right_after_the_grasp_does_not_halt():
+    """10-07: 잡은 순간 지도로 막혀 HALTED — 다음 사이클 지도로는 −4 cm 에 섰다."""
+    cx, cy = 0.99, 1.26
     fsm, _ = _carrying({"rook": [(cx - 0.06, cy + 0.12)], "knight": [(cx + 0.06, cy + 0.12)]})
-    assert fsm.state == HostState.HALTED
-    assert "정차 구역" in fsm.halt_reason and "치워" in fsm.halt_reason
+    assert fsm.state == HostState.CARRY_TO_DEST
+    fsm.step(P(0.99, 0.56), {"queen": [(0.99, 0.82)], "knight": [(1.106, 1.307)]}, S(), 0.3)   # 룩 유령 사라짐
+    assert fsm.state == HostState.CARRY_TO_DEST and fsm.dest_xy[0] < cx
