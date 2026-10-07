@@ -626,7 +626,10 @@ class MissionFSM:
         at_stop = dist <= m.place_arrive_tol_m      # 이미 정차점에 서 있다 — 곧장 갈 거리가 없다
         line_ok = self._line_clear(pose.xy, self.dest_xy)
         # 10-07: 정차점 2 cm 안에 서 있는데 정차점 자체가 나이트에서 13 cm 라 "직선 막힘"으로 영원히 서 있었다.
-        self.ready_to_advance = near and (line_ok or at_stop)
+        # 넘기면 곧장 가는 단계가 먼저 정차점 쪽으로 제자리에서 돈다(검사 없음). 그 회전이 옆 기물을 쓸면
+        # 넘기지 않고 운반(앞으로 빠져나간 뒤 돌기)을 잇는다 — 10-07 궤적: 넘긴 직후 +20° 돌며 상자 기물과 −1.9 cm.
+        turn_ok = not self._approach_turn_sweeps(pose)
+        self.ready_to_advance = near and ((line_ok and turn_ok) or at_stop)
         if near and not line_ok and not at_stop:
             if self._carry_line_blocked_since is None:
                 self._carry_line_blocked_since = self._now
@@ -743,6 +746,11 @@ class MissionFSM:
             return self._nudge_missed(f"nudge {moved:.2f}m and still {gap:+.2f}m off the stand-off")
         nav = self._drive.update(pose.xy, pose.yaw_deg, self.dest_xy)
         if nav.mode == DriveMode.ROTATE:
+            if self._turn_sweeps(pose, nav.yaw_error_deg):
+                # 정차점 쪽으로 돌면 옆 기물을 쓴다 — 밀고 돌지 않고 운반(경로 계획)으로 돌아가 다시 다가온다.
+                self._log(f"nudge: 정차점 쪽 {nav.yaw_error_deg:+.0f}° 회전이 옆 기물을 쓴다 — 운반으로 돌아간다")
+                self._enter(HostState.CARRY_TO_DEST)
+                return self._stop("nudge turn blocked by a piece")
             return self._rotate(nav.yaw_error_deg)
         if nav.mode == DriveMode.STOP:
             # 시퀀서가 직진<->회전 사이에 한 사이클 세운다. 그 한 박자를 지킨다.
@@ -961,6 +969,23 @@ class MissionFSM:
                 out.append(p)
         return out
 
+    def _turn_sweeps(self, pose: Pose, turn_deg: float) -> bool:
+        """여기서 turn_deg 만큼 제자리에서 돌면 차체가 다른 기물(목표·쥔 것 제외)을 쓰는가(실제 각 + 3°)."""
+        pl = self._planner
+        return any(_dist(pose.xy, o) < pl.turn_safe
+                   and pl._sweep_hits(pose.xy, pose.yaw_deg, turn_deg, o, slack_deg=self.SWEEP_SLACK_DEG)
+                   for o in self._other_pieces(pose))
+
+    def _approach_turn_sweeps(self, pose: Pose) -> bool:
+        """곧장 가는 단계로 넘기면 먼저 정차점 쪽으로 돌 각도(정렬 허용치 넘을 때만)가 옆 기물을 쓰는가."""
+        if self.dest_xy is None or _dist(pose.xy, self.dest_xy) < self.cfg.planner.min_heading_dist_m:
+            return False
+        bearing = math.degrees(math.atan2(self.dest_xy[1] - pose.y, self.dest_xy[0] - pose.x))
+        turn = wrap_deg(bearing - pose.yaw_deg)
+        if abs(turn) <= self.cfg.planner.yaw_tolerance_deg:
+            return False
+        return self._turn_sweeps(pose, turn)
+
     def _piece_label_near(self, xy: XY) -> str:
         """xy 에 가장 가까운 기물(목표·쥔 것 제외)의 라벨 — 사람에게 알릴 때."""
         pose = self._pose_now
@@ -1135,6 +1160,10 @@ class MissionFSM:
             self.ready_to_advance = False
             nav = self._drive.update(pose.xy, pose.yaw_deg, self.dest_xy)
             if nav.mode == DriveMode.ROTATE:
+                if self._turn_sweeps(pose, nav.yaw_error_deg):
+                    self._log(f"to hand: 정차점 쪽 {nav.yaw_error_deg:+.0f}° 회전이 옆 기물을 쓴다 — 운반으로 돌아간다")
+                    self._enter(HostState.CARRY_TO_DEST)
+                    return self._stop("hand turn blocked by a piece")
                 return self._rotate(nav.yaw_error_deg)
             if nav.mode == DriveMode.STOP:
                 return self._stop("to hand stop (settle)")
