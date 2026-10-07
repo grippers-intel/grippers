@@ -642,7 +642,8 @@ class MissionFSM:
         # 옆 기물을 쓴다. 정차점보다 충분히 아래에 있으면 정면 ±cone 안에서만 넘기고, 아니면 바로 아래 지점으로 간다.
         # 10-07 마지막 상자: 주변에 기물이 없는데도 가운데(0.93, 0.96)로 갔다 올라갔다 — 곧장 가서 정차점에서
         # 도는 회전이 기물을 쓸 때만 아래에서 들어간다.
-        low = self._carry_from_below(pose) and self._straight_arrival_sweeps(pose)
+        # 옆에서(정차점 높이) 올 때도 같다 — 10-07 상자: 오른쪽에서 퀸 바로 아래로 옆으로 들어가 1.3 cm, 거기서 돌다 −2 cm.
+        low = self.dest_kind != "hand" and bool(self.dest_box) and self._straight_arrival_sweeps(pose)
         bearing = math.degrees(math.atan2(self.dest_xy[1] - pose.y, self.dest_xy[0] - pose.x))
         in_cone = (not low) or abs(wrap_deg(bearing - 90.0)) <= m.basket_approach_cone_deg
         line_ok = self._line_clear(pose.xy, self.dest_xy)
@@ -907,9 +908,17 @@ class MissionFSM:
                     return ahead
                 if not at_basket and not self._turn_blocked(pose, other, held):
                     return self._rotate_other_way(turn, other)
-                if at_basket and self._turn_min_gap(pose, other) > self._turn_min_gap(pose, turn) + 0.005:
-                    # 양쪽 다 쓸고 앞은 바구니 — 덜 붙는 쪽으로(후진 없음). 정차 구역이 돌 수 있는 자리를 먼저 고르니 드물다.
-                    return self._rotate_other_way(turn, other)
+                if at_basket:
+                    g_turn, g_other = self._turn_min_gap(pose, turn), self._turn_min_gap(pose, other)
+                    if max(g_turn, g_other) < 0.0:
+                        # 어느 쪽으로 돌아도 닿는다(10-07 상자: 퀸 옆에서 돌다 −2 cm). 밀고 돌지 않고 사람을 부른다.
+                        who = min(self._other_pieces(pose), key=lambda o: _dist(o, pose.xy), default=None)
+                        name = self._piece_label_at(who) if who is not None else "기물"
+                        self._halt(f"바구니 앞에서 어느 쪽으로 돌아도 {name} 에 닿는다 — 치워 주세요")
+                        return self._stop("halted")
+                    if g_other > g_turn + 0.005:
+                        # 양쪽 다 쓸고 앞은 바구니 — 덜 붙는 쪽으로(후진 없음). 정차 구역이 돌 수 있는 자리를 먼저 고르니 드물다.
+                        return self._rotate_other_way(turn, other)
             else:
                 self._other_way_logged = False
             self._exit_logged = False
@@ -1088,8 +1097,13 @@ class MissionFSM:
         """지금 자리에서 정차점으로 곧장 가면(도착 방향 = 그 직선) 정차점에서 몸을 돌릴 때 기물을 쓰는가.
 
         팔이 ±max_arm_yaw_deg 를 메우니 그 밖만 몸으로 돈다(place_turn_to_deg 까지). 직선 자체가 막혔어도 True."""
-        m = self.cfg.mission
+        m, pl = self.cfg.mission, self._planner
         if not self._line_clear(pose.xy, self.dest_xy):
+            return True
+        # 직선이 기물의 회전 반경(turn_safe) 안을 지나면 메카넘 흐름(15 cm 에 ~10°)만으로 닿는다 — 아래로 돌아간다.
+        if _dist(pose.xy, self.dest_xy) > m.place_arrive_tol_m and any(
+                segment_circle_clearance(pose.xy, self.dest_xy, o)[0] < pl.turn_safe
+                and _dist(o, self.dest_xy) >= pl.turn_safe for o in self._other_pieces(pose)):
             return True
         b = math.degrees(math.atan2(self.dest_xy[1] - pose.y, self.dest_xy[0] - pose.x))
         residual = facing_error_deg(self._basket(), self.dest_xy, b)
@@ -1106,7 +1120,8 @@ class MissionFSM:
         """
         m = self.cfg.mission
         sx, sy = self.dest_xy
-        lo = max(sy - m.basket_pre_stop_m, pose.y)
+        # 아래에서 왔으면 지금 높이보다 낮게는 안 간다. 옆(정차점 높이)에서 왔으면 정차점 30 cm 아래부터 본다.
+        lo = max(sy - m.basket_pre_stop_m, pose.y) if pose.y < sy - m.basket_low_margin_m else sy - m.basket_pre_stop_m
         hi = sy - m.basket_low_margin_m
         others = self._other_pieces(pose)
         clear = self._planner.safe + 0.02
