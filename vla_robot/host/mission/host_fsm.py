@@ -460,7 +460,9 @@ class MissionFSM:
             sweep = [o for o in obstacles
                      if _dist(pose.xy, o) < pl.turn_safe
                      and pl._sweep_hits(pose.xy, pose.yaw_deg, face, o, slack_deg=self.SWEEP_SLACK_DEG)]
-            if abs(face) > m.grasp_face_tol_deg and sweep:
+            # 작은 회전(≤ narrow_hold_enter_deg, 모서리 ~5 cm)은 평소처럼 맞추고 잡는다 — 10-07: +14° 를
+            # 미뤘다가 앞으로 나가 공을 밀었다. 미루는 건 우회하다 옆구리로 들어온 큰 회전(90° 룩)만.
+            if abs(face) > max(m.grasp_face_tol_deg, self.cfg.planner.narrow_hold_enter_deg) and sweep:
                 entering = False
                 if not self._zone_wait_logged:
                     self._zone_wait_logged = True
@@ -877,7 +879,12 @@ class MissionFSM:
                 return None
             if any(segment_hits_rect(pose.xy, end, r) for r in pl._active_keepouts(pose.xy)):
                 return None
-            for o in obstacles:                 # 앞면에 닿는 기물이 있으면 더 못 간다
+            # 앞면에 닿는 기물이 있으면 더 못 간다. **잡으러 가는 기물도** 본다 — 10-07: 그걸 빼고 봐서
+            # 0.3 m 앞의 공 쪽으로 16 cm 나가 공을 17 cm 밀었다.
+            front = list(obstacles)
+            if self.state == HostState.APPROACH_PIECE and self.target_xy is not None:
+                front.append(self.target_xy)
+            for o in front:
                 dx, dy = o[0] - pose.x, o[1] - pose.y
                 lx, ly = dx * fwd[0] + dy * fwd[1], -dx * fwd[1] + dy * fwd[0]
                 if lx > 0 and abs(ly) < pl.safe and lx - s < hl + pad:
