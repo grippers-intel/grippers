@@ -186,6 +186,8 @@ class PlannerConfig:
 
 @dataclass(frozen=True)
 class DriveConfig:
+    # 제자리 회전이 옆 기물을 쓸 때(틈 안에서 잡은 직후 등) 앞이 비었으면 이만큼까지 앞으로 나간 뒤 돈다(10-07).
+    turn_exit_max_m: float = 0.30
     linear_mps: float = 0.15
     # 제자리 회전 최고 속도. 오차가 rotation_slow_deg 아래면 비례로 줄이되 rotation_min_rad_s
     # 아래로는 안 내린다(데드밴드 아래면 안 돈다).
