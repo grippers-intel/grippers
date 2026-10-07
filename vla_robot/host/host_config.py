@@ -179,12 +179,6 @@ class PlannerConfig:
 
 @dataclass(frozen=True)
 class DriveConfig:
-    # 제자리 회전 전 주변 확인(2026-10-05): 회전 반경 안에 다른 기물이 있으면 먼저 직진·후진으로
-    # 물러나 간격을 만든 뒤 돈다(옆걸음 없음). turn_guard_max_m 넘게 물러나야 하거나 물러날 자리가
-    # 막혔으면 예전처럼 그냥 돈다(로그를 남긴다).
-    turn_guard: bool = True
-    turn_guard_mps: float = 0.08
-    turn_guard_max_m: float = 0.15
     linear_mps: float = 0.15
     # 제자리 회전 최고 속도. 오차가 rotation_slow_deg 아래면 비례로 줄이되 rotation_min_rad_s
     # 아래로는 안 내린다(데드밴드 아래면 안 돈다).
