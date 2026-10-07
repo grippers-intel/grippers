@@ -32,6 +32,7 @@ from typing import Optional
 from host_config import HostConfig
 from localization.pose import Pose
 from mission.base_monitor import BaseRunawayMonitor, BaseSpinMonitor, BaseStallMonitor
+from mission.trajectory_log import body_gap
 from mission.basket_target import BasketTarget, basket_target, facing_error_deg
 from planning.planner import (DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold,
                               segment_circle_clearance, segment_hits_rect, wrap_deg)
@@ -1280,7 +1281,7 @@ class MissionFSM:
 
         y 는 정차점 그대로(더 붙으면 돌 때 상자에 닿고, 덜 붙으면 팔이 테두리를 못 넘는다), x 만
         가운데 ±basket_stop_zone_half_m 에서 basket_stop_step_m 간격으로 가운데부터 본다. 후보마다
-          - 바구니를 보고(90°) 섰을 때, 그리고 ±max_arm_yaw_deg 돌아도 차체가 다른 기물에 닿지 않는가
+          - 바구니를 보고(90° ± basket_stop_turn_deg) 섰을 때 차체와 다른 기물 사이가 basket_stop_clear_m 이상인가
         를 본다(10-07: 정차점 한 점이라 바로 옆 나이트와 바퀴가 1 cm 였다). 들어오는 길은 여기서 보지 않는다 —
         어느 쪽에서든 직선이 비면 넘기는 운반 단계 규칙(직선 검사 · 5 s HALTED)이 맡는다.
         """
@@ -1290,14 +1291,17 @@ class MissionFSM:
         n = int(round(m.basket_stop_zone_half_m / m.basket_stop_step_m))
         offsets = [0.0] + [s * k * m.basket_stop_step_m for k in range(1, n + 1) for s in (-1.0, 1.0)]
         blocker: Optional[XY] = None
+        c = self.cfg.planner
         for dx in offsets:
             stop = (cx + dx, cy)
             if not (pl.x0 <= stop[0] <= pl.x1):
                 continue
+            # 바구니를 보고(90° ± basket_stop_turn_deg) 섰을 때 차체 바깥면–기물 가장자리가 basket_stop_clear_m 이상.
+            # 10-07: ±15° 회전 · 여유 4 cm 로 보다가 "그렇게 여유가 없진 않았다" — 정차점 몸 회전은 팔로만 넣기 규칙이 따로 본다.
             swept = [o for o in others
-                     if _dist(stop, o) < pl.turn_safe
-                     and pl._sweep_hits(stop, 90.0 - m.max_arm_yaw_deg, 2 * m.max_arm_yaw_deg, o,
-                                        slack_deg=self.SWEEP_SLACK_DEG)]
+                     if any(body_gap(stop[0], stop[1], 90.0 + a, o, c.robot_length_m, c.robot_width_m,
+                                     c.piece_obstacle_radius_m) < m.basket_stop_clear_m
+                            for a in range(-int(m.basket_stop_turn_deg), int(m.basket_stop_turn_deg) + 1))]
             if swept:
                 blocker = blocker or swept[0]
                 continue

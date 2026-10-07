@@ -55,6 +55,7 @@ def test_at_the_stop_point_hands_over_even_if_a_piece_is_close():
     knight = (dest[0] + 0.06, dest[1] + 0.12)
     at = (dest[0] - 0.016, dest[1] - 0.011)
     held = (at[0], at[1] + 0.26)
+    fsm._box_stop_chosen = True                                # 정차 구역 고르기 없이 가운데 정차점 그대로(이 규칙만 본다)
     fsm.step(P(*at), {"queen": [held], "knight": [knight]}, S(), 0.1)
     assert fsm.state != HostState.CARRY_TO_DEST
 
