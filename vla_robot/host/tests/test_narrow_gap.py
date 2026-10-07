@@ -76,6 +76,7 @@ def _carry_from_inside_gap(extra=None):
     from mission.host_fsm import HostState
     fsm.state = HostState.CARRY_TO_DEST
     fsm.dest_xy = (1.55, 1.20)                                              # 오른쪽으로 크게 돌아야 한다
+    fsm._box_stop_chosen = True                                             # 정차 구역 고르기는 건너뛴다(이 시험의 목적지 그대로)
     pmap = {"soccer": [(0.97, 1.10)], "box": [(1.13, 0.78)], "rook": [(0.78, 0.79)], **(extra or {})}
     return fsm, pmap
 

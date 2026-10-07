@@ -285,6 +285,12 @@ class MissionConfig:
     # 정차점에서 몸을 돌리면 바구니 옆 기물에 닿을 때, 팔(±max_arm_yaw_deg)로만 넣어도 되는 모자란 각의 상한.
     # 10° 면 팔 0.32 m 끝에서 ~5.6 cm 옆 — 바구니 폭 21 cm 안. 넘으면 다시 접근(그래도 안 되면 HALTED). 10-07
     place_arm_only_max_short_deg: float = 10.0
+    # 바구니 정차 구역(2026-10-07): 정차점 한 점 대신, 앞뒤(y)는 그대로 두고 좌우(x)로 ±basket_stop_zone_half_m
+    # 안에서 차체가 다른 기물에 닿지 않는 자리 중 가운데에 가장 가까운 곳에 선다. 겨누는 점도 그만큼(최대
+    # basket_aim_shift_max_m) 옮겨 팔을 많이 틀지 않게 한다. 구역 어디에도 못 서면 들어가기 전에 HALTED.
+    basket_stop_zone_half_m: float = 0.08
+    basket_stop_step_m: float = 0.02
+    basket_aim_shift_max_m: float = 0.06
     # 정차점 근처(place_trigger_dist_m 안)에서 정차점까지 직선이 이만큼 계속 막혀 있으면 HALTED 로 사람을 부른다(10-07).
     carry_line_block_s: float = 5.0
     # 상자 앞에서 앞으로 밀어 볼 수 있는 최대 거리. 여기까지 가도 정면에 못 서면
