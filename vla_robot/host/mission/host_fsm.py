@@ -177,6 +177,7 @@ class MissionFSM:
         self._narrow_logged = False
         self._exit_logged = False
         self._carry_line_blocked_since: Optional[float] = None
+        self._zone_wait_logged = False
         self._pose_now: Optional[Pose] = None
         self._pmap_now: Optional[PieceMap] = None
         self._unwind_sign = -1.0
@@ -446,7 +447,25 @@ class MissionFSM:
         # 파지 구역: 들어갈 때는 트리거 거리(기물 범위 상한이 더 크면 그것), 나갈 때는 히스테리시스를 더한다.
         trigger = max(m.grasp_trigger_dist_m, hi)
         limit = trigger + (m.grasp_zone_hysteresis_m if self._in_grasp_zone else 0.0)
-        self._in_grasp_zone = dist <= limit
+        entering = dist <= limit and not self._in_grasp_zone
+        if entering:
+            # 우회하다 옆구리로 들어오면 여기서 크게 돌아야 하고, 그 자리는 우회하게 만든 기물 바로 옆이다
+            # (10-07: 룩을 끼고 돌아 0.33 m 안에 들어와 90° 돌다 룩을 6 cm 밀었다). 그 회전이 옆 기물을
+            # 쓸면 아직 구역에 들어가지 않고 경로 주행을 잇는다 — 앞으로 빠져나간 뒤 공을 보고 다가온다.
+            bearing = math.degrees(math.atan2(self.target_xy[1] - pose.y, self.target_xy[0] - pose.x))
+            face = wrap_deg(bearing - pose.yaw_deg)
+            pl = self._planner
+            sweep = [o for o in obstacles
+                     if _dist(pose.xy, o) < pl.turn_safe
+                     and pl._sweep_hits(pose.xy, pose.yaw_deg, face, o, slack_deg=self.SWEEP_SLACK_DEG)]
+            if abs(face) > m.grasp_face_tol_deg and sweep:
+                entering = False
+                if not self._zone_wait_logged:
+                    self._zone_wait_logged = True
+                    self._log(f"grasp zone: 여기서 {face:+.0f}° 돌면 옆 기물에 닿는다 — 경로로 더 가서 돈다")
+        self._in_grasp_zone = self._in_grasp_zone and dist <= limit or entering
+        if self._in_grasp_zone:
+            self._zone_wait_logged = False
         if self._in_grasp_zone:
             self._clear_nav()
             bearing = math.degrees(math.atan2(self.target_xy[1] - pose.y, self.target_xy[0] - pose.x))
