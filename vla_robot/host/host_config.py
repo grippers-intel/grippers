@@ -289,7 +289,8 @@ class MissionConfig:
     # 안에서 차체가 다른 기물에 닿지 않는 자리 중 가운데에 가장 가까운 곳에 선다. 겨누는 점도 그만큼(최대
     # basket_aim_shift_max_m) 옮겨 팔을 많이 틀지 않게 한다. 구역 어디에도 못 서면 들어가기 전에 HALTED.
     basket_stop_zone_half_m: float = 0.10
-    basket_stop_turn_deg: float = 5.0        # 구역 자리 검사에서 바구니 정면 ± 이 각도(방향 오차)까지 본다
+    basket_stop_turn_deg: float = 15.0       # 구역 자리 검사에서 바구니 정면 ± 이 각도까지 본다(팔이 메우는 만큼 틀어져 선다)
+    basket_stop_pos_err_m: float = 0.02      # 구역 자리 검사에서 좌우로 이만큼 어긋나 서는 것까지 본다
     basket_stop_clear_m: float = 0.015       # 차체 바깥면–기물 가장자리 최소 간격
     basket_stop_zone_retry_s: float = 3.0    # 설 자리가 없으면 운반을 이으며 이만큼 다시 보고 그래도 없으면 HALTED
     basket_stop_step_m: float = 0.02

@@ -1309,10 +1309,13 @@ class MissionFSM:
                 continue
             # 바구니를 보고(90° ± basket_stop_turn_deg) 섰을 때 차체 바깥면–기물 가장자리가 basket_stop_clear_m 이상.
             # 10-07: ±15° 회전 · 여유 4 cm 로 보다가 "그렇게 여유가 없진 않았다" — 정차점 몸 회전은 팔로만 넣기 규칙이 따로 본다.
+            # 실제로 서는 방식대로 본다: 팔이 ±max_arm_yaw_deg 를 메우니 몸은 그만큼 틀어진 채 서고(10-07 실기 79°),
+            # 정차 위치도 좌우로 basket_stop_pos_err_m 어긋난다(0.95 고르고 0.964 에 섰다 → 나이트와 1.2 cm).
+            turn, err = int(m.basket_stop_turn_deg), m.basket_stop_pos_err_m
             swept = [o for o in others
-                     if any(body_gap(stop[0], stop[1], 90.0 + a, o, c.robot_length_m, c.robot_width_m,
+                     if any(body_gap(stop[0] + e, stop[1], 90.0 + a, o, c.robot_length_m, c.robot_width_m,
                                      c.piece_obstacle_radius_m) < m.basket_stop_clear_m
-                            for a in range(-int(m.basket_stop_turn_deg), int(m.basket_stop_turn_deg) + 1))]
+                            for a in range(-turn, turn + 1) for e in (-err, 0.0, err))]
             if swept:
                 blocker = blocker or swept[0]
                 continue
