@@ -190,6 +190,7 @@ class MissionFSM:
         self._pre_stop: Optional[tuple[XY, XY]] = None   # (정차점, 거쳐 갈 점) — 정차점이 바뀌면 다시 정한다
         self._other_way_logged = False
         self._halted_from: Optional[HostState] = None
+        self._zone_first_logged: Optional[XY] = None
         self._prev_step_now: Optional[float] = None
         self._last_turn_at: Optional[float] = None
         self._along_turning = False
@@ -710,8 +711,11 @@ class MissionFSM:
         # 직선과 도착 회전이 비면 멀리서도 곧장 간다(경로 계획의 중간점을 거치면 목표가 바뀌며 한 번 더 돈다).
         # 멀리서 넘길 때는 정차점 쪽 첫 회전을 경로 주행과 같은 기준(계획기 회전 반경 + 차체)으로 본다 — 쓸리면 경로
         # 주행이 앞으로 빠져나간 뒤 돈다(틈 안에서 잡은 경우, 10-07).
+        # 길게 곧장 가는 동안 흐름(회전 뒤 7.5° 등)으로 몇 cm 옆으로 밀린다 — 직선이 기물에서 직진 여유보다
+        # DIRECT_EXTRA_M 더 떨어져야 곧장 간다(10-08 시뮬: 여유 2 cm 로 지나가다 상자 기물과 −0.3 cm).
         direct = (self.dest_kind != "hand" and dist <= m.place_direct_max_m
-                  and line_ok and turn_ok and in_cone and not self._direct_turn_blocked(pose, obstacles))
+                  and line_ok and turn_ok and in_cone and not self._direct_turn_blocked(pose, obstacles)
+                  and (near or self._line_clear(pose.xy, self.dest_xy, slack=-self.DIRECT_EXTRA_M)))
         self.ready_to_advance = (near and ((line_ok and turn_ok and in_cone) or at_stop)) or direct
         if near and not line_ok and not at_stop:
             if self._carry_line_blocked_since is None:
@@ -918,7 +922,10 @@ class MissionFSM:
         if dist > 1e-6 and all(segment_circle_clearance(pose.xy, ahead, o)[0] >= self._planner.turn_safe for o in others):
             c = self.cfg.planner
             enter = 90.0 if dist < c.no_turn_near_m else                 max(c.yaw_enter_deg, math.degrees(math.asin(min(1.0, m.place_lateral_tol_m / dist))))
-        nav = self._drive.update(pose.xy, pose.yaw_deg, goal, enter_deg=enter)
+        # 길게 곧장 갈 때는 출발 방향을 좁게(2.5°) 맞춘다 — 5° 로 1 m 가면 옆 8.7 cm 라 가는 중에 다시 서서 맞췄다(10-08 시뮬).
+        c = self.cfg.planner
+        tol = c.narrow_yaw_tolerance_deg if dist > self.LONG_RUN_M else None
+        nav = self._drive.update(pose.xy, pose.yaw_deg, goal, enter_deg=enter, tol_deg=tol)
         if nav.mode == DriveMode.ROTATE:
             if self._turn_sweeps(pose, nav.yaw_error_deg):
                 # 정차점 쪽으로 돌면 옆 기물을 쓴다 — 밀고 돌지 않고 운반(경로 계획)으로 돌아가 다시 다가온다.
@@ -961,6 +968,9 @@ class MissionFSM:
         13 s 가 25 s 에 들어가 복구 직후 "제자리에 못 섰다" HALTED)."""
         if self.state == HostState.NUDGE_BOX:
             self._nudge_started += dt
+
+    #: 이보다 멀리 곧장 가면 출발 방향을 좁게 맞춘다(옆 오차 = 거리 × sin 각).
+    LONG_RUN_M = 0.40
 
     def _nudge_missed(self, why: str) -> HostCommand:
         m = self.cfg.mission
@@ -1325,6 +1335,9 @@ class MissionFSM:
             return False
         return self._turn_sweeps(pose, turn)
 
+    #: 멀리서(place_trigger_dist_m 밖) 곧장 갈 때 직선이 기물에서 더 떨어져야 하는 거리.
+    DIRECT_EXTRA_M = 0.04
+
     def _direct_turn_blocked(self, pose: Pose, obstacles) -> bool:
         """정차점 쪽으로 제자리에서 돌 회전이 경로 주행 기준(_turn_blocked)으로 막히는가."""
         if self.dest_xy is None or _dist(pose.xy, self.dest_xy) < self.cfg.planner.min_heading_dist_m:
@@ -1574,12 +1587,44 @@ class MissionFSM:
         a = self.cfg.arena
         return a.workspace_x[0] <= p[0] <= a.workspace_x[1] and a.workspace_y[0] <= p[1] <= a.workspace_y[1]
 
+    def _zone_spot_blockers(self, stop: XY, others) -> list[XY]:
+        """정차 구역의 한 자리(stop)에 바구니를 보고(90° ± basket_stop_turn_deg, 좌우 ± basket_stop_pos_err_m) 섰을 때
+        차체–기물 간격이 basket_stop_clear_m 아래인 기물들."""
+        m, c = self.cfg.mission, self.cfg.planner
+        turn, err = int(m.basket_stop_turn_deg), m.basket_stop_pos_err_m
+        return [o for o in others
+                if _dist(stop, o) < self.ZONE_REACH_M
+                and any(body_gap(stop[0] + e, stop[1], 90.0 + a, o, c.robot_length_m, c.robot_width_m,
+                                 c.piece_obstacle_radius_m) < m.basket_stop_clear_m
+                        for a in range(-turn, turn + 1) for e in (-err, 0.0, err))]
+
+    #: 정차 자리에서 이보다 먼 기물은 그 자리를 막을 수 없다(모서리 반경 0.16 + 기물 · 간격 · 좌우 오차 넉넉히).
+    ZONE_REACH_M = 0.30
+    #: 정차 구역 선분에서 회전 반경(turn_safe) + 이만큼 안의 기물은 들어와 돌 때 걸린다 — 먼저 치운다.
+    ZONE_APPROACH_EXTRA_M = 0.03
+
+    def _zone_has_spot(self, box: str, pieces) -> bool:
+        """box 앞 정차 구역에 지금 기물들(pieces)로 설 자리가 하나라도 있는가."""
+        m, pl = self.cfg.mission, self._planner
+        cx, cy = self._box_front_xy(box)
+        near = [o for o in pieces if abs(o[0] - cx) < m.basket_stop_zone_half_m + self.ZONE_REACH_M
+                and abs(o[1] - cy) < self.ZONE_REACH_M]
+        n = int(round(m.basket_stop_zone_half_m / m.basket_stop_step_m))
+        for k in range(-n, n + 1):
+            stop = (cx + k * m.basket_stop_step_m, cy)
+            if pl.x0 <= stop[0] <= pl.x1 and not self._zone_spot_blockers(stop, near):
+                return True
+        return False
+
     def _nearest_piece(self, pmap: PieceMap, robot_xy: XY, skips: list[XY],
                        labels: Optional[tuple[str, ...]] = None) -> Optional[tuple[str, XY]]:
         """작업영역 안 + 목적지 상자가 있는 라벨 + 보류되지 않은 것 중 최근접.
-        y 가 작업영역 밖이면 상자 자리(이미 옮긴 것)라 뺀다. labels 가 있으면 그 라벨만(지시)."""
-        best, best_d = None, math.inf
+        y 가 작업영역 밖이면 상자 자리(이미 옮긴 것)라 뺀다. labels 가 있으면 그 라벨만(지시).
+
+        단, 바구니 앞 정차 구역을 막고 있는 기물이 대상 중에 있으면 **그것부터** — 다른 것을 먼저 쥐면 넣으러 가서
+        설 자리가 없어 HALTED 다(10-08 시뮬: 무작위 배치 12개 중 6개가 첫 기물에서 멈췄다)."""
         r = self.cfg.mission.skip_radius_m
+        cands: list[tuple[float, str, XY]] = []
         for label, pts in pmap.items():
             if label not in self.cfg.mission.piece_dest_box:
                 continue
@@ -1588,10 +1633,35 @@ class MissionFSM:
             for p in pts:
                 if not self._in_workspace(p) or any(_dist(p, s) <= r for s in skips):
                     continue
-                d = _dist(p, robot_xy)
-                if d < best_d:
-                    best, best_d = (label, p), d
-        return best
+                cands.append((_dist(p, robot_xy), label, p))
+        if not cands:
+            return None
+        cands.sort(key=lambda t: t[0])
+        everything = [p for pts in pmap.values() for p in pts]
+        near_r = self._planner.turn_safe + self.ZONE_APPROACH_EXTRA_M
+        for box in {self.cfg.mission.piece_dest_box[lb] for _d, lb, _p in cands}:
+            if box not in self.cfg.arena.boxes:
+                continue
+            mine = [(d, lb, p) for d, lb, p in cands if self.cfg.mission.piece_dest_box[lb] == box]
+            first = None
+            if not self._zone_has_spot(box, everything):
+                first = next(((lb, p) for _d, lb, p in mine
+                              if self._zone_has_spot(box, [q for q in everything if q != p])), None)
+            if first is None:
+                # 정차 구역 바로 앞(회전 반경 + 여유 안)의 기물도 먼저 — 들어와 바구니 쪽으로 돌 때 닿아 HALTED(10-08 시뮬
+                # 무작위 40판 중 2판: 정차점 17~19 cm 아래의 룩·나이트).
+                cx, cy = self._box_front_xy(box)
+                m = self.cfg.mission
+                first = next(((lb, p) for _d, lb, p in mine
+                              if abs(p[0] - cx) <= m.basket_stop_zone_half_m + near_r and _dist(p, (min(max(p[0], cx - m.basket_stop_zone_half_m), cx + m.basket_stop_zone_half_m), cy)) < near_r), None)
+            if first is not None:
+                lb, p = first
+                if self._zone_first_logged != p:
+                    self._zone_first_logged = p
+                    self._log(f"{box} 앞 정차 구역을 {lb} ({p[0]:.2f}, {p[1]:.2f}) 이(가) 막거나 바로 앞에 있다 — 그것부터")
+                return lb, p
+        _d, lb, p = cands[0]
+        return lb, p
 
     def _basket(self, box: Optional[str] = None) -> BasketTarget:
         """목적지 상자의 투입 목표. 팔이 겨누는 점은 상자 중심이 아니다."""
@@ -1643,11 +1713,7 @@ class MissionFSM:
             # 10-07: ±15° 회전 · 여유 4 cm 로 보다가 "그렇게 여유가 없진 않았다" — 정차점 몸 회전은 팔로만 넣기 규칙이 따로 본다.
             # 실제로 서는 방식대로 본다: 팔이 ±max_arm_yaw_deg 를 메우니 몸은 그만큼 틀어진 채 서고(10-07 실기 79°),
             # 정차 위치도 좌우로 basket_stop_pos_err_m 어긋난다(0.95 고르고 0.964 에 섰다 → 나이트와 1.2 cm).
-            turn, err = int(m.basket_stop_turn_deg), m.basket_stop_pos_err_m
-            swept = [o for o in others
-                     if any(body_gap(stop[0] + e, stop[1], 90.0 + a, o, c.robot_length_m, c.robot_width_m,
-                                     c.piece_obstacle_radius_m) < m.basket_stop_clear_m
-                            for a in range(-turn, turn + 1) for e in (-err, 0.0, err))]
+            swept = self._zone_spot_blockers(stop, others)
             if swept:
                 blocker = blocker or swept[0]
                 continue
