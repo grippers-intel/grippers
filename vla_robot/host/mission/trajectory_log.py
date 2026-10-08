@@ -7,6 +7,9 @@
 차체 간격 = 차체 사각형(마커 중심 기준 길이 robot_length_m · 폭 robot_width_m)에서 기물 중심까지의
 거리 - 기물 반경(piece_obstacle_radius_m). 0 이하면 닿았다고 본다(상자 기물 모서리는 0.8 cm 더 나온다).
 쥔 기물·잡으러 가는 기물은 빼고 따로 적는다(target_m).
+
+veh_v · arm_v = Pi 가 보내는 차체·팔 배터리 전압(V, 1 Hz 갱신 · 모르면 빈칸, 10-08 추가). 대기·직진·회전별 전압 하락,
+전압과 무응답·회전 뒤 흐름·파지 빈손의 관계를 나중에 보려고 남긴다.
 """
 from __future__ import annotations
 
@@ -18,7 +21,7 @@ from typing import Optional
 
 COLUMNS = ["t", "state", "cmd", "linear_x", "angular_z", "stop", "pose_ok", "cams",
            "x", "y", "yaw", "target", "target_m", "nearest", "nearest_center_m", "nearest_gap_m",
-           "sub_goal_x", "sub_goal_y"]
+           "sub_goal_x", "sub_goal_y", "veh_v", "arm_v"]
 
 
 def body_gap(x: float, y: float, yaw_deg: float, o: tuple[float, float], length: float, width: float,
@@ -29,6 +32,14 @@ def body_gap(x: float, y: float, yaw_deg: float, o: tuple[float, float], length:
     lx, ly = dx * math.cos(th) + dy * math.sin(th), -dx * math.sin(th) + dy * math.cos(th)
     ex, ey = max(abs(lx) - length / 2.0, 0.0), max(abs(ly) - width / 2.0, 0.0)
     return math.hypot(ex, ey) - piece_r
+
+
+def _volts(v) -> str:
+    """전압 칸. 0 이하(Pi 가 모른다고 보냄)·없음은 빈칸."""
+    try:
+        return f"{float(v):.2f}" if v and float(v) > 0 else ""
+    except (TypeError, ValueError):
+        return ""
 
 
 class TrajectoryLog:
@@ -45,7 +56,7 @@ class TrajectoryLog:
     def new(cls, logs_dir: Path, planner_cfg) -> "TrajectoryLog":
         return cls(logs_dir / time.strftime("traj_%Y%m%d_%H%M%S.csv"), planner_cfg)
 
-    def row(self, t: float, fsm, pose, cmd, pmap) -> None:
+    def row(self, t: float, fsm, pose, cmd, pmap, status=None) -> None:
         c = self._c
         ok = bool(pose.ok)
         others: list[tuple[str, tuple[float, float]]] = []
@@ -75,6 +86,7 @@ class TrajectoryLog:
             f"{pose.x:.3f}" if ok else "", f"{pose.y:.3f}" if ok else "", f"{pose.yaw_deg:.1f}" if ok else "",
             getattr(fsm, "target_label", "") or "", tgt_m, near_lb, near_c, near_gap,
             f"{sg[0]:.3f}" if sg else "", f"{sg[1]:.3f}" if sg else "",
+            _volts(getattr(status, "battery_v", 0.0)), _volts(getattr(status, "arm_v", 0.0)),
         ])
         now = time.monotonic()
         if now - self._last_flush >= 1.0:            # 강제 종료돼도 1 s 이상은 잃지 않게
