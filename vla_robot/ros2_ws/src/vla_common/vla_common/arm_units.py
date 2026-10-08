@@ -211,3 +211,18 @@ def hot_servos(temps, limit_c: float, valid_max_c: float) -> tuple[list[str], li
         elif t >= limit_c:
             hot.append(f"servo {sid} {t}°C")
     return hot, bogus
+
+
+def confirm_hot(read_hot, first_hot: list[str], tries: int = 2) -> list[str]:
+    """한 번 상한을 넘게 읽혔으면 tries 번 더 읽어 **매번** 넘은 서보만 남긴다.
+
+    2026-10-08: 막 켠 직후 첫 파지에서 servo 2 가 70°C 로 읽혀 중단 — 2.5 s 뒤 시도는 정상(그 사이 10°C 넘게
+    식을 수 없다). 온도는 몇 초에 몇 도씩 변하니, 다시 읽어 그대로면 진짜다. read_hot() 은 지금 넘은 목록.
+    """
+    hot = list(first_hot)
+    for _ in range(tries):
+        if not hot:
+            break
+        again = {h.split(" ")[1] for h in read_hot()}                     # "servo N T°C" -> N
+        hot = [h for h in hot if h.split(" ")[1] in again]
+    return hot
