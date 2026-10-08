@@ -305,6 +305,10 @@ class MissionConfig:
     # 알 수 없는 자세에서 관절 공간 직선 보간을 하면 그리퍼가 바닥을 쓸 수 있다
     # (기존 실기 2026-08-24). 벗어나 있으면 작업을 거부하고 사람에게 넘긴다.
     known_pose_tolerance_deg: float = 20.0
+    # 파지 뒤 쥔 기물을 조이는 세기(라벨별). 없으면 정책이 마지막으로 보낸 목표(대개 끝까지 닫힘)를 그대로 유지해
+    # 세게 조인다(2026-09-30 soccer 낙하 대응). 있으면 목표를 "지금 개도 − 이 값(%)" 으로 바꿔 덜 조인다 —
+    # 2026-10-08: 공을 세게 조이자 복귀 중 공이 튀어 나갔다(빈손 2번, 공이 25 cm 날아감).
+    hold_squeeze_pct_by_label: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
