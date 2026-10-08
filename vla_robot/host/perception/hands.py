@@ -189,6 +189,7 @@ class _HandWorker:
         self._new = threading.Event()
         self._stop = False
         self._last = 0.0
+        self.active = True               # False 면 추론하지 않는다(HandDetector.set_active)
         self._thread = threading.Thread(target=self._run, name=f"hands-{name}", daemon=True)
         self._thread.start()
 
@@ -223,6 +224,10 @@ class _HandWorker:
                 frame = self._frame
             if frame is None or self._stop:
                 continue
+            if not self.active:
+                with self._lock:
+                    self._result = None
+                continue
             try:
                 result = run_landmarker(self._lm, frame)
             except Exception as exc:  # noqa: BLE001 — 스레드가 죽으면 손이 영영 안 보인다
@@ -256,9 +261,21 @@ class HandDetector:
             self._workers[int(idx)] = _HandWorker(lm, f"cam{idx}", hcfg.min_infer_interval_s)
         self.ok = True
 
+    @property
+    def active(self) -> bool:
+        return any(w.active for w in self._workers.values())
+
+    def set_active(self, active: bool) -> None:
+        """손이 필요할 때만 돈다 — "가져와" 해석·손 대기·건네기 동안(10-08 사용자). 끄면 결과도 비운다."""
+        for w in self._workers.values():
+            w.active = active
+            if not active:
+                with w._lock:
+                    w._result = None
+
     def submit(self, cam_index: int, frame_bgr: np.ndarray) -> None:
         w = self._workers.get(int(cam_index))
-        if w is not None:
+        if w is not None and w.active:
             w.submit(frame_bgr.copy())
 
     def latest(self, cam_index: int) -> Optional[list[HandSighting]]:

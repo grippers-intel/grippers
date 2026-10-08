@@ -143,7 +143,11 @@ def test_desk_flow_to_order_and_ui(cfg):
     fsm.cancel_order()
 
     desk.submit("가져와", pmap)
-    desk.update(fsm)                                   # 손이 안 보인다 -> 접수하지 않고 카드
+    desk.update(fsm)                                   # 손이 안 보인다 -> 손 검출을 막 켰으니 잠깐 찾는다
+    s = ui.build(pose, pmap, fsm, None, 0.0, 10.0, desk=desk)
+    assert fsm.order is None and s["screen"] == "command" and desk.phase == "hand_wait"
+    desk._hand_wait_until = 0.0                        # 그래도 없으면 접수하지 않고 카드
+    desk.update(fsm)
     s = ui.build(pose, pmap, fsm, None, 0.0, 10.0, desk=desk)
     assert fsm.order is None and s["card"]["code"].startswith("E-220")
 
@@ -235,6 +239,10 @@ def test_desk_fetch_needs_a_visible_hand(cfg):
     fsm = MissionFSM(cfg)
     pmap = {"queen": [(0.9, 0.9)]}
     desk.submit("퀸 가져와", pmap)
+    assert desk.hands_wanted(fsm)                      # 해석 중 = "가져와"일 수 있다 -> 손 검출을 켠다
+    desk.update(fsm, hands=[])
+    assert desk.phase == "hand_wait" and fsm.order is None and desk.hands_wanted(fsm)
+    desk._hand_wait_until = 0.0
     desk.update(fsm, hands=[])
     card = desk.card()
     assert card["code"].startswith("E-220") and fsm.order is None
@@ -243,7 +251,16 @@ def test_desk_fetch_needs_a_visible_hand(cfg):
     fsm.cancel_order()
     desk.submit("퀸 가져와", pmap)
     desk.update(fsm, hands=[(0.10, 0.90)])
-    assert fsm.order.intent == "fetch"
+    assert fsm.order.intent == "fetch" and desk.hands_wanted(fsm)   # 건네는 동안 손 검출 유지
+    fsm.cancel_order()
+    desk.submit("퀸 가져와", pmap)                     # 해석이 끝났을 때 손이 아직 확인 전이면 기다렸다가 받는다
+    desk.update(fsm, hands=[])
+    assert desk.phase == "hand_wait"
+    desk.update(fsm, hands=[(0.10, 0.90)])
+    assert fsm.order.intent == "fetch" and desk.phase == "accepted"
+    fsm.cancel_order()
+    desk.dismiss()
+    assert not desk.hands_wanted(fsm)                  # 할 일이 없으면 끈다
 
 
 def test_ui_wording_for_handover(cfg):

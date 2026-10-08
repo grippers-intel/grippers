@@ -103,7 +103,7 @@ def main() -> int:
         else:
             import cv2
             from localization.aruco_localizer import Camera, RobotLocalizer, detect, draw_overlay, make_detector
-            from localization.cameras import open_cams, read_frames
+            from localization.cameras import grab_frames, open_cams, read_frames
             from perception.detector import make_detector as make_piece_detector
             from perception.hands import (HandDetector, hand_observations, make_hand_tracker,
                                           nearest_spot)
@@ -150,6 +150,7 @@ def main() -> int:
 
         period = 1.0 / cfg.mission.cycle_hz
         hz, hz_n, hz_t0, cycles = 0.0, 0, time.monotonic(), 0
+        last_processed = 0.0
         pose, pmap = Pose(), {}
 
         while not _stop:
@@ -159,67 +160,84 @@ def main() -> int:
                 pose, pmap = world.pose(), world.piece_map()
                 hands = list(world.hands)
             else:
-                frames = read_frames(caps)
-                dets = [{} if f is None else detect(aruco_detector, cv2.cvtColor(f, cv2.COLOR_BGR2GRAY))
-                        for f in frames]
-                pose = localizer.update(cams, dets)
-                obs = []
-                for idx, cam, frame in zip(indices, cams, frames):
-                    if frame is not None:
-                        piece_detector.submit(idx, frame)
-                    obs.append(observations_from_detections(cam, piece_detector.latest(idx),
-                                                            cfg.detector.conf_threshold,
-                                                            cfg.tracker.piece_radius_by_label))
-                pmap = tracker.update(obs, t0)
-                if args.log_piece and t0 - piece_log_at >= 1.0:
-                    piece_log_at = t0
-                    want = args.log_piece.split(",")
-                    labels = sorted({o.label for lst in obs for o in lst} | set(pmap)) if want == ["all"] else want
-                    for label in labels:
-                        seen = [f"{o.cam_name} ({o.x:.3f},{o.y:.3f})" for lst in obs for o in lst
-                                if o.label == label]
-                        fused = [f"({x:.3f},{y:.3f})" for x, y in pmap.get(label, [])]
-                        # 두 카메라가 같은 기물을 보면 반경 추정: 각자 자기 쪽 가장자리를 보므로
-                        # p_i = 중심 + r * (카메라 i 쪽 단위벡터) -> r = |p0 - p1| / |u0 - u1| (장판 어디서든)
-                        est = ""
-                        per = {o.cam_name: o for lst in obs for o in lst if o.label == label}
-                        named = {c.name: c for c in cams if getattr(c, "center", None) is not None}
-                        if len(per) == 2 and set(per) <= set(named):
-                            (n0, o0), (n1, o1) = sorted(per.items())
-                            us = []
-                            for n, o in ((n0, o0), (n1, o1)):
-                                cx, cy = float(named[n].center[0]), float(named[n].center[1])
-                                dx, dy = cx - o.x, cy - o.y
-                                k = (dx * dx + dy * dy) ** 0.5 or 1.0
-                                us.append((dx / k, dy / k))
-                            du = ((us[0][0] - us[1][0]) ** 2 + (us[0][1] - us[1][1]) ** 2) ** 0.5
-                            gap = ((o0.x - o1.x) ** 2 + (o0.y - o1.y) ** 2) ** 0.5
-                            if du > 0.3:
-                                est = f" · 차이 {gap * 100:.1f} cm -> 반경 추정 {gap / du:.3f} m"
-                        print(f"[piece] {label} 카메라별 " + (" · ".join(seen) or "없음")
-                              + " -> 지도 " + (" ".join(fused) or "없음") + est, flush=True)
-                hobs = []
-                if hand_detector.ok:
-                    for idx, frame in zip(indices, frames):
+                # 지시 대기 중이면 영상 풀기·ArUco·검출을 idle_process_period_s 마다만(10-08 CPU) — 사이에는 grab 만 하고
+                # 지난 위치·지도를 그대로 쓴다. ESTOP·HALTED 는 폭주를 지켜봐야 하고, 손을 보는 중("가져와" 해석)에는
+                # 손이 바로 잡혀야 해서 늘 돈다.
+                waiting = (fsm.idle and not fsm.estop and fsm.state != HostState.HALTED
+                           and not (hand_detector is not None and hand_detector.active))
+                if waiting and t0 - last_processed < cfg.cameras.idle_process_period_s:
+                    grab_frames(caps)
+                else:
+                    last_processed = t0
+                    frames = read_frames(caps)
+                    dets = [{} if f is None else detect(aruco_detector, cv2.cvtColor(f, cv2.COLOR_BGR2GRAY))
+                            for f in frames]
+                    pose = localizer.update(cams, dets)
+                    piece_detector.set_idle(fsm.idle)          # 지시 대기 중에는 Geti 를 2 s 간격으로(10-08 CPU)
+                    obs = []
+                    for idx, cam, frame in zip(indices, cams, frames):
                         if frame is not None:
-                            hand_detector.submit(idx, frame)
-                    hobs = hand_observations(cams, [hand_detector.latest(i) for i in indices],
-                                             cfg.hands, cfg.arena)
-                hands = hand_tracker.update([hobs], t0).get("hand", [])
-                spots = sorted(nearest_spot(h) for h in hands)
-                if spots != hand_spots:     # 손이 생기거나 사라지거나 자리를 옮길 때만 찍는다
-                    raw = " | 관측 " + ", ".join(f"{o.cam_name} ({o.x:.2f},{o.y:.2f})" for o in hobs) if hobs else ""
-                    print("[hands] " + (", ".join(f"{nearest_spot(h)} ({h[0]:.2f},{h[1]:.2f})"
-                                                  for h in hands) or "손 없음") + raw)
-                    hand_spots = spots
-                if args.show_cams:
-                    for idx, cam, frame, det in zip(indices, cams, frames, dets):
-                        if frame is not None:
-                            over = draw_overlay(frame.copy(), cam, det, pose, cfg.aruco.robot_marker_id)
-                            for s in (hand_detector.latest(idx) or []) if hand_detector.ok else []:
-                                c = tuple(int(v) for v in s.palm)
-                                cv2.circle(over, c, 10, (0, 140, 255), 2)
-                            cv2.imshow(cam.name, over)
+                            piece_detector.submit(idx, frame)
+                        obs.append(observations_from_detections(cam, piece_detector.latest(idx),
+                                                                cfg.detector.conf_threshold,
+                                                                cfg.tracker.piece_radius_by_label))
+                    pmap = tracker.update(obs, t0)
+                    if args.log_piece and t0 - piece_log_at >= 1.0:
+                        piece_log_at = t0
+                        want = args.log_piece.split(",")
+                        labels = sorted({o.label for lst in obs for o in lst} | set(pmap)) if want == ["all"] else want
+                        for label in labels:
+                            seen = [f"{o.cam_name} ({o.x:.3f},{o.y:.3f})" for lst in obs for o in lst
+                                    if o.label == label]
+                            fused = [f"({x:.3f},{y:.3f})" for x, y in pmap.get(label, [])]
+                            # 두 카메라가 같은 기물을 보면 반경 추정: 각자 자기 쪽 가장자리를 보므로
+                            # p_i = 중심 + r * (카메라 i 쪽 단위벡터) -> r = |p0 - p1| / |u0 - u1| (장판 어디서든)
+                            est = ""
+                            per = {o.cam_name: o for lst in obs for o in lst if o.label == label}
+                            named = {c.name: c for c in cams if getattr(c, "center", None) is not None}
+                            if len(per) == 2 and set(per) <= set(named):
+                                (n0, o0), (n1, o1) = sorted(per.items())
+                                us = []
+                                for n, o in ((n0, o0), (n1, o1)):
+                                    cx, cy = float(named[n].center[0]), float(named[n].center[1])
+                                    dx, dy = cx - o.x, cy - o.y
+                                    k = (dx * dx + dy * dy) ** 0.5 or 1.0
+                                    us.append((dx / k, dy / k))
+                                du = ((us[0][0] - us[1][0]) ** 2 + (us[0][1] - us[1][1]) ** 2) ** 0.5
+                                gap = ((o0.x - o1.x) ** 2 + (o0.y - o1.y) ** 2) ** 0.5
+                                if du > 0.3:
+                                    est = f" · 차이 {gap * 100:.1f} cm -> 반경 추정 {gap / du:.3f} m"
+                            print(f"[piece] {label} 카메라별 " + (" · ".join(seen) or "없음")
+                                  + " -> 지도 " + (" ".join(fused) or "없음") + est, flush=True)
+                    hobs = []
+                    if hand_detector.ok:
+                        # 손은 "가져와" 해석·손 대기·건네기 동안만 본다(10-08 사용자). 끄면 지도에서도 지운다.
+                        want = view.hands_wanted(fsm) if hasattr(view, "hands_wanted") else (
+                            fsm.order is not None and fsm.order.intent == "fetch")
+                        if want != hand_detector.active:
+                            hand_detector.set_active(want)
+                            if not want:
+                                hand_tracker.reset()
+                        for idx, frame in zip(indices, frames):
+                            if frame is not None:
+                                hand_detector.submit(idx, frame)
+                        hobs = hand_observations(cams, [hand_detector.latest(i) for i in indices],
+                                                 cfg.hands, cfg.arena)
+                    hands = hand_tracker.update([hobs], t0).get("hand", [])
+                    spots = sorted(nearest_spot(h) for h in hands)
+                    if spots != hand_spots:     # 손이 생기거나 사라지거나 자리를 옮길 때만 찍는다
+                        raw = " | 관측 " + ", ".join(f"{o.cam_name} ({o.x:.2f},{o.y:.2f})" for o in hobs) if hobs else ""
+                        print("[hands] " + (", ".join(f"{nearest_spot(h)} ({h[0]:.2f},{h[1]:.2f})"
+                                                      for h in hands) or "손 없음") + raw)
+                        hand_spots = spots
+                    if args.show_cams:
+                        for idx, cam, frame, det in zip(indices, cams, frames, dets):
+                            if frame is not None:
+                                over = draw_overlay(frame.copy(), cam, det, pose, cfg.aruco.robot_marker_id)
+                                for s in (hand_detector.latest(idx) or []) if hand_detector.ok else []:
+                                    c = tuple(int(v) for v in s.palm)
+                                    cv2.circle(over, c, 10, (0, 140, 255), 2)
+                                cv2.imshow(cam.name, over)
 
             status = link.latest_status()
             fsm.set_hands(hands)

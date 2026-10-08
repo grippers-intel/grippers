@@ -94,6 +94,9 @@ class CameraConfig:
     # C920 수동 초점, 카메라별 {인덱스: 값}(0 = 먼 곳). 오토포커스를 끄기만 하면 초점이
     # 멈춘 자리에 남는다. 팀이 쓰던 값 {0: 5, 1: 0}. 표에 없거나 음수면 오토포커스만 끈다.
     focus: dict[int, int] = field(default_factory=lambda: {0: 5, 1: 0})
+    # 지시를 기다리는 동안(로봇이 서 있다)에는 이 간격으로만 영상을 풀고 ArUco 를 찾는다. 그 사이에는 grab 만 해
+    # 카메라 버퍼를 비운다(오래된 프레임이 쌓이지 않게). 0 = 매 사이클(10-08 Host CPU 과다).
+    idle_process_period_s: float = 0.3
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,12 @@ class DetectorConfig:
     cache_dir: str = ".ov_cache"
     # 추론이 카메라당 ~0.8 s 라 쉬지 않고 돌리면 메인 루프가 1.7 Hz 로 떨어졌다.
     min_infer_interval_s: float = 0.3
+    # 지시를 기다리는 동안(할 일 없음 · HALTED · ESTOP)의 간격. 기물은 사람이 옮길 때만 움직인다(10-08: 대기 중에도
+    # Host 가 CPU 16스레드의 56 % — 그중 Geti 두 개가 36 %).
+    idle_infer_interval_s: float = 2.0
+    # OpenVINO 추론 스레드(카메라당). 0 = 기본(코어 전부). 10-08 집 실측: 기본 862 ms · 4 → 726 ms 로 오히려 빠르고
+    # (두 카메라가 같은 코어를 다투지 않는다) CPU 는 같다.
+    num_threads: int = 4
     conf_threshold: float = 0.6
     empty_labels: tuple[str, ...] = ("No object", "Empty")
 

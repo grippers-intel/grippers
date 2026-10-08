@@ -189,6 +189,11 @@ class WebView:
                              else ("not opened", None))
         print(f"[view] 시연 UI: {self.url} ({how}) — 창에서 q = 종료 (창을 X 로 닫으면 Ctrl+C 로 끝낼 것)")
 
+    def hands_wanted(self, fsm) -> bool:
+        """손 검출이 필요한가 — 지시 쪽(CommandDesk) 판단 + 마이크로 말하는 중("룩 가져와"일 수 있다)."""
+        vphase = getattr(self.voice, "phase", "idle")
+        return self.desk.hands_wanted(fsm) or vphase in ("listening", "transcribing", "final")
+
     def update(self, pose, piece_map, fsm, pi_status, link_age_s: float, hz: float,
                hands=()) -> Optional[str]:
         action = self._next_action(fsm, piece_map)   # 먼저 — 버튼이 띄운 알림이 이번 화면에 바로 실린다
