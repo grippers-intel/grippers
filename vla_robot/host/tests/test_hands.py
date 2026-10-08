@@ -93,7 +93,7 @@ def test_fixed_height_would_split_a_raised_hand(cfg):
     z = cfg.hands.hand_z_m
     y0 = c0.pixels_to_plane(_sighting_at(K0, R0, t0, 0.075, 0.915, 0.45).palm.reshape(1, 2), z)[0, 1]
     y1 = c1.pixels_to_plane(_sighting_at(K1, R1, t1, 0.075, 0.915, 0.45).palm.reshape(1, 2), z)[0, 1]
-    assert y0 - y1 > cfg.hands.merge_dist_m
+    assert y0 - y1 > 0.15                                     # 10-01 실측 24 cm(당시 손 묶는 거리 15 cm)
 
 
 def test_two_hands_stay_two(cfg):
@@ -183,3 +183,19 @@ def test_two_real_hands_far_apart_stay_two_when_unpaired(cfg):
     pts = locate_hands([c0, c1], [[_sighting_at(K0, R0, t0, 0.33, 0.12, z)],
                                   [_sighting_at(K1, R1, t1, 1.905, 0.915, z)]], cfg.hands)
     assert len(pts) == 2
+
+
+def test_a_moving_hand_stays_one_hand(cfg):
+    """10-08: 왼쪽 가장자리(바닥 마커 1번 근처)에서 손을 내밀며 움직이자 L1 (0.16, 0.42) 과 ? (0.36, 0.61) 둘 —
+    15 cm 넘게 옮긴 손이 새 손이 되고 옛 자리가 hold_s 동안 남았다."""
+    cam, K, R, t = _synthetic_cam(cfg)
+    tracker = make_hand_tracker(cfg.hands, cfg.tracker)
+    z = cfg.hands.hand_z_m
+    now = 0.0
+    for k in range(12):                                         # 0.16, 0.42 -> 0.36, 0.61 로 1.2 s 동안
+        x, y = 0.16 + 0.20 * k / 11, 0.42 + 0.19 * k / 11
+        obs = [hand_observations([cam], [[_sighting_at(K, R, t, x, y, z)]], cfg.hands, cfg.arena)]
+        hands = tracker.update(obs, now).get(HAND_LABEL, [])
+        if now >= cfg.hands.confirm_s:
+            assert len(hands) == 1, (now, hands)
+        now += 0.1

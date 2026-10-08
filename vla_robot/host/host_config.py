@@ -130,7 +130,7 @@ class HandConfig:
     edges: tuple[str, ...] = ("front", "left", "right")
     edge_band_m: float = 0.50
     outside_m: float = 0.30               # 장판 밖으로 내민 손도 이만큼은 받는다
-    merge_dist_m: float = 0.15
+    merge_dist_m: float = 0.35            # 10-08 0.15 -> 0.35: 움직이는 손의 옛 자리가 2 s 남아 손이 둘로 보였다
     confirm_s: float = 0.6                # 이만큼 계속 보여야 손으로 인정
     hold_s: float = 2.0                   # 잠깐 놓쳐도 지도에서 지우지 않는다(10-05)
     max_hands: int = 2
