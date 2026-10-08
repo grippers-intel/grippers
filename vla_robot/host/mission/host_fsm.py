@@ -181,6 +181,7 @@ class MissionFSM:
         self._pre_stop: Optional[tuple[XY, XY]] = None   # (정차점, 거쳐 갈 점) — 정차점이 바뀌면 다시 정한다
         self._other_way_logged = False
         self._halted_from: Optional[HostState] = None
+        self._prev_step_now: Optional[float] = None
         self._along_turning = False
         self._along_logged = False
         self._tight_turn_logged = False
@@ -264,6 +265,8 @@ class MissionFSM:
     def step(self, pose: Pose, piece_map: PieceMap, pi_status: Optional[PiStatus],
              now: float) -> HostCommand:
         """한 사이클. 차체가 명령을 무시하면(탑뷰로 판단) Pi 에 컨트롤러 복구를 맡기고 기다린다."""
+        dt = 0.0 if self._prev_step_now is None else max(0.0, now - self._prev_step_now)
+        self._prev_step_now = now
         self._now = now
         if pose.ok:
             self._last_pose_xy = pose.xy
@@ -271,6 +274,7 @@ class MissionFSM:
         if self._recover_started is not None and not self.estop:
             waiting = self._wait_base_recovery(pi_status)
             if waiting is not None:
+                self._pause_timers(dt)
                 return waiting
         if (pi_status is not None and pi_status.base_recovering and not self.estop
                 and self.state in _DRIVE_HOST_STATES):
@@ -280,6 +284,7 @@ class MissionFSM:
             self._runaway.reset()
             self._spin.reset()
             self._clear_nav()
+            self._pause_timers(dt)
             self.last_cmd_text = "base reset (wait)"
             return HostCommand(WIRE_STATE[self.state], stop=True, label=self.target_label or "")
         cmd = self._step_states(pose, piece_map, pi_status, now)
@@ -832,8 +837,16 @@ class MissionFSM:
         if dist < self.cfg.planner.min_heading_dist_m:
             return self._rotate(residual) if abs(residual) > self.cfg.planner.yaw_tolerance_deg else \
                 HostCommand(WIRE_STATE[self.state], linear_x=self.cfg.drive.nudge_mps, label=self.target_label or "")
-        nav = self._drive.update(pose.xy, pose.yaw_deg, goal,
-                                 enter_deg=self._enter_deg(pose, goal, self._other_pieces(pose)))
+        others = self._other_pieces(pose)
+        enter = self._enter_deg(pose, goal, others)
+        if enter is not None:
+            # 바구니 앞에서는 도착해서 몸을 돌려야 한다 — 틀어진 채 가는 길이 기물의 회전 반경(turn_safe) 안을 지나면
+            # 넓히지 않는다(10-08 공: 8~9° 틀어진 채 퀸 옆 2.9 cm 에 도착, 24° 를 어느 쪽으로도 못 돌아 HALTED).
+            th = math.radians(pose.yaw_deg)
+            ahead = (pose.x + dist * math.cos(th), pose.y + dist * math.sin(th))
+            if any(segment_circle_clearance(pose.xy, ahead, o)[0] < self._planner.turn_safe for o in others):
+                enter = None
+        nav = self._drive.update(pose.xy, pose.yaw_deg, goal, enter_deg=enter)
         if nav.mode == DriveMode.ROTATE:
             if self._turn_sweeps(pose, nav.yaw_error_deg):
                 # 정차점 쪽으로 돌면 옆 기물을 쓴다 — 밀고 돌지 않고 운반(경로 계획)으로 돌아가 다시 다가온다.
@@ -859,6 +872,12 @@ class MissionFSM:
         k = (edge - pose.y) / (ay - pose.y)
         cx = pose.x + k * (ax - pose.x)
         return bx - w + m.basket_rim_margin_m <= cx <= bx + w - m.basket_rim_margin_m
+
+    def _pause_timers(self, dt: float) -> None:
+        """차체 컨트롤러 복구로 서 있던 시간은 바구니 앞 맞추기 제한 시간에 넣지 않는다(10-08 룩: 회전 폭주 복구
+        13 s 가 25 s 에 들어가 복구 직후 "제자리에 못 섰다" HALTED)."""
+        if self.state == HostState.NUDGE_BOX:
+            self._nudge_started += dt
 
     def _nudge_missed(self, why: str) -> HostCommand:
         m = self.cfg.mission
