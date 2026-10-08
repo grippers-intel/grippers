@@ -777,10 +777,11 @@ class MissionFSM:
             self._enter(HostState.CARRY_TO_DEST)
             return self._stop("nudge blocked by a piece")
         # 멀리서 곧장 오면(place_direct_max_m) 오는 시간만큼 더 준다.
-        if self._now - self._nudge_started > m.nudge_timeout_s + self._nudge_start_dist / self.cfg.drive.nudge_mps:
+        limit_s = m.nudge_timeout_s + self._nudge_start_dist / self.cfg.drive.nudge_mps
+        if self._now - self._nudge_started > limit_s:
             # 2026-09-30: 상자 앞에서 "물러나기 <-> 밀기"를 끝없이 되풀이한 적이 있다. 여기서 더
             # 버티지 않고 운반 단계로 돌아가 다시 접근한다.
-            return self._nudge_missed(f"no stand-off after {m.nudge_timeout_s:.0f}s at the box")
+            return self._nudge_missed(f"no stand-off after {limit_s:.0f}s at the box")
         # 정차점은 dest_xy 다 — 상자 앞 box_approach_margin_m(0.22), 금지 구역 바로 밖이고
         # 거기서 제자리 회전해도 차체가 상자에 닿지 않는 자리다. **더 붙지 않는다**: 팔이 모자라면 차를 밀어 넣는 게 아니라 팔을 재야 한다
         # (2026-09-23 시뮬에서 조준점까지 붙였더니 차가 주행 구역 밖으로 나가 다음 경로를
@@ -806,6 +807,10 @@ class MissionFSM:
                   else m.place_arrive_tol_m + hyst / 2.0)
         close = (-m.place_min_gap_m <= gap <= gap_hi
                  and (dist <= m.place_lateral_tol_m + hyst or rim_ok))
+        if dist < self.cfg.planner.min_heading_dist_m and gap >= -m.place_min_gap_m:
+            # 정차점 5 cm 안 — 시퀀서가 방향을 못 잰다. 도착으로 보고 바구니 쪽 몸 회전(쓸림 검사 · 반대쪽 · 팔로만)으로 간다.
+            # 10-08 검토: 따로 돌던 분기가 쓸림 검사 없이 바구니 쪽으로 돌았다.
+            close = True
         # 정차점 가까이에서 바구니까지만 조금 멀다 — 정차점으로 돌아가지 않고 겨누는 점을 보고 그 선을 따라 붙는다.
         # 바구니까지 place_arrive_tol_m 넘게 멀 때 시작하고, 시작했으면 place_here_gap_m 까지 붙는다.
         # 서 있는 채 넘어왔을 때(잡은 자리가 정차점 가까이), 또는 달려오다 그대로 가면 정차점 옆 place_lateral_tol_m 밖에
@@ -889,10 +894,11 @@ class MissionFSM:
                         self._tight_turn_logged = True
                         self._log(f"바구니 앞 몸 회전: 양쪽 다 옆 기물과 빠듯하다(짧은 쪽 {g_turn * 100:.1f} · "
                                   f"반대 {g_other * 100:.1f} cm) — 덜 붙는 쪽으로")
-                    if g_other > g_turn + 0.005:
+                    if self._prefer_other_side(g_turn, g_other):
                         return self._rotate_other_way(residual, residual - math.copysign(360.0, residual))
                     return self._rotate(residual)
-                return self._nudge_missed(f"바구니 옆 기물 — 몸을 돌리면 닿고 팔로는 {short:.1f}° 모자란다")
+                return self._nudge_missed(f"바구니 옆 기물 — 몸을 돌리면 닿고 팔로는 {short:.1f}° 모자란다",
+                                          at_stop_halts=True)
             if not self._nudge_turn_logged:
                 self._nudge_turn_logged = True
                 self._log(f"arm cannot cover {residual:+.1f}도 (limit ±{m.max_arm_yaw_deg:.0f}) — "
@@ -906,9 +912,6 @@ class MissionFSM:
         # 12° 넘을 때마다 서서 다시 돌았다). 정차점이 5 cm 안이면 방향을 못 재 지금 방향으로 곧장 갔다(퀸, 바구니 반대로
         # 6 cm) — 그때는 정차점이 아니라 겨누는 점을 본다.
         goal = self.dest_xy
-        if dist < self.cfg.planner.min_heading_dist_m:
-            return self._rotate(residual) if abs(residual) > self.cfg.planner.yaw_tolerance_deg else \
-                HostCommand(WIRE_STATE[self.state], linear_x=self.cfg.drive.nudge_mps, label=self.target_label or "")
         others = self._other_pieces(pose)
         # 다시 돌기 시작하는 문턱. 바구니 앞은 상자 금지 구역 바로 앞이라 운반용 판단(_enter_deg, 앞길이 금지 구역에 닿으면
         # 기본 12°)을 쓰지 않는다. 틀어진 길이 기물의 회전 반경(turn_safe) 밖이면:
@@ -972,10 +975,21 @@ class MissionFSM:
     #: 이보다 멀리 곧장 가면 출발 방향을 좁게 맞춘다(옆 오차 = 거리 × sin 각).
     LONG_RUN_M = 0.40
 
-    def _nudge_missed(self, why: str) -> HostCommand:
+    @staticmethod
+    def _prefer_other_side(g_turn: float, g_other: float) -> bool:
+        """양쪽 회전이 다 빠듯할 때 반대쪽으로 돌까. 짧은 쪽이 닿으면(간격 < 0) 반대쪽, 둘 다 닿지 않으면 반대쪽이
+        5 mm 넘게 넉넉할 때만(짧은 쪽이 자연스럽다). 10-08 검토: 짧은 쪽 −0.2 cm · 반대 +0.2 cm 에서 짧은 쪽으로 돌았다."""
+        if g_turn < 0.0 <= g_other:
+            return True
+        return g_other > g_turn + 0.005
+
+    def _nudge_missed(self, why: str, at_stop_halts: bool = False) -> HostCommand:
+        """상자 앞에 못 섰다 — 운반으로 돌아가 다시 다가간다(place_retry_max 번). at_stop_halts 면 이미 정차점에 서
+        있을 때 바로 HALTED — 운반이 곧바로 같은 자리로 넘겨 같은 결과가 되는 경우(몸 회전이 막힌 경우)만 쓴다."""
         m = self.cfg.mission
         pose = self._pose_now
-        if pose is not None and self.dest_xy is not None and _dist(pose.xy, self.dest_xy) <= m.place_arrive_tol_m:
+        if at_stop_halts and pose is not None and self.dest_xy is not None \
+                and _dist(pose.xy, self.dest_xy) <= m.place_arrive_tol_m:
             # 이미 정차점에 서 있다 — 운반으로 돌아가도 곧바로 여기로 다시 넘어와 같은 결과다(10-08: 0.2 s 에 3번).
             self._halt(f"could not stand in front of {self.dest_box}: {why} — 치워 주세요")
             return self._stop("halted")
@@ -1107,7 +1121,7 @@ class MissionFSM:
                         name = self._piece_label_at(who) if who is not None else "기물"
                         self._halt(f"바구니 앞에서 어느 쪽으로 돌아도 {name} 에 닿는다 — 치워 주세요")
                         return self._stop("halted")
-                    if g_other > g_turn + 0.005:
+                    if self._prefer_other_side(g_turn, g_other):
                         # 양쪽 다 쓸고 앞은 바구니 — 덜 붙는 쪽으로(후진 없음). 정차 구역이 돌 수 있는 자리를 먼저 고르니 드물다.
                         return self._rotate_other_way(turn, other)
             else:
@@ -1437,10 +1451,14 @@ class MissionFSM:
             # 사람이 치웠다 — 쥔 채 멈췄으면 운반부터(정차 자리를 다시 고른다. 10-08: 상자 앞 맞추기로 곧장 가면
             # 막혔던 예전 자리를 그대로 썼다), 잡기 전에 멈췄으면 다가가기부터.
             held = (HostState.CARRY_TO_DEST, HostState.NUDGE_BOX, HostState.FACE_HAND, HostState.PLACE)
-            if self._halted_from in held:
+            if self._halted_from in held and self.dest_xy is not None:
                 prev = HostState.CARRY_TO_DEST
             elif self._halted_from in (HostState.APPROACH_PIECE, HostState.GRASP) and self.target_xy is not None:
                 prev = HostState.APPROACH_PIECE
+            else:
+                # 쥔 것도 다가가던 것도 없다 — 처음(대상 고르기)부터. 예전에는 상자 앞 맞추기로 가서 정차점 없이 돌았다.
+                prev = HostState.SEARCH_TARGET
+            self._halted_from = None
         if prev == HostState.SEARCH_TARGET:
             self._clear_target()
         self.halt_reason = None

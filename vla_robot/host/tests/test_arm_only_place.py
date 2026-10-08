@@ -86,3 +86,29 @@ def test_back_from_halted_while_holding_rechooses_the_stop():
     assert fsm.state == HostState.HALTED
     fsm._go_back()
     assert fsm.state == HostState.CARRY_TO_DEST and not fsm._box_stop_chosen
+
+
+def test_tight_turn_never_picks_the_touching_side():
+    """10-08 검토: 짧은 쪽 −0.2 cm(닿음) · 반대 +0.2 cm 에서 "반대가 5 mm 넘게 넉넉할 때만" 규칙으로 짧은 쪽을 골랐다."""
+    pick = MissionFSM._prefer_other_side
+    assert pick(-0.002, 0.002)                    # 짧은 쪽이 닿으면 반대쪽
+    assert not pick(0.004, 0.006)                 # 둘 다 안 닿고 차이 2 mm — 짧은 쪽
+    assert pick(0.004, 0.012)                     # 반대가 8 mm 넉넉 — 반대쪽
+
+
+def test_inside_5cm_of_the_stop_turns_with_the_sweep_checks():
+    """10-08 검토: 정차점 5 cm 안 분기가 쓸림 검사 없이 바구니 쪽으로 돌았다. 이제 도착으로 보고 몸 회전 규칙을 탄다 —
+    옆 기물에 막히면 돌지 않는다."""
+    fsm, pose, pmap = _at_stop(30.0)                                       # 정차점에 서서 30° 남음 · 뒤에 나이트
+    sx, sy = fsm.dest_xy
+    near = P(sx + 0.03, sy, pose.yaw_deg)                                  # 정차점 3 cm 옆
+    cmd = fsm.step(near, pmap, S(), 1.0)
+    assert cmd.angular_z == 0.0                                            # 쓸리는 회전은 하지 않는다
+
+
+def test_back_from_halted_without_a_target_starts_over():
+    """10-08 검토: 대상 없이 멈췄을 때 ← 가 상자 앞 맞추기로 가 정차점 없이 돌았다 — 처음부터 다시."""
+    fsm = MissionFSM(_cfg())
+    fsm._halt("test")
+    fsm._go_back()
+    assert fsm.state == HostState.SEARCH_TARGET and fsm._halted_from is None
