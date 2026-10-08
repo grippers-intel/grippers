@@ -139,6 +139,19 @@ class DriveCommand:
     dist_to_waypoint: float
 
 
+#: 회전 뒤 직진 시작 때 더 도는 몫을 이 시간보다 오래 돈 회전에만 뺀다(그보다 짧은 보정은 끝까지 돈다).
+TURN_LEAD_MIN_S = 0.5
+
+
+def lead_err(err_deg: float, rot_sign: float, turned_s: float, lead_deg: float) -> float:
+    """회전을 멈출지 볼 때 쓰는 오차. 제자리 회전 뒤 직진을 시작하면 차체가 **돈 방향으로** lead_deg 더 돈다
+    (10-08 base_trace 35번: 7.5 ± 1.5°, 회전 크기·사이 정지와 무관) — 그만큼 남기고 멈춘다.
+    TURN_LEAD_MIN_S 넘게 돈 회전에서, 아직 같은 방향으로 남았고 90° 안일 때만. 시퀀서와 상자 앞 겨누는 선 붙기가 같이 쓴다."""
+    if turned_s < TURN_LEAD_MIN_S or rot_sign == 0.0 or err_deg * rot_sign <= 0.0 or abs(err_deg) >= 90.0:
+        return err_deg
+    return err_deg - math.copysign(min(lead_deg, abs(err_deg)), rot_sign)
+
+
 class DriveSequencer:
     """차량을 항상 정면으로만 달리게 한다(메카넘이지만 제어 단순화를 위해 직진 전용).
 
@@ -157,8 +170,8 @@ class DriveSequencer:
         self._rot_sign = 0.0
         self._rot_cycles = 0
 
-    #: 일찍 멈추기는 이만큼(사이클) 넘게 돈 회전에만 — 직진 시작 때 더 도는 것은 돈 뒤에만 생긴다(10 Hz 에서 0.5 s).
-    LEAD_MIN_CYCLES = 5
+    #: 사이클 길이(s) — 돈 시간을 셀 때. Host 루프 10 Hz.
+    CYCLE_S = 0.1
 
     def reset(self) -> None:
         self._mode = None
@@ -195,9 +208,7 @@ class DriveSequencer:
             if self._rot_sign == 0.0:
                 self._rot_sign = 1.0 if err >= 0 else -1.0
             self._rot_cycles += 1
-            if self._rot_cycles > self.LEAD_MIN_CYCLES and abs(err) < 90.0:
-                # 직진을 시작하면 돈 방향으로 lead 만큼 더 돈다 — 그만큼 남기고 멈춘다(10-08 base_trace).
-                err = err - math.copysign(min(self.lead, abs(err)), self._rot_sign) if err * self._rot_sign > 0 else err
+            err = lead_err(err, self._rot_sign, (self._rot_cycles - 1) * self.CYCLE_S, self.lead)
         else:
             self._rot_sign, self._rot_cycles = 0.0, 0
         aligned = abs(err) <= tol

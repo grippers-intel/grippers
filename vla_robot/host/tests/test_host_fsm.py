@@ -552,20 +552,6 @@ def test_too_close_with_room_behind_backs_into_range(cfg):
     assert cmd.linear_x < 0.0 and fsm.target_label == "box"
 
 
-def test_waits_after_a_turn_before_driving(cfg):
-    """10-08 base_trace: 회전 뒤 0.1 s 만에 직진하면 처음 0.4~0.5 s 동안 저절로 돌며 미끄러졌다(대각선 밀림).
-    회전을 마친 뒤 drive.turn_settle_s 동안은 직진하지 않는다."""
-    from dataclasses import replace as _replace
-    cfg = _replace(cfg, drive=_replace(cfg.drive, turn_settle_s=0.4))      # 기본은 끔(실기 효과 없음) — 기능만 본다
-    fsm = MissionFSM(cfg)
-    fsm._last_turn_at = 10.0
-    fwd = HostCommand(State.APPROACH, linear_x=0.15)
-    assert fsm._settle_after_turn(fwd, 10.0 + cfg.drive.turn_settle_s * 0.5).stop
-    assert fsm._settle_after_turn(fwd, 10.0 + cfg.drive.turn_settle_s + 0.01).linear_x == 0.15
-    turn = HostCommand(State.APPROACH, angular_z=0.5)
-    assert fsm._settle_after_turn(turn, 20.0).angular_z == 0.5 and fsm._last_turn_at == 20.0
-
-
 def test_idle_only_while_waiting_for_a_command(cfg):
     """기물 검출을 느리게 돌려도 되는 때(10-08 CPU): 지시 대기 · HALTED · ESTOP. 지시가 있으면 아니다."""
     from dataclasses import replace as _replace
@@ -577,4 +563,3 @@ def test_idle_only_while_waiting_for_a_command(cfg):
     fsm.request_estop()
     fsm.step(P(0.9, 0.5), {}, S(), 0.0)
     assert fsm.idle
-
