@@ -138,3 +138,19 @@ def test_backing_off_as_told_is_not_a_runaway():
     back = HostCommand(State.APPROACH_BOX, linear_x=-0.15)
     assert not any(m.update(0.1 * k, back, P(1.0, 1.30 - 0.015 * k), True) for k in range(10))
 
+
+def test_backing_off_right_after_driving_forward_is_not_a_runaway():
+    """10-08 검토: 정차점을 지나쳐 앞으로 가다 곧바로 물러나면(사이 정지 없음) 직전 전진이 "반대로 간다"로 잡혀
+    보드 리셋이 났을 것이다. 명령 방향이 바뀌면 처음부터 본다."""
+    m = _mon()
+    fwd = HostCommand(State.APPROACH_BOX, linear_x=0.15)
+    back = HostCommand(State.APPROACH_BOX, linear_x=-0.15)
+    y, t = 1.20, 0.0
+    for _ in range(8):                                     # 0.8 s 앞으로(북쪽)
+        assert not m.update(t, fwd, P(1.0, y), True)
+        y += 0.015
+        t += 0.1
+    for _ in range(4):                                     # 곧바로 물러나기 — 관성으로 한 사이클 더 간 뒤 뒤로
+        assert not m.update(t, back, P(1.0, y), True)
+        y -= 0.01
+        t += 0.1

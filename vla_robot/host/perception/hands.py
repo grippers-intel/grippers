@@ -236,7 +236,8 @@ class _HandWorker:
             finally:
                 self._last = time.monotonic()
             with self._lock:
-                self._result = result
+                # 추론 중에 꺼졌으면 버린다 — 꺼진 뒤에는 새 프레임이 안 오니 남으면 유령 손이 된다(10-08 검토).
+                self._result = result if self.active else None
 
 
 class HandDetector:
@@ -268,9 +269,9 @@ class HandDetector:
     def set_active(self, active: bool) -> None:
         """손이 필요할 때만 돈다 — "가져와" 해석·손 대기·건네기 동안(10-08 사용자). 끄면 결과도 비운다."""
         for w in self._workers.values():
-            w.active = active
-            if not active:
-                with w._lock:
+            with w._lock:
+                w.active = active
+                if not active:
                     w._result = None
 
     def submit(self, cam_index: int, frame_bgr: np.ndarray) -> None:

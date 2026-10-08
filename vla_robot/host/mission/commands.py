@@ -46,6 +46,7 @@ class CommandDesk:
             self.note = ("앞 명령을 해석하는 중입니다 — 잠시만요", "CMD", "caution")
             return
         self.text, self.result, self.failure = text, None, None
+        self._pending, self._hand_wait_until = None, None          # 새 명령이면 앞의 보류 지시는 버린다
         self.visible = visible_labels(self.cfg, pmap)
         if not self.visible:
             self.phase, self.failure = "failed", "empty"
@@ -54,7 +55,10 @@ class CommandDesk:
             self.phase = "interpreting"
 
     def dismiss(self) -> None:
+        # 보류한 "가져와"도 버린다 — 남겨 두면 손 검출이 계속 켜져 있고(hands_wanted), 나중 "바구니에 넣기"가
+        # 묵은 지시를 받는다(10-08 검토).
         self.phase, self.failure = "idle", None
+        self._pending, self._hand_wait_until = None, None
 
     def pick_label(self, label: str, fsm) -> None:
         """E-210 카드에서 사람이 직접 고른 라벨 — 해석 없이 바로 지시로."""

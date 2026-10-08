@@ -261,6 +261,15 @@ def test_desk_fetch_needs_a_visible_hand(cfg):
     fsm.cancel_order()
     desk.dismiss()
     assert not desk.hands_wanted(fsm)                  # 할 일이 없으면 끈다
+    desk.submit("퀸 가져와", pmap)                     # 손 없음 카드를 닫으면(취소) 보류 지시도 버린다(10-08 검토)
+    desk.update(fsm, hands=[])
+    desk._hand_wait_until = 0.0
+    desk.update(fsm, hands=[])
+    assert desk.card()["code"].startswith("E-220") and desk.hands_wanted(fsm)
+    desk.dismiss()
+    assert not desk.hands_wanted(fsm)
+    desk.to_basket(fsm)
+    assert fsm.order is None                           # 묵은 지시가 접수되지 않는다
 
 
 def test_ui_wording_for_handover(cfg):

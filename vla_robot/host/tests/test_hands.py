@@ -222,3 +222,30 @@ def test_hand_worker_runs_only_when_active(monkeypatch):
     finally:
         w.stop()
 
+
+def test_hand_result_finished_after_switching_off_is_dropped(monkeypatch):
+    """10-08 검토: 추론이 도는 중에 끄면 그 결과가 끈 뒤에 저장돼 유령 손으로 남았다."""
+    import threading
+    import time
+    import perception.hands as H
+    started, release = threading.Event(), threading.Event()
+
+    def slow(lm, frame):
+        started.set()
+        release.wait(2.0)
+        return [HandSighting(np.zeros((21, 2)), 0.9)]
+
+    monkeypatch.setattr(H, "run_landmarker", slow)
+    w = H._HandWorker(object(), "cam0", 0.0)
+    try:
+        w.submit(np.zeros((4, 4, 3), np.uint8))
+        assert started.wait(2.0)
+        with w._lock:
+            w.active = False                           # HandDetector.set_active(False) 와 같다
+            w._result = None
+        release.set()
+        time.sleep(0.2)
+        assert w.latest() is None
+    finally:
+        release.set()
+        w.stop()
