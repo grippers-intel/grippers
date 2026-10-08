@@ -1271,12 +1271,6 @@ class MissionFSM:
         self._log(f"pre-stop: 정차점 아래에 기물 없는 점이 없다 — 정차점으로 바로 간다")
         return None
 
-    def _carry_from_below(self, pose: Pose) -> bool:
-        """바구니로 가는데 정차점보다 basket_low_margin_m 넘게 아래에 있는가(아래에서 똑바로 들어갈 수 있다)."""
-        if self.dest_kind == "hand" or not self.dest_box or self.dest_xy is None:
-            return False
-        return pose.y < self.dest_xy[1] - self.cfg.mission.basket_low_margin_m
-
     def _approach_turn_sweeps(self, pose: Pose) -> bool:
         """곧장 가는 단계로 넘기면 먼저 정차점 쪽으로 돌 각도(정렬 허용치 넘을 때만)가 옆 기물을 쓰는가."""
         if self.dest_xy is None or _dist(pose.xy, self.dest_xy) < self.cfg.planner.min_heading_dist_m:
@@ -1585,9 +1579,6 @@ class MissionFSM:
         others = self._other_pieces(pose)
         n = int(round(m.basket_stop_zone_half_m / m.basket_stop_step_m))
         offsets = [0.0] + [s * k * m.basket_stop_step_m for k in range(1, n + 1) for s in (-1.0, 1.0)]
-        if not self._carry_from_below(pose):
-            # 정차점 높이 근처(옆)에서 왔다 — 옆으로 가는 거리와 첫 회전을 줄이게 로봇 쪽 자리부터 본다(10-07).
-            offsets.sort(key=lambda dx: abs(cx + dx - pose.x))
         blocker: Optional[XY] = None
         c = self.cfg.planner
         # 넣고 떠날 때 그 자리에서 어느 쪽으로든 돌 수 있는 자리를 먼저 고른다(모서리 반경 + 기물 반경 + 간격).
@@ -1595,8 +1586,10 @@ class MissionFSM:
         corner_r = math.hypot(c.robot_length_m / 2.0, c.robot_width_m / 2.0)
         # 실제로 서는 자리는 고른 자리에서 basket_stop_pos_err_m 어긋난다(별: 0.93 고르고 0.958 에 섬) — 그만큼 더.
         free_r = corner_r + c.piece_obstacle_radius_m + m.basket_stop_clear_m + m.basket_stop_pos_err_m
-        free = [dx for dx in offsets if all(_dist((cx + dx, cy), o) >= free_r for o in others)]
-        offsets = free + [dx for dx in offsets if dx not in free]
+        free = {dx for dx in offsets if all(_dist((cx + dx, cy), o) >= free_r for o in others)}
+        # 로봇에서 가장 가까운 자리부터(10-08 사용자: 정해 둔 한 점이 아니라 가장 가까운 정차 지역으로 가서 바로 넣기).
+        # 떠날 때 어느 쪽으로든 돌 수 있는 자리는 basket_stop_free_bonus_m 만큼 가깝게 친다(10-07 나이트 −0.8 cm).
+        offsets.sort(key=lambda dx: _dist(pose.xy, (cx + dx, cy)) - (m.basket_stop_free_bonus_m if dx in free else 0.0))
         for dx in offsets:
             stop = (cx + dx, cy)
             if not (pl.x0 <= stop[0] <= pl.x1):
@@ -1616,7 +1609,7 @@ class MissionFSM:
             self.dest_xy = stop
             self._aim_shift = max(-m.basket_aim_shift_max_m, min(m.basket_aim_shift_max_m, dx))
             if dx:
-                self._log(f"basket stop zone: 가운데 막힘 — 좌우 {dx * 100:+.0f} cm 에 선다 "
+                self._log(f"basket stop zone: 좌우 {dx * 100:+.0f} cm 에 선다 — 로봇에서 가장 가까운 자리 "
                           f"(겨누는 점 {self._aim_shift * 100:+.0f} cm)")
             return None
         if blocker is None:
