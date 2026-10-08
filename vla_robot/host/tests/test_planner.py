@@ -254,3 +254,32 @@ def test_last_point_turn_is_toward_the_target(cfg):
     assert not p._turn_conflicts(pts, [side], (0.90, 0.40), (0.90, 1.10))   # 곧장 앞
     assert p._turn_conflicts(pts, [side], (0.90, 0.40), (0.50, 0.80)) == {0}  # 왼쪽으로 90°
     assert p._turn_conflicts(pts, [side], (0.90, 0.40), None) == {0}          # 모르면 한 바퀴
+
+
+def test_long_turn_stops_early_by_the_drive_off_carryover():
+    """10-08 base_trace 35번: 회전 뒤 직진을 시작하면 돈 방향으로 7.5 ± 1.5° 더 돈다(회전 크기와 무관).
+    0.5 s 넘게 돈 회전은 turn_lead_deg 만큼 남기고 멈춘다 — 짧은 보정(몇 사이클)은 그대로 끝까지 돈다."""
+    from host_config import load_host_config
+    c = load_host_config(None).planner
+    d = DriveSequencer(c)
+    target = (1.0, 0.0)                                   # 오른쪽(0°)
+    yaw = 60.0
+    modes = []
+    for _ in range(40):
+        cmd = d.update((0.0, 0.0), yaw, target)
+        modes.append(cmd.mode)
+        if cmd.mode == DriveMode.ROTATE:
+            yaw -= 2.0                                    # 사이클마다 2° 시계
+        if cmd.mode == DriveMode.FORWARD and modes.count(DriveMode.ROTATE) > 0:
+            break
+    assert c.turn_lead_deg - c.yaw_tolerance_deg - 2.0 <= yaw <= c.turn_lead_deg + c.yaw_tolerance_deg, yaw
+    short = DriveSequencer(c)
+    yaw = 8.0                                             # 3 사이클이면 끝나는 짧은 보정
+    for _ in range(10):
+        cmd = short.update((0.0, 0.0), yaw, target)
+        if cmd.mode == DriveMode.ROTATE:
+            yaw -= 2.0
+        if cmd.mode == DriveMode.FORWARD:
+            break
+    assert abs(yaw) <= c.yaw_tolerance_deg
+

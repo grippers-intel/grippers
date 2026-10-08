@@ -151,12 +151,20 @@ class DriveSequencer:
         self.min_heading = cfg.min_heading_dist_m
         self.step = cfg.waypoint_step_m
         self.arrive = cfg.axis_leg_tolerance_m
+        self.lead = getattr(cfg, "turn_lead_deg", 0.0)
         self._mode: Optional[DriveMode] = None
         self._after_stop = DriveMode.FORWARD
+        self._rot_sign = 0.0
+        self._rot_cycles = 0
+
+    #: 일찍 멈추기는 이만큼(사이클) 넘게 돈 회전에만 — 직진 시작 때 더 도는 것은 돈 뒤에만 생긴다(10 Hz 에서 0.5 s).
+    LEAD_MIN_CYCLES = 5
 
     def reset(self) -> None:
         self._mode = None
         self._after_stop = DriveMode.FORWARD
+        self._rot_sign = 0.0
+        self._rot_cycles = 0
 
     def update(self, robot_xy: XY, robot_yaw_deg: float, target_xy: XY,
                enter_deg: Optional[float] = None, tol_deg: Optional[float] = None) -> DriveCommand:
@@ -183,6 +191,15 @@ class DriveSequencer:
             return DriveCommand(DriveMode.STOP, waypoint, target_yaw, err, dist)
 
         tol = self.tol if tol_deg is None else tol_deg
+        if self._mode == DriveMode.ROTATE:
+            if self._rot_sign == 0.0:
+                self._rot_sign = 1.0 if err >= 0 else -1.0
+            self._rot_cycles += 1
+            if self._rot_cycles > self.LEAD_MIN_CYCLES and abs(err) < 90.0:
+                # 직진을 시작하면 돈 방향으로 lead 만큼 더 돈다 — 그만큼 남기고 멈춘다(10-08 base_trace).
+                err = err - math.copysign(min(self.lead, abs(err)), self._rot_sign) if err * self._rot_sign > 0 else err
+        else:
+            self._rot_sign, self._rot_cycles = 0.0, 0
         aligned = abs(err) <= tol
         # 문턱은 허용치보다 작아질 수 없다(같으면 좌우로 떤다). 지정이 없으면 기본 문턱.
         drifted = abs(err) > (self.enter if enter_deg is None else max(enter_deg, tol))

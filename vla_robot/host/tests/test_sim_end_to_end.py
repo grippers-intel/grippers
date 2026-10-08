@@ -176,7 +176,7 @@ def test_runaway_base_is_reset_and_the_mission_finishes(cfg):
         cmd = fsm.step(world.pose(), world.piece_map(), world.link.latest_status(), clock.t)
         world.link.send(cmd)
         seen.update(list(fsm.events)[-3:])
-        if froze_at is None and fsm.state == HostState.CARRY_TO_DEST and cmd.linear_x > 0 \
+        if froze_at is None and fsm.state in (HostState.CARRY_TO_DEST, HostState.NUDGE_BOX) and cmd.linear_x > 0 \
                 and world._vel[0] > 0:
             world.fail_runaway()
             froze_at = (world.x, world.y)

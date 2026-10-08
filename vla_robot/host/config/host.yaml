@@ -148,6 +148,8 @@ planner:
   narrow_hold_enter_deg: 20.0
   no_turn_near_m: 0.15             # 부분목표가 이 안이면 뒤로 가지 않는 한 다시 돌지 않는다
   min_heading_dist_m: 0.05
+  # 10-08 base_trace 35번: 회전 뒤 직진을 시작하면 회전 방향으로 7.5 ± 1.5° 더 돈다(회전 크기와 무관, 0.4 s 서도 그대로).
+  turn_lead_deg: 7.0               # 그만큼 덜 돌고 멈춘다(0.5 s 넘게 돈 회전만)
   obstacle_hold_cycles: 8
   obstacle_match_m: 0.06
   carry_ignore_radius_m: 0.30
@@ -165,7 +167,7 @@ drive:
   nudge_mps: 0.15
   # 10-08 base_trace: 회전 뒤 0.1 s 만에 직진하면 처음 0.4~0.5 s 동안 0.25~0.44 rad/s 로 저절로 돌았다(회전 없이 시작하면 0.06)
   # — 18 cm 에 12° 틀어져 대각선으로 밀리고 다시 맞추기. 회전 뒤 직진 전에 이만큼 선다. 0 = 끔.
-  turn_settle_s: 0.4
+  turn_settle_s: 0.0               # 10-08 실기: 0.4 s 서도 직진 시작 회전이 그대로(0.25 rad/s) — 효과 없어 끔
   # 10-08: 파지·투입 직전 반대 회전(unwind_*)을 뺐다 — 정차 소음은 Pi 소음 정리 재기동(팔 작업 시작 때)이 맡는다.
 
 mission:
@@ -229,6 +231,8 @@ mission:
   # 10-08 6기물: 정차점 옆 8~9 cm 에서 정차점까지 185° · 203° 돌고 다시 46° · 57°, 퀸은 5 cm 안이라 바구니 반대로 6 cm 직진.
   # 정차점 12 cm 안이고 겨누는 점으로 가는 선이 입구를 벽에서 2 cm 안쪽으로 지나면, 그 선을 보고 서서 곧장 붙는다.
   place_here_max_m: 0.12
+  # 10-08 사용자: 정차점까지 직선으로 가고 도착해서 yaw 만 맞추면 안 되나 — 직선·도착 회전이 비면 1.6 m 안에서는 곧장 간다.
+  place_direct_max_m: 1.6
   place_here_gap_m: 0.01           # 정차점 거리 + 1 cm 까지 붙는다
   place_here_max_gap_m: 0.10       # 정차점보다 10 cm 넘게 멀면 정차점으로 간다
   basket_rim_margin_m: 0.02        # 오늘 2.4 · 2.6 cm 에서 넣은 것은 잘 들어갔다(별 확인)

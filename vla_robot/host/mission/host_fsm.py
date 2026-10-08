@@ -185,6 +185,7 @@ class MissionFSM:
         self._last_turn_at: Optional[float] = None
         self._along_turning = False
         self._along_logged = False
+        self._along_rot: Optional[tuple[float, float]] = None
         self._tight_turn_logged = False
         self._pose_now: Optional[Pose] = None
         self._pmap_now: Optional[PieceMap] = None
@@ -695,7 +696,12 @@ class MissionFSM:
         # 넘기면 곧장 가는 단계가 먼저 정차점 쪽으로 제자리에서 돈다(검사 없음). 그 회전이 옆 기물을 쓸면
         # 넘기지 않고 운반(앞으로 빠져나간 뒤 돌기)을 잇는다 — 10-07 궤적: 넘긴 직후 +20° 돌며 상자 기물과 −1.9 cm.
         turn_ok = not self._approach_turn_sweeps(pose)
-        self.ready_to_advance = near and ((line_ok and turn_ok and in_cone) or at_stop)
+        # 직선과 도착 회전이 비면 멀리서도 곧장 간다(경로 계획의 중간점을 거치면 목표가 바뀌며 한 번 더 돈다).
+        # 멀리서 넘길 때는 정차점 쪽 첫 회전을 경로 주행과 같은 기준(계획기 회전 반경 + 차체)으로 본다 — 쓸리면 경로
+        # 주행이 앞으로 빠져나간 뒤 돈다(틈 안에서 잡은 경우, 10-07).
+        direct = (self.dest_kind != "hand" and dist <= m.place_direct_max_m
+                  and line_ok and turn_ok and in_cone and not self._direct_turn_blocked(pose, obstacles))
+        self.ready_to_advance = (near and ((line_ok and turn_ok and in_cone) or at_stop)) or direct
         if near and not line_ok and not at_stop:
             if self._carry_line_blocked_since is None:
                 self._carry_line_blocked_since = self._now
@@ -755,7 +761,8 @@ class MissionFSM:
             self._log("nudge: 정차점까지 직선에 기물이 있다 — 운반(경로 계획)으로 돌아가 다시 다가간다")
             self._enter(HostState.CARRY_TO_DEST)
             return self._stop("nudge blocked by a piece")
-        if self._now - self._nudge_started > m.nudge_timeout_s:
+        # 멀리서 곧장 오면(place_direct_max_m) 오는 시간만큼 더 준다.
+        if self._now - self._nudge_started > m.nudge_timeout_s + self._nudge_start_dist / self.cfg.drive.nudge_mps:
             # 2026-09-30: 상자 앞에서 "물러나기 <-> 밀기"를 끝없이 되풀이한 적이 있다. 여기서 더
             # 버티지 않고 운반 단계로 돌아가 다시 접근한다.
             return self._nudge_missed(f"no stand-off after {m.nudge_timeout_s:.0f}s at the box")
@@ -788,14 +795,22 @@ class MissionFSM:
         limit = m.place_turn_to_deg if self._nudge_turn_logged else m.max_arm_yaw_deg
         if along:
             limit = self.cfg.planner.yaw_tolerance_deg if not self._along_turning else m.place_turn_to_deg / 2.0
+            if not self._along_turning:
+                # 돌고 나서 직진하면 돈 방향으로 turn_lead_deg 더 돈다 — 그만큼 남기고 멈춘다(시퀀서와 같다).
+                if self._along_rot is None and abs(residual) > limit:
+                    self._along_rot = (1.0 if residual >= 0 else -1.0, self._now)
+                if self._along_rot is not None and self._now - self._along_rot[1] >= 0.5 \
+                        and residual * self._along_rot[0] > 0:
+                    residual = residual - math.copysign(min(self.cfg.planner.turn_lead_deg, abs(residual)),
+                                                        self._along_rot[0])
         self.ready_to_advance = close and not along and (abs(residual) <= limit or self._arm_only_place)
         if self.ready_to_advance:
             if self._should_advance():
                 self._enter(HostState.PLACE)
                 return self._step_place(pi_status)
             return self._stop(f"at box (arm {residual:+.1f}도)")
-        if gap < -m.place_min_gap_m:
-            # 정차점을 크게 지나쳤다(드문 경우). 여기서 돌면 차체가 상자에 닿고, 시퀀서는 뒤에 있는
+        if gap < -m.place_min_gap_m and dist <= m.place_trigger_dist_m:
+            # 정차점을 크게 지나쳤다(드문 경우). 멀리서 곧장 오는 중(place_direct_max_m)이면 해당 없다. 여기서 돌면 차체가 상자에 닿고, 시퀀서는 뒤에 있는
             # 정차점을 보려고 180° 돌려 한다 — 돌지 않고 상자에서 곧장 물러난다.
             return self._back_away_from_box(pose, "overshoot — back off")
         if along and abs(residual) <= limit:
@@ -859,6 +874,10 @@ class MissionFSM:
                 HostCommand(WIRE_STATE[self.state], linear_x=self.cfg.drive.nudge_mps, label=self.target_label or "")
         others = self._other_pieces(pose)
         enter = self._enter_deg(pose, goal, others)
+        if enter is not None and dist > 1e-6:
+            # 지금 흐름대로 가도 정차점 옆 place_lateral_tol_m 안에 닿으면 다시 돌지 않는다 — 도착해서 바구니 쪽으로 돌며
+            # 맞춘다(10-08 사용자: 정차점까지 직선, 도착 뒤 yaw). 가까울수록 같은 옆 거리에 큰 각이다.
+            enter = max(enter, math.degrees(math.asin(min(1.0, m.place_lateral_tol_m / dist))))
         if enter is not None:
             # 바구니 앞에서는 도착해서 몸을 돌려야 한다 — 틀어진 채 가는 길이 기물의 회전 반경(turn_safe) 안을 지나면
             # 넓히지 않는다(10-08 공: 8~9° 틀어진 채 퀸 옆 2.9 cm 에 도착, 24° 를 어느 쪽으로도 못 돌아 HALTED).
@@ -1268,6 +1287,16 @@ class MissionFSM:
             return False
         return self._turn_sweeps(pose, turn)
 
+    def _direct_turn_blocked(self, pose: Pose, obstacles) -> bool:
+        """정차점 쪽으로 제자리에서 돌 회전이 경로 주행 기준(_turn_blocked)으로 막히는가."""
+        if self.dest_xy is None or _dist(pose.xy, self.dest_xy) < self.cfg.planner.min_heading_dist_m:
+            return False
+        bearing = math.degrees(math.atan2(self.dest_xy[1] - pose.y, self.dest_xy[0] - pose.x))
+        turn = wrap_deg(bearing - pose.yaw_deg)
+        if abs(turn) <= self.cfg.planner.yaw_tolerance_deg:
+            return False
+        return self._turn_blocked(pose, turn, obstacles)
+
     def _piece_label_near(self, xy: XY) -> str:
         """xy 에 가장 가까운 기물(목표·쥔 것 제외)의 라벨 — 사람에게 알릴 때."""
         pose = self._pose_now
@@ -1341,6 +1370,7 @@ class MissionFSM:
             self._nudge_from = None
             self._along_turning = False
             self._along_logged = False
+            self._along_rot = None
             self._tight_turn_logged = False
             self._nudge_turn_logged = False
             self._arm_only_place = False
