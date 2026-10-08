@@ -182,6 +182,7 @@ class MissionFSM:
         self._other_way_logged = False
         self._halted_from: Optional[HostState] = None
         self._prev_step_now: Optional[float] = None
+        self._last_turn_at: Optional[float] = None
         self._along_turning = False
         self._along_logged = False
         self._tight_turn_logged = False
@@ -287,7 +288,7 @@ class MissionFSM:
             self._pause_timers(dt)
             self.last_cmd_text = "base reset (wait)"
             return HostCommand(WIRE_STATE[self.state], stop=True, label=self.target_label or "")
-        cmd = self._step_states(pose, piece_map, pi_status, now)
+        cmd = self._settle_after_turn(self._step_states(pose, piece_map, pi_status, now), now)
         watching = self.estop or self.state in _DRIVE_HOST_STATES
         ran = self._runaway.update(now, cmd, pose, watching)
         spun = self._spin.update(now, cmd, pose, watching)      # 제자리 회전 폭주(10-05)
@@ -311,6 +312,21 @@ class MissionFSM:
         if self._stall.moved_since_reset:
             # 복구 뒤 실제로 움직였다 — 연속 실패 횟수를 되돌린다.
             self._recover_in_a_row = 0
+        return cmd
+
+    def _settle_after_turn(self, cmd: HostCommand, now: float) -> HostCommand:
+        """제자리 회전을 마친 뒤 drive.turn_settle_s 동안은 직진·옆걸음 대신 선다(10-08: 회전 직후 직진하면 처음
+        0.4~0.5 s 동안 저절로 돌며 미끄러졌다). 어느 단계의 직진이든(운반·바구니 앞·겨누는 선·거리 맞추기) 같다."""
+        if cmd.stop:
+            return cmd
+        moving = abs(cmd.linear_x) > 1e-6 or abs(cmd.linear_y) > 1e-6
+        if abs(cmd.angular_z) > 1e-6 and not moving:
+            self._last_turn_at = now
+            return cmd
+        settle = self.cfg.drive.turn_settle_s
+        if moving and settle > 0 and self._last_turn_at is not None and now - self._last_turn_at < settle:
+            self.last_cmd_text = f"settle after turn ({self.last_cmd_text})"
+            return replace(cmd, linear_x=0.0, linear_y=0.0, angular_z=0.0, stop=True)
         return cmd
 
     def _start_base_recovery(self, pi_status: Optional[PiStatus], why: Optional[str] = None) -> HostCommand:
@@ -753,8 +769,12 @@ class MissionFSM:
         dist = _dist(pose.xy, self.dest_xy)
         residual = facing_error_deg(target, pose.xy, pose.yaw_deg)
         # 바구니까지 거리만 보면 정차점 높이에서 옆으로 13 cm 떨어져도 "도착"이었다(10-07 별, 팔 +12.6° 로 멀리서 넣음).
-        rim_ok = dist <= m.place_here_max_m and self._drop_clears_rim(pose, target)
-        close = -m.place_min_gap_m <= gap <= m.place_arrive_tol_m and (dist <= m.place_lateral_tol_m or rim_ok)
+        # 바구니 쪽 몸 회전을 시작했으면 경계를 2 cm 넓힌다 — 정차점 옆 8 cm 언저리에서 위치 흔들림으로 "바구니 쪽 돌기"와
+        # "정차점 쪽 돌기"가 사이클마다 번갈아 나왔다(10-08 시뮬, 회전 뒤 기다리기와 겹쳐 25 s 동안 제자리).
+        hyst = 0.02 if self._nudge_turn_logged else 0.0
+        rim_ok = dist <= m.place_here_max_m + hyst and self._drop_clears_rim(pose, target)
+        close = (-m.place_min_gap_m <= gap <= m.place_arrive_tol_m + hyst / 2.0
+                 and (dist <= m.place_lateral_tol_m + hyst or rim_ok))
         # 정차점 가까이에서 바구니까지만 조금 멀다 — 정차점으로 돌아가지 않고 겨누는 점을 보고 그 선을 따라 붙는다.
         # 바구니까지 place_arrive_tol_m 넘게 멀 때 시작하고, 시작했으면 place_here_gap_m 까지 붙는다.
         along = (rim_ok and not self._arm_only_place and gap <= m.place_here_max_gap_m
