@@ -118,3 +118,23 @@ def test_spin_not_watched_while_translating_in_arm_jobs_or_unwatched():
     assert _first_hit(_spin(), [fwd] * 40, 10.0) is None                       # 직진 중 방향 보정
     assert _first_hit(_spin(), [HostCommand(State.PLACE, stop=True)] * 40, 10.0) is None  # 팔 base 가 돈다
     assert _first_hit(_spin(), [HALT] * 40, 10.0, watching=False) is None      # 사람이 돌리는 중
+
+
+def test_going_forward_while_told_to_back_off_is_a_runaway():
+    """10-08 시뮬: 곧장 달려오다 굳어 정차점을 지나쳤는데 물러나라는 명령(병진)이 계속 나가 "멈추라 했는데 간다"로는
+    못 잡았다. 가라는 방향과 반대로 window 안에 move_m 넘게 가면 폭주다."""
+    m = _mon()
+    back = HostCommand(State.APPROACH_BOX, linear_x=-0.15)
+    hit = None
+    for k in range(10):
+        if m.update(0.1 * k, back, P(1.0, 1.20 + 0.015 * k), True):   # 북쪽을 보고 뒤로 가라는데 앞(+y)으로 1.5 cm/사이클
+            hit = k
+            break
+    assert hit is not None and hit <= 6
+
+
+def test_backing_off_as_told_is_not_a_runaway():
+    m = _mon()
+    back = HostCommand(State.APPROACH_BOX, linear_x=-0.15)
+    assert not any(m.update(0.1 * k, back, P(1.0, 1.30 - 0.015 * k), True) for k in range(10))
+

@@ -75,6 +75,7 @@ class BaseRunawayMonitor:
     def reset(self) -> None:
         self._last_linear_at: Optional[float] = None
         self._poses: list[tuple[float, float, float]] = []
+        self._moves: list[tuple[float, float, float, float]] = []   # 병진 중 (t, x, y, 명령 방향 부호)
 
     @staticmethod
     def _commands_translation(cmd: HostCommand) -> bool:
@@ -87,6 +88,20 @@ class BaseRunawayMonitor:
             if self._commands_translation(cmd):
                 self._last_linear_at = now
             return False
+        if self._commands_translation(cmd):
+            # 가라는 방향과 반대로 간다 — 굳은 직진. 10-08 시뮬: 곧장 달려오다 굳어 정차점을 지나쳤고, 물러나라는
+            # 명령(병진)이 계속 나가 "멈추라 했는데 간다"로는 못 잡고 1.2 m 를 갔다.
+            th = math.radians(pose.yaw_deg)
+            ex = cmd.linear_x * math.cos(th) - cmd.linear_y * math.sin(th)
+            ey = cmd.linear_x * math.sin(th) + cmd.linear_y * math.cos(th)
+            n = math.hypot(ex, ey)
+            ex, ey = ex / n, ey / n
+            self._moves = [m for m in self._moves if now - m[0] <= self.window_s] + [(now, pose.x, pose.y, 0.0)]
+            t0, x0, y0, _ = self._moves[0]
+            if now - t0 >= self.window_s * 0.8 and (pose.x - x0) * ex + (pose.y - y0) * ey < -self.move_m:
+                return True
+        else:
+            self._moves.clear()
         if self._commands_translation(cmd) or self._last_linear_at is None:
             # 병진 중이거나 막 시작했다. 기준 시각만 적는다(처음 보는 경우도 방금 병진한 것으로 친다).
             self._last_linear_at = now
