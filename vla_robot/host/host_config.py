@@ -120,6 +120,9 @@ class HandConfig:
     num_hands: int = 2
     # 두 카메라가 같이 보면 광선 교차로 높이까지 푼다. 광선 사이가 이보다 멀면 다른 손이다.
     pair_max_gap_m: float = 0.08
+    # 짝을 못 지은 손이 두 카메라에서 하나씩, 높이 평면으로 푼 자리가 이 안이면 같은 손이다 — 광선이 더 곧게
+    # 내려다보는 카메라(높이를 틀려도 덜 밀린다) 것 하나만 쓴다(10-08: 손 하나가 15~20 cm 떨어진 둘로 보였다).
+    same_hand_m: float = 0.35
     max_z_m: float = 1.0
     # 한 카메라만 볼 때 손바닥 중심을 이 높이 평면으로 푼다. 받는 자세(장판 위 30~35 cm).
     hand_z_m: float = 0.32
@@ -497,7 +500,7 @@ def load_host_config(path: str | Path | None = None) -> HostConfig:
     if bad:
         raise ConfigError(f"hands.edges 는 front|back|left|right: {sorted(bad)}")
     for name in ("min_infer_interval_s", "hand_z_m", "edge_band_m", "merge_dist_m", "hold_s",
-                 "pair_max_gap_m", "max_z_m"):
+                 "pair_max_gap_m", "max_z_m", "same_hand_m"):
         if getattr(h, name) <= 0:
             raise ConfigError(f"hands.{name} 는 양수여야 한다")
     if h.outside_m < 0 or h.confirm_s < 0 or h.num_hands < 1 or h.max_hands < 1:
