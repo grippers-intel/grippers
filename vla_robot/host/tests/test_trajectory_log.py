@@ -29,3 +29,22 @@ def test_writes_one_row_per_cycle(tmp_path):
     assert len(rows) == 1 and rows[0]["state"]
     assert rows[0]["nearest"] == "box" and abs(float(rows[0]["nearest_center_m"]) - 0.107) < 0.001
     assert float(rows[0]["nearest_gap_m"]) < 0.0                                  # 10.7 cm 면 닿는다
+
+
+def test_writes_battery_voltages_from_the_pi_status(tmp_path):
+    """10-08: 대기·주행·회전별 전압 하락을 나중에 보려고 차체·팔 전압을 같이 남긴다. 모르면(0) 빈칸."""
+    from host_config import load_host_config
+    from vla_common.protocol import PiStatus
+    cfg = load_host_config(None)
+    fsm = MissionFSM(cfg)
+    log = TrajectoryLog(tmp_path / "t.csv", cfg.planner)
+    pose = Pose(1.0, 0.5, 90.0, ok=True, n_cams=2, fresh=True)
+    st = PiStatus(boot_id="B", state=State.IDLE, busy=False, job_id=0, result=None, base_ok=True, watchdog=False,
+                  battery_v=8.123, arm_v=0.0)
+    fsm.step(pose, {}, st, 0.0)
+    log.row(0.0, fsm, pose, HostCommand(State.IDLE, stop=True), {}, st)
+    log.row(0.1, fsm, pose, HostCommand(State.IDLE, stop=True), {})
+    log.close()
+    rows = list(csv.DictReader(open(tmp_path / "t.csv", encoding="utf-8")))
+    assert rows[0]["veh_v"] == "8.12" and rows[0]["arm_v"] == ""
+    assert rows[1]["veh_v"] == "" and rows[1]["arm_v"] == ""

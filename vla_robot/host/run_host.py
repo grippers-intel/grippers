@@ -244,7 +244,7 @@ def main() -> int:
             cmd = fsm.step(pose, pmap, status, t0)
             link.send(cmd)
             if traj is not None:
-                traj.row(t0, fsm, pose, cmd, pmap)
+                traj.row(t0, fsm, pose, cmd, pmap, status)
 
             action = None
             if view is not None:
