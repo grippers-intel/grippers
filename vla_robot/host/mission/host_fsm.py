@@ -181,6 +181,8 @@ class MissionFSM:
         self._pre_stop: Optional[tuple[XY, XY]] = None   # (정차점, 거쳐 갈 점) — 정차점이 바뀌면 다시 정한다
         self._other_way_logged = False
         self._halted_from: Optional[HostState] = None
+        self._along_turning = False
+        self._along_logged = False
         self._tight_turn_logged = False
         self._pose_now: Optional[Pose] = None
         self._pmap_now: Optional[PieceMap] = None
@@ -746,7 +748,12 @@ class MissionFSM:
         dist = _dist(pose.xy, self.dest_xy)
         residual = facing_error_deg(target, pose.xy, pose.yaw_deg)
         # 바구니까지 거리만 보면 정차점 높이에서 옆으로 13 cm 떨어져도 "도착"이었다(10-07 별, 팔 +12.6° 로 멀리서 넣음).
-        close = -m.place_min_gap_m <= gap <= m.place_arrive_tol_m and dist <= m.place_lateral_tol_m
+        rim_ok = dist <= m.place_here_max_m and self._drop_clears_rim(pose, target)
+        close = -m.place_min_gap_m <= gap <= m.place_arrive_tol_m and (dist <= m.place_lateral_tol_m or rim_ok)
+        # 정차점 가까이에서 바구니까지만 조금 멀다 — 정차점으로 돌아가지 않고 겨누는 점을 보고 그 선을 따라 붙는다.
+        # 바구니까지 place_arrive_tol_m 넘게 멀 때 시작하고, 시작했으면 place_here_gap_m 까지 붙는다.
+        along = (rim_ok and not self._arm_only_place and gap <= m.place_here_max_gap_m
+                 and gap > (m.place_here_gap_m if self._along_turning else m.place_arrive_tol_m))
         # 팔로만 넣기로 했으면 팔 한계까지만 튼다(남는 몇 도만큼 떨어지는 점이 옆으로 간다).
         arm = (max(-m.max_arm_yaw_deg, min(m.max_arm_yaw_deg, residual)) if self._arm_only_place
                else residual)
@@ -754,7 +761,9 @@ class MissionFSM:
         # 차체를 돌리기 시작했으면 팔 한계 바로 안(14.x°)이 아니라 place_turn_to_deg(12°)까지 돈다.
         # 정면(0°)까지는 맞추지 않는다 — 나머지는 팔 base 가 맡는다(2026-09-30 저녁 요청).
         limit = m.place_turn_to_deg if self._nudge_turn_logged else m.max_arm_yaw_deg
-        self.ready_to_advance = close and (abs(residual) <= limit or self._arm_only_place)
+        if along:
+            limit = self.cfg.planner.yaw_tolerance_deg if not self._along_turning else m.place_turn_to_deg / 2.0
+        self.ready_to_advance = close and not along and (abs(residual) <= limit or self._arm_only_place)
         if self.ready_to_advance:
             if self._should_advance():
                 self._enter(HostState.PLACE)
@@ -764,10 +773,23 @@ class MissionFSM:
             # 정차점을 크게 지나쳤다(드문 경우). 여기서 돌면 차체가 상자에 닿고, 시퀀서는 뒤에 있는
             # 정차점을 보려고 180° 돌려 한다 — 돌지 않고 상자에서 곧장 물러난다.
             return self._back_away_from_box(pose, "overshoot — back off")
-        if close and abs(residual) > limit:
+        if along and abs(residual) <= limit:
+            ahead = (pose.x + (gap + 0.02) * math.cos(math.radians(pose.yaw_deg)),
+                     pose.y + (gap + 0.02) * math.sin(math.radians(pose.yaw_deg)))
+            if self._line_clear(pose.xy, ahead):
+                self._along_turning = True              # 붙는 동안 조금 흘러도 6° 까지는 다시 돌지 않는다
+                if not self._along_logged:
+                    self._along_logged = True
+                    self._log(f"nudge: 정차점 {dist * 100:.0f} cm 옆 · 바구니까지 {gap * 100:+.0f} cm — "
+                              f"겨누는 점을 보고 곧장 붙는다")
+                self.last_cmd_text = "nudge (aim line)"
+                return HostCommand(WIRE_STATE[self.state], linear_x=self.cfg.drive.nudge_mps,
+                                   label=self.target_label or "")
+            along = False                               # 앞에 기물 — 정차점으로 간다
+        if (close or along) and abs(residual) > limit:
             # 팔이 못 메우는 각도다. 이때만 정차점에서 차체를 돌린다(돌아도 상자에 닿지 않는 자리다).
             # 단, 그 회전이 바구니 옆 기물을 쓸면 돌지 않는다(10-05 별 · 10-07 나이트를 쳤다).
-            turn = residual - math.copysign(m.place_turn_to_deg, residual)
+            turn = residual - math.copysign(limit if along else m.place_turn_to_deg, residual)
             if self._turn_sweeps(pose, turn):         # 정차 구역·상자 앞 맞추기와 같은 간격 기준
                 # 반대로 돌면 비는가(10-08 상자: 정차점 위에서 −144° 를 보고 잡아 +127° 쪽은 뒷모서리가 퀸을 쓸고
                 # 시계 방향은 뒷면이 퀸에서 멀어지는데, 짧은 쪽만 보고 다시 접근 3번 → HALTED).
@@ -803,7 +825,15 @@ class MissionFSM:
         if moved >= max(m.nudge_max_m, self._nudge_start_dist + 0.15):
             # 이만큼 밀고도 정면에 못 섰다. 더 밀면 상자를 친다.
             return self._nudge_missed(f"nudge {moved:.2f}m and still {gap:+.2f}m off the stand-off")
-        nav = self._drive.update(pose.xy, pose.yaw_deg, self.dest_xy)
+        # 앞길이 비었으면 25° 까지, 정차점 15 cm 안이면 다시 돌지 않는다 — 운반과 같은 규칙(10-08: 30 cm 맞추기 중
+        # 12° 넘을 때마다 서서 다시 돌았다). 정차점이 5 cm 안이면 방향을 못 재 지금 방향으로 곧장 갔다(퀸, 바구니 반대로
+        # 6 cm) — 그때는 정차점이 아니라 겨누는 점을 본다.
+        goal = self.dest_xy
+        if dist < self.cfg.planner.min_heading_dist_m:
+            return self._rotate(residual) if abs(residual) > self.cfg.planner.yaw_tolerance_deg else \
+                HostCommand(WIRE_STATE[self.state], linear_x=self.cfg.drive.nudge_mps, label=self.target_label or "")
+        nav = self._drive.update(pose.xy, pose.yaw_deg, goal,
+                                 enter_deg=self._enter_deg(pose, goal, self._other_pieces(pose)))
         if nav.mode == DriveMode.ROTATE:
             if self._turn_sweeps(pose, nav.yaw_error_deg):
                 # 정차점 쪽으로 돌면 옆 기물을 쓴다 — 밀고 돌지 않고 운반(경로 계획)으로 돌아가 다시 다가온다.
@@ -816,6 +846,19 @@ class MissionFSM:
             return self._stop("nudge (settle)")
         self.last_cmd_text = "nudge"
         return HostCommand(WIRE_STATE[self.state], linear_x=self.cfg.drive.nudge_mps)
+
+    def _drop_clears_rim(self, pose: Pose, target: BasketTarget) -> bool:
+        """여기서 겨누는 점을 보고 넣으면 그 선이 바구니 입구(앞면)를 양쪽 벽에서 basket_rim_margin_m 안쪽으로 지나는가."""
+        a, m = self.cfg.arena, self.cfg.mission
+        bx, by, _yaw = a.boxes[self.dest_box]
+        w, l = a.box_size[0] / 2.0, a.box_size[1] / 2.0
+        edge = by - l
+        ax, ay = target.aim
+        if ay - pose.y < 1e-6 or pose.y >= edge:
+            return False
+        k = (edge - pose.y) / (ay - pose.y)
+        cx = pose.x + k * (ax - pose.x)
+        return bx - w + m.basket_rim_margin_m <= cx <= bx + w - m.basket_rim_margin_m
 
     def _nudge_missed(self, why: str) -> HostCommand:
         m = self.cfg.mission
@@ -1257,6 +1300,8 @@ class MissionFSM:
             self._pre_stop = None
         if state == HostState.NUDGE_BOX:
             self._nudge_from = None
+            self._along_turning = False
+            self._along_logged = False
             self._tight_turn_logged = False
             self._nudge_turn_logged = False
             self._arm_only_place = False
