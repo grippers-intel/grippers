@@ -182,6 +182,7 @@ class MissionFSM:
         self._narrow_logged = False
         self._exit_logged = False
         self._carry_line_blocked_since: Optional[float] = None
+        self._carry_line_pose: Optional[tuple[float, float, float]] = None   # 직선 막힘을 세기 시작한 자세
         self._zone_wait_logged = False
         self._box_stop_chosen = False
         self._zone_blocked_since: Optional[float] = None
@@ -703,8 +704,14 @@ class MissionFSM:
                   and (near or self._line_clear(pose.xy, self.dest_xy, slack=-self.DIRECT_EXTRA_M)))
         self.ready_to_advance = (near and ((line_ok and turn_ok and in_cone) or at_stop)) or direct
         if near and not line_ok and not at_stop:
-            if self._carry_line_blocked_since is None:
+            ref = self._carry_line_pose
+            moved = ref is not None and (math.hypot(pose.x - ref[0], pose.y - ref[1]) > self.LINE_BLOCK_MOVE_M
+                                         or abs(wrap_deg(pose.yaw_deg - ref[2])) > self.LINE_BLOCK_TURN_DEG)
+            if self._carry_line_blocked_since is None or moved:
+                # 제자리에 있을 때만 센다 — 실제로 돌거나 가고 있으면 처음부터(10-08 시뮬 3차 별: 정차점 33 cm 에서
+                # 빠져나가려고 128° 도는 5 s 에 "막혀 서 있다"로 HALTED 가 났다).
                 self._carry_line_blocked_since = self._now
+                self._carry_line_pose = (pose.x, pose.y, pose.yaw_deg)
             elif self._now - self._carry_line_blocked_since > m.carry_line_block_s:
                 who = self._piece_label_near(self.dest_xy)
                 where = self.dest_box or f"hand {self.hand_spot}"
@@ -1059,8 +1066,13 @@ class MissionFSM:
                     nxt = (sub_goal[0] + (sub_goal[0] - prev[0]) / d * ext, sub_goal[1] + (sub_goal[1] - prev[1]) / d * ext)
             if nxt is not None:
                 sub_goal = nxt
-        enter, tol = self._enter_deg(pose, sub_goal, held), None
         narrow, inside, at_entry = self._narrow_gap(pose.xy, sub_goal, held)
+        aim, grazing = (sub_goal, False) if narrow else self._aim_off_piece(pose, sub_goal, held)
+        enter, tol = self._enter_deg(pose, aim, held), None
+        if grazing:
+            # 기물 옆을 붙어 지나는 직선 — 돌 때는 2.5° 까지 맞춘다. 허용치 5° 끝에서 서면 덜 돈 쪽, 곧 돌아 피하려는
+            # 기물 쪽을 보게 된다(10-08 시뮬). 직진 중 다시 돌기 문턱(enter)은 그대로라 조금 가고 돌기는 늘지 않는다.
+            tol = c.narrow_yaw_tolerance_deg
         if inside:
             # 틈 안 — 여기서 돌면 차체 모서리가 옆 기물을 쓴다. 웬만큼 틀어져도 직진으로 빠져나간다.
             enter = max(enter if enter is not None else c.yaw_enter_deg, c.narrow_hold_enter_deg)
@@ -1076,7 +1088,7 @@ class MissionFSM:
                       if not inside else "narrow gap — 틈 안에서는 돌지 않고 직진")
         elif not narrow:
             self._narrow_logged = False
-        nav = self._drive.update(pose.xy, pose.yaw_deg, sub_goal, enter, tol)
+        nav = self._drive.update(pose.xy, pose.yaw_deg, aim, enter, tol)
         self.nav_goal = goal
         self.nav_path = self._planner.last_path
         self.blocked_by = blocked
@@ -1198,6 +1210,57 @@ class MissionFSM:
                 return HostCommand(WIRE_STATE[self.state], linear_x=d.linear_mps,
                                    label=self.target_label or "")
         return None
+
+    #: 정차점까지 직선 막힘 시간을 처음부터 세는 움직임(실제로 가거나 돌고 있다)
+    LINE_BLOCK_MOVE_M = 0.02
+    LINE_BLOCK_TURN_DEG = 5.0
+
+    #: 기물 옆을 최소 여유(safe)로 스치는 직선은 이만큼 더 떨어지게 겨눈다(겨누는 점 옆으로 최대 AIM_SHIFT_MAX_M).
+    AIM_EXTRA_M = 0.015
+    AIM_SHIFT_MAX_M = 0.04
+    AIM_MIN_LEG_M = 0.25
+    AIM_MAX_T = 0.8
+
+    def _aim_off_piece(self, pose: Pose, sub_goal: XY, obstacles) -> tuple[XY, bool]:
+        """기물 옆을 최소 여유로 스치는 직선이면 겨누는 점을 그 기물 반대쪽으로 조금 옮긴다(방향만, 경로는 그대로).
+
+        계획기의 펴진 직선은 기물에 **딱 직진 여유(14 cm, 차체 옆 2 cm)** 로 붙는다(최단 경로라 접선이다). 회전을 잘
+        맞춰도 1~2° · 위치 노이즈면 40 cm 가서 1~1.5 cm 를 먹어 차체 옆 0.4~1.1 cm 로 지났다(10-08 시뮬 무작위 40판 중
+        3판, 모두 출발 첫 직진). 겨누는 점을 옆으로 옮겨 그 기물을 AIM_EXTRA_M 더 떨어져 지나게 한다.
+        기물이 구간 끝 가까이(AIM_MAX_T 뒤)면 도착점이 어긋나므로, 옮긴 직선이 다른 기물·금지 구역에 걸리면 옮기지 않는다.
+        기물을 지나면 직선이 더는 그 옆을 지나지 않아 원래 점을 다시 겨눈다. 돌려주는 것: (겨누는 점, 붙어 지나는가)."""
+        pl = self._planner
+        leg = _dist(pose.xy, sub_goal)
+        if leg < self.AIM_MIN_LEG_M:
+            return sub_goal, False
+        want = pl.safe + self.AIM_EXTRA_M
+        worst = None
+        for o in obstacles:
+            if _dist(pose.xy, o) < pl.turn_safe:          # 이미 옆이다 — 방향을 바꿔도 소용없다
+                continue
+            d, t = segment_circle_clearance(pose.xy, sub_goal, o)
+            if d < want and 0.0 < t <= self.AIM_MAX_T and (worst is None or d < worst[0]):
+                worst = (d, t, o)
+        if worst is None:
+            return sub_goal, False
+        d, t, o = worst
+        ux, uy = (sub_goal[0] - pose.x) / leg, (sub_goal[1] - pose.y) / leg
+        nx, ny = -uy, ux                                  # 왼쪽 법선
+        if nx * (o[0] - pose.x) + ny * (o[1] - pose.y) > 0:
+            nx, ny = -nx, -ny                             # 기물 반대쪽
+        shift = min((want - d) / t, self.AIM_SHIFT_MAX_M)
+        rects = pl._active_keepouts(pose.xy)
+        for k in (1.0, 0.5):
+            aim = (sub_goal[0] + nx * shift * k, sub_goal[1] + ny * shift * k)
+            if not (pl.x0 <= aim[0] <= pl.x1 and pl.y0 <= aim[1] <= pl.y1):
+                continue
+            if any(segment_hits_rect(pose.xy, aim, r) for r in rects):
+                continue
+            if any(segment_circle_clearance(pose.xy, aim, q)[0] < pl.safe for q in obstacles
+                   if _dist(pose.xy, q) >= pl.safe):
+                continue
+            return aim, True
+        return sub_goal, True
 
     def _narrow_gap(self, at: XY, sub_goal: XY, obstacles) -> tuple[bool, bool, bool]:
         """(지금 가는 직선이 좁은 틈을 지나는가, 지금 그 틈 안에 있는가, 틈 입구 바로 앞인가).

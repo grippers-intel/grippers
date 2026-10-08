@@ -563,3 +563,42 @@ def test_idle_only_while_waiting_for_a_command(cfg):
     fsm.request_estop()
     fsm.step(P(0.9, 0.5), {}, S(), 0.0)
     assert fsm.idle
+
+
+def test_aims_a_little_off_a_piece_the_straight_line_only_just_clears(cfg):
+    """10-08 시뮬: 펴진 직선은 기물에 직진 여유(차체 옆 2 cm)로 딱 붙는다 — 1~2° 틀어지면 0.4~1.1 cm 로 스쳤다.
+    그 기물 반대쪽으로 조금 겨누고(경로는 그대로) 돌 때는 2.5° 까지 맞춘다."""
+    fsm = MissionFSM(cfg)
+    safe = fsm._planner.safe
+    pose, goal = P(0.60, 0.40), (0.60, 1.00)
+    aim, grazing = fsm._aim_off_piece(pose, goal, [(0.60 + safe + 0.001, 0.70)])   # 오른쪽을 딱 붙어 지난다
+    assert grazing and aim[0] < 0.60 and abs(aim[1] - 1.00) < 1e-9                # 왼쪽으로 겨눈다
+    assert 0.60 - aim[0] <= fsm.AIM_SHIFT_MAX_M + 1e-9
+    aim, grazing = fsm._aim_off_piece(pose, goal, [(0.60 + 0.20, 0.70)])          # 넉넉하면 그대로
+    assert not grazing and aim == goal
+
+
+def test_blocked_line_near_the_stop_counts_only_while_standing(cfg):
+    """10-08 시뮬 3차 별: 정차점 33 cm 에서 빠져나가려고 128° 도는 5 s 동안 "직선이 막혀 서 있다"로 HALTED 가 났다.
+    도는 동안은 세지 않고, 정말 서 있을 때만 carry_line_block_s 뒤 HALTED."""
+    fsm = MissionFSM(cfg)
+    _setup_place(fsm)
+    fsm._enter(HostState.CARRY_TO_DEST)
+    fsm.step(P(0.60, 1.10, yaw=0.0), {}, S(), 0.0)
+    fsm._enter(HostState.CARRY_TO_DEST)
+    dx, dy = fsm.dest_xy
+    pose = P(dx + 0.25, dy - 0.05, yaw=0.0)                                         # 정차점 가까이(트리거 안)
+    blocker: dict = {}
+    fsm._line_clear = lambda *a, **k: False                                         # 정차점까지 직선이 막혔다
+    fsm._stall.update = lambda *a, **k: False                                       # 제자리 pose — 무응답 감시는 뺀다
+    fsm._drive_to = lambda *a, **k: HostCommand(State.IDLE, angular_z=-0.3)
+    t, yaw = 0.0, 0.0
+    while t < 8.0:                                                                  # 실제로 돈다(초당 25°)
+        t += 0.1
+        yaw -= 2.5
+        fsm.step(P(pose.x, pose.y, yaw), blocker, S(), t)
+    assert fsm.state == HostState.CARRY_TO_DEST                                     # 도는 중 — 멈추지 않는다
+    while t < 16.0 and fsm.state != HostState.HALTED:                               # 명령은 돌지만 제자리
+        t += 0.1
+        fsm.step(P(pose.x, pose.y, yaw), blocker, S(), t)
+    assert fsm.state == HostState.HALTED and "직선이 막힘" in (fsm.halt_reason or "")
