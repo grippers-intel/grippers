@@ -208,8 +208,9 @@ def main() -> int:
                 hands = hand_tracker.update([hobs], t0).get("hand", [])
                 spots = sorted(nearest_spot(h) for h in hands)
                 if spots != hand_spots:     # 손이 생기거나 사라지거나 자리를 옮길 때만 찍는다
+                    raw = " | 관측 " + ", ".join(f"{o.cam_name} ({o.x:.2f},{o.y:.2f})" for o in hobs) if hobs else ""
                     print("[hands] " + (", ".join(f"{nearest_spot(h)} ({h[0]:.2f},{h[1]:.2f})"
-                                                  for h in hands) or "손 없음"))
+                                                  for h in hands) or "손 없음") + raw)
                     hand_spots = spots
                 if args.show_cams:
                     for idx, cam, frame, det in zip(indices, cams, frames, dets):
