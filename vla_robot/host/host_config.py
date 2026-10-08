@@ -200,6 +200,9 @@ class DriveConfig:
     rotation_min_rad_s: float = 0.25
     rotation_slow_deg: float = 30.0
     nudge_mps: float = 0.15
+    # 제자리 회전 뒤 직진·옆걸음을 시작하기 전에 이만큼 선다(10-08: 회전 뒤 직진을 0.1 s 만에 시작하면 처음 0.4~0.5 s
+    # 동안 차체가 0.25~0.44 rad/s 로 저절로 돌며 미끄러졌다 — 회전 없이 시작하면 0.06. 방향이 10° 틀어져 다시 맞추기·대각선 밀림).
+    turn_settle_s: float = 0.4
     # 파지·투입 직전 반대 회전(unwind, 10-01~10-07)은 뺐다(10-08 사용자): 회전 뒤 정차 소음은 Pi 의
     # 소음 정리 재기동(base.quiet_reset_on_job, 팔 작업 시작 때)이 멎게 하고, 반대 회전은 배터리만 더 쓴다.
 

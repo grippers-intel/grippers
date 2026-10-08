@@ -4,7 +4,7 @@ import pytest
 
 from localization.pose import Pose
 from mission.host_fsm import HostState, MissionFSM
-from vla_common.protocol import JobResult, PiStatus, State
+from vla_common.protocol import HostCommand, JobResult, PiStatus, State
 
 
 def P(x, y, yaw=90.0):
@@ -547,3 +547,16 @@ def test_too_close_with_room_behind_backs_into_range(cfg):
     fsm.step(P(0.90, 0.755), pmap, S(), 0.0)
     cmd = fsm.step(P(0.90, 0.755), pmap, S(), 0.1)
     assert cmd.linear_x < 0.0 and fsm.target_label == "box"
+
+
+def test_waits_after_a_turn_before_driving(cfg):
+    """10-08 base_trace: 회전 뒤 0.1 s 만에 직진하면 처음 0.4~0.5 s 동안 저절로 돌며 미끄러졌다(대각선 밀림).
+    회전을 마친 뒤 drive.turn_settle_s 동안은 직진하지 않는다."""
+    fsm = MissionFSM(cfg)
+    fsm._last_turn_at = 10.0
+    fwd = HostCommand(State.APPROACH, linear_x=0.15)
+    assert fsm._settle_after_turn(fwd, 10.0 + cfg.drive.turn_settle_s * 0.5).stop
+    assert fsm._settle_after_turn(fwd, 10.0 + cfg.drive.turn_settle_s + 0.01).linear_x == 0.15
+    turn = HostCommand(State.APPROACH, angular_z=0.5)
+    assert fsm._settle_after_turn(turn, 20.0).angular_z == 0.5 and fsm._last_turn_at == 20.0
+

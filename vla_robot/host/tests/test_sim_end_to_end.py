@@ -73,7 +73,10 @@ def test_ignoring_the_arm_yaw_misses(cfg):
     """각도를 무시하는 옛 Pi 라면 정차 오차가 그대로 투하 오차가 된다.
 
     이 테스트가 통과한다는 것은 `HostCommand.arm_yaw_deg` 가 장식이 아니라는 뜻이다.
+    겨누는 선으로 붙기(10-08)는 차체가 겨누는 점을 보고 서서 팔 각이 거의 0 이라 끄고 본다.
     """
+    from dataclasses import replace as _replace
+    cfg = _replace(cfg, mission=_replace(cfg.mission, place_here_max_m=0.0))
     honoring = SimWorld(cfg, clock=FakeClock(), seed=3)
     _run_mission(cfg, honoring)
     ignoring = SimWorld(cfg, clock=FakeClock(), seed=3, honor_arm_yaw=False)
