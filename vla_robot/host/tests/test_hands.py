@@ -161,3 +161,25 @@ def test_bad_edge_rejected(tmp_path):
     bad.write_text(text.replace("edges: [front, left, right]", "edges: [front, top]"), encoding="utf-8")
     with pytest.raises(host_config.ConfigError):
         host_config.load_host_config(bad)
+
+
+def test_one_hand_unpaired_in_both_cameras_is_one_hand(cfg):
+    """10-08: 손 하나가 15~20 cm 떨어진 둘로 보였다 — 두 카메라 광선이 짝(8 cm)을 못 지으면 카메라마다 높이 평면으로
+    풀어 따로 나왔다. 짝 없는 두 카메라 손이 same_hand_m 안이면 하나 — 더 곧게 내려다보는 앞 카메라 것을 쓴다."""
+    (c0, K0, R0, t0), (c1, K1, R1, t1) = _two_cams(cfg)
+    z = cfg.hands.hand_z_m
+    s0 = _sighting_at(K0, R0, t0, 0.99, 0.12, z)                      # 앞 카메라: 손 바로 위에 가깝다
+    s1 = _sighting_at(K1, R1, t1, 1.12, 0.12, 0.45)                   # 뒤 카메라: 손바닥 중심이 다르게 잡혀 광선이 어긋남
+    split = locate_hands([c0, c1], [[s0], [s1]], replace(cfg.hands, same_hand_m=0.0))
+    assert len(split) == 2 and all("+" not in p.cams for p in split)  # 고치기 전: 둘
+    pts = locate_hands([c0, c1], [[s0], [s1]], cfg.hands)
+    assert len(pts) == 1 and pts[0].cams == "cam0"
+    assert abs(pts[0].x - 0.99) < 0.01 and abs(pts[0].y - 0.12) < 0.01
+
+
+def test_two_real_hands_far_apart_stay_two_when_unpaired(cfg):
+    (c0, K0, R0, t0), (c1, K1, R1, t1) = _two_cams(cfg)
+    z = cfg.hands.hand_z_m
+    pts = locate_hands([c0, c1], [[_sighting_at(K0, R0, t0, 0.33, 0.12, z)],
+                                  [_sighting_at(K1, R1, t1, 1.905, 0.915, z)]], cfg.hands)
+    assert len(pts) == 2

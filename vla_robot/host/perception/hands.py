@@ -146,13 +146,23 @@ def locate_hands(cams, sightings_per_cam, hcfg) -> list[HandPoint]:
         out.append(HandPoint(float(p[0]), float(p[1]), float(p[2]),
                              max(rays[i][2].score, rays[j][2].score),
                              f"{rays[i][3].name}+{rays[j][3].name}"))
-    for k, (_ci, _r, s, cam) in enumerate(rays):
+    singles = []                                # (카메라 번호, 광선 기울기 |dz|, HandPoint)
+    for k, (ci, (_o, d), s, cam) in enumerate(rays):
         if k in used:
             continue
         pt = cam.pixels_to_plane(s.palm.reshape(1, 2), z=hcfg.hand_z_m)
         if pt is not None:
-            out.append(HandPoint(float(pt[0, 0]), float(pt[0, 1]), hcfg.hand_z_m, s.score, cam.name))
-    return out
+            singles.append((ci, abs(float(d[2])),
+                            HandPoint(float(pt[0, 0]), float(pt[0, 1]), hcfg.hand_z_m, s.score, cam.name)))
+    # 짝을 못 지은 손: 다른 카메라 것이 same_hand_m 안이면 같은 손 — 더 곧게 내려다보는 쪽 하나만(10-08 손이 둘로 보임).
+    # 높이를 틀리면 각 카메라가 자기에게서 먼 쪽으로 미는데, 곧게 내려다볼수록 덜 민다.
+    singles.sort(key=lambda q: -q[1])
+    kept: list[tuple[int, float, HandPoint]] = []
+    for ci, steep, h in singles:
+        if any(cj != ci and np.hypot(h.x - k.x, h.y - k.y) <= hcfg.same_hand_m for cj, _s, k in kept):
+            continue
+        kept.append((ci, steep, h))
+    return out + [h for _ci, _s, h in kept]
 
 
 def hand_observations(cams, sightings_per_cam, hcfg, arena) -> list[PieceObs]:
