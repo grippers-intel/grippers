@@ -34,7 +34,7 @@ from localization.pose import Pose
 from mission.base_monitor import BaseRunawayMonitor, BaseSpinMonitor, BaseStallMonitor
 from mission.trajectory_log import body_gap
 from mission.basket_target import BasketTarget, basket_target, facing_error_deg
-from planning.planner import (DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold,
+from planning.planner import (DriveMode, DriveSequencer, GridPathPlanner, ObstacleHold, lead_err,
                               segment_circle_clearance, segment_hits_rect, wrap_deg)
 from vla_common.protocol import HostCommand, JobResult, JobTracker, PiStatus, State
 
@@ -191,8 +191,8 @@ class MissionFSM:
         self._other_way_logged = False
         self._halted_from: Optional[HostState] = None
         self._zone_first_logged: Optional[XY] = None
+        self._zone_first_cache: Optional[tuple] = None
         self._prev_step_now: Optional[float] = None
-        self._last_turn_at: Optional[float] = None
         self._along_turning = False
         self._along_logged = False
         self._along_rot: Optional[tuple[float, float]] = None
@@ -301,7 +301,7 @@ class MissionFSM:
             self._pause_timers(dt)
             self.last_cmd_text = "base reset (wait)"
             return HostCommand(WIRE_STATE[self.state], stop=True, label=self.target_label or "")
-        cmd = self._settle_after_turn(self._step_states(pose, piece_map, pi_status, now), now)
+        cmd = self._step_states(pose, piece_map, pi_status, now)
         watching = self.estop or self.state in _DRIVE_HOST_STATES
         ran = self._runaway.update(now, cmd, pose, watching)
         spun = self._spin.update(now, cmd, pose, watching)      # 제자리 회전 폭주(10-05)
@@ -325,21 +325,6 @@ class MissionFSM:
         if self._stall.moved_since_reset:
             # 복구 뒤 실제로 움직였다 — 연속 실패 횟수를 되돌린다.
             self._recover_in_a_row = 0
-        return cmd
-
-    def _settle_after_turn(self, cmd: HostCommand, now: float) -> HostCommand:
-        """제자리 회전을 마친 뒤 drive.turn_settle_s 동안은 직진·옆걸음 대신 선다(10-08: 회전 직후 직진하면 처음
-        0.4~0.5 s 동안 저절로 돌며 미끄러졌다). 어느 단계의 직진이든(운반·바구니 앞·겨누는 선·거리 맞추기) 같다."""
-        if cmd.stop:
-            return cmd
-        moving = abs(cmd.linear_x) > 1e-6 or abs(cmd.linear_y) > 1e-6
-        if abs(cmd.angular_z) > 1e-6 and not moving:
-            self._last_turn_at = now
-            return cmd
-        settle = self.cfg.drive.turn_settle_s
-        if moving and settle > 0 and self._last_turn_at is not None and now - self._last_turn_at < settle:
-            self.last_cmd_text = f"settle after turn ({self.last_cmd_text})"
-            return replace(cmd, linear_x=0.0, linear_y=0.0, angular_z=0.0, stop=True)
         return cmd
 
     def _start_base_recovery(self, pi_status: Optional[PiStatus], why: Optional[str] = None) -> HostCommand:
@@ -836,10 +821,9 @@ class MissionFSM:
                 # 돌고 나서 직진하면 돈 방향으로 turn_lead_deg 더 돈다 — 그만큼 남기고 멈춘다(시퀀서와 같다).
                 if self._along_rot is None and abs(residual) > limit:
                     self._along_rot = (1.0 if residual >= 0 else -1.0, self._now)
-                if self._along_rot is not None and self._now - self._along_rot[1] >= 0.5 \
-                        and residual * self._along_rot[0] > 0:
-                    residual = residual - math.copysign(min(self.cfg.planner.turn_lead_deg, abs(residual)),
-                                                        self._along_rot[0])
+                if self._along_rot is not None:
+                    residual = lead_err(residual, self._along_rot[0], self._now - self._along_rot[1],
+                                        self.cfg.planner.turn_lead_deg)
         self.ready_to_advance = close and not along and (abs(residual) <= limit or self._arm_only_place)
         if self.ready_to_advance and not self._standing_still():
             # 넣기 전에 차체가 정말 섰는지 본다 — 곧장 길게 달려오면(place_direct_max_m) 중간에 서는 일이 없어, 굳은
@@ -1655,6 +1639,29 @@ class MissionFSM:
         if not cands:
             return None
         cands.sort(key=lambda t: t[0])
+        first = self._zone_first(pmap, cands)
+        if first is not None:
+            lb, p = first
+            if self._zone_first_logged != p:
+                self._zone_first_logged = p
+                self._log(f"{self.cfg.mission.piece_dest_box[lb]} 앞 정차 구역을 {lb} ({p[0]:.2f}, {p[1]:.2f}) 이(가) "
+                          f"막거나 바로 앞에 있다 — 그것부터")
+            return lb, p
+        _d, lb, p = cands[0]
+        return lb, p
+
+    def _zone_first(self, pmap: PieceMap, cands) -> Optional[tuple[str, XY]]:
+        """정차 구역을 막거나 바로 앞에 있어 먼저 잡을 대상. 계산이 무거워(자리 11 × 기물 × 각 31 × 좌우 3) 지도·후보가
+        그대로면 지난 결과를 쓴다(10-08 검토: 대상 고르는 동안 10 Hz 로 매번 다시 셌다)."""
+        key = (tuple(sorted((lb, round(p[0], 2), round(p[1], 2)) for lb, pts in pmap.items() for p in pts)),
+               tuple((lb, round(p[0], 2), round(p[1], 2)) for _d, lb, p in cands))
+        if self._zone_first_cache is not None and self._zone_first_cache[0] == key:
+            return self._zone_first_cache[1]
+        first = self._find_zone_first(pmap, cands)
+        self._zone_first_cache = (key, first)
+        return first
+
+    def _find_zone_first(self, pmap: PieceMap, cands) -> Optional[tuple[str, XY]]:
         everything = [p for pts in pmap.values() for p in pts]
         near_r = self._planner.turn_safe + self.ZONE_APPROACH_EXTRA_M
         for box in {self.cfg.mission.piece_dest_box[lb] for _d, lb, _p in cands}:
@@ -1673,13 +1680,8 @@ class MissionFSM:
                 first = next(((lb, p) for _d, lb, p in mine
                               if abs(p[0] - cx) <= m.basket_stop_zone_half_m + near_r and _dist(p, (min(max(p[0], cx - m.basket_stop_zone_half_m), cx + m.basket_stop_zone_half_m), cy)) < near_r), None)
             if first is not None:
-                lb, p = first
-                if self._zone_first_logged != p:
-                    self._zone_first_logged = p
-                    self._log(f"{box} 앞 정차 구역을 {lb} ({p[0]:.2f}, {p[1]:.2f}) 이(가) 막거나 바로 앞에 있다 — 그것부터")
-                return lb, p
-        _d, lb, p = cands[0]
-        return lb, p
+                return first
+        return None
 
     def _basket(self, box: Optional[str] = None) -> BasketTarget:
         """목적지 상자의 투입 목표. 팔이 겨누는 점은 상자 중심이 아니다."""

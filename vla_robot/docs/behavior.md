@@ -68,9 +68,9 @@ SEARCH_TARGET → APPROACH_PIECE → GRASP → CARRY_TO_DEST → NUDGE_BOX → P
 ## 회전의 차체 특성
 
 - 회전 뒤 직진을 시작하면 **돈 방향으로 7.5 ± 1.5° 더 돕니다**(10-08 base_trace 35번, 12~180° 회전, 사이 정지
-  시간과 무관). 그래서 0.5 s 넘게 돈 회전은 `planner.turn_lead_deg`(7°) 일찍 멈춥니다. 12° 아래 회전에서도 같은지는
+  시간과 무관). 그래서 0.5 s 넘게 돈 회전은 `planner.turn_lead_deg`(7°) 일찍 멈춥니다(시퀀서와 겨누는 선 붙기가 같은 `planning.planner.lead_err` 를 씁니다). 12° 아래 회전에서도 같은지는
   아직 모릅니다.
-- 회전 뒤 서 있기(`drive.turn_settle_s`)는 효과가 없어 꺼 두었습니다.
+- 회전 뒤 서 있기는 효과가 없어(0.4 s 서도 직진 시작 회전 그대로) 뺐습니다.
 - 반대 회전(정차 소음 줄이기, unwind)은 뺐습니다. 소음은 Pi 의 소음 정리 재기동이 맡습니다.
 
 ## 고장 감시와 복구
