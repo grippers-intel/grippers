@@ -181,6 +181,9 @@ class PlannerConfig:
     narrow_hold_enter_deg: float = 20.0
     no_turn_near_m: float = 0.15
     min_heading_dist_m: float = 0.05
+    # 제자리 회전 뒤 직진을 시작하면 차체가 **회전 방향으로** 이만큼 더 돈다(10-08 base_trace 35번: 회전 크기 12~180° 와
+    # 무관하게 7.5 ± 1.5°, 0.4 s 서도 그대로 — 보드 바퀴 속도 보정이 직진 시작 때 풀린다). 그만큼 덜 돌고 멈춘다.
+    turn_lead_deg: float = 7.0
     obstacle_hold_cycles: int = 8
     obstacle_match_m: float = 0.06
     # CARRY 중 로봇 근처의 검출은 들고 있는 물체일 가능성이 높아 장애물에서 뺀다.
@@ -202,7 +205,7 @@ class DriveConfig:
     nudge_mps: float = 0.15
     # 제자리 회전 뒤 직진·옆걸음을 시작하기 전에 이만큼 선다(10-08: 회전 뒤 직진을 0.1 s 만에 시작하면 처음 0.4~0.5 s
     # 동안 차체가 0.25~0.44 rad/s 로 저절로 돌며 미끄러졌다 — 회전 없이 시작하면 0.06. 방향이 10° 틀어져 다시 맞추기·대각선 밀림).
-    turn_settle_s: float = 0.4
+    turn_settle_s: float = 0.0
     # 파지·투입 직전 반대 회전(unwind, 10-01~10-07)은 뺐다(10-08 사용자): 회전 뒤 정차 소음은 Pi 의
     # 소음 정리 재기동(base.quiet_reset_on_job, 팔 작업 시작 때)이 멎게 하고, 반대 회전은 배터리만 더 쓴다.
 
@@ -307,6 +310,10 @@ class MissionConfig:
     # 정차점 옆 8~9 cm 에서 185° · 203° 돌아 정차점에 갔다가 다시 46° · 57°, 퀸은 5 cm 안이라 바구니 반대로 6 cm 직진).
     # 붙는 것은 정차점 거리 + place_here_gap_m 까지, 정차점보다 place_here_max_gap_m 넘게 멀면 정차점으로 간다.
     place_here_max_m: float = 0.12
+    # 정차점까지 직선이 비고(기물 직진 여유) 도착해서 도는 회전도 비면, 이 거리 안에서는 경로 계획 없이 곧장 간다 —
+    # 잡은 자리에서 정차점 쪽으로 한 번 돌고 직진, 도착해서 바구니 쪽으로 한 번(10-08 사용자: 정차점 근처까지 방향 전환이
+    # 두 번씩 — 운반 중간점 → 정차점으로 목표가 바뀌고, 직진 중 흐름을 다시 맞췄다).
+    place_direct_max_m: float = 1.6
     place_here_gap_m: float = 0.01
     place_here_max_gap_m: float = 0.10
     basket_rim_margin_m: float = 0.02

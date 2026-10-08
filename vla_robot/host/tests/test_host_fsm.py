@@ -387,8 +387,9 @@ def test_carry_goes_straight_to_the_stop_point(cfg):
     fsm._enter(HostState.CARRY_TO_DEST)
     fsm.step(P(0.60, 1.10, yaw=0.0), {}, S(), 0.0)
     dx, dy = fsm.dest_xy
-    # 주변에 기물이 없으면 곧장(10-07 마지막 상자: 가운데로 갔다 올라가는 건 불필요했다)
-    assert fsm.nav_goal == pytest.approx((dx, dy))
+    # 주변에 기물이 없으면 곧장(10-07 마지막 상자: 가운데로 갔다 올라가는 건 불필요했다) — 10-08: 경로 계획 없이
+    # 곧장 가는 단계로(직선·도착 회전이 비면 1.6 m 안에서)
+    assert fsm.state == HostState.NUDGE_BOX
     # 정차점 옆에 기물이 있어 곧장 들어가 몸을 돌리면 쓸면 아래에서 들어간다 — 이미 정차점 30 cm 아래보다 위(y 1.10)면
     # 내려가지 않고 지금 높이에서 옆으로(10-07 별)
     fsm._enter(HostState.CARRY_TO_DEST)
@@ -449,7 +450,7 @@ def test_nudge_times_out_back_to_carry(cfg):
         fsm.step(P(dx, dy - 0.10 - 0.03 * (k % 2), yaw=160.0), {}, S(), t)
         assert fsm.state == HostState.NUDGE_BOX
         t += 0.5
-    fsm.step(P(dx, dy - 0.10, yaw=160.0), {}, S(), cfg.mission.nudge_timeout_s + 0.2)
+    fsm.step(P(dx, dy - 0.10, yaw=160.0), {}, S(), cfg.mission.nudge_timeout_s + 1.2)   # + 오는 시간(시작 거리/속도)
     assert fsm.state == HostState.CARRY_TO_DEST and fsm.place_tries == 1
 
 
@@ -552,6 +553,8 @@ def test_too_close_with_room_behind_backs_into_range(cfg):
 def test_waits_after_a_turn_before_driving(cfg):
     """10-08 base_trace: 회전 뒤 0.1 s 만에 직진하면 처음 0.4~0.5 s 동안 저절로 돌며 미끄러졌다(대각선 밀림).
     회전을 마친 뒤 drive.turn_settle_s 동안은 직진하지 않는다."""
+    from dataclasses import replace as _replace
+    cfg = _replace(cfg, drive=_replace(cfg.drive, turn_settle_s=0.4))      # 기본은 끔(실기 효과 없음) — 기능만 본다
     fsm = MissionFSM(cfg)
     fsm._last_turn_at = 10.0
     fwd = HostCommand(State.APPROACH, linear_x=0.15)
