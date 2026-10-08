@@ -160,3 +160,23 @@ def test_nudge_does_not_place_from_beside_the_stop():
     fsm.step(P(0.76, 1.267, yaw=45.0), {"queen": [(1.125, 1.355)]}, S(), 0.0)
     assert fsm.state == HostState.NUDGE_BOX
     assert not fsm.ready_to_advance                           # 옆으로 더 가야 한다
+
+
+def test_nudge_places_from_just_beside_the_stop_with_one_turn():
+    """10-08 상자: 정차점(−10 cm 자리) 바로 옆 6.5 cm 에서 바구니 반대쪽을 보고 잡았다. 옆 허용 6 cm 에 걸려
+    정차점 쪽으로 +120° 돌고 5 cm 간 뒤 다시 +83° — 약 200°. 8 cm 안이면 그 자리에서 바구니 쪽으로 한 번만 돈다."""
+    fsm = MissionFSM(_cfg())
+    fsm.target_label, fsm.target_xy, fsm.dest_box = "box", (0.573, 1.202), "basket"
+    fsm.dest_xy, fsm._aim_shift = (0.89, 1.26), -0.06
+    fsm._enter(HostState.NUDGE_BOX)
+    pmap = {"queen": [(1.118, 1.334)]}
+    cmd = fsm.step(P(0.840, 1.301, yaw=-159.5), pmap, S(), 0.0)
+    assert fsm.state == HostState.NUDGE_BOX
+    assert cmd.linear_x == 0.0 and cmd.angular_z < 0          # 정차점으로 가지 않고 바구니 쪽으로(짧은 쪽) 돈다
+    heading = fsm._basket().heading_deg((0.840, 1.301))
+    t = 0.1
+    while fsm.state == HostState.NUDGE_BOX and t < 1.0:
+        cmd = fsm.step(P(0.840, 1.301, yaw=heading - 5.0), pmap, S(), t)
+        assert cmd.linear_x == 0.0
+        t += 0.1
+    assert fsm.state == HostState.PLACE
