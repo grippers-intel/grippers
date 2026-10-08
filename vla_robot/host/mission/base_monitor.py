@@ -72,10 +72,14 @@ class BaseRunawayMonitor:
         self.grace_s = grace_s
         self.reset()
 
+    #: 이 cos 보다 방향이 많이 바뀌면(약 30°) 다른 병진으로 본다.
+    SAME_DIR_COS = 0.87
+
     def reset(self) -> None:
         self._last_linear_at: Optional[float] = None
         self._poses: list[tuple[float, float, float]] = []
-        self._moves: list[tuple[float, float, float, float]] = []   # 병진 중 (t, x, y, 명령 방향 부호)
+        self._moves: list[tuple[float, float, float]] = []   # 같은 방향 병진 중 (t, x, y)
+        self._move_dir: Optional[tuple[float, float]] = None  # 그 병진의 map 방향(단위벡터)
 
     @staticmethod
     def _commands_translation(cmd: HostCommand) -> bool:
@@ -96,12 +100,18 @@ class BaseRunawayMonitor:
             ey = cmd.linear_x * math.sin(th) + cmd.linear_y * math.cos(th)
             n = math.hypot(ex, ey)
             ex, ey = ex / n, ey / n
-            self._moves = [m for m in self._moves if now - m[0] <= self.window_s] + [(now, pose.x, pose.y, 0.0)]
-            t0, x0, y0, _ = self._moves[0]
+            # 방향이 바뀌면(직진 → 물러나기 등) 처음부터 — 지난 방향의 이동을 새 명령에 대지 않는다(10-08 검토:
+            # 정차점을 지나쳐 물러나는 첫 사이클에 직전 0.5 s 전진이 "반대로 간다"로 잡혀 보드 리셋).
+            if self._move_dir is None or ex * self._move_dir[0] + ey * self._move_dir[1] < self.SAME_DIR_COS:
+                self._moves.clear()
+            self._move_dir = (ex, ey)
+            self._moves = [m for m in self._moves if now - m[0] <= self.window_s] + [(now, pose.x, pose.y)]
+            t0, x0, y0 = self._moves[0]
             if now - t0 >= self.window_s * 0.8 and (pose.x - x0) * ex + (pose.y - y0) * ey < -self.move_m:
                 return True
         else:
             self._moves.clear()
+            self._move_dir = None
         if self._commands_translation(cmd) or self._last_linear_at is None:
             # 병진 중이거나 막 시작했다. 기준 시각만 적는다(처음 보는 경우도 방금 병진한 것으로 친다).
             self._last_linear_at = now
