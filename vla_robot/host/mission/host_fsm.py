@@ -180,6 +180,8 @@ class MissionFSM:
         self._aim_shift = 0.0                # 바구니 정차 구역에서 비켜 선 만큼 겨누는 점도 옮긴다(m)
         self._pre_stop: Optional[tuple[XY, XY]] = None   # (정차점, 거쳐 갈 점) — 정차점이 바뀌면 다시 정한다
         self._other_way_logged = False
+        self._halted_from: Optional[HostState] = None
+        self._tight_turn_logged = False
         self._pose_now: Optional[Pose] = None
         self._pmap_now: Optional[PieceMap] = None
         self.skipped: list[tuple[XY, float]] = []
@@ -766,14 +768,31 @@ class MissionFSM:
             # 팔이 못 메우는 각도다. 이때만 정차점에서 차체를 돌린다(돌아도 상자에 닿지 않는 자리다).
             # 단, 그 회전이 바구니 옆 기물을 쓸면 돌지 않는다(10-05 별 · 10-07 나이트를 쳤다).
             turn = residual - math.copysign(m.place_turn_to_deg, residual)
-            pl = self._planner
             if self._turn_sweeps(pose, turn):         # 정차 구역·상자 앞 맞추기와 같은 간격 기준
+                # 반대로 돌면 비는가(10-08 상자: 정차점 위에서 −144° 를 보고 잡아 +127° 쪽은 뒷모서리가 퀸을 쓸고
+                # 시계 방향은 뒷면이 퀸에서 멀어지는데, 짧은 쪽만 보고 다시 접근 3번 → HALTED).
+                other = turn - math.copysign(360.0, turn)
+                if not self._turn_sweeps(pose, other):
+                    self._nudge_turn_logged = True
+                    return self._rotate_other_way(residual, residual - math.copysign(360.0, residual))
                 short = abs(residual) - m.max_arm_yaw_deg
                 if short <= m.place_arm_only_max_short_deg:
                     self._arm_only_place = True
                     self._log(f"몸을 돌리면 바구니 옆 기물에 닿는다 — 팔로만 넣음 "
                               f"(팔 {math.copysign(m.max_arm_yaw_deg, residual):+.0f}°, 모자란 각 {short:.1f}°)")
                     return self._stop("arm-only place")
+                # 양쪽 다 1.5 cm 안이지만 닿지는 않으면 덜 붙는 쪽으로 돈다 — 운반 중 바구니 앞 회전과 같은 규칙(10-07).
+                # 10-08 상자: 잡은 자리가 고른 정차점에서 3 cm 어긋나 퀸과 시계 1.1 · 반시계 0.8 cm.
+                g_turn, g_other = self._turn_min_gap(pose, turn), self._turn_min_gap(pose, other)
+                if max(g_turn, g_other) >= 0.0:
+                    self._nudge_turn_logged = True
+                    if not self._tight_turn_logged:
+                        self._tight_turn_logged = True
+                        self._log(f"바구니 앞 몸 회전: 양쪽 다 옆 기물과 빠듯하다(짧은 쪽 {g_turn * 100:.1f} · "
+                                  f"반대 {g_other * 100:.1f} cm) — 덜 붙는 쪽으로")
+                    if g_other > g_turn + 0.005:
+                        return self._rotate_other_way(residual, residual - math.copysign(360.0, residual))
+                    return self._rotate(residual)
                 return self._nudge_missed(f"바구니 옆 기물 — 몸을 돌리면 닿고 팔로는 {short:.1f}° 모자란다")
             if not self._nudge_turn_logged:
                 self._nudge_turn_logged = True
@@ -800,6 +819,11 @@ class MissionFSM:
 
     def _nudge_missed(self, why: str) -> HostCommand:
         m = self.cfg.mission
+        pose = self._pose_now
+        if pose is not None and self.dest_xy is not None and _dist(pose.xy, self.dest_xy) <= m.place_arrive_tol_m:
+            # 이미 정차점에 서 있다 — 운반으로 돌아가도 곧바로 여기로 다시 넘어와 같은 결과다(10-08: 0.2 s 에 3번).
+            self._halt(f"could not stand in front of {self.dest_box}: {why} — 치워 주세요")
+            return self._stop("halted")
         self.place_tries += 1
         if self.place_tries > m.place_retry_max:
             self._halt(f"could not stand in front of {self.dest_box} ({self.place_tries} tries): {why}")
@@ -1233,6 +1257,7 @@ class MissionFSM:
             self._pre_stop = None
         if state == HostState.NUDGE_BOX:
             self._nudge_from = None
+            self._tight_turn_logged = False
             self._nudge_turn_logged = False
             self._arm_only_place = False
             self._nudge_started = self._now
@@ -1242,6 +1267,14 @@ class MissionFSM:
         prev = _PREV.get(self.state)
         if prev is None:
             return
+        if self.state == HostState.HALTED:
+            # 사람이 치웠다 — 쥔 채 멈췄으면 운반부터(정차 자리를 다시 고른다. 10-08: 상자 앞 맞추기로 곧장 가면
+            # 막혔던 예전 자리를 그대로 썼다), 잡기 전에 멈췄으면 다가가기부터.
+            held = (HostState.CARRY_TO_DEST, HostState.NUDGE_BOX, HostState.FACE_HAND, HostState.PLACE)
+            if self._halted_from in held:
+                prev = HostState.CARRY_TO_DEST
+            elif self._halted_from in (HostState.APPROACH_PIECE, HostState.GRASP) and self.target_xy is not None:
+                prev = HostState.APPROACH_PIECE
         if prev == HostState.SEARCH_TARGET:
             self._clear_target()
         self.halt_reason = None
@@ -1374,6 +1407,7 @@ class MissionFSM:
         self._enter(HostState.SEARCH_TARGET)
 
     def _halt(self, why: str) -> None:
+        self._halted_from = self.state
         self.halt_reason = why
         self._log(f"HALTED: {why}")
         self._enter(HostState.HALTED)

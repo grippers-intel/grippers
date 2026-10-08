@@ -55,8 +55,34 @@ def test_turns_the_body_as_before_when_nothing_is_beside():
     assert not any("팔로만" in e for e in fsm.events)
 
 
-def test_too_much_short_goes_back_to_approach():
-    fsm, pose, pmap = _at_stop(30.0)                                        # 팔로 15° 모자란다(상한 10°)
+def test_too_much_short_at_the_stop_halts_instead_of_fake_retries():
+    """10-08: 정차점에 선 채 "다시 접근" 3번이 0.2 s 에 지나갔다(운반이 곧바로 같은 자리로 넘긴다) — 바로 HALTED."""
+    fsm, pose, pmap = _at_stop(30.0)                                        # 팔로 15° 모자란다(상한 10°) · 반대로도 닿는다
     fsm.step(pose, pmap, S(), 1.0)
-    assert fsm.state == HostState.CARRY_TO_DEST
-    assert any("팔로는" in e and "모자란다" in e for e in fsm.events)
+    assert fsm.state == HostState.HALTED
+    assert "팔로는" in fsm.halt_reason and "모자란다" in fsm.halt_reason
+
+
+def test_turns_on_the_less_tight_side_when_both_ways_pass_close():
+    """10-08 상자: 잡은 자리가 고른 정차점에서 3 cm 어긋나(0.996, 1.279 · −144°) 바구니 쪽 회전이 어느 쪽으로든
+    퀸과 1 cm 안팎(닿지는 않음) — 짧은 쪽만 보고 "다시 접근" 3번이 0.2 s 에 지나가 HALTED. 덜 붙는 쪽으로 돈다."""
+    fsm = MissionFSM(_cfg())
+    fsm.set_order(Order(labels=("box",)))
+    fsm.step(P(0.97, 0.40), {"box": [(0.97, 1.0)]}, S(), 0.0)
+    fsm.dest_xy, fsm._aim_shift = (0.97, 1.26), -0.02
+    fsm._enter(HostState.NUDGE_BOX)
+    pose = P(0.996, 1.279, -143.9)
+    held = (0.996 - 0.2 * math.cos(math.radians(36.1)), 1.279 - 0.2 * math.sin(math.radians(36.1)))
+    pmap = {"box": [held], "queen": [(1.166, 1.355)]}
+    cmd = fsm.step(pose, pmap, S(), 1.0)
+    assert fsm.state == HostState.NUDGE_BOX
+    assert cmd.angular_z < 0                                                # 시계(짧은 쪽, 1.1 cm > 반대 0.8 cm)
+    assert any("빠듯" in e for e in fsm.events), list(fsm.events)
+
+
+def test_back_from_halted_while_holding_rechooses_the_stop():
+    fsm, pose, pmap = _at_stop(30.0)
+    fsm.step(pose, pmap, S(), 1.0)
+    assert fsm.state == HostState.HALTED
+    fsm._go_back()
+    assert fsm.state == HostState.CARRY_TO_DEST and not fsm._box_stop_chosen
