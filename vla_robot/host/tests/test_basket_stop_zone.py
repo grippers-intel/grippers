@@ -228,3 +228,41 @@ def test_thirty_cm_nudge_does_not_stop_to_realign(drift):
     state, rot, _worst, _events = _nudge_sim((1.110, 0.937, 134.7), (0.99, 1.26), 0.0, drift=drift)
     assert state == HostState.PLACE and rot < 60.0, rot
 
+
+def _nudging(pose_xy=(0.99, 0.95)):
+    fsm = MissionFSM(_cfg())
+    fsm.target_label, fsm.target_xy, fsm.dest_box = "star", (0.5, 0.5), "basket"
+    fsm.dest_xy, fsm._aim_shift = (0.99, 1.26), 0.0
+    fsm._enter(HostState.NUDGE_BOX)
+    return fsm
+
+
+def test_nudge_realigns_when_drifting_past_a_piece():
+    """10-08 공: 바구니 앞 직진을 25° 까지 그냥 가게 했더니 8~9° 틀어진 채 퀸 옆 2.9 cm 에 도착해 HALTED.
+    틀어진 길이 기물의 회전 반경(0.20 m) 안을 지나면 예전처럼 12° 에서 다시 맞춘다."""
+    pose = P(0.99, 0.95, 90.0 + 15.0)                          # 정차점 쪽에서 15° 틀어짐
+    near = {"star": [(0.99 - 0.05, 1.14)], "queen": [(0.80, 1.18)]}
+    far = {"star": [(0.99 - 0.05, 1.14)], "queen": [(0.50, 1.18)]}
+    for pm, keeps_going in ((near, False), (far, True)):
+        fsm = _nudging()
+        for k in range(3):                                     # 똑바로 보고 직진을 시작한 뒤
+            fsm.step(P(0.99, 0.95), pm, S(), 0.1 * k)
+        fsm.step(pose, pm, S(), 0.3)                           # 15° 흐름 — 시퀀서는 한 사이클 뒤에 바꾼다
+        cmd = fsm.step(pose, pm, S(), 0.4)
+        assert (cmd.linear_x > 0.0) == keeps_going, (pm["queen"], cmd)
+
+
+def test_base_recovery_time_does_not_count_against_the_nudge_timeout():
+    """10-08 룩: 회전 폭주 복구 13 s 가 바구니 앞 맞추기 25 s 에 들어가 복구 직후 HALTED."""
+    from vla_common.protocol import PiStatus
+    fsm = _nudging()
+    pm = {"star": [(0.94, 1.14)]}
+    fsm.step(P(0.99, 0.95), pm, S(), 0.0)
+    rec = PiStatus(boot_id="B", state=State.IDLE, busy=False, job_id=0, result=None,
+                   base_ok=True, watchdog=False, base_recovering=True)
+    t = 0.1
+    while t < fsm.cfg.mission.nudge_timeout_s + 5.0:
+        fsm.step(P(0.99, 0.95), pm, rec, t)
+        t += 0.1
+    fsm.step(P(0.99, 0.95), pm, S(), t)
+    assert fsm.state == HostState.NUDGE_BOX
