@@ -195,6 +195,7 @@ class SimWorld:
             # 실제 Pi 도 작업을 **시작시킨 명령**의 각도를 쓴다. 이후 패킷 값은 보지 않는다.
             self._job_arm_yaw = float(cmd.arm_yaw_deg)
             self._job_place_pose = cmd.place_pose
+            self._job_label = cmd.label
             self._vel = (0.0, 0.0, 0.0)
             return
         if cmd.state in State.JOB_STATES:
@@ -212,7 +213,10 @@ class SimWorld:
                 self._result = JobResult(self._job_id, action, False, "already holding")
                 return
             free = [p for p in self.pieces if not p.held and p.in_box is None]
-            near = min(free, key=lambda p: math.hypot(p.x - self.x, p.y - self.y), default=None)
+            # 팔은 앞에 있는 것을 잡는다 — Host 가 겨눈 기물(라벨)이 손 닿는 곳에 있으면 그것부터(옆의 다른 기물이 아니라)
+            aimed = [p for p in free if p.label == getattr(self, "_job_label", "")
+                     and math.hypot(p.x - self.x, p.y - self.y) <= self.grasp_reach_m]
+            near = min(aimed or free, key=lambda p: math.hypot(p.x - self.x, p.y - self.y), default=None)
             if near is None or math.hypot(near.x - self.x, near.y - self.y) > self.grasp_reach_m:
                 self._result = JobResult(self._job_id, action, False, "nothing within reach")
                 return

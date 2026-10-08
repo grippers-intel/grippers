@@ -289,3 +289,18 @@ def test_goes_to_the_nearest_spot_of_the_stop_zone():
         fsm.step(P(x, 0.95, yaw=90.0), {"queen": [(x, 1.15)]}, S(), 0.1)
         assert abs(fsm.dest_xy[0] - (cx + sign * fsm.cfg.mission.basket_stop_zone_half_m)) < 1e-6, (x, fsm.dest_xy)
 
+
+def test_piece_in_or_right_in_front_of_the_stop_zone_goes_first():
+    """10-08 시뮬(무작위 배치 12개 중 6개 HALTED): 정차 구역을 막는 기물이 있는데 가까운 다른 기물을 먼저 쥐면
+    넣으러 가서 설 자리가 없다. 정차 구역을 막거나 바로 앞(회전 반경 안)에 있는 대상부터 잡는다."""
+    for blocker in ((1.03, 1.20), (0.96, 1.09)):            # 구역 안 · 정차점 17 cm 아래
+        fsm = MissionFSM(_cfg())
+        fsm.set_order(Order(labels=("queen", "soccer")))
+        fsm.step(P(0.93, 0.33), {"queen": [(0.80, 0.62)], "soccer": [blocker]}, S(), 0.0)
+        assert fsm.target_label == "soccer", (blocker, fsm.target_label)
+        assert any("그것부터" in e for e in fsm.events)
+    fsm = MissionFSM(_cfg())                                 # 막는 것이 없으면 가까운 것부터
+    fsm.set_order(Order(labels=("queen", "soccer")))
+    fsm.step(P(0.93, 0.33), {"queen": [(0.80, 0.62)], "soccer": [(1.50, 0.80)]}, S(), 0.0)
+    assert fsm.target_label == "queen"
+
