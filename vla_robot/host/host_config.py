@@ -296,6 +296,14 @@ class MissionConfig:
     basket_near_m: float = 0.35
     # 상자 앞 맞추기의 "도착"은 바구니까지 거리만이 아니라 정차점에서 옆으로 이만큼 안이어야 한다(10-07 별: 13 cm 옆에서 넣음).
     place_lateral_tol_m: float = 0.08
+    # 정차점 가까이(place_here_max_m 안)에서 바구니까지만 조금 멀면 정차점으로 돌아가지 않고, 겨누는 점을 보고 서서
+    # 그 선을 따라 곧장 붙는다 — 그 선이 바구니 입구를 벽에서 basket_rim_margin_m 안쪽으로 지나야 한다(10-08 6기물:
+    # 정차점 옆 8~9 cm 에서 185° · 203° 돌아 정차점에 갔다가 다시 46° · 57°, 퀸은 5 cm 안이라 바구니 반대로 6 cm 직진).
+    # 붙는 것은 정차점 거리 + place_here_gap_m 까지, 정차점보다 place_here_max_gap_m 넘게 멀면 정차점으로 간다.
+    place_here_max_m: float = 0.12
+    place_here_gap_m: float = 0.01
+    place_here_max_gap_m: float = 0.10
+    basket_rim_margin_m: float = 0.02
     basket_front_clear_m: float = 0.02
     basket_stop_step_m: float = 0.02
     basket_aim_shift_max_m: float = 0.06

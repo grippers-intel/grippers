@@ -1,4 +1,6 @@
 import math
+
+import pytest
 """바구니 정차 구역(2026-10-07): y 는 정차점 그대로, x 는 가운데 ±8 cm 안에서 기물에 안 닿는 가장 가운데 자리."""
 from localization.pose import Pose
 from mission.host_fsm import HostState, MissionFSM, Order
@@ -180,3 +182,49 @@ def test_nudge_places_from_just_beside_the_stop_with_one_turn():
         assert cmd.linear_x == 0.0
         t += 0.1
     assert fsm.state == HostState.PLACE
+
+
+def _nudge_sim(pose, stop, shift, drift=0.0):
+    """바구니 앞 맞추기만 단순 적분으로 돌린다. (끝 상태, 돈 각도 합, 바구니에서 멀어진 최대 거리, 사건)."""
+    fsm = MissionFSM(_cfg())
+    fsm.target_label, fsm.target_xy, fsm.dest_box = "star", (0.5, 0.5), "basket"
+    fsm.dest_xy, fsm._aim_shift = stop, shift
+    fsm._enter(HostState.NUDGE_BOX)
+    x, y, yaw = pose
+    t, rot, worst = 0.0, 0.0, 0.0
+    aim = fsm._basket().aim
+    d0 = math.dist((x, y), aim)
+    while fsm.state == HostState.NUDGE_BOX and t < 20.0:
+        th = math.radians(yaw)
+        cmd = fsm.step(P(x, y, yaw), {"star": [(x + 0.2 * math.cos(th), y + 0.2 * math.sin(th))]}, S(), t)
+        yaw += math.degrees(cmd.angular_z) * 0.1
+        rot += abs(math.degrees(cmd.angular_z)) * 0.1
+        x += cmd.linear_x * 0.1 * math.cos(th) + drift * 0.1
+        y += cmd.linear_x * 0.1 * math.sin(th)
+        worst = max(worst, math.dist((x, y), aim) - d0)
+        t += 0.1
+    return fsm.state, rot, worst, list(fsm.events)
+
+
+def test_beside_the_stop_faces_the_aim_and_creeps_in():
+    """10-08 6기물 별: 정차점 8.7 cm 옆 · 바구니까지 +4 cm. 정차점 쪽으로 185° 돌아 5 cm 간 뒤 다시 46° 돌았다.
+    겨누는 점으로 가는 선이 입구 안(벽에서 2.2 cm)이면 그 선을 보고 서서 곧장 붙는다 — 한 번만 돈다."""
+    state, rot, _worst, events = _nudge_sim((1.175, 1.242, -18.4), (1.09, 1.26), 0.06)
+    assert state == HostState.PLACE
+    assert rot < 150.0, rot                                   # 예전 ~230°
+    assert any("겨누는 점을 보고" in e for e in events)
+
+
+def test_close_to_the_stop_never_drives_away_from_the_basket():
+    """10-08 6기물 퀸: 정차점 4.7 cm(5 cm 안) — 방향을 못 재 지금 방향(−64°, 바구니 반대)으로 6 cm 직진했다."""
+    state, _rot, worst, _events = _nudge_sim((1.047, 1.213, -63.6), (1.05, 1.26), 0.06)
+    assert state == HostState.PLACE
+    assert worst < 0.01, worst
+
+
+@pytest.mark.parametrize("drift", [0.01, -0.01])
+def test_thirty_cm_nudge_does_not_stop_to_realign(drift):
+    """10-08 공·나이트: 30 cm 맞추기 중 12° 넘을 때마다 서서 다시 돌았다(2번씩). 앞길이 비면 계속 간다."""
+    state, rot, _worst, _events = _nudge_sim((1.110, 0.937, 134.7), (0.99, 1.26), 0.0, drift=drift)
+    assert state == HostState.PLACE and rot < 60.0, rot
+
