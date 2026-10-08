@@ -147,3 +147,7 @@ mission:
   grasp_timeout_s: 90.0
   place_timeout_s: 45.0
   known_pose_tolerance_deg: 20.0
+  # 파지 뒤 조이는 세기: 목표 = 지금 개도 − 값(%). 없는 라벨은 정책 목표(끝까지 닫힘)로 세게 조인다(09-30 soccer 낙하 대응).
+  # 10-08: soccer 를 세게 조이자 복귀 중 공이 튀어 나갔다 — 기존(idle 개도 6.9 % · 공에서 약 3 %p 더 닫힘)과 비슷하게.
+  hold_squeeze_pct_by_label:
+    soccer: 3.0

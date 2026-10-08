@@ -320,6 +320,15 @@ class RosJobRunner:
                     self._set_gripper(idle_open, "복귀 전 그리퍼 닫기")
                 except JobFailed as exc:
                     self._node.get_logger().warn(f"그리퍼 정렬 실패, 그대로 복귀한다: {exc}")
+            elif label in mcfg.hold_squeeze_pct_by_label:
+                # 끝까지 닫으라는 정책 목표로 조이면 공처럼 둥글고 무른 것은 튀어 나간다(10-08) — 지금 개도에서
+                # 조금만 더 닫힌 목표로 바꿔 덜 조인다. 이 목표를 복귀·운반 내내 유지한다(arm_driver 가 보낸 목표를 잇는다).
+                target = max(0.0, now_open - mcfg.hold_squeeze_pct_by_label[label])
+                try:
+                    self._set_gripper(target, f"{label} 조임 줄이기")
+                    self._node.get_logger().info(f"{label} 조임 줄임: 개도 {now_open:.1f}% → 목표 {target:.1f}%")
+                except JobFailed as exc:
+                    self._node.get_logger().warn(f"조임 줄이기 실패, 그대로 복귀한다: {exc}")
 
         # 성공·실패와 무관하게 **먼저 집으로 돌린다.** 정책은 사이클 끝(복귀 문턱이나 재시도
         # 골짜기)에서 멈추므로 팔이 공중에 남고, 그대로 두면 다음 작업이
