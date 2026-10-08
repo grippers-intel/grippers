@@ -177,6 +177,9 @@ class UiState:
         if desk is not None and desk.phase == "interpreting":
             return {"text": f"“{desk.text}”", "interp_text": "해석 중 · 대상 탐색…", "interp_code": "Interpreting",
                     "echo": desk.text, "action": "mic", "partial": desk.text, "hint": ""}
+        if desk is not None and desk.phase == "hand_wait":
+            return {"text": f"“{desk.text}”", "interp_text": "손을 찾는 중 · 가장자리에서 손바닥을 펴 주세요",
+                    "interp_code": "Hand", "echo": desk.text, "action": "mic", "partial": desk.text, "hint": ""}
         if vphase == "listening":
             return {"partial": "", "hint": "듣고 있습니다 · 말이 끝나면 자동으로 인식합니다 (다시 누르면 멈춤)"}
         if vphase == "transcribing":
@@ -245,7 +248,7 @@ class UiState:
         order = getattr(fsm, "order", None)
         finished = getattr(fsm, "finished_order", None)
         waiting = searching and order is None and getattr(fsm, "command_mode", "auto") == "instructed"
-        if desk is not None and desk.phase == "interpreting":
+        if desk is not None and desk.phase in ("interpreting", "hand_wait"):
             screen = "command"
         elif vphase in ("listening", "transcribing"):
             screen = "listen"

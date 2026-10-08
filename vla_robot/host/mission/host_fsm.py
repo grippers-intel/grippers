@@ -141,6 +141,14 @@ class MissionFSM:
                           f"{reach:.3f} m — 기물이 상자 앞에 떨어진다")
 
     # ------------------------------------------------------------------ 조작
+    @property
+    def idle(self) -> bool:
+        """지시를 기다리거나(지시 모드) 멈춰 서 있다 — 기물 검출을 느리게 돌려도 된다."""
+        if self.estop or self.state == HostState.HALTED:
+            return True
+        return (self.state == HostState.SEARCH_TARGET and self.order is None
+                and self.command_mode == "instructed")
+
     def reset(self) -> None:
         """처음부터. ESTOP 래치를 푸는 유일한 방법이다(실수로 재개되지 않게)."""
         self.state = HostState.SEARCH_TARGET

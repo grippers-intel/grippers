@@ -98,6 +98,13 @@ def read_frames(caps) -> list[np.ndarray | None]:
     return frames
 
 
+def grab_frames(caps) -> None:
+    """영상을 풀지 않고 한 장씩 넘긴다 — 쉬는 사이클에도 버퍼에 오래된 프레임이 쌓이지 않게(MJPEG 풀기는 retrieve 에서)."""
+    for cap in caps:
+        if cap.isOpened():
+            cap.grab()
+
+
 def release_all(caps) -> None:
     for cap in caps:
         try:

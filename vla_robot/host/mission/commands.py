@@ -7,6 +7,7 @@ phase:  idle -> interpreting -> (accepted | failed) -> idle
 """
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 from mission.host_fsm import Order
@@ -31,6 +32,8 @@ class CommandDesk:
         self.failure: Optional[str] = None      # "unparseable" | "error" | "empty" | "nohand"
         self.hands: list = []                   # 매 사이클 update() 가 받는다 — "가져와"는 손이 보여야 접수
         self._pending: Optional[Order] = None   # 손이 없어 멈춘 "가져와" 지시(카드에서 바구니로 바꿀 수 있다)
+        self._want_since: Optional[float] = None   # 손 검출을 켠 시각 — 켠 직후에는 손이 아직 확인 전이다
+        self._hand_wait_until: Optional[float] = None
         self.visible: list[str] = []
         self.note: Optional[tuple[str, str, str]] = None   # (text, code, tone) — 한 번 띄울 알림
 
@@ -61,8 +64,27 @@ class CommandDesk:
         self._accept(fsm, Order((label,), "one", intent, self.text or label))
 
     # -- 매 사이클 ----------------------------------------------------------
+    def hands_wanted(self, fsm) -> bool:
+        """손 검출이 필요한가 — 명령 해석 중("가져와"일 수 있다) · 손을 기다리는 중 · 손에 건네는 지시가 도는 중.
+        그 밖에는 끈다(10-08 사용자: "가져와" 때만 실시간으로 본다)."""
+        order = getattr(fsm, "order", None)
+        return (self.phase in ("interpreting", "hand_wait") or self._pending is not None
+                or (order is not None and order.intent == "fetch"))
+
     def update(self, fsm, hands=()) -> None:
         self.hands = list(hands)
+        now = time.monotonic()
+        if self.hands_wanted(fsm):
+            self._want_since = self._want_since or now
+        else:
+            self._want_since = None
+        if self.phase == "hand_wait" and self._pending is not None:
+            if self.hands:
+                order, self._pending = self._pending, None
+                self._accept(fsm, order)
+            elif now >= (self._hand_wait_until or 0.0):
+                self.phase, self.failure = "failed", "nohand"
+            return
         r = self.resolver.poll()
         if r is None:
             return
@@ -77,7 +99,12 @@ class CommandDesk:
     def _accept(self, fsm, order: Order) -> None:
         if order.intent == "fetch" and not self.hands:
             # 손이 안 보이면 시작하지 않는다(2026-10-01 결정). 카드에서 바구니로 바꾸거나 손을 내밀고 다시.
+            # 손 검출은 해석을 시작할 때 켜진다 — 확인(hands.confirm_s)까지 HAND_WARMUP_S 는 기다려 본다.
             self._pending = order
+            ready_at = (self._want_since or time.monotonic()) + self.HAND_WARMUP_S
+            if time.monotonic() < ready_at:
+                self.phase, self.failure, self._hand_wait_until = "hand_wait", None, ready_at
+                return
             self.phase, self.failure = "failed", "nohand"
             return
         fsm.set_order(order)
@@ -91,6 +118,9 @@ class CommandDesk:
             order.intent = "organize"
             fsm.set_order(order)
             self.phase, self.failure = "accepted", None
+
+    #: 손 검출을 켠 뒤 "손 없음"이라 하기 전에 기다리는 시간 — 확인 0.6 s + 카메라 두 대 추론·지연 여유.
+    HAND_WARMUP_S = 2.0
 
     # -- 화면 ---------------------------------------------------------------
     def card(self) -> Optional[dict]:

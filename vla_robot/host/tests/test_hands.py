@@ -199,3 +199,26 @@ def test_a_moving_hand_stays_one_hand(cfg):
         if now >= cfg.hands.confirm_s:
             assert len(hands) == 1, (now, hands)
         now += 0.1
+
+
+def test_hand_worker_runs_only_when_active(monkeypatch):
+    """10-08 사용자: 손은 "가져와" 때만 실시간으로 본다. 꺼져 있으면 추론하지 않고 결과도 비운다."""
+    import time
+    import perception.hands as H
+    calls = []
+    monkeypatch.setattr(H, "run_landmarker", lambda lm, frame: calls.append(1) or [])
+    w = H._HandWorker(object(), "cam0", 0.0)
+    try:
+        w.active = False
+        w.submit(np.zeros((4, 4, 3), np.uint8))
+        time.sleep(0.3)
+        assert not calls and w.latest() is None
+        w.active = True
+        w.submit(np.zeros((4, 4, 3), np.uint8))
+        end = time.monotonic() + 2.0
+        while not calls and time.monotonic() < end:
+            time.sleep(0.02)
+        assert calls
+    finally:
+        w.stop()
+

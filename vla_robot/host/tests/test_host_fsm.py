@@ -565,3 +565,16 @@ def test_waits_after_a_turn_before_driving(cfg):
     turn = HostCommand(State.APPROACH, angular_z=0.5)
     assert fsm._settle_after_turn(turn, 20.0).angular_z == 0.5 and fsm._last_turn_at == 20.0
 
+
+def test_idle_only_while_waiting_for_a_command(cfg):
+    """기물 검출을 느리게 돌려도 되는 때(10-08 CPU): 지시 대기 · HALTED · ESTOP. 지시가 있으면 아니다."""
+    from dataclasses import replace as _replace
+    from mission.host_fsm import Order
+    fsm = MissionFSM(_replace(cfg, instruction=_replace(cfg.instruction, mode="instructed")))
+    assert fsm.idle
+    fsm.set_order(Order(labels=("queen",)))
+    assert not fsm.idle
+    fsm.request_estop()
+    fsm.step(P(0.9, 0.5), {}, S(), 0.0)
+    assert fsm.idle
+

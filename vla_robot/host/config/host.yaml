@@ -59,6 +59,8 @@ cameras:
   focus:
     0: 5
     1: 0
+  # 지시 대기 중(ESTOP·HALTED·손 검출 중 제외)에는 0.3 s 마다만 영상 풀기·ArUco. 사이에는 grab 만(버퍼 비우기). 0 = 끔
+  idle_process_period_s: 0.3
 
 detector:
   kind: geti                       # geti | none
@@ -66,6 +68,9 @@ detector:
   device: CPU
   cache_dir: .ov_cache
   min_infer_interval_s: 0.3
+  # 10-08 집 실측(카메라 2대분, 1280×720): 0.3 s 간격 CPU 16스레드의 36 % · 1.5 s 간격 17 %.
+  idle_infer_interval_s: 2.0       # 지시 대기 · HALTED · ESTOP 동안 — 기물은 사람이 옮길 때만 움직인다
+  num_threads: 4                   # OpenVINO 스레드(카메라당). 기본 862 ms → 4 스레드 726 ms, CPU 같음
   conf_threshold: 0.6
   empty_labels: ["No object", "Empty"]
 

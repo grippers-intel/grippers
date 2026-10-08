@@ -34,6 +34,7 @@ class Detection:
 class Detector(Protocol):
     def submit(self, cam_index: int, frame_bgr: np.ndarray) -> None: ...
     def latest(self, cam_index: int) -> Optional[list[Detection]]: ...
+    def set_idle(self, idle: bool) -> None: ...
     def close(self) -> None: ...
 
 
@@ -45,6 +46,9 @@ class NoneDetector:
 
     def latest(self, cam_index):
         return []
+
+    def set_idle(self, idle: bool) -> None:
+        pass
 
     def close(self) -> None:
         pass
@@ -64,6 +68,7 @@ class _GetiWorker:
         self._new = threading.Event()
         self._stop = False
         self._last_infer = 0.0
+        self.interval_s = cfg.min_infer_interval_s     # 대기 중이면 idle_infer_interval_s (GetiDetector.set_idle)
         self._thread = threading.Thread(target=self._run, name=f"geti-{name}", daemon=True)
         self._thread.start()
 
@@ -102,10 +107,9 @@ class _GetiWorker:
             self._new.clear()
             # 기물은 로봇이 옮기기 전엔 안 움직인다. 최소 간격만큼 쉬어 메인 루프에
             # CPU 를 돌려준다(0 s: 1.7 Hz, 0.3 s: 8.3 Hz 실측).
-            wait_left = self._cfg.min_infer_interval_s - (time.monotonic() - self._last_infer)
-            while wait_left > 0 and not self._stop:
-                time.sleep(min(wait_left, 0.1))
-                wait_left -= 0.1
+            # 간격은 기다리는 동안에도 다시 읽는다 — 대기 중(2 s)에 지시가 들어오면 바로 0.3 s 로.
+            while not self._stop and time.monotonic() - self._last_infer < self.interval_s:
+                time.sleep(0.05)
             with self._lock:
                 frame = self._frame
             if frame is None or self._stop:
@@ -136,15 +140,18 @@ class GetiDetector:
             raise RuntimeError(
                 f"Geti 배포 폴더가 없습니다: {path}\n"
                 "hardware\\grippers_topview\\geti_sdk-deployment\\deployment 를 이 경로로 복사하세요")
-        ov_config = None
+        ov_config = {}
         if cfg.cache_dir:
             # iGPU 캐시 없음 30 s -> 캐시 3 s. CPU 에서도 손해가 없어 항상 켠다.
             Path(cfg.cache_dir).mkdir(parents=True, exist_ok=True)
-            ov_config = {"CACHE_DIR": str(cfg.cache_dir)}
+            ov_config["CACHE_DIR"] = str(cfg.cache_dir)
+        if cfg.num_threads > 0 and cfg.device.upper() == "CPU":
+            ov_config["INFERENCE_NUM_THREADS"] = str(cfg.num_threads)
+        self._cfg = cfg
         self._workers: dict[int, _GetiWorker] = {}
         for idx in cam_indices:
             dep = Deployment.from_folder(str(path))
-            dep.load_inference_models(device=cfg.device, openvino_configuration=ov_config)
+            dep.load_inference_models(device=cfg.device, openvino_configuration=ov_config or None)
             self._workers[int(idx)] = _GetiWorker(dep, f"cam{idx}", cfg)
 
     def submit(self, cam_index: int, frame_bgr: np.ndarray) -> None:
@@ -155,6 +162,11 @@ class GetiDetector:
     def latest(self, cam_index: int):
         w = self._workers.get(int(cam_index))
         return None if w is None else w.latest()
+
+    def set_idle(self, idle: bool) -> None:
+        """지시 대기 중이면 추론 간격을 idle_infer_interval_s 로 늘린다."""
+        for w in self._workers.values():
+            w.interval_s = self._cfg.idle_infer_interval_s if idle else self._cfg.min_infer_interval_s
 
     def close(self) -> None:
         for w in self._workers.values():
