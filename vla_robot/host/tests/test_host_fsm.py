@@ -97,12 +97,12 @@ def test_does_not_grasp_until_it_faces_the_piece(cfg):
     assert cmd.angular_z > 0 and cmd.linear_x == 0            # 반시계로 돌아 기물을 본다
     assert fsm.grasp_face_err_deg == pytest.approx(30.0)
     cmd = fsm.step(P(0.9, 0.62, yaw=86.0), PM, S(), 0.1)       # 4° — 허용치 안
-    assert cmd.angular_z < 0, "회전으로 멈췄으니 반대로 짧게 돈다(정차 소음)"
-    _run_until(fsm, HostState.GRASP, P(0.9, 0.62, yaw=86.0), PM, S(), 0.2)
+    assert cmd.angular_z == 0                                   # 반대 회전 없이(10-08) 바로 잡는다
+    assert fsm.state == HostState.GRASP
 
 
 def _run_until(fsm, state, pose, pmap, status, t, limit_s=1.5):
-    """같은 자세로 0.1 s 씩 돌려 state 가 될 때까지(반대 회전·정착 사이클을 지나간다)."""
+    """같은 자세로 0.1 s 씩 돌려 state 가 될 때까지(정착 사이클을 지나간다)."""
     end = t + limit_s
     while fsm.state != state and t < end:
         fsm.step(pose, pmap, status, t)
@@ -111,44 +111,19 @@ def _run_until(fsm, state, pose, pmap, status, t, limit_s=1.5):
     return t
 
 
-def test_unwind_after_turning_then_grasp_without_turning_again(cfg):
-    """10-01: 회전 뒤 멈춰 있으면 바퀴가 크게 울었다. 반대로 unwind_s 만큼 돈 뒤, 그 탓에 1~2°
-    되돌아가 허용치를 살짝 넘어도 다시 돌지 않고 잡는다(무한 반복 방지)."""
-    d = cfg.drive
+def test_turning_to_face_goes_straight_to_grasp_without_a_reverse_turn(cfg):
+    """10-08: 파지 직전 반대 회전(unwind)을 뺐다 — 정면을 맞췄으면 거꾸로 돌지 않고 바로 잡는다."""
     fsm = MissionFSM(cfg)
     fsm.step(P(0.9, 0.62, yaw=60.0), PM, S(), 0.0)
-    fsm.step(P(0.9, 0.62, yaw=86.0), PM, S(), 0.1)              # 정면 — 반대 회전 시작
-    t, signs = 0.2, []
-    while t < 0.1 + d.unwind_s:
-        cmd = fsm.step(P(0.9, 0.62, yaw=83.0), PM, S(), t)
-        signs.append(cmd.angular_z)
+    t, turns = 0.1, []
+    while fsm.state != HostState.GRASP and t < 3.0:
+        cmd = fsm.step(P(0.9, 0.62, yaw=88.0), PM, S(), t)
+        turns.append(cmd.angular_z)
         t += 0.1
-    assert signs and all(s == pytest.approx(-d.unwind_rad_s) for s in signs)
-    # 반대 회전으로 7° 어긋났다(허용치 6° 밖) — 그래도 다시 돌지 않는다
-    _run_until(fsm, HostState.GRASP, P(0.9, 0.62, yaw=83.0), PM, S(), t)
+    assert fsm.state == HostState.GRASP and all(z >= 0 for z in turns)
 
 
-def test_a_short_creep_after_turning_does_not_cancel_the_unwind(cfg):
-    """10-01 star: 정면 회전 → 1~2 cm 후진(거리 맞추기) → 파지 동안 다시 울었다. 짧은 후진으로는
-    회전 뒤 버팀이 안 풀린다 — 파지 전에 반대로 짧게 돈다."""
-    m = cfg.mission
-    fsm = MissionFSM(cfg)
-    fsm.step(P(0.9, 0.68, yaw=60.0), PM, S(), 0.0)               # 0.22 m, 30° 어긋남 — 먼저 돈다
-    fsm.step(P(0.9, 0.68, yaw=60.0), PM, S(), 0.1)
-    t, unwound, seen_back = 0.2, False, False
-    y = 0.68
-    while fsm.state != HostState.GRASP and t < 5.0:
-        cmd = fsm.step(P(0.9, y, yaw=88.0), PM, S(), t)
-        if cmd.linear_x < 0:
-            seen_back = True
-            y = 0.62                                              # 몇 사이클 만에 범위 안으로
-        if cmd.angular_z < 0 and seen_back:
-            unwound = True
-        t += 0.1
-    assert seen_back and unwound and fsm.state == HostState.GRASP
-
-
-def test_no_unwind_when_the_last_move_was_straight(cfg):
+def test_grasps_right_away_when_facing_and_in_range(cfg):
     fsm = MissionFSM(cfg)
     fsm.step(P(0.9, 0.62), PM, S(), 0.0)
     fsm.step(P(0.9, 0.62), PM, S(), 0.1)
@@ -399,8 +374,8 @@ def test_turns_the_body_at_the_stop_point_when_the_arm_cannot_cover(cfg):
     cmd = fsm.step(P(dx, dy, yaw=76.0), {}, S(), 0.1)             # 14도 — 팔 한계 안이지만
     assert cmd.angular_z > 0 and fsm.state == HostState.NUDGE_BOX  # 돌기 시작했으면 12도 안까지
     cmd = fsm.step(P(dx, dy, yaw=80.0), {}, S(), 0.2)             # 10도 — 정면까진 안 맞춘다
-    assert cmd.angular_z < 0, "회전으로 멈췄으니 투입 전에 반대로 짧게 돈다"
-    _run_until(fsm, HostState.PLACE, P(dx, dy, yaw=80.0), {}, S(), 0.3)
+    assert cmd.angular_z == 0                                     # 반대 회전 없이(10-08) 넣는다
+    _run_until(fsm, HostState.PLACE, P(dx, dy, yaw=80.0), {}, S(), 0.2)
     # 같은 사유는 한 번만 기록한다(예전엔 매 사이클 찍혀 수백 줄이 쌓였다)
     assert sum("arm cannot cover" in e for e in fsm.events) == 1
 
@@ -528,20 +503,3 @@ def test_still_turns_early_when_a_piece_is_on_the_way(cfg):
     cmd = fsm.step(P(0.90, 0.45, yaw=90.0 + off), pm, S(), 0.2)
     cmd = fsm.step(P(0.90, 0.45, yaw=90.0 + off), pm, S(), 0.3)
     assert cmd.angular_z != 0 or cmd.stop
-
-
-def test_unwind_length_follows_how_much_it_turned(cfg):
-    """10-05 상자 앞 54° 회전 뒤 소음: 반대 회전을 돈 양에 비례해 늘리고 unwind_max_s 에서 자른다."""
-    import math
-    from mission.host_fsm import MissionFSM
-    d = cfg.drive
-    for turned_deg, want in ((20, d.unwind_s), (54, d.unwind_s * math.radians(54) / d.unwind_ref_rad),
-                             (180, d.unwind_max_s)):
-        fsm = MissionFSM(cfg)
-        fsm._now = 10.0
-        fsm._rot_since_unwind, fsm._last_rot_sign = True, 1.0
-        fsm._rot_accum = math.radians(turned_deg)
-        cmd = fsm._unwind()
-        assert cmd is not None and cmd.angular_z < 0                  # 반대 방향
-        assert abs((fsm._unwind_until - 10.0) - want) < 1e-6, turned_deg
-        assert any("unwind" in e for e in fsm.events)
