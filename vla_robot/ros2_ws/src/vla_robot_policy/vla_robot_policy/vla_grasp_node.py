@@ -31,7 +31,7 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 
-from vla_common.arm_units import GRIPPER_INDEX, SHOULDER_LIFT_INDEX, hot_servos
+from vla_common.arm_units import GRIPPER_INDEX, SHOULDER_LIFT_INDEX, confirm_hot, hot_servos
 from vla_common.config import load_robot_config
 from vla_common.grasp_cycle import CYCLE_START, scan_cycle
 from vla_robot_interfaces.action import ExecuteJointChunk, RunVlaGrasp
@@ -149,6 +149,12 @@ class VlaGraspNode(Node):
                                 self.max_temp_c, self.valid_temp_c)
         if bogus:
             self.get_logger().warn(f"서보 온도 읽기 오류로 보고 무시: {', '.join(bogus)}")
+        if hot:
+            first = hot
+            hot = confirm_hot(lambda: hot_servos(((i + 1, t) for i, t in enumerate(self._arm_state().temperature_c)),
+                                                 self.max_temp_c, self.valid_temp_c)[0], hot)
+            if not hot:
+                self.get_logger().warn(f"서보 온도 한 번만 높게 읽힘 — 다시 읽으니 정상: {', '.join(first)}")
         if hot:
             raise GraspAborted(f"서보 온도 상한({self.max_temp_c:.0f}°C) 초과: {', '.join(hot)}")
 

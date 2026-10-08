@@ -91,3 +91,16 @@ def test_hot_servos_ignores_impossible_readings():
     hot, bogus = hot_servos([(1, 35), (2, 150), (3, 0), (4, None), (5, 61), (6, 60)], 60.0, 100.0)
     assert hot == ["servo 5 61°C", "servo 6 60°C"]
     assert bogus == ["servo 2 150°C"]
+
+
+def test_confirm_hot_drops_a_one_off_reading():
+    """2026-10-08: servo 2 가 한 번 70°C 로 읽혀 파지 중단 — 다시 읽으면 정상이었다."""
+    from vla_common.arm_units import confirm_hot
+    reads = iter([[], []])
+    assert confirm_hot(lambda: next(reads), ["servo 2 70°C"]) == []
+
+
+def test_confirm_hot_keeps_a_real_hot_servo():
+    from vla_common.arm_units import confirm_hot
+    reads = iter([["servo 6 61°C"], ["servo 6 62°C"]])
+    assert confirm_hot(lambda: next(reads), ["servo 6 61°C", "servo 2 70°C"]) == ["servo 6 61°C"]
