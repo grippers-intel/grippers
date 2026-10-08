@@ -266,3 +266,17 @@ def test_base_recovery_time_does_not_count_against_the_nudge_timeout():
         t += 0.1
     fsm.step(P(0.99, 0.95), pm, S(), t)
     assert fsm.state == HostState.NUDGE_BOX
+
+
+def test_goes_to_the_nearest_spot_of_the_stop_zone():
+    """10-08 사용자: 정해 둔 정차점이 아니라 가장 가까운 정차 지역으로 가서 바로 넣기. 기물이 없어도 오른쪽 아래에서
+    오면 구역 오른쪽 끝(+10 cm)에, 왼쪽에서 오면 왼쪽 끝에 선다."""
+    for x, sign in ((1.40, 1.0), (0.55, -1.0)):
+        fsm = MissionFSM(_cfg())
+        fsm.set_order(Order(labels=("queen",)))
+        fsm.step(P(0.99, 0.50), {"queen": [(0.99, 0.80)]}, S(), 0.0)
+        cx = fsm.dest_xy[0]
+        fsm._enter(HostState.CARRY_TO_DEST)
+        fsm.step(P(x, 0.95, yaw=90.0), {"queen": [(x, 1.15)]}, S(), 0.1)
+        assert abs(fsm.dest_xy[0] - (cx + sign * fsm.cfg.mission.basket_stop_zone_half_m)) < 1e-6, (x, fsm.dest_xy)
+
