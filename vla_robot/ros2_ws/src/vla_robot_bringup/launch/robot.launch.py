@@ -19,12 +19,19 @@ MentorPi 는 **부팅 때 `ros_robot_controller` 를 자동 실행한다.** 여�
 부팅 자동 실행분이 없는 환경(직접 정리했거나 서비스를 껐을 때)에서만
 `use_vendor_controller:=true` 로 켠다. 기동 전에 `tools/ops/pi_preflight.sh` 로 몇 개가
 떠 있는지 먼저 확인할 것.
+
+## 차체 명령 기록 (use_base_trace:=true, 기본)
+
+`tools/ops/base_trace.py` 를 같이 띄운다 — 듣기만 하는 기록(바퀴 명령 · 모터 명령 · IMU · Pi 상태 →
+/tmp/base_trace.csv). 첫 출발 무응답이 어디서 끊기는지 보려고 10-08 에 따로 띄우던 것을 기동에 넣었다.
+스크립트는 config 경로(소스의 robot.yaml)에서 저장소 위치를 찾고, 없으면 배포 경로를 쓴다.
 """
 import os
+from pathlib import Path
 
 from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, LogInfo, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -78,6 +85,20 @@ def _vendor_controller(context):
     return [IncludeLaunchDescription(PythonLaunchDescriptionSource(launch_file))]
 
 
+#: 저장소를 config 경로로 못 찾을 때(설치본 robot.yaml) 쓰는 배포 경로.
+DEPLOY_BASE_TRACE = "/grippers/vla_deploy/vla_robot/tools/ops/base_trace.py"
+
+
+def _base_trace(context):
+    """차체 명령 기록 스크립트를 듣기 전용으로 띄운다(ROS 패키지가 아니라 저장소의 도구)."""
+    config = Path(LaunchConfiguration("config").perform(context)).resolve()
+    candidates = [p / "tools" / "ops" / "base_trace.py" for p in config.parents] + [Path(DEPLOY_BASE_TRACE)]
+    script = next((p for p in candidates if p.is_file()), None)
+    if script is None:
+        return [LogInfo(msg="[vla_robot] tools/ops/base_trace.py 를 찾지 못했다 — 차체 명령 기록 없이 돈다")]
+    return [ExecuteProcess(cmd=["python3", str(script)], name="base_trace", output="screen")]
+
+
 def generate_launch_description():
     default_config = os.path.join(get_package_share_directory("vla_robot_bringup"), "config", "robot.yaml")
     config = LaunchConfiguration("config")
@@ -98,6 +119,8 @@ def generate_launch_description():
         DeclareLaunchArgument("use_camera", default_value="true"),
         DeclareLaunchArgument("use_policy", default_value="true"),
         DeclareLaunchArgument("use_mission", default_value="true"),
+        DeclareLaunchArgument("use_base_trace", default_value="true",
+                              description="차체 명령 기록(tools/ops/base_trace.py, 듣기만) -> /tmp/base_trace.csv"),
         OpaqueFunction(function=_vendor_controller,
                        condition=IfCondition(LaunchConfiguration("use_vendor_controller"))),
         OpaqueFunction(function=_base, condition=IfCondition(LaunchConfiguration("use_base"))),
@@ -105,4 +128,5 @@ def generate_launch_description():
         node("vla_robot_vision", "gripper_cam_node", "use_camera"),
         node("vla_robot_policy", "vla_grasp_node", "use_policy"),
         node("vla_robot_mission", "pi_mission_node", "use_mission"),
+        OpaqueFunction(function=_base_trace, condition=IfCondition(LaunchConfiguration("use_base_trace"))),
     ])

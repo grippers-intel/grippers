@@ -68,11 +68,12 @@ run_host 는 계속 도니 그때는 터미널에서 Ctrl+C.
 - **모드**(`instruction.mode`): `auto` = 보이는 기물을 모두 정리하되 지시가 오면 그것부터 ·
   `instructed` = 지시가 있을 때만 움직인다. 초기화(Reset)는 지시도 취소한다.
 - **가져오기**("가져와") = 사람 손에 건네기. 지시를 받을 때 탑뷰에 손이 보여야 접수한다(없으면 카드 —
-  "바구니에 넣기"로 바꿀 수 있다). 집은 뒤 보이는 손에서 가장 가까운 위치(F1~R3)의 **정차점**
+  "바구니에 넣기"로 바꿀 수 있다). 손 검출은 CPU 를 아끼려고 **명령 해석·마이크 입력·손 대기·건네기 중에만** 돈다 —
+  해석이 손 확인보다 먼저 끝나면 최대 2 s "손을 찾는 중"으로 기다린다. 집은 뒤 보이는 손에서 가장 가까운 위치(F1~R3)의 **정차점**
   (`handover.spots`: [손 x, 손 y, 정차 x, 정차 y])으로 가서 손 쪽을 보고(남는 각도는 팔 base),
   Pi 에 PLACE(`place_pose=handover`)를 보낸다. Pi 는 `arm_poses.yaml` 의 **handover**(ㄱ자) 자세로 가서
   `place.handover_wait_s`(1 s) 기다린 뒤 연다. 정차점에서 손이 `hand_wait_s`(20 s) 동안 안 보이면 바구니로 간다.
-  ⚠️ handover 자세는 **아직 실측 전**(`measured: false`) — 재기 전에는 건네기가 실패로 끝나고 재시도 뒤 멈춘다.
+  handover 자세는 10-05 교육장에서 실측했다(그리퍼 끝 높이 약 55 cm). 10-05 · 10-08 "룩 가져와" 성공.
 - 시뮬에서 손 두기: `python run_host.py --sim --sim-hand L2` (지시는 입력창으로 — Claude 키 필요)
 
 ### 음성 (노트북 마이크)
@@ -92,12 +93,16 @@ run_host 는 계속 도니 그때는 터미널에서 Ctrl+C.
 ## 상태 흐름
 
 ```
-SEARCH_TARGET -> APPROACH_PIECE -> GRASP -> CARRY_TO_DEST -> FACE_BOX -> NUDGE_BOX -> PLACE -> SEARCH_TARGET
-                                     | 실패: 기물 보류(90 s) 후 SEARCH        | 실패: FACE_BOX 부터 재시도(2회), 넘으면 HALTED
+SEARCH_TARGET -> APPROACH_PIECE -> GRASP -> CARRY_TO_DEST -> NUDGE_BOX -> PLACE -> SEARCH_TARGET
+                                     |            └-> FACE_HAND -> PLACE(handover)   ("가져와")
+                                     | 실패: 1번 더 시도, 그래도 실패면 기물 보류(90 s) 후 SEARCH
+                                                     투입 실패: 상자 앞 맞추기부터 재시도(2회), 넘으면 HALTED
 ```
 
-전선 상태: SEARCH/HALTED=IDLE(stop) · APPROACH_PIECE=APPROACH · CARRY/FACE=CARRY · NUDGE=APPROACH_BOX ·
+전선 상태: SEARCH/HALTED=IDLE(stop) · APPROACH_PIECE=APPROACH · CARRY/FACE_HAND=CARRY · NUDGE=APPROACH_BOX ·
 GRASP/PLACE=해당 작업(stop) · ESTOP 래치=ESTOP.
+
+주행·정차·회전의 자세한 규칙과 설정 키는 [`docs/behavior.md`](../docs/behavior.md).
 
 - 매 사이클 명령을 반드시 하나 보낸다. pose 를 잃으면 stop 을 보낸다.
 - GRASP/PLACE 중에는 pose 와 무관하게 같은 상태를 계속 보낸다(팔이 마커를 가리는 건 정상).
@@ -107,4 +112,9 @@ GRASP/PLACE=해당 작업(stop) · ESTOP 래치=ESTOP.
 
 ```powershell
 python -m pytest -q tests
+python tools/sim_regress.py              # 교육장 배치로 6기물 판 전체를 시뮬에서(회귀 점검)
+python tools/sim_regress.py rand 7 20    # 무작위 배치 20개
 ```
+
+⚠️ 집에서는 카메라를 여는 실행(실기 모드 run_host)을 하지 말 것 — 노트북에 붙은 다른 카메라(휴대폰 연결 등)가
+0번으로 열린다. 인식 부하를 잴 때는 합성 영상으로 잰다.

@@ -4,7 +4,8 @@
 경로:  pi_mission_node --/controller/cmd_vel--> odom_publisher --/ros_robot_controller/set_motor-->
        ros_robot_controller --시리얼--> 보드 --> 바퀴.   보드 쪽 읽기는 imu_raw(49 Hz)로 살아 있음을 본다.
 
-이 노드는 **듣기만 한다**(아무것도 내지 않는다). 컨테이너 안에서 스택과 따로 띄운다:
+이 노드는 **듣기만 한다**(아무것도 내지 않는다). 스택 기동(robot.launch.py, use_base_trace:=true 기본)이 같이 띄운다.
+따로 띄우려면(use_base_trace:=false 로 기동했을 때) 컨테이너 안에서:
 
     docker exec -d IntelPi bash -lc "export ROS_DOMAIN_ID=21 && source /opt/ros/humble/setup.bash && \\
         source /ros2_ws/install/setup.bash && source /grippers/vla_deploy/vla_robot/ros2_ws/install/setup.bash && \\

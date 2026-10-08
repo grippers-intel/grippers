@@ -67,11 +67,31 @@ docker exec -it IntelPi bash -lc '
   source /opt/ros/humble/setup.bash &&
   source /ros2_ws/install/setup.bash &&                      # 벤더: controller · ros_robot_controller
   source /grippers/vla_deploy/vla_robot/ros2_ws/install/setup.bash &&
-  bash /grippers/vla_deploy/vla_robot/tools/ops/pi_preflight.sh &&
-  ros2 launch vla_robot_bringup robot.launch.py     config:=/grippers/vla_deploy/vla_robot/ros2_ws/src/vla_robot_bringup/config/robot.yaml'
+  bash /grippers/vla_deploy/vla_robot/tools/ops/pi_preflight.sh --beep &&
+  ros2 launch /grippers/vla_deploy/vla_robot/ros2_ws/src/vla_robot_bringup/launch/robot.launch.py     config:=/grippers/vla_deploy/vla_robot/ros2_ws/src/vla_robot_bringup/config/robot.yaml'
 ```
 
 `config:=` 로 **소스 경로**를 주는 것이 기본입니다 — 설치본은 빌드 시점의 복사본이라 설정 변경이 반영되지 않습니다(3번 경고).
+런치 파일도 같은 이유로 **소스 경로로 직접** 줍니다(10-08: 차체 명령 기록을 런치에 넣었다 — 패키지 이름으로 띄우면
+빌드 전 설치본이라 빠진다). 파이썬 노드는 심링크라 `git checkout` 만으로 바뀝니다.
+
+스택과 같이 **차체 명령 기록**(`tools/ops/base_trace.py`, 듣기만)이 뜹니다 → `/tmp/base_trace.csv`.
+끄려면 `use_base_trace:=false`. 보는 법은 그 파일 머리 설명(무응답이 명령 변환·보드 쓰기·시리얼 중 어디서 끊기는지).
+
+백그라운드로 띄우고 로그를 남길 때(실기에서 쓰는 방식):
+
+```bash
+docker exec -d IntelPi bash -lc '<위와 같은 source …> && exec ros2 launch <소스 런치 경로> config:=<소스 robot.yaml> > /tmp/robot_launch.log 2>&1'
+```
+
+### 하루 마무리(안전 종료)
+
+1. 로그를 PC 로 받아 둔다: `/tmp/robot_launch.log` · `/tmp/base_trace.csv` · `/tmp/rrc.log` (`docker exec IntelPi cat …`).
+2. Hailo 사용 0 확인: `lsmod | grep hailo` 의 마지막 열이 0.
+3. `docker exec IntelPi pkill -INT -f "[r]os2 launch vla_robot_bringup"` → 로그에 `finished cleanly` 확인 →
+   `cp /tmp/robot_launch.log /tmp/robot_launch_prev.log`.
+4. `docker stop IntelPi`.
+5. 사람이: `ssh -t pi@192.168.0.7 'sync && sudo shutdown -h now'`.
 
 source 순서가 중요합니다. 벤더 워크스페이스를 먼저 얹어야 `controller` 패키지를 찾습니다.
 
