@@ -476,6 +476,11 @@ class MissionFSM:
                 return self._stop(f"grasp range (settle, {dist:.3f} m)")
             in_range = lo <= dist <= hi
             if not in_range and self._creep_tries < self.CREEP_TRIES:
+                # 범위까지 앞뒤로 갈 자리가 탑뷰로 없으면(차체가 다른 기물에 닿는다) 여기서 잡지 않는다 —
+                # 너무 가까우면 그리퍼 아래에 걸려 빈손이다. 다른 기물부터 치우고 다시 온다(10-08 사용자).
+                blocker = self._creep_blocker(pose, dist)
+                if blocker is not None:
+                    return self._no_room_to_grasp(pmap, pose, dist, blocker)
                 self._creep = 1 if dist > hi else -1
                 self._creep_tries += 1
                 self._creep_cmds = 0
@@ -507,6 +512,45 @@ class MissionFSM:
 
     #: 파지 거리 맞추기 최대 횟수. 넘으면 그 자리에서 잡는다(맴돌지 않게).
     CREEP_TRIES = 4
+
+    #: 거리 맞추기 끝 자리를 볼 때 더 보는 거리 — 멈추라고 한 뒤 지연 동안 더 간다(09-30: 0.30 에서 멈췄는데 0.25).
+    CREEP_OVERRUN_M = 0.01
+
+    def _creep_blocker(self, pose: Pose, dist: float) -> Optional[XY]:
+        """파지 범위 가운데까지 지금 방향으로 앞뒤로 가면 차체가 다른 기물(목표 제외)에 basket_stop_clear_m 보다
+        붙는가. 붙으면 그 기물, 아니면 None. 이미 붙어 있던 기물에서 멀어지는 쪽은 막지 않는다.
+
+        10-08 1차: 정차점에서 154° 돌아 상자를 본 뒤 0.249 m 라 바구니 쪽으로 후진 — 뒤의 퀸과 계산상 −1.2 cm."""
+        c, clear = self.cfg.planner, self.cfg.mission.basket_stop_clear_m
+        move = dist - sum(self._grasp_range()) / 2.0              # + 앞으로, − 뒤로
+        move += math.copysign(self.CREEP_OVERRUN_M, move)
+        th = math.radians(pose.yaw_deg)
+        steps = max(1, int(math.ceil(abs(move) / 0.005)))
+        worst: Optional[tuple[float, XY]] = None
+        for o in self._other_pieces(pose):
+            gap0 = body_gap(pose.x, pose.y, pose.yaw_deg, o, c.robot_length_m, c.robot_width_m, c.piece_obstacle_radius_m)
+            for k in range(1, steps + 1):
+                d = move * k / steps
+                g = body_gap(pose.x + d * math.cos(th), pose.y + d * math.sin(th), pose.yaw_deg, o,
+                             c.robot_length_m, c.robot_width_m, c.piece_obstacle_radius_m)
+                if g < clear and g < gap0 - 1e-4 and (worst is None or g < worst[0]):
+                    worst = (g, o)
+        return worst[1] if worst else None
+
+    def _no_room_to_grasp(self, pmap: PieceMap, pose: Pose, dist: float, blocker: XY) -> HostCommand:
+        """거리 맞추기 자리가 없다 — 다른 기물이 있으면 이것은 보류하고 그것부터, 없으면 사람을 부른다."""
+        lo, hi = self._grasp_range()
+        name = self._piece_label_at(blocker)
+        way = "앞" if dist > hi else "뒤"
+        why = (f"{self.target_label} 를 잡을 거리({lo:.2f}-{hi:.2f} m, 지금 {dist:.3f})로 {way}로 가면 "
+               f"{name} 에 닿는다")
+        labels = self.order.labels if self.order else None
+        others = self._nearest_piece(pmap, pose.xy, self._active_skips() + [self.target_xy], labels)
+        if others is None:
+            self._halt(f"{why} — 치워 주세요")
+            return self._stop("halted")
+        self._skip_target(f"{why} — 다른 기물부터")
+        return self._stop("no room to grasp")
 
     def _grasp_range(self) -> tuple[float, float]:
         """지금 목표 기물의 파지 시작 거리 범위 [min, max]. 기물별 값이 없으면 기본 범위."""

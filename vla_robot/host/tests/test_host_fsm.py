@@ -503,3 +503,47 @@ def test_still_turns_early_when_a_piece_is_on_the_way(cfg):
     cmd = fsm.step(P(0.90, 0.45, yaw=90.0 + off), pm, S(), 0.2)
     cmd = fsm.step(P(0.90, 0.45, yaw=90.0 + off), pm, S(), 0.3)
     assert cmd.angular_z != 0 or cmd.stop
+
+
+def _grasp_zone_fsm(cfg, labels):
+    from mission.host_fsm import Order
+    fsm = MissionFSM(cfg)
+    fsm.set_order(Order(labels=labels))               # 퀸은 지시에 없다(장애물만)
+    return fsm
+
+
+def test_too_close_with_a_piece_behind_grasps_another_piece_first(cfg):
+    """10-08 1차: 상자 0.249 m(범위 0.28-0.31)라 후진했는데 뒤에 퀸 — 계산상 −1.2 cm. 뒤로 갈 자리가 없으면
+    그 자리에서 잡지 않고(가까우면 그리퍼에 걸려 빈손) 보류한 뒤 다른 기물부터 잡는다."""
+    pmap = {"box": [(0.90, 1.00)], "queen": [(0.90, 0.60)], "rook": [(0.30, 0.80)]}
+    fsm = _grasp_zone_fsm(cfg, ("box", "rook"))
+    t = 0.0
+    while t < 1.0:
+        cmd = fsm.step(P(0.90, 0.755), pmap, S(), t)          # 상자까지 0.245 m, 뒤 퀸까지 차체 뒷면 ~1 cm
+        assert cmd.linear_x >= 0.0                             # 퀸 쪽으로 후진하지 않는다
+        if fsm.target_label == "rook":
+            break
+        t += 0.1
+    assert any("다른 기물부터" in e for e in fsm.events)
+    assert fsm.target_label == "rook" and fsm.state != HostState.HALTED
+
+
+def test_too_close_with_a_piece_behind_and_nothing_else_halts(cfg):
+    pmap = {"box": [(0.90, 1.00)], "queen": [(0.90, 0.60)]}
+    from mission.host_fsm import Order
+    fsm = MissionFSM(cfg)
+    fsm.set_order(Order(labels=("box",)))
+    t = 0.0
+    while t < 1.0 and fsm.state != HostState.HALTED:
+        cmd = fsm.step(P(0.90, 0.755), pmap, S(), t)
+        assert cmd.linear_x >= 0.0
+        t += 0.1
+    assert fsm.state == HostState.HALTED and "queen" in fsm.halt_reason
+
+
+def test_too_close_with_room_behind_backs_into_range(cfg):
+    pmap = {"box": [(0.90, 1.00)], "queen": [(0.90, 0.45)]}  # 뒤 퀸까지 충분
+    fsm = _grasp_zone_fsm(cfg, ("box",))
+    fsm.step(P(0.90, 0.755), pmap, S(), 0.0)
+    cmd = fsm.step(P(0.90, 0.755), pmap, S(), 0.1)
+    assert cmd.linear_x < 0.0 and fsm.target_label == "box"
