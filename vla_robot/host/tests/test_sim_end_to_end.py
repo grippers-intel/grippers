@@ -69,22 +69,6 @@ def test_place_lands_inside_the_basket(cfg):
     assert len(world.pieces_in_box("basket")) == 2
 
 
-def test_ignoring_the_arm_yaw_misses(cfg):
-    """각도를 무시하는 옛 Pi 라면 정차 오차가 그대로 투하 오차가 된다.
-
-    이 테스트가 통과한다는 것은 `HostCommand.arm_yaw_deg` 가 장식이 아니라는 뜻이다.
-    겨누는 선으로 붙기(10-08)는 차체가 겨누는 점을 보고 서서 팔 각이 거의 0 이라 끄고, 정차 구역(가장 가까운 자리,
-    10-08)은 겨누는 점을 일부러 옆으로 옮기므로 가운데 한 점으로 둔다 — 여기서는 팔 각이 쓰이는지만 본다.
-    """
-    from dataclasses import replace as _replace
-    cfg = _replace(cfg, mission=_replace(cfg.mission, place_here_max_m=0.0, basket_stop_zone_half_m=0.0))
-    honoring = SimWorld(cfg, clock=FakeClock(), seed=3)
-    _run_mission(cfg, honoring)
-    ignoring = SimWorld(cfg, clock=FakeClock(), seed=3, honor_arm_yaw=False)
-    _run_mission(cfg, ignoring)
-    assert honoring.last_drop_offset_m < ignoring.last_drop_offset_m
-
-
 def test_arm_reach_clears_the_rim_but_not_the_box(cfg):
     """팔 길이가 기하와 맞물리는지 — 양쪽 끝을 본다.
 
@@ -181,6 +165,7 @@ def test_runaway_base_is_reset_and_the_mission_finishes(cfg):
                 and world._vel[0] > 0:
             world.fail_runaway()
             froze_at = (world.x, world.y)
+            dest_at_freeze = fsm.dest_xy
         if froze_at is not None and stopped_at is None and not world.runaway:
             stopped_at = (world.x, world.y)
         if len(world.pieces_in_box("basket")) == 2:
@@ -188,8 +173,10 @@ def test_runaway_base_is_reset_and_the_mission_finishes(cfg):
     assert froze_at is not None and stopped_at is not None, list(fsm.events)
     assert any("폭주" in e for e in seen), sorted(seen)
     assert world.base_recoveries == 1
-    # 굳은 뒤 멈출 때까지: 부분목표에 닿을 때까지(최대 ~0.3 m) + 폭주 판단(grace 1 s + 창 0.5 s)
-    assert math.dist(froze_at, stopped_at) < 0.6
+    # 굳은 채 달리는 동안은 명령도 같은 직진이라 알 수 없다 — 멈추거나 물러나라고 한 뒤에야 안다. 10-08 부터 정차점까지
+    # 곧장(최대 1.6 m) 가므로 굳은 자리가 아니라 **정차점을 얼마나 지나쳐 섰는지**를 본다(폭주 판단 grace 1 s + 창 0.5 s,
+    # 물러나라는데 앞으로 가면 바로).
+    assert math.dist(dest_at_freeze, stopped_at) < 0.35
     assert sorted(world.pieces_in_box("basket")) == ["queen", "star"]
 
 

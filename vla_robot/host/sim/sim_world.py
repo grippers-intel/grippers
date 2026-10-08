@@ -69,6 +69,11 @@ class SimWorld:
         self.pos_noise_m, self.yaw_noise_deg = pos_noise_m, yaw_noise_deg
         self.watchdog_s = watchdog_s
         self.limits = MotionLimits(max_linear_mps=0.15, max_angular_rad_s=0.5)
+        # 실차 흉내: 제자리 회전 뒤 직진을 시작하면 돈 방향으로 이만큼 더 돈다(10-08 base_trace 35번 7.5 ± 1.5°,
+        # 회전 크기·사이 정지와 무관). 0.3 s 에 걸쳐 나온다.
+        self.drive_off_carry_deg = 7.5
+        self._carry_sign = 0.0
+        self._carry_left = 0.0
         self._rng = random.Random(seed)
         self._t = clock()
         # Pi 흉내 상태
@@ -131,6 +136,14 @@ class SimWorld:
             vx, vy, wz = self._frozen_vel
         else:
             vx, vy, wz = (0.0, 0.0, 0.0) if (watchdog or dead or self._job is not None) else self._vel
+        if abs(wz) > 1e-6 and abs(vx) < 1e-6 and abs(vy) < 1e-6:
+            self._carry_sign = 1.0 if wz > 0 else -1.0
+        elif (abs(vx) > 1e-6 or abs(vy) > 1e-6) and self._carry_sign:
+            self._carry_left, self._carry_sign = math.copysign(self.drive_off_carry_deg, self._carry_sign), 0.0
+        if self._carry_left and (abs(vx) > 1e-6 or abs(vy) > 1e-6):
+            step = math.copysign(min(abs(self._carry_left), self.drive_off_carry_deg / 0.3 * dt), self._carry_left)
+            self.yaw_deg += step
+            self._carry_left -= step
         th = math.radians(self.yaw_deg)
         self.x += (vx * math.cos(th) - vy * math.sin(th)) * dt
         self.y += (vx * math.sin(th) + vy * math.cos(th)) * dt

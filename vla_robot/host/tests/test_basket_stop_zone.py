@@ -192,6 +192,7 @@ def _nudge_sim(pose, stop, shift, drift=0.0):
     fsm._enter(HostState.NUDGE_BOX)
     x, y, yaw = pose
     t, rot, worst = 0.0, 0.0, 0.0
+    carry, turned = 0.0, 0.0                              # 실차처럼: 회전 뒤 직진 시작 때 돈 방향으로 7.5° 더(10-08)
     aim = fsm._basket().aim
     d0 = math.dist((x, y), aim)
     while fsm.state == HostState.NUDGE_BOX and t < 20.0:
@@ -199,6 +200,14 @@ def _nudge_sim(pose, stop, shift, drift=0.0):
         cmd = fsm.step(P(x, y, yaw), {"star": [(x + 0.2 * math.cos(th), y + 0.2 * math.sin(th))]}, S(), t)
         yaw += math.degrees(cmd.angular_z) * 0.1
         rot += abs(math.degrees(cmd.angular_z)) * 0.1
+        if cmd.angular_z and not cmd.linear_x:
+            turned = 1.0 if cmd.angular_z > 0 else -1.0
+        elif cmd.linear_x and turned:
+            carry, turned = 7.5 * turned, 0.0
+        if carry and cmd.linear_x:
+            step = math.copysign(min(abs(carry), 2.5), carry)
+            yaw += step
+            carry -= step
         x += cmd.linear_x * 0.1 * math.cos(th) + (drift * 0.1 if cmd.linear_x else 0.0)
         y += cmd.linear_x * 0.1 * math.sin(th)
         worst = max(worst, math.dist((x, y), aim) - d0)
@@ -240,14 +249,14 @@ def _nudging(pose_xy=(0.99, 0.95)):
 def test_nudge_realigns_when_drifting_past_a_piece():
     """10-08 공: 바구니 앞 직진을 25° 까지 그냥 가게 했더니 8~9° 틀어진 채 퀸 옆 2.9 cm 에 도착해 HALTED.
     틀어진 길이 기물의 회전 반경(0.20 m) 안을 지나면 예전처럼 12° 에서 다시 맞춘다."""
-    pose = P(0.99, 0.95, 90.0 + 15.0)                          # 정차점 쪽에서 15° 틀어짐
+    pose = P(0.99, 0.95, 90.0 + 13.0)                          # 정차점 쪽에서 13° 틀어짐(그대로 가면 옆 7 cm)
     near = {"star": [(0.99 - 0.05, 1.14)], "queen": [(0.80, 1.18)]}
     far = {"star": [(0.99 - 0.05, 1.14)], "queen": [(0.50, 1.18)]}
     for pm, keeps_going in ((near, False), (far, True)):
         fsm = _nudging()
         for k in range(3):                                     # 똑바로 보고 직진을 시작한 뒤
             fsm.step(P(0.99, 0.95), pm, S(), 0.1 * k)
-        fsm.step(pose, pm, S(), 0.3)                           # 15° 흐름 — 시퀀서는 한 사이클 뒤에 바꾼다
+        fsm.step(pose, pm, S(), 0.3)                           # 13° 흐름 — 시퀀서는 한 사이클 뒤에 바꾼다
         cmd = fsm.step(pose, pm, S(), 0.4)
         assert (cmd.linear_x > 0.0) == keeps_going, (pm["queen"], cmd)
 

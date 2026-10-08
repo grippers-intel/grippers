@@ -158,6 +158,7 @@ class MissionFSM:
         self._face_turning = False
         self._face_arrived = False
         self._last_pose_xy: Optional[XY] = None
+        self._pose_hist: deque[tuple[float, XY]] = deque(maxlen=20)
         self.halt_reason: Optional[str] = None
         self.search_reason: Optional[str] = None
         self.ready_to_advance = False
@@ -186,6 +187,7 @@ class MissionFSM:
         self._along_turning = False
         self._along_logged = False
         self._along_rot: Optional[tuple[float, float]] = None
+        self._nudge_drove = False
         self._tight_turn_logged = False
         self._pose_now: Optional[Pose] = None
         self._pmap_now: Optional[PieceMap] = None
@@ -272,6 +274,7 @@ class MissionFSM:
         self._now = now
         if pose.ok:
             self._last_pose_xy = pose.xy
+            self._pose_hist.append((now, pose.xy))
         self._pose_now, self._pmap_now = pose, piece_map      # 직선이 비었는지(_line_clear)용
         if self._recover_started is not None and not self.estop:
             waiting = self._wait_base_recovery(pi_status)
@@ -778,13 +781,28 @@ class MissionFSM:
         # 바구니까지 거리만 보면 정차점 높이에서 옆으로 13 cm 떨어져도 "도착"이었다(10-07 별, 팔 +12.6° 로 멀리서 넣음).
         # 바구니 쪽 몸 회전을 시작했으면 경계를 2 cm 넓힌다 — 정차점 옆 8 cm 언저리에서 위치 흔들림으로 "바구니 쪽 돌기"와
         # "정차점 쪽 돌기"가 사이클마다 번갈아 나왔다(10-08 시뮬, 회전 뒤 기다리기와 겹쳐 25 s 동안 제자리).
-        hyst = 0.02 if self._nudge_turn_logged else 0.0
+        # 바구니 쪽 몸 회전을 시작했거나 달려와 섰으면 경계를 2 cm 넓힌다(떨림 · 4.5 cm 에 서서 0.5 cm 더 붙으려 돌고 기기).
+        hyst = 0.02 if (self._nudge_turn_logged or self._nudge_drove) else 0.0
         rim_ok = dist <= m.place_here_max_m + hyst and self._drop_clears_rim(pose, target)
-        close = (-m.place_min_gap_m <= gap <= m.place_arrive_tol_m + hyst / 2.0
+        # 곧장 달려오는 중이면 허용치(4 cm) 끝에서 서지 않고 정차점 거리(+1 cm)까지 와서 선다 — 거기서 바구니 쪽으로
+        # 돌고 바로 넣는다. 4 cm 앞에서 돌면 돌며 마커가 밀려 "덜 붙었다"가 되고, 겨누는 선으로 다시 붙었다
+        # (10-08 별·공: 돌고 → 앞으로 2~3 cm). 모든 기물이 같은 순서: 직진 → 도착 → yaw → 투입.
+        driving = self._nudge_drove and not self._nudge_turn_logged
+        # 정차점 5 cm 안(시퀀서가 방향을 못 재는 거리)에 들어오면 달리기는 끝 — 허용치로 본다(더 붙으려고 돌고 기지 않는다).
+        gap_hi = (m.place_here_gap_m if driving and dist > max(self.cfg.planner.axis_leg_tolerance_m,
+                                                               self.cfg.planner.min_heading_dist_m)
+                  else m.place_arrive_tol_m + hyst / 2.0)
+        close = (-m.place_min_gap_m <= gap <= gap_hi
                  and (dist <= m.place_lateral_tol_m + hyst or rim_ok))
         # 정차점 가까이에서 바구니까지만 조금 멀다 — 정차점으로 돌아가지 않고 겨누는 점을 보고 그 선을 따라 붙는다.
         # 바구니까지 place_arrive_tol_m 넘게 멀 때 시작하고, 시작했으면 place_here_gap_m 까지 붙는다.
+        # 서 있는 채 넘어왔을 때(잡은 자리가 정차점 가까이), 또는 달려오다 그대로 가면 정차점 옆 place_lateral_tol_m 밖에
+        # 닿을 만큼 틀어졌을 때만 — 그 안이면 끝까지 달려 정차점 거리에 선다(위 driving). 각이 아니라 옆 거리로 본다:
+        # 정차점 12 cm 앞에서 17° 는 옆 3.4 cm 다(10-08 시뮬: 각으로 보다 서서 돌고 다시 붙었다).
+        to_stop = math.degrees(math.atan2(self.dest_xy[1] - pose.y, self.dest_xy[0] - pose.x))
+        off_line = dist * abs(math.sin(math.radians(wrap_deg(to_stop - pose.yaw_deg)))) > m.place_lateral_tol_m
         along = (rim_ok and not self._arm_only_place and gap <= m.place_here_max_gap_m
+                 and (self._along_turning or not self._nudge_drove or (gap > m.place_arrive_tol_m and off_line))
                  and gap > (m.place_here_gap_m if self._along_turning else m.place_arrive_tol_m))
         # 팔로만 넣기로 했으면 팔 한계까지만 튼다(남는 몇 도만큼 떨어지는 점이 옆으로 간다).
         arm = (max(-m.max_arm_yaw_deg, min(m.max_arm_yaw_deg, residual)) if self._arm_only_place
@@ -794,7 +812,9 @@ class MissionFSM:
         # 정면(0°)까지는 맞추지 않는다 — 나머지는 팔 base 가 맡는다(2026-09-30 저녁 요청).
         limit = m.place_turn_to_deg if self._nudge_turn_logged else m.max_arm_yaw_deg
         if along:
-            limit = self.cfg.planner.yaw_tolerance_deg if not self._along_turning else m.place_turn_to_deg / 2.0
+            # 붙기 시작한 뒤에는 팔이 메우는 만큼(place_turn_to_deg)까지 다시 돌지 않는다 — 회전 뒤 직진 시작 때 더 도는 몫이
+            # 덜 나와 몇 도 남아도 서서 다시 돌지 않게(10-08 시뮬: 돌고 1.5 cm 가고 다시 돌고).
+            limit = self.cfg.planner.yaw_tolerance_deg if not self._along_turning else m.place_turn_to_deg
             if not self._along_turning:
                 # 돌고 나서 직진하면 돈 방향으로 turn_lead_deg 더 돈다 — 그만큼 남기고 멈춘다(시퀀서와 같다).
                 if self._along_rot is None and abs(residual) > limit:
@@ -804,6 +824,11 @@ class MissionFSM:
                     residual = residual - math.copysign(min(self.cfg.planner.turn_lead_deg, abs(residual)),
                                                         self._along_rot[0])
         self.ready_to_advance = close and not along and (abs(residual) <= limit or self._arm_only_place)
+        if self.ready_to_advance and not self._standing_still():
+            # 넣기 전에 차체가 정말 섰는지 본다 — 곧장 길게 달려오면(place_direct_max_m) 중간에 서는 일이 없어, 굳은
+            # 직진(09-30 폭주)을 "멈춰라" 뒤에야 알아챈다. 투입 중에는 지켜보지 않으므로 여기서 거른다.
+            self.ready_to_advance = False
+            return self._stop("at box (settle)")
         if self.ready_to_advance:
             if self._should_advance():
                 self._enter(HostState.PLACE)
@@ -873,18 +898,18 @@ class MissionFSM:
             return self._rotate(residual) if abs(residual) > self.cfg.planner.yaw_tolerance_deg else \
                 HostCommand(WIRE_STATE[self.state], linear_x=self.cfg.drive.nudge_mps, label=self.target_label or "")
         others = self._other_pieces(pose)
-        enter = self._enter_deg(pose, goal, others)
-        if enter is not None and dist > 1e-6:
-            # 지금 흐름대로 가도 정차점 옆 place_lateral_tol_m 안에 닿으면 다시 돌지 않는다 — 도착해서 바구니 쪽으로 돌며
-            # 맞춘다(10-08 사용자: 정차점까지 직선, 도착 뒤 yaw). 가까울수록 같은 옆 거리에 큰 각이다.
-            enter = max(enter, math.degrees(math.asin(min(1.0, m.place_lateral_tol_m / dist))))
-        if enter is not None:
-            # 바구니 앞에서는 도착해서 몸을 돌려야 한다 — 틀어진 채 가는 길이 기물의 회전 반경(turn_safe) 안을 지나면
-            # 넓히지 않는다(10-08 공: 8~9° 틀어진 채 퀸 옆 2.9 cm 에 도착, 24° 를 어느 쪽으로도 못 돌아 HALTED).
-            th = math.radians(pose.yaw_deg)
-            ahead = (pose.x + dist * math.cos(th), pose.y + dist * math.sin(th))
-            if any(segment_circle_clearance(pose.xy, ahead, o)[0] < self._planner.turn_safe for o in others):
-                enter = None
+        # 다시 돌기 시작하는 문턱. 바구니 앞은 상자 금지 구역 바로 앞이라 운반용 판단(_enter_deg, 앞길이 금지 구역에 닿으면
+        # 기본 12°)을 쓰지 않는다. 틀어진 길이 기물의 회전 반경(turn_safe) 밖이면:
+        #   - 지금 흐름대로 가도 정차점 옆 place_lateral_tol_m 안에 닿는 각까지는 그대로 간다 — 도착해서 바구니 쪽으로
+        #     돌며 맞춘다(10-08 사용자: 정차점까지 직선, 도착 뒤 yaw). 가까울수록 같은 옆 거리에 큰 각이다.
+        #   - 정차점 no_turn_near_m 안에서는 다시 돌지 않는다.
+        # 기물 옆을 지나면 넓히지 않는다(10-08 공: 8~9° 틀어진 채 퀸 옆 2.9 cm 에 도착, 어느 쪽으로도 못 돌아 HALTED).
+        th = math.radians(pose.yaw_deg)
+        ahead = (pose.x + dist * math.cos(th), pose.y + dist * math.sin(th))
+        enter = None
+        if dist > 1e-6 and all(segment_circle_clearance(pose.xy, ahead, o)[0] >= self._planner.turn_safe for o in others):
+            c = self.cfg.planner
+            enter = 90.0 if dist < c.no_turn_near_m else                 max(c.yaw_enter_deg, math.degrees(math.asin(min(1.0, m.place_lateral_tol_m / dist))))
         nav = self._drive.update(pose.xy, pose.yaw_deg, goal, enter_deg=enter)
         if nav.mode == DriveMode.ROTATE:
             if self._turn_sweeps(pose, nav.yaw_error_deg):
@@ -896,8 +921,19 @@ class MissionFSM:
         if nav.mode == DriveMode.STOP:
             # 시퀀서가 직진<->회전 사이에 한 사이클 세운다. 그 한 박자를 지킨다.
             return self._stop("nudge (settle)")
+        self._nudge_drove = True
         self.last_cmd_text = "nudge"
         return HostCommand(WIRE_STATE[self.state], linear_x=self.cfg.drive.nudge_mps)
+
+    #: 넣기 전 차체가 섰다고 보는 기준 — 최근 STILL_S 동안 마커가 STILL_M 안에서만 움직였다.
+    STILL_S = 0.3
+    STILL_M = 0.015
+
+    def _standing_still(self) -> bool:
+        recent = [xy for t, xy in self._pose_hist if self._now - t <= self.STILL_S + 1e-6]
+        if len(recent) < 2 or self._now - min(t for t, _ in self._pose_hist) < self.STILL_S - 1e-6:
+            return False
+        return max(_dist(a, b) for a in recent for b in recent) <= self.STILL_M
 
     def _drop_clears_rim(self, pose: Pose, target: BasketTarget) -> bool:
         """여기서 겨누는 점을 보고 넣으면 그 선이 바구니 입구(앞면)를 양쪽 벽에서 basket_rim_margin_m 안쪽으로 지나는가."""
@@ -1365,6 +1401,7 @@ class MissionFSM:
             self._along_turning = False
             self._along_logged = False
             self._along_rot = None
+            self._nudge_drove = False
             self._tight_turn_logged = False
             self._nudge_turn_logged = False
             self._arm_only_place = False
