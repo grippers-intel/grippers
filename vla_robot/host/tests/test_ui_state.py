@@ -239,3 +239,18 @@ def test_piece_states_idle_done_outside():
     st = {p["label"]: p["state"] for p in ui._workspace_pieces(
         {"queen": [(0.90, 0.90)], "knight": [(1.106, 1.307)], "rook": [(0.99, 1.65)]})}
     assert st == {"queen": "idle", "knight": "outside", "rook": "done"}
+
+
+def test_held_piece_is_not_drawn_on_the_map(cfg):
+    """10-12: 상자를 들고 가는데 화면 지도에 상자가 남았다. 쥔 기물은 그리지 않고 다른 기물은 그린다."""
+    from localization.pose import Pose
+    fsm = MissionFSM(cfg)
+    ui = UiState(cfg)
+    fsm.target_label, fsm.target_xy = "box", (0.36, 1.12)
+    fsm._enter(HostState.CARRY_TO_DEST)
+    pose = Pose(0.60, 1.10, 0.0, ok=True, n_cams=2, fresh=True)
+    pmap = {"box": [(0.72, 1.10)], "knight": [(1.70, 1.00)]}              # 상자는 그리퍼 안(12 cm 앞)
+    fsm._pose_now, fsm._pmap_now = pose, pmap
+    s = ui.build(pose, pmap, fsm, None, 0.0, 10.0)
+    labels = [p["label"] for p in s["pieces"]]
+    assert "box" not in labels and "knight" in labels
