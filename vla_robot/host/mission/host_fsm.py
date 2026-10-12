@@ -201,6 +201,9 @@ class MissionFSM:
         self._tight_turn_logged = False
         self._pose_now: Optional[Pose] = None
         self._pmap_now: Optional[PieceMap] = None
+        self._known_pieces: list[XY] = []       # 쥐기 전에 본 기물 + 운반 중 멀리서 본 기물(_held_ghost)
+        self._ghost_armed = False               # 이번 기물을 파지 단계에서 쥐었다 — 그때만 유령을 거른다
+        self._ghost_logged: set = set()
         self.skipped: list[tuple[XY, float]] = []
         self.last_result: Optional[JobResult] = None
         self._advance_requested = False
@@ -286,6 +289,7 @@ class MissionFSM:
             self._last_pose_xy = pose.xy
             self._pose_hist.append((now, pose.xy))
         self._pose_now, self._pmap_now = pose, piece_map      # 직선이 비었는지(_line_clear)용
+        self._learn_known_pieces(pose, piece_map)
         if self._recover_started is not None and not self.estop:
             waiting = self._wait_base_recovery(pi_status)
             if waiting is not None:
@@ -675,7 +679,8 @@ class MissionFSM:
         # 2026-09-30: 반경만으로 빼다가 box 기물에 30 cm 안으로 다가가자 그것까지 빠져,
         # 계획기가 box 를 뚫고 가는 길을 내고 그대로 밀고 갔다.
         obstacles = [p for label, pts in pmap.items() for p in pts
-                     if not (label == self.target_label and _dist(p, pose.xy) <= r)]
+                     if not (label == self.target_label and _dist(p, pose.xy) <= r)
+                     and not self._held_ghost(label, p, pose)]
         # 상자(손) 앞 맞추기는 계획기 없이 정차점까지 곧장 간다 — 그 직선이 기물을 스치면 넘기지 않고
         # 계획기로 더 다가간다(2026-10-05: 0.35 m 에서 넘겨 곧장 가다 정차점 옆 나이트를 쳤다).
         dist = _dist(pose.xy, self.dest_xy)
@@ -1316,6 +1321,49 @@ class MissionFSM:
             return False
         return self._now - self._blocked_since > self.cfg.mission.blocked_timeout_s
 
+    #: 쥔 기물이 다른 라벨로 잘못 검출된 것(유령)으로 볼 범위와 판단 기준
+    GHOST_R = 0.40           # 로봇에서 이 안의 모르는 검출
+    GHOST_LEARN_R = 0.45     # 운반 중 이보다 먼 검출은 실제 기물로 익힌다
+    GHOST_MATCH_M = 0.08     # 아는 기물과 이만큼 안이면 같은 기물
+
+    def _holding(self) -> bool:
+        return self.state in (HostState.CARRY_TO_DEST, HostState.NUDGE_BOX, HostState.FACE_HAND, HostState.PLACE)
+
+    def _learn_known_pieces(self, pose: Pose, pmap) -> None:
+        """실제 기물로 익힌다 — 쥐기 전(고르기·다가가기)에 본 것은 모두, 쥔 뒤(파지 중 포함 — 팔이 기물을 들어 올린다)에는
+        로봇에서 먼 것만. 검출이 한 사이클 빠져도 다가가는 동안 여러 번 보므로 놓치지 않는다."""
+        if not pmap:
+            return
+        before = self.state in (HostState.SEARCH_TARGET, HostState.APPROACH_PIECE)
+        if not before and not (pose.ok and (self._holding() or self.state == HostState.GRASP)):
+            return
+        for pts in pmap.values():
+            for p in pts:
+                if before and self.target_xy is not None and _dist(p, self.target_xy) <= 0.05:
+                    continue                    # 잡으러 가는 기물 — 곧 쥔다
+                if not before and _dist(p, pose.xy) <= self.GHOST_LEARN_R:
+                    continue
+                if not any(_dist(p, k) <= self.GHOST_MATCH_M for k in self._known_pieces):
+                    self._known_pieces.append(p)
+
+    def _held_ghost(self, label: str, p: XY, pose: Pose) -> bool:
+        """쥐고 있는 기물이 다른 라벨로 검출된 것인가.
+
+        10-12 실기(DP): 쥐고 든 룩이 탑뷰에서 간간이 "나이트"로 검출됐다. 들어 올린 물체는 바닥 기준으로
+        밖으로 밀려 찍혀(로봇에서 15~31 cm) 로봇이 돌면 빠르게 움직였고, 라벨이 달라 같은 라벨만 빼는 규칙을
+        빠져나가 장애물로 남아 바구니 앞에서 HALTED. 쥐기 전 지도에 없던 검출이 로봇 GHOST_R 안에 나타나면
+        라벨과 상관없이 쥔 기물로 본다. 원래 있던 기물(쥐기 전 지도 · 운반 중 멀리서 본 것)은 그대로 피한다 —
+        09-30 처럼 반경만으로 빼면 옆 기물을 밀고 간다."""
+        if not self._ghost_armed or not self._holding() or not pose.ok or _dist(p, pose.xy) > self.GHOST_R:
+            return False                        # 파지 단계 없이 운반부터(시험 등)면 거르지 않는다
+        if any(_dist(p, k) <= self.GHOST_MATCH_M for k in self._known_pieces):
+            return False
+        if label not in self._ghost_logged and label != self.target_label:      # 운반마다 라벨당 한 번
+            self._ghost_logged.add(label)
+            self._log(f"쥔 기물로 본다: {label} ({p[0]:.2f}, {p[1]:.2f}) — 쥐기 전 지도에 없던 검출이 로봇 "
+                      f"{_dist(p, pose.xy) * 100:.0f} cm 옆")
+        return True
+
     def _other_pieces(self, pose: Pose) -> list[XY]:
         """지도 위 기물 중 목표(잡으러 가는 것)·쥔 기물을 뺀 것."""
         r_hold = self.cfg.planner.carry_ignore_radius_m
@@ -1328,6 +1376,8 @@ class MissionFSM:
                     continue                    # 잡으러 가는 기물(정면에 0.26 m 이상 떨어져 있다)
                 if holding and label == self.target_label and _dist(p, pose.xy) <= r_hold:
                     continue                    # 쥐고 있는 기물(그리퍼 안에서 계속 보인다)
+                if self._held_ghost(label, p, pose):
+                    continue                    # 쥔 기물이 다른 라벨로 보인 것
                 out.append(p)
         return out
 
@@ -1470,6 +1520,12 @@ class MissionFSM:
         if state in (HostState.GRASP, HostState.PLACE):
             self._job_armed = False
             self._job_result = None
+        if state == HostState.SEARCH_TARGET:
+            self._known_pieces = []             # 이번 기물을 고르고 다가가며 본 것부터 다시 모은다
+            self._ghost_armed = False
+        if state == HostState.GRASP:
+            self._ghost_logged = set()
+            self._ghost_armed = True
         if state == HostState.FACE_HAND:
             self._face_turning = False
             self._face_arrived = False
