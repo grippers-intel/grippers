@@ -193,6 +193,7 @@ class MissionFSM:
         self._halted_from: Optional[HostState] = None
         self._zone_first_logged: Optional[XY] = None
         self._zone_first_cache: Optional[tuple] = None
+        self._tie_logged: Optional[tuple] = None
         self._prev_step_now: Optional[float] = None
         self._along_turning = False
         self._along_logged = False
@@ -225,6 +226,7 @@ class MissionFSM:
         self._spin = BaseSpinMonitor(m.base_spin_turn_deg, m.base_spin_window_s, m.base_spin_grace_s)
         self._recover_started: Optional[float] = None
         self._recover_baseline: Optional[int] = None
+        self._recover_req_at: Optional[float] = None    # Host 가 마지막으로 보드 리셋을 요청한 때(화면 알림)
         self._recover_in_a_row = 0
         # 상자 앞에 선 자리에서 팔이 메워야 할 좌우 각도. PLACE 명령에 실린다.
         self.place_arm_yaw_deg = 0.0
@@ -317,6 +319,7 @@ class MissionFSM:
             if self.estop:
                 # ESTOP 인데 달린다/돈다 — 정지 명령이 안 먹는 것이다. 보드 리셋만 요청하고 ESTOP 은 유지한다.
                 self._log(f"차체 폭주 — ESTOP 인데 {'움직인다' if ran else '돈다'}. Pi 에 컨트롤러 복구(보드 리셋) 요청")
+                self._recover_req_at = self._now
                 return replace(cmd, recover_base=True)
             if ran:
                 why = (f"차체 폭주 — 직진을 멈췄는데 {m.base_runaway_window_s:.1f}s 에 "
@@ -338,6 +341,8 @@ class MissionFSM:
             self._halt(f"차체가 명령을 따르지 않는다 — 자동 복구 {self._recover_in_a_row}번 뒤에도. "
                        f"차체 전원·배선을 확인할 것")
             # HALTED 도 멈추라는 명령일 뿐이다 — 폭주 중이면 그것도 안 먹으니 보드 리셋은 계속 요청한다.
+            if why is not None:
+                self._recover_req_at = self._now
             return replace(self._stop("halted"), recover_base=why is not None)
         self._recover_started = self._now
         self._recover_baseline = pi_status.base_recoveries if pi_status is not None else None
@@ -347,6 +352,16 @@ class MissionFSM:
         self.last_cmd_text = "base recovery"
         return HostCommand(WIRE_STATE.get(self.state, State.IDLE), stop=True,
                            label=self.target_label or "", recover_base=True)
+
+    #: Host 가 요청한 보드 리셋을 이만큼은 "Host 가 요청한 복구"로 본다(ESTOP · HALTED 중 요청은 기다리지 않는다)
+    RECOVER_REQ_HOLD_S = 20.0
+
+    @property
+    def host_recovery(self) -> bool:
+        """지금 도는 컨트롤러 재기동이 Host 가 무응답·폭주를 보고 요청한 것인가(화면 알림용). Pi 가 예정대로 하는
+        재기동(기동 직후 · 팔 작업 시작 · 오래 서 있다 첫 출발)은 아니다."""
+        return self._recover_started is not None or (
+            self._recover_req_at is not None and self._now - self._recover_req_at < self.RECOVER_REQ_HOLD_S)
 
     def _wait_base_recovery(self, pi_status: Optional[PiStatus]) -> Optional[HostCommand]:
         """복구 중이면 정지 + 요청을 계속 싣는다. 끝났으면 None(하던 일로 돌아간다)."""
@@ -1545,6 +1560,11 @@ class MissionFSM:
         if state == HostState.GRASP:
             self._ghost_logged = set()
             self._ghost_armed = True
+            if self.target_xy is not None:
+                # 고르는 동안(SEARCH, 아직 대상 없음) 잡을 기물도 "원래 있던 기물"로 익혔다 — 쥔 직후 그리퍼 속 기물이 그
+                # 자리 근처에서 다른 라벨로 보이면 아는 기물로 맞춰져 장애물로 남는다(10-12 검토). 그 자리는 뺀다.
+                self._known_pieces = [k for k in self._known_pieces
+                                      if _dist(k, self.target_xy) > self.GHOST_MATCH_M]
         if state == HostState.FACE_HAND:
             self._face_turning = False
             self._face_arrived = False
@@ -1788,13 +1808,19 @@ class MissionFSM:
         d0, lb, p = cands[0]
         # 거리가 비슷하면(TIE_M 안) 정차 구역에 더 가까운 것부터 — 구역 옆 기물은 나중에 다른 기물을 넣으러 올 때 길을
         # 좁힌다. 10-12 실기: 상자를 넣은 뒤 별 36.4 cm · 룩 37.2 cm 로 별을 잡았는데 룩은 정차 구역 16 cm 옆이었다.
-        tied = [(self._zone_dist(tl, tp), td, tl, tp) for td, tl, tp in cands if td <= d0 + self.TIE_M]
-        if len(tied) > 1:
-            _zd, _td, tl, tp = min(tied)
-            if tp != p:
+        tied = sorted((self._zone_dist(tl, tp), td, tl, tp) for td, tl, tp in cands if td <= d0 + self.TIE_M)
+        for _zd, _td, tl, tp in tied:
+            if tp == p:
+                break
+            # 바꿔 고른 기물도 쥐고 갔을 때 설 자리·들어오는 길이 있어야 한다(10-12 검토: 안 보고 바꾸면 그쪽이 HALTED)
+            box = self.cfg.mission.piece_dest_box.get(tl)
+            if box in self.cfg.arena.boxes and not self._placeable(box, tp, [tp]):
+                continue
+            if self._tie_logged != (p, tp):
+                self._tie_logged = (p, tp)              # 같은 판단은 한 번만(수동 모드 대기 중 10 Hz 로 찍혔다)
                 self._log(f"{lb} 와 {tl} 거리가 비슷하다({d0 * 100:.0f} · {_td * 100:.0f} cm) — 정차 구역에 더 가까운 "
                           f"{tl} 부터")
-                return tl, tp
+            return tl, tp
         return lb, p
 
     #: 대상 고르기에서 거리가 이만큼 안이면 같다고 보고 정차 구역에 가까운 것부터
