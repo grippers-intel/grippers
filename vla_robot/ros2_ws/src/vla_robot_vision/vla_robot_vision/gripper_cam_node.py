@@ -24,6 +24,14 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 
 from vla_common.config import load_robot_config
+try:
+    from vla_common.gripper_idle import BUSY_HOLD_S, camera_idle
+except ImportError:  # pragma: no cover — 설치본이 새 모듈을 모를 때: 아끼지 않고 지금처럼 다 푼다
+    BUSY_HOLD_S = 3.0
+
+    def camera_idle(*_args) -> bool:
+        return False
+from vla_robot_interfaces.msg import RobotStatus
 
 
 class GripperCamNode(Node):
@@ -37,7 +45,13 @@ class GripperCamNode(Node):
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._frames = 0
+        self._decoded = 0
         self._published_stamp = 0.0
+        # 팔 작업 중인가(/vla_robot/status busy). 상태를 한 번도 못 받았으면 늘 다 푼다(모르면 아끼지 않는다).
+        self._status_at: Optional[float] = None
+        self._busy_until = 0.0
+        if self.cfg.idle_period_s > 0:
+            self.create_subscription(RobotStatus, "/vla_robot/status", self._on_status, 10)
 
         qos = QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,
                          reliability=ReliabilityPolicy.BEST_EFFORT)
@@ -46,6 +60,16 @@ class GripperCamNode(Node):
         self._thread.start()
         self.create_timer(1.0 / max(self.cfg.publish_hz, 1.0), self._publish)
         self.create_timer(10.0, self._report)
+
+    def _on_status(self, msg: RobotStatus) -> None:
+        now = time.monotonic()
+        self._status_at = now
+        if msg.busy:
+            self._busy_until = now + BUSY_HOLD_S
+
+    def _idle(self, now: float) -> bool:
+        """지금 아껴도 되는가 — 설정이 켜졌고, 상태가 살아 있고, 팔 작업이 아니다."""
+        return camera_idle(self.cfg.idle_period_s, self._status_at, self._busy_until, now)
 
     # -- 장치 ---------------------------------------------------------------
     def _open(self) -> bool:
@@ -70,6 +94,7 @@ class GripperCamNode(Node):
 
     def _capture_loop(self) -> None:
         last_ok = time.monotonic()
+        last_decode = 0.0
         while not self._stop.is_set():
             if self._cap is None:
                 if not self._open():
@@ -78,6 +103,20 @@ class GripperCamNode(Node):
                     time.sleep(1.0)
                     continue
                 last_ok = time.monotonic()
+            now = time.monotonic()
+            if self._idle(now) and now - last_decode < self.cfg.idle_period_s:
+                # 받기만 한다(풀지 않는다) — 장치 버퍼가 낡지 않게 비우면서 CPU 를 아낀다
+                if self._cap.grab():
+                    last_ok = now
+                    with self._lock:
+                        self._frames += 1
+                elif now - last_ok > self.cfg.reopen_after_s:
+                    self.get_logger().warn("그리퍼캠 읽기 실패가 계속된다 — 장치를 다시 연다")
+                    self._cap.release()
+                    self._cap = None
+                else:
+                    time.sleep(0.01)
+                continue
             ok, frame = self._cap.read()
             now = time.monotonic()
             if not ok or frame is None:
@@ -88,12 +127,14 @@ class GripperCamNode(Node):
                 time.sleep(0.01)
                 continue
             last_ok = now
+            last_decode = now
             if self.cfg.rotate_180:
                 frame = cv2.rotate(frame, cv2.ROTATE_180)
             stamp = self.get_clock().now().nanoseconds * 1e-9
             with self._lock:
                 self._latest = (stamp, frame)
                 self._frames += 1
+                self._decoded += 1
 
     # -- 발행 ---------------------------------------------------------------
     def _publish(self) -> None:
@@ -125,7 +166,9 @@ class GripperCamNode(Node):
     def _report(self) -> None:
         with self._lock:
             n, self._frames = self._frames, 0
-        self.get_logger().info(f"캡처 {n / 10.0:.1f} fps")
+            d, self._decoded = self._decoded, 0
+        idle = " (팔 작업 없음 — 받기만)" if self._idle(time.monotonic()) else ""
+        self.get_logger().info(f"캡처 {n / 10.0:.1f} fps · 풀기 {d / 10.0:.1f} fps{idle}")
 
     def destroy_node(self) -> None:
         self._stop.set()

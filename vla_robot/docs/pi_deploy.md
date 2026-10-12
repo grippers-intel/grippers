@@ -148,6 +148,25 @@ cd /home/pi/docker/shared/grippers/vla_deploy/vla_robot && python3 tools/arm_che
 docker exec -it IntelPi bash -lc "cd /grippers/vla_deploy/vla_robot && python3 tools/arm_check.py"
 ```
 
+## 차체 배터리 — 바탕 부하 재기(2026-10-12 준비)
+
+10-12 궤적: 판 시간의 60~80 % 가 정지인데도 차체 전압이 판마다 150~235 mV 내려갔고, 주행 중 순간 처짐은 −6 mV 뿐이었다
+→ 늘 켜진 바탕 부하(Pi 5 · 그리퍼캠 · Hailo · 보드)를 먼저 숫자로 본다. 스택을 켠 **지시 대기 상태**에서 조건만 바꿔 잰다.
+
+```bash
+# Pi 호스트에서(컨테이너 안이 아니다). 30 s 평균 PMIC 전력(W) · 온도 · CPU 상위 프로세스 → /tmp/pi_power_*.txt
+bash /home/pi/docker/shared/grippers/vla_deploy/vla_robot/tools/ops/pi_power.sh 30 기준
+```
+
+1. **기준**: 지금 설정 그대로.
+2. **그리퍼캠 아끼기**: `robot.yaml` 의 `gripper_cam.idle_period_s: 0.5` 로 바꾸고 스택만 다시 띄운 뒤 같은 대기에서 잰다.
+   팔 작업이 없을 때는 프레임을 받기만 하고 0.5 s 마다 한 장만 푼다 — 작업(`/vla_robot/status` busy)이 시작되면 곧바로
+   다 푼다. 노드 로그 `캡처 15.0 fps · 풀기 2.0 fps (팔 작업 없음 — 받기만)` 로 확인. 파지 한 판으로 정상 확인.
+3. **Hailo**(정책이 안 쓴다 — 시스템 설정이라 사용자 확인 뒤): `sudo modprobe -r hailo1x_pci` 로 드라이버만 내리고 잰다
+   (재부팅하면 돌아온다). 효과가 있으면 그때 계속 끌지 정한다.
+
+전압(1 Hz)은 판마다 흔들림이 커서 비교는 같은 대기 상태의 Pi 전력(W)으로 한다.
+
 ## 8. 되돌리기
 
 ```bash
