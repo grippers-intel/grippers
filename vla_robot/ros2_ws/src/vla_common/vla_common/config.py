@@ -189,6 +189,9 @@ class GripperCamConfig:
     publish_height: int = 180
     # 읽기가 이만큼 연속 실패하면 장치를 다시 연다.
     reopen_after_s: float = 2.0
+    # 팔 작업이 없을 때(/vla_robot/status busy 아님)는 프레임을 받기만 하고(grab) 이 간격마다 한 장만 푼다(2026-10-12,
+    # 배터리). 0 = 늘 다 푼다. 작업이 시작되면 곧바로 다 푼다 — 파지 확인 기준 사진은 새 프레임을 기다려 받는다.
+    idle_period_s: float = 0.0
 
 
 @dataclass(frozen=True)
