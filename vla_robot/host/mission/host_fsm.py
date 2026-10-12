@@ -1785,8 +1785,29 @@ class MissionFSM:
                 self._log(f"{self.cfg.mission.piece_dest_box[lb]} 앞 정차 구역을 {lb} ({p[0]:.2f}, {p[1]:.2f}) 이(가) "
                           f"막거나 바로 앞에 있다 — 그것부터")
             return lb, p
-        _d, lb, p = cands[0]
+        d0, lb, p = cands[0]
+        # 거리가 비슷하면(TIE_M 안) 정차 구역에 더 가까운 것부터 — 구역 옆 기물은 나중에 다른 기물을 넣으러 올 때 길을
+        # 좁힌다. 10-12 실기: 상자를 넣은 뒤 별 36.4 cm · 룩 37.2 cm 로 별을 잡았는데 룩은 정차 구역 16 cm 옆이었다.
+        tied = [(self._zone_dist(tl, tp), td, tl, tp) for td, tl, tp in cands if td <= d0 + self.TIE_M]
+        if len(tied) > 1:
+            _zd, _td, tl, tp = min(tied)
+            if tp != p:
+                self._log(f"{lb} 와 {tl} 거리가 비슷하다({d0 * 100:.0f} · {_td * 100:.0f} cm) — 정차 구역에 더 가까운 "
+                          f"{tl} 부터")
+                return tl, tp
         return lb, p
+
+    #: 대상 고르기에서 거리가 이만큼 안이면 같다고 보고 정차 구역에 가까운 것부터
+    TIE_M = 0.05
+
+    def _zone_dist(self, label: str, p: XY) -> float:
+        """기물에서 그 라벨 목적지 상자의 정차 구역(가운데 ± basket_stop_zone_half_m 선분)까지 거리."""
+        box = self.cfg.mission.piece_dest_box.get(label)
+        if box not in self.cfg.arena.boxes:
+            return float("inf")
+        cx, cy = self._box_front_xy(box)
+        hm = self.cfg.mission.basket_stop_zone_half_m
+        return _dist(p, (min(max(p[0], cx - hm), cx + hm), cy))
 
     def _zone_first(self, pmap: PieceMap, cands) -> Optional[tuple[str, XY]]:
         """정차 구역을 막거나 바로 앞에 있어 먼저 잡을 대상. 계산이 무거워(자리 11 × 기물 × 각 31 × 좌우 3) 지도·후보가
