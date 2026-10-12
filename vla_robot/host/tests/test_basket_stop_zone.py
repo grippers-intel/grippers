@@ -304,3 +304,30 @@ def test_piece_in_or_right_in_front_of_the_stop_zone_goes_first():
     fsm.step(P(0.93, 0.33), {"queen": [(0.80, 0.62)], "soccer": [(1.50, 0.80)]}, S(), 0.0)
     assert fsm.target_label == "queen"
 
+
+
+def _first_target(cfg, pieces, robot):
+    from mission.host_fsm import Order
+    fsm = MissionFSM(cfg)
+    pmap = {}
+    for lb, x, y in pieces:
+        pmap.setdefault(lb, []).append((x, y))
+    fsm.set_order(Order(tuple(sorted(pmap)), "all", "organize", "test"))
+    fsm.step(P(*robot), pmap, S(), 0.0)
+    return fsm.target_label
+
+
+def test_piece_beside_the_zone_is_not_taken_first_when_the_next_one_can_still_be_placed(cfg):
+    """10-12 실기 마지막 판: 정차 구역 왼쪽 끝 21 cm 옆 별 때문에 로봇 바로 앞 퀸을 두고 별부터 갔다. 퀸을 쥐고 와도
+    설 자리와 들어오는 길이 있으면 가까운 것부터."""
+    layout = [("star", .71, 1.15), ("queen", .99, .76), ("soccer", 1.32, 1.08), ("knight", 1.65, 1.01),
+              ("box", 1.41, .71), ("rook", .45, .77)]
+    assert _first_target(cfg, layout, (0.99, 0.45, 90.0)) == "queen"
+
+
+def test_piece_that_spoils_every_approach_is_still_taken_first(cfg):
+    """시뮬 5차: 바구니 왼쪽 아래 상자 기물 · 오른쪽 위 퀸(작업장 밖) — 남는 정차 자리마다 올라오는 길이 상자 기물 회전
+    반경 안이라 HALTED. 그 상자 기물을 먼저."""
+    layout = [("box", .776, 1.106), ("knight", .145, .675), ("queen", 1.166, 1.355), ("soccer", 1.463, .797),
+              ("star", .713, .807)]
+    assert _first_target(cfg, layout, (0.93, 0.33, 90.0)) == "box"

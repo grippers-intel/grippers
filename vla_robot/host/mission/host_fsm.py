@@ -1414,7 +1414,25 @@ class MissionFSM:
         turn = residual - math.copysign(m.place_turn_to_deg, residual)
         return self._turn_sweeps(Pose(self.dest_xy[0], self.dest_xy[1], b, True), turn)
 
-    def _pick_pre_stop(self, pose: Pose) -> Optional[XY]:
+    def _stop_arrival_ok(self, pose: Pose, stop: XY, dx: float) -> bool:
+        """지금 자리에서 이 정차 자리로 갈 때 도착해서 바구니 쪽으로 돌 몸 회전이 기물을 쓸지 않는가 — 곧장 오거나,
+        곧장 오면 쓸 때는 바로 아래에서 올라올 점(pre-stop)이 있으면 된다(아래에서 오면 바구니를 보고 도착한다)."""
+        m = self.cfg.mission
+        saved = (self.dest_xy, self._aim_shift)
+        try:
+            self.dest_xy = stop
+            self._aim_shift = max(-m.basket_aim_shift_max_m, min(m.basket_aim_shift_max_m, dx))
+            if not self._straight_arrival_sweeps(pose):
+                return True
+            pre = self._pick_pre_stop(pose, quiet=True)
+            # 아래에서 올라오는 직선도 기물의 회전 반경(turn_safe) 밖이어야 한다 — 시뮬 5차: 그 직선이 상자 기물 14 cm 옆을
+            # 지나 정차점 앞에서 −15° 맞추는 회전이 막혀 HALTED.
+            return pre is not None and all(segment_circle_clearance(pre, stop, o)[0] >= self._planner.turn_safe
+                                           for o in self._other_pieces(pose))
+        finally:
+            self.dest_xy, self._aim_shift = saved
+
+    def _pick_pre_stop(self, pose: Pose, quiet: bool = False) -> Optional[XY]:
         """정차점 바로 아래 거쳐 갈 점. 기물에서 직진 여유(safe) + 2 cm 밖이고 거기서 정차점까지 직선이 빈 곳.
 
         10-07: 정차 구역이 −10 cm 로 옮겨지자 그 아래 30 cm 점이 퀸에서 5 cm 였다 — 계획기가 그 점으로 곧장 가며
@@ -1433,7 +1451,8 @@ class MissionFSM:
             if all(_dist(pt, o) >= clear for o in others) and self._line_clear(pt, self.dest_xy):
                 return pt
             y += 0.025
-        self._log(f"pre-stop: 정차점 아래에 기물 없는 점이 없다 — 정차점으로 바로 간다")
+        if not quiet:
+            self._log(f"pre-stop: 정차점 아래에 기물 없는 점이 없다 — 정차점으로 바로 간다")
         return None
 
     def _approach_turn_sweeps(self, pose: Pose) -> bool:
@@ -1791,16 +1810,49 @@ class MissionFSM:
             if not self._zone_has_spot(box, everything):
                 first = next(((lb, p) for _d, lb, p in mine
                               if self._zone_has_spot(box, [q for q in everything if q != p])), None)
-            if first is None:
-                # 정차 구역 바로 앞(회전 반경 + 여유 안)의 기물도 먼저 — 들어와 바구니 쪽으로 돌 때 닿아 HALTED(10-08 시뮬
-                # 무작위 40판 중 2판: 정차점 17~19 cm 아래의 룩·나이트).
-                cx, cy = self._box_front_xy(box)
-                m = self.cfg.mission
-                first = next(((lb, p) for _d, lb, p in mine
-                              if abs(p[0] - cx) <= m.basket_stop_zone_half_m + near_r and _dist(p, (min(max(p[0], cx - m.basket_stop_zone_half_m), cx + m.basket_stop_zone_half_m), cy)) < near_r), None)
+            if first is None and mine:
+                # 가장 가까운 기물(다음에 잡을 것)을 쥐고 왔을 때 들어오는 길까지 되는 정차 자리가 있는가. 없으면 그 길을
+                # 막는 기물을 먼저 — 10-08 시뮬 무작위 40판 중 2판(정차점 17~19 cm 아래 룩·나이트) · 5차(바구니 옆 상자 기물).
+                # 예전에는 "구역에서 회전 반경 + 3 cm 안"이면 무조건 먼저 잡아, 10-12 실기에서 구역 끝 21 cm 옆 별 때문에
+                # 로봇 바로 앞 퀸을 두고 멀리 갔다.
+                _d0, _lb0, nxt = mine[0]
+                if not self._placeable(box, nxt, [nxt]):
+                    first = next(((lb, p) for _d, lb, p in mine
+                                  if p != nxt and self._placeable(box, nxt, [nxt, p]) and self._placeable(box, p, [p])), None)
+                    if first is None:
+                        # 하나 치워서 풀리지 않으면 예전 규칙(구역 바로 앞 · 회전 반경 + 3 cm 안)
+                        cx, cy = self._box_front_xy(box)
+                        hm = self.cfg.mission.basket_stop_zone_half_m
+                        first = next(((lb, p) for _d, lb, p in mine
+                                      if abs(p[0] - cx) <= hm + near_r
+                                      and _dist(p, (min(max(p[0], cx - hm), cx + hm), cy)) < near_r), None)
             if first is not None:
                 return first
         return None
+
+    def _placeable(self, box: str, origin: XY, removed: list[XY]) -> bool:
+        """origin 의 기물을 쥐고(removed 는 지도에서 뺀 채) 바구니로 갈 때 설 자리가 있고 들어오는 길까지 되는가.
+        정차 자리 고르기(_zone_spot_blockers)와 들어오는 길(_stop_arrival_ok)과 같은 검사 — 쥐는 자리는 기물 위치로 어림한다."""
+        m, pl = self.cfg.mission, self._planner
+        saved = (self._pmap_now, self.target_xy, self.dest_box, self.state)
+        try:
+            self._pmap_now = {lb: [p for p in pts if all(_dist(p, r) > 1e-6 for r in removed)]
+                              for lb, pts in (saved[0] or {}).items()}
+            self.target_xy, self.dest_box, self.state = None, box, HostState.SEARCH_TARGET
+            pieces = [p for pts in self._pmap_now.values() for p in pts]
+            cx, cy = self._box_front_xy(box)
+            n = int(round(m.basket_stop_zone_half_m / m.basket_stop_step_m))
+            for k in range(-n, n + 1):
+                dx = k * m.basket_stop_step_m
+                stop = (cx + dx, cy)
+                if not (pl.x0 <= stop[0] <= pl.x1) or self._zone_spot_blockers(stop, pieces):
+                    continue
+                yaw = math.degrees(math.atan2(stop[1] - origin[1], stop[0] - origin[0]))
+                if self._stop_arrival_ok(Pose(origin[0], origin[1], yaw, True), stop, dx):
+                    return True
+            return False
+        finally:
+            self._pmap_now, self.target_xy, self.dest_box, self.state = saved
 
     def _basket(self, box: Optional[str] = None) -> BasketTarget:
         """목적지 상자의 투입 목표. 팔이 겨누는 점은 상자 중심이 아니다."""
@@ -1844,6 +1896,7 @@ class MissionFSM:
         # 로봇에서 가장 가까운 자리부터(10-08 사용자: 정해 둔 한 점이 아니라 가장 가까운 정차 지역으로 가서 바로 넣기).
         # 떠날 때 어느 쪽으로든 돌 수 있는 자리는 basket_stop_free_bonus_m 만큼 가깝게 친다(10-07 나이트 −0.8 cm).
         offsets.sort(key=lambda dx: _dist(pose.xy, (cx + dx, cy)) - (m.basket_stop_free_bonus_m if dx in free else 0.0))
+        usable: list[float] = []
         for dx in offsets:
             stop = (cx + dx, cy)
             if not (pl.x0 <= stop[0] <= pl.x1):
@@ -1856,9 +1909,19 @@ class MissionFSM:
             if swept:
                 blocker = blocker or swept[0]
                 continue
+            usable.append(dx)
+        # 들어오는 길까지 되는 자리를 먼저(10-12): 곧장 와서 바구니 쪽으로 돌 때 기물을 쓸지 않거나, 쓸면 아래에서 올라올
+        # 점이 있는 자리. 시뮬 5차: 왼쪽에서 잡고 가장 가까운 왼쪽 끝 자리에 와서 돌다 옆 상자 기물에 막혀 HALTED.
+        # 그런 자리가 없으면 예전대로 가장 가까운 자리(들어오는 길은 운반 단계 규칙이 맡는다).
+        ok = [dx for dx in usable if self._stop_arrival_ok(pose, (cx + dx, cy), dx)]
+        for dx in (ok or usable)[:1]:
+            stop = (cx + dx, cy)
             self.dest_xy = stop
             self._aim_shift = max(-m.basket_aim_shift_max_m, min(m.basket_aim_shift_max_m, dx))
-            if dx:
+            if ok and usable and ok[0] != usable[0]:
+                self._log(f"basket stop zone: 좌우 {dx * 100:+.0f} cm 에 선다 — 더 가까운 {usable[0] * 100:+.0f} cm 는 와서 "
+                          f"돌 때 기물을 쓴다 (겨누는 점 {self._aim_shift * 100:+.0f} cm)")
+            elif dx:
                 self._log(f"basket stop zone: 좌우 {dx * 100:+.0f} cm 에 선다 — 로봇에서 가장 가까운 자리 "
                           f"(겨누는 점 {self._aim_shift * 100:+.0f} cm)")
             return None
