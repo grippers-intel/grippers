@@ -656,3 +656,36 @@ def test_detections_off_the_mat_are_dropped(cfg):
     assert not on_mat(a, 1.56, 1.92)                      # 장판(세로 1.83) 9 cm 밖
     assert on_mat(a, 1.56, 1.85)                          # 가장자리에 걸침(3 cm 안)
     assert on_mat(a, 0.99, 1.80)                          # 바구니 안 — 완료 표시용으로 남긴다
+
+
+def test_the_grasped_piece_spot_is_not_remembered_as_a_known_piece(cfg):
+    """10-12 검토: 고르는 동안(대상 없음) 잡을 기물 자리도 "원래 있던 기물"로 익혀, 쥔 직후 그 근처에서 다른 라벨로
+    보인 그리퍼 속 기물이 장애물로 남았다. 파지를 시작하면 그 자리는 기억에서 뺀다."""
+    fsm = MissionFSM(cfg)
+    rook, knight = (0.90, 0.80), (0.40, 1.10)
+    fsm._enter(HostState.SEARCH_TARGET)
+    fsm._learn_known_pieces(P(0.90, 0.40), {"rook": [rook], "knight": [knight]})   # 고르는 중 — 둘 다 익힌다
+    fsm.target_label, fsm.target_xy = "rook", rook
+    fsm._enter(HostState.GRASP)
+    assert all(_d(k, rook) > fsm.GHOST_MATCH_M for k in fsm._known_pieces)
+    assert any(_d(k, knight) < 1e-6 for k in fsm._known_pieces)
+    _setup_place(fsm)
+    fsm.target_label = "rook"
+    fsm._enter(HostState.CARRY_TO_DEST)
+    pose = P(0.90, 0.55, 90.0)                                                    # 잡은 자리에서 막 떠난다
+    fsm._pose_now, fsm._pmap_now = pose, {"knight": [(0.92, 0.79), knight]}       # 그리퍼 속 룩이 "나이트"로
+    others = fsm._other_pieces(pose)
+    assert (0.92, 0.79) not in others and knight in others
+
+
+def test_tie_message_is_logged_once(cfg):
+    """10-12 검토: 수동 모드에서 대상 고르기가 10 Hz 로 돌며 같은 동점 로그가 계속 찍혔다."""
+    fsm = MissionFSM(cfg)
+    pmap = {"rook": [(.74, 1.194)], "star": [(1.417, 1.085)]}
+    for _ in range(5):
+        fsm._nearest_piece(pmap, (1.104, 1.271), [])
+    assert sum("거리가 비슷하다" in e for e in fsm.events) == 1
+
+
+def _d(a, b):
+    return math.hypot(a[0] - b[0], a[1] - b[1])

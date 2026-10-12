@@ -272,3 +272,18 @@ def test_planned_controller_restart_shows_no_banner(cfg):
     fsm._recover_started = 0.0                                          # Host 가 무응답을 보고 요청했다
     s = ui.build(pose, {}, fsm, st, 0.0, 10.0)
     assert s["notice"]["code"] == "BASE"
+
+
+def test_banner_for_a_reset_the_host_asked_for_under_estop(cfg):
+    """10-12 검토: ESTOP 중 폭주로 Host 가 보드 리셋을 요청해도(복구를 기다리지 않는 길) 알림이 떠야 한다."""
+    from localization.pose import Pose
+    from vla_common.protocol import PiStatus
+    fsm = MissionFSM(cfg)
+    ui = UiState(cfg)
+    fsm._enter(HostState.APPROACH_PIECE)
+    fsm._now, fsm._recover_req_at = 10.0, 9.0                         # ESTOP 폭주 길에서 요청했다
+    pose = Pose(1.0, 0.5, 90.0, ok=True, n_cams=2, fresh=True)
+    st = PiStatus(boot_id="b", state="APPROACH", busy=False, job_id=0, result=None, base_ok=True, watchdog=False,
+                  base_recovering=True, base_recoveries=3)
+    s = ui.build(pose, {}, fsm, st, 0.0, 10.0)
+    assert s["notice"]["code"] == "BASE"

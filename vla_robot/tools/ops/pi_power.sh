@@ -20,8 +20,8 @@ fi
 pmic_watts() {
     # "XXX_A current(n)=0.123A" 와 "XXX_V volt(n)=0.789V" 를 이름으로 짝지어 곱한 합
     vcgencmd pmic_read_adc | awk '
-        /current\(/ { split($1, a, "_A"); gsub(/.*=/, "", $2); gsub(/A/, "", $2); cur[a[1]] = $2 }
-        /volt\(/    { split($1, v, "_V"); gsub(/.*=/, "", $2); gsub(/V/, "", $2); vol[v[1]] = $2 }
+        /current\(/ { k = $1; sub(/_A$/, "", k); gsub(/.*=/, "", $2); gsub(/A/, "", $2); cur[k] = $2 }
+        /volt\(/    { k = $1; sub(/_V$/, "", k); gsub(/.*=/, "", $2); gsub(/V/, "", $2); vol[k] = $2 }
         END { w = 0; for (k in cur) if (k in vol) w += cur[k] * vol[k]; printf "%.3f\n", w }'
 }
 
