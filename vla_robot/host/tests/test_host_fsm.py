@@ -647,3 +647,12 @@ def test_piece_first_seen_far_away_while_holding_is_learned(cfg):
     fsm._pose_now = near
     fsm._pmap_now = {"star": [new]}
     assert new in fsm._other_pieces(near)
+
+
+def test_detections_off_the_mat_are_dropped(cfg):
+    """10-12: 바구니 오른쪽 뒤 장판 밖 (1.56, 1.92)에 "룩"이 간간이 잡혔다. 장판 위·가장자리에 걸친 것은 남긴다."""
+    from perception.piece_tracker import on_mat
+    a = cfg.arena
+    assert not on_mat(a, 1.56, 1.92)                      # 장판(세로 1.83) 9 cm 밖
+    assert on_mat(a, 1.56, 1.85)                          # 가장자리에 걸침(3 cm 안)
+    assert on_mat(a, 0.99, 1.80)                          # 바구니 안 — 완료 표시용으로 남긴다

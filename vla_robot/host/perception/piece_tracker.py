@@ -88,6 +88,17 @@ class _Track:
         return sum(self.label_scores.values())
 
 
+#: 장판 밖 검출을 버리는 여유(m) — 가장자리에 걸친 기물은 남긴다
+OFF_MAT_MARGIN_M = 0.03
+
+
+def on_mat(arena_cfg, x: float, y: float, margin: float = OFF_MAT_MARGIN_M) -> bool:
+    """장판(wall_x · wall_y) 위인가. 10-12: 바구니 오른쪽 뒤 장판 밖 (1.56, 1.92)에 "룩"이 카메라 하나에서 간간이
+    잡혔다 — 장판 밖은 기물이 놓일 수도 로봇이 갈 수도 없는 곳이라 지도에 올리지 않는다."""
+    return (arena_cfg.wall_x[0] - margin <= x <= arena_cfg.wall_x[1] + margin
+            and arena_cfg.wall_y[0] - margin <= y <= arena_cfg.wall_y[1] + margin)
+
+
 class PieceTracker:
     def __init__(self, cfg) -> None:
         self.cfg = cfg

@@ -107,7 +107,7 @@ def main() -> int:
             from perception.detector import make_detector as make_piece_detector
             from perception.hands import (HandDetector, hand_observations, make_hand_tracker,
                                           nearest_spot)
-            from perception.piece_tracker import PieceTracker, observations_from_detections
+            from perception.piece_tracker import PieceTracker, observations_from_detections, on_mat
 
             indices = args.cams if args.cams is not None else list(cfg.cameras.indices)
             caps = open_cams(indices, cfg.cameras.width, cfg.cameras.height, cfg.cameras.focus)
@@ -179,9 +179,10 @@ def main() -> int:
                     for idx, cam, frame in zip(indices, cams, frames):
                         if frame is not None:
                             piece_detector.submit(idx, frame)
-                        obs.append(observations_from_detections(cam, piece_detector.latest(idx),
-                                                                cfg.detector.conf_threshold,
-                                                                cfg.tracker.piece_radius_by_label))
+                        obs.append([o for o in observations_from_detections(cam, piece_detector.latest(idx),
+                                                                            cfg.detector.conf_threshold,
+                                                                            cfg.tracker.piece_radius_by_label)
+                                    if on_mat(cfg.arena, o.x, o.y)])      # 장판 밖 검출은 버린다(10-12)
                     pmap = tracker.update(obs, t0)
                     if args.log_piece and t0 - piece_log_at >= 1.0:
                         piece_log_at = t0

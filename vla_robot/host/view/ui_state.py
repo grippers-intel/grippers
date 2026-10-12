@@ -227,6 +227,11 @@ class UiState:
             self.notify("이 기물은 건너뛰고 다음 기물로 갑니다", "E-314", "caution")
         self._skipped_n = len(fsm.skipped)
 
+        if fsm._holding() and pose.ok:
+            # 쥔 기물(같은 라벨 · 다른 라벨로 보인 유령)은 지도에 그리지 않는다 — 10-12: 상자를 들고 가는데 화면에 상자가 남았다.
+            keep = set(fsm._other_pieces(pose))
+            held = {p for pts in (fsm._pmap_now or {}).values() for p in pts if p not in keep}
+            pmap = {lb: [p for p in pts if p not in held] for lb, pts in (pmap or {}).items()}
         pieces = self._workspace_pieces(pmap)
         live = [p for p in pieces if p["state"] == "idle"]
         target_id = None
