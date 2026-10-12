@@ -15,7 +15,7 @@ VLA 정책으로 물체를 집는 로봇팔(SO-ARM101)과 탑뷰 ArUco 기반 �
                                                   └──────────────────────────────────────────┘
 ```
 
-문서: [Pi 배포·기동·종료](docs/pi_deploy.md) · [주행·미션 동작과 설정](docs/behavior.md) ·
+문서: **[프로젝트 정리(지금 상태 한 장)](docs/handover.md)** · [Pi 배포·기동·종료](docs/pi_deploy.md) · [주행·미션 동작과 설정](docs/behavior.md) ·
 [맵 다시 만들기](docs/map_rebuild.md) · [Host(노트북)](host/README.md)
 
 ## 기존 `hardware/`에서 무엇이 달라졌나
