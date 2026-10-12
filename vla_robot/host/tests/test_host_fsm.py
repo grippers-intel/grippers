@@ -602,3 +602,48 @@ def test_blocked_line_near_the_stop_counts_only_while_standing(cfg):
         t += 0.1
         fsm.step(P(pose.x, pose.y, yaw), blocker, S(), t)
     assert fsm.state == HostState.HALTED and "직선이 막힘" in (fsm.halt_reason or "")
+
+
+def _holding_rook(cfg):
+    """룩을 쥐고 운반 중. 쥐기 전 지도에는 나이트가 (0.40, 1.10)에 있었다."""
+    fsm = MissionFSM(cfg)
+    fsm.target_label, fsm.target_xy = "rook", (0.90, 0.80)
+    fsm._enter(HostState.SEARCH_TARGET)
+    fsm._learn_known_pieces(P(0.90, 0.52), {"rook": [(0.90, 0.80)], "knight": [(0.40, 1.10)]})   # 다가가며 본 지도
+    fsm._enter(HostState.GRASP)
+    _setup_place(fsm)
+    fsm.target_label = "rook"
+    fsm._enter(HostState.CARRY_TO_DEST)
+    return fsm
+
+
+def test_held_piece_seen_as_another_label_is_not_an_obstacle(cfg):
+    """10-12 실기(DP): 쥐고 든 룩이 "나이트"로 로봇 15 cm 옆에 검출돼 바구니 앞에서 HALTED. 쥐기 전 지도에 없던
+    검출이 로봇 가까이 나타나면 라벨과 상관없이 쥔 기물로 본다."""
+    fsm = _holding_rook(cfg)
+    pose = P(0.96, 1.21, 35.0)
+    fsm._pose_now = pose
+    fsm._pmap_now = {"knight": [(0.94, 1.36), (0.40, 1.10)]}
+    others = fsm._other_pieces(pose)
+    assert (0.94, 1.36) not in others                     # 유령 — 빼고
+    assert (0.40, 1.10) in others                         # 원래 있던 나이트는 그대로(로봇에서 멀다)
+
+
+def test_known_piece_near_the_robot_stays_an_obstacle_while_holding(cfg):
+    """09-30: 반경만으로 빼다가 옆 기물까지 빠져 밀고 갔다. 쥐기 전 지도에 있던 기물은 가까워도 피한다."""
+    fsm = _holding_rook(cfg)
+    pose = P(0.50, 1.05, 90.0)                            # 원래 나이트 10 cm 옆
+    fsm._pose_now = pose
+    fsm._pmap_now = {"knight": [(0.40, 1.10)]}
+    assert (0.40, 1.10) in fsm._other_pieces(pose)
+
+
+def test_piece_first_seen_far_away_while_holding_is_learned(cfg):
+    """운반 중 멀리서 처음 본 기물(사람이 새로 놓음)은 익혀 두었다가, 다가가서도 피한다."""
+    fsm = _holding_rook(cfg)
+    new = (1.50, 1.00)
+    far, near = P(0.80, 1.00, 0.0), P(1.30, 1.00, 0.0)
+    fsm.step(far, {"star": [new]}, S(), 1.0)
+    fsm._pose_now = near
+    fsm._pmap_now = {"star": [new]}
+    assert new in fsm._other_pieces(near)

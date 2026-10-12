@@ -80,7 +80,7 @@ def _scene_b():
     import math
     fsm = MissionFSM(_cfg())
     fsm.set_order(Order(labels=("soccer",)))
-    fsm.step(P(0.99, 0.50), {"soccer": [(0.99, 0.80)]}, S(), 0.0)
+    fsm.step(P(0.99, 0.50), {"soccer": [(0.99, 0.80)], "box": [(1.143, 0.895)]}, S(), 0.0)   # 상자 기물은 처음부터 있었다
     fsm._enter(HostState.CARRY_TO_DEST)
     fsm.dest_xy, fsm._box_stop_chosen = (0.95, 1.26), True   # 그때 정차 구역이 고른 자리(왼쪽 4 cm)
     pose = P(1.004, 0.920, yaw=80.8)
