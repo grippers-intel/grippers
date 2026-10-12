@@ -150,6 +150,9 @@ class BaseConfig:
     quiet_reset: bool = True
     quiet_reset_on_job: bool = True
     quiet_reset_idle_s: float = 3.0
+    # 마지막 재기동 뒤 이만큼 넘게 서 있다 처음 움직일 때는 먼저 재기동한다(2026-10-12, 0 = 끔). 오래 쉬면 보드가
+    # 첫 명령을 안 받았다(재기동 뒤 30 s 넘게 서 있다 출발 11번 중 3번 무응답).
+    quiet_reset_stale_s: float = 60.0
 
 
 @dataclass(frozen=True)

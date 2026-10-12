@@ -51,6 +51,12 @@ class BaseRecovery:
         self.last_detail = ""
 
     @property
+    def last_end(self) -> Optional[float]:
+        """마지막 재기동이 끝난 시각(clock 기준). 아직 없으면 None."""
+        with self._lock:
+            return self._last_end
+
+    @property
     def recovering(self) -> bool:
         with self._lock:
             return self._recovering
@@ -113,10 +119,11 @@ class QuietResetPolicy:
     움직인 뒤 한 번만 한다(다시 움직이기 전에는 또 하지 않는다).
     """
 
-    def __init__(self, enabled: bool, on_job: bool, idle_s: float) -> None:
+    def __init__(self, enabled: bool, on_job: bool, idle_s: float, stale_s: float = 0.0) -> None:
         self.enabled = enabled
         self.on_job = on_job
         self.idle_s = idle_s
+        self.stale_s = stale_s
         self._dirty = False                    # 마지막 재기동 뒤 바퀴가 움직였나
         self._still_since: Optional[float] = None
 
@@ -133,6 +140,19 @@ class QuietResetPolicy:
             return "팔 작업 시작(어차피 서 있다)"
         if now - self._still_since >= self.idle_s:
             return f"움직인 뒤 {self.idle_s:.0f}s 넘게 정지"
+        return ""
+
+    def before_move(self, wants_move: bool, since_reset_s: Optional[float]) -> str:
+        """움직이려는데 마지막 재기동 뒤 한 번도 안 움직였고 stale_s 넘게 지났으면 먼저 재기동할 이유("" = 아니다).
+
+        2026-10-12 base_trace 출발 133번: 무응답 4번 모두 모터 명령은 보드 입구까지 나갔고(set_motor) IMU 도 살아
+        있는데 바퀴만 안 돌았다(시리얼 쓰기 실패 기록 없음). 재기동 뒤 30 s 넘게 서 있다 출발한 11번 중 3번(10~43분
+        서 있던 것) · 6~30 s 안 출발 33번 중 0번. 무응답 뒤에는 재기동하고 같은 명령으로 바로 움직였다 — 오래 쉬면
+        보드가 첫 명령을 안 받는 것으로 보고, 그런 출발 전에 미리 다시 띄운다(무응답 1.5 s + 복구 13 s → 재기동 6 s)."""
+        if not (self.enabled and self.stale_s > 0 and wants_move) or self._dirty or since_reset_s is None:
+            return ""
+        if since_reset_s >= self.stale_s:
+            return f"재기동 뒤 {since_reset_s:.0f}s 서 있다 출발 — 첫 명령 무응답을 막는다"
         return ""
 
     def mark_done(self) -> None:

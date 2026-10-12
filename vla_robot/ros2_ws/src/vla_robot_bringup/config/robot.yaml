@@ -47,6 +47,8 @@ base:
   quiet_reset: true
   quiet_reset_on_job: true
   quiet_reset_idle_s: 3.0
+  # 10-12 base_trace: 재기동 뒤 오래(10~43분) 서 있다 출발하면 보드가 첫 명령을 안 받았다 — 그런 출발 전에 미리 재기동.
+  quiet_reset_stale_s: 60.0
 
 link:
   bind_ip: 0.0.0.0
