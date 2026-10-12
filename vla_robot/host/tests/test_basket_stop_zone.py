@@ -331,3 +331,17 @@ def test_piece_that_spoils_every_approach_is_still_taken_first(cfg):
     layout = [("box", .776, 1.106), ("knight", .145, .675), ("queen", 1.166, 1.355), ("soccer", 1.463, .797),
               ("star", .713, .807)]
     assert _first_target(cfg, layout, (0.93, 0.33, 90.0)) == "box"
+
+
+def test_near_tie_takes_the_piece_next_to_the_stop_zone_first(cfg):
+    """10-12 실기: 상자를 넣고 오른쪽 정차 자리(1.10, 1.27)에서 별 36.4 cm · 룩 37.2 cm — 별을 잡았다. 거리가 5 cm 안으로
+    비슷하면 정차 구역 16 cm 옆 룩부터."""
+    layout = [("knight", .508, .664), ("queen", 1.566, .788), ("rook", .74, 1.194), ("soccer", .515, 1.0),
+              ("star", 1.417, 1.085)]
+    assert _first_target(cfg, layout, (1.104, 1.271, 94.0)) == "rook"
+
+
+def test_clearly_nearer_piece_still_goes_first(cfg):
+    """거리 차이가 크면 그대로 가까운 것부터 — 정차 구역 가까운 것을 위해 멀리 가지 않는다."""
+    layout = [("rook", .74, 1.194), ("star", 1.30, 1.10)]
+    assert _first_target(cfg, layout, (1.104, 1.271, 94.0)) == "star"
