@@ -97,7 +97,10 @@ HALTED 에서 ← 를 누르면 쥔 채였으면 운반(정차 자리 다시 고
 ## Host CPU
 
 - 기물 검출(Geti)은 지시 대기 · HALTED · ESTOP 동안 `detector.idle_infer_interval_s`(2 s) 간격, 일할 때 0.3 s.
-  OpenVINO 는 카메라당 `detector.num_threads`(4) 스레드.
+  OpenVINO 는 **내장 그래픽**(`detector.device: GPU.0`, Intel UHD)에서 돈다 — 한 장 255 ms(CPU 690 ms), 못 올리면 CPU
+  (카메라당 `detector.num_threads` 4 스레드)로 돌아간다. 외장 RTX 3050 은 OpenVINO 로 못 쓴다.
+- 10-12 교육장 실측(run_host 전체, CPU 16스레드 기준): 대기 21.9 → **11.1 %** · 작업 중 46.6 → **19.0 %**.
+  검출을 빼면 대기 9.1 % · 작업 중 13.6 % — 남은 몫은 카메라 영상 풀기와 ArUco.
 - 손 검출은 "가져와" 해석·마이크 입력·손 대기·건네기 중에만.
 - 지시 대기 중(ESTOP·HALTED·손 검출 중 제외)에는 영상 풀기·ArUco 를 `cameras.idle_process_period_s`(0.3 s)마다만.
 

@@ -122,8 +122,9 @@ def main() -> int:
                 from dataclasses import replace
                 det_cfg = replace(det_cfg, kind=args.detector or det_cfg.kind,
                                   device=args.geti_device or det_cfg.device)
-            print(f"[host] 검출기: {det_cfg.kind}")
             piece_detector = make_piece_detector(det_cfg, indices)
+            print(f"[host] 검출기: {det_cfg.kind}" + (f" · {getattr(piece_detector, 'device', '')}"
+                                                     if getattr(piece_detector, "device", None) else ""))
             tracker = PieceTracker(cfg.tracker)
             hand_detector = HandDetector(cfg.hands, indices)
             hand_tracker = make_hand_tracker(cfg.hands, cfg.tracker)
