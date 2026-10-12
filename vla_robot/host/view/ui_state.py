@@ -296,8 +296,11 @@ class UiState:
         # 알림 배너: 일회성(notify) > 차체 복구 > Pi 연결 > 탐색 사유
         notice = self._notice if (self._notice and now < self._notice_until) else None
         if notice is None:
-            if (pi_status is not None and pi_status.base_recovering
+            if (pi_status is not None and pi_status.base_recovering and fsm._recover_started is not None
                     and fsm.state not in (HostState.GRASP, HostState.PLACE)):
+                # Host 가 무응답·폭주를 보고 요청한 복구만 띄운다. Pi 가 예정대로 하는 재기동(스택 기동 직후 · 팔 작업
+                # 시작 · 오래 서 있다 첫 출발 전)은 늘 있는 일이라 띄우지 않는다(10-12 사용자: 보는 사람이 왜 자꾸
+                # 재기동하냐고 물을 수 있다).
                 notice = {"text": "차체 컨트롤러를 다시 띄우는 중입니다", "code": "BASE", "tone": "caution"}
             elif pi_status is None or link_age_s > 2.0:
                 notice = {"text": "Pi 상태가 오지 않습니다 — 명령은 콘솔/UDP 로만 나갑니다",

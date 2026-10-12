@@ -254,3 +254,21 @@ def test_held_piece_is_not_drawn_on_the_map(cfg):
     s = ui.build(pose, pmap, fsm, None, 0.0, 10.0)
     labels = [p["label"] for p in s["pieces"]]
     assert "box" not in labels and "knight" in labels
+
+
+def test_planned_controller_restart_shows_no_banner(cfg):
+    """10-12 사용자: Pi 가 예정대로 하는 재기동(오래 서 있다 첫 출발 전 등)은 화면에 띄우지 않는다. Host 가 무응답을
+    보고 요청한 복구만 알린다."""
+    from localization.pose import Pose
+    from vla_common.protocol import PiStatus
+    fsm = MissionFSM(cfg)
+    ui = UiState(cfg)
+    fsm._enter(HostState.APPROACH_PIECE)
+    pose = Pose(1.0, 0.5, 90.0, ok=True, n_cams=2, fresh=True)
+    st = PiStatus(boot_id="b", state="APPROACH", busy=False, job_id=0, result=None, base_ok=True, watchdog=False,
+                  base_recovering=True, base_recoveries=3)
+    s = ui.build(pose, {}, fsm, st, 0.0, 10.0)
+    assert (s["notice"] or {}).get("code") != "BASE"                  # 예정된 재기동
+    fsm._recover_started = 0.0                                          # Host 가 무응답을 보고 요청했다
+    s = ui.build(pose, {}, fsm, st, 0.0, 10.0)
+    assert s["notice"]["code"] == "BASE"
