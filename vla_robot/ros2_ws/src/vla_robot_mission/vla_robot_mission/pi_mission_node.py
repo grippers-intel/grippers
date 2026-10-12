@@ -430,7 +430,8 @@ class PiMissionNode(Node):
                             log=lambda m: self.get_logger().info(m))
         self.recovery = BaseRecovery(bcfg.recover_script, bcfg.recover_timeout_s, bcfg.recover_cooldown_s,
                                      log=lambda m: self.get_logger().warn(m))
-        self.quiet = QuietResetPolicy(bcfg.quiet_reset, bcfg.quiet_reset_on_job, bcfg.quiet_reset_idle_s)
+        self.quiet = QuietResetPolicy(bcfg.quiet_reset, bcfg.quiet_reset_on_job, bcfg.quiet_reset_idle_s,
+                                      bcfg.quiet_reset_stale_s)
 
         cb = ReentrantCallbackGroup()
         self._twist_pub = self.create_publisher(Twist, bcfg.cmd_vel_topic, 10)
@@ -516,6 +517,13 @@ class PiMissionNode(Node):
             if getattr(cmd, "recover_base", False):
                 self.recovery.request()           # 이미 도는 중·쿨다운이면 알아서 무시한다
         out = self.core.step(now, self._base_alive(now))
+
+        # 오래 서 있다 첫 출발이면 먼저 컨트롤러를 다시 띄운다(10-12) — 도는 동안 아래에서 정지만 나가고 Host 는 기다린다.
+        wants_move = any(abs(v) > 1e-6 for v in (out.motion.linear_x, out.motion.linear_y, out.motion.angular_z))
+        last_end = self.recovery.last_end
+        stale = self.quiet.before_move(wants_move, None if last_end is None else now - last_end)
+        if stale and not self.recovery.recovering and self.recovery.request(quiet=stale):
+            self.quiet.mark_done()
 
         twist = Twist()
         if not self.recovery.recovering:          # 컨트롤러를 다시 띄우는 동안은 정지만 낸다

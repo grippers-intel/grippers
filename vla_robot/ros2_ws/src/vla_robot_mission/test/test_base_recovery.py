@@ -106,3 +106,24 @@ def test_quiet_reset_can_be_turned_off():
     q = QuietResetPolicy(enabled=False, on_job=True, idle_s=3.0)
     q.due(0.0, moving=True, job_busy=False)
     assert q.due(10.0, moving=False, job_busy=True) == ""
+
+
+def test_restart_before_the_first_move_after_standing_long():
+    """10-12: 재기동 뒤 10분 넘게 서 있다 출발하면 보드가 첫 명령을 안 받았다 — 그 출발 전에 미리 다시 띄운다."""
+    q = QuietResetPolicy(enabled=True, on_job=True, idle_s=3.0, stale_s=60.0)
+    assert q.before_move(False, 600.0) == ""                    # 움직이려 할 때만
+    assert q.before_move(True, 30.0) == ""                      # 재기동 30 s 뒤 — 그대로 간다
+    assert "서 있다 출발" in q.before_move(True, 615.0)
+    assert q.before_move(True, None) == ""                      # 기동 직후 선제 재기동이 아직 안 끝났다
+    q.due(0.0, moving=True, job_busy=False)                     # 재기동 뒤 이미 움직였다 — 보드가 깨어 있다
+    assert q.before_move(True, 615.0) == ""
+    off = QuietResetPolicy(enabled=True, on_job=True, idle_s=3.0, stale_s=0.0)
+    assert off.before_move(True, 615.0) == ""
+
+
+def test_recovery_reports_when_it_last_finished():
+    clock, calls = Clock(), []
+    r = make(clock, calls)
+    assert r.last_end is None
+    r.request(quiet="x")
+    assert r.last_end == clock()
