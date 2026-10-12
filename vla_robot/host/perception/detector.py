@@ -145,14 +145,26 @@ class GetiDetector:
             # iGPU 캐시 없음 30 s -> 캐시 3 s. CPU 에서도 손해가 없어 항상 켠다.
             Path(cfg.cache_dir).mkdir(parents=True, exist_ok=True)
             ov_config["CACHE_DIR"] = str(cfg.cache_dir)
-        if cfg.num_threads > 0 and cfg.device.upper() == "CPU":
-            ov_config["INFERENCE_NUM_THREADS"] = str(cfg.num_threads)
         self._cfg = cfg
         self._workers: dict[int, _GetiWorker] = {}
+        self.device = cfg.device
         for idx in cam_indices:
             dep = Deployment.from_folder(str(path))
-            dep.load_inference_models(device=cfg.device, openvino_configuration=ov_config or None)
+            try:
+                dep.load_inference_models(device=self.device, openvino_configuration=self._ov_config(ov_config) or None)
+            except Exception as exc:  # noqa: BLE001 — 내장 그래픽 드라이버가 없거나 커널이 없으면 CPU 로
+                if self.device.upper() == "CPU":
+                    raise
+                print(f"[detector] {self.device} 에 모델을 올리지 못해 CPU 로 돌립니다: {str(exc)[:120]}")
+                self.device = "CPU"
+                dep.load_inference_models(device="CPU", openvino_configuration=self._ov_config(ov_config) or None)
             self._workers[int(idx)] = _GetiWorker(dep, f"cam{idx}", cfg)
+
+    def _ov_config(self, base: dict) -> dict:
+        cfg = dict(base)
+        if self._cfg.num_threads > 0 and self.device.upper() == "CPU":
+            cfg["INFERENCE_NUM_THREADS"] = str(self._cfg.num_threads)
+        return cfg
 
     def submit(self, cam_index: int, frame_bgr: np.ndarray) -> None:
         w = self._workers.get(int(cam_index))
