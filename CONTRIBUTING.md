@@ -41,8 +41,11 @@ black .
 
 ## 주제 전환 마이그레이션
 
-`domain/` 코드는 아직 이전 주제(암실 반출) 기준입니다. 재작성은
-[`docs/design/class_diagram.md` §5](docs/design/class_diagram.md) 의 **PR 10건 순서를 반드시 따르세요.**
+> **2026-10-13**: 최종 시스템은 [`vla_robot/`](vla_robot/) 입니다. 아래 마이그레이션 계획의 대상이던 초기 설계 코드는
+> [`legacy/`](legacy/) 로 옮겼고 더 이상 진행하지 않습니다(기록용).
+
+초기 설계의 `domain/` 재작성은
+[`docs/design/class_diagram.md` §5](docs/design/class_diagram.md) 의 PR 10건 순서를 따랐습니다.
 
 ```
 값 객체 → 포트 → Fake 어댑터 → states.py → 실제 어댑터 → 테스트

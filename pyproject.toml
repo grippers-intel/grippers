@@ -3,12 +3,14 @@
 #
 # ros2_ws/src 아래 MentorPi 벤더 스택과 third_party 서브모듈은
 # 우리가 작성한 코드가 아니므로 검사 대상에서 제외한다.
-# 검사 대상: domain/, tests/, ros2_ws/src/grippers_*
+# 검사 대상: legacy/(초기 설계 코드 — domain · tests · grippers_* · tools)와 vla_robot/(자체 ruff.toml)
 # ─────────────────────────────────────────────────────────
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# import 정렬이 legacy/ 아래 코드를 원래처럼 "우리 코드"(first-party)로 보게 한다 — 루트에 있던 때와 같은 결과.
+src = [".", "legacy"]
 
 exclude = [
     ".git",
