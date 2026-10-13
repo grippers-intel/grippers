@@ -4,3 +4,6 @@ models/
 __pycache__/
 .pytest_cache/
 logs/
+
+# OpenVINO 가 GPU 커널을 컴파일하다 실패하면 실행 폴더에 남기는 로그(10-13 실수로 커밋됐다)
+kernel.errors.txt
