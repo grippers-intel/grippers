@@ -19,6 +19,13 @@
 - **10-13 최종 확인**: 2/2 · 6기물 6/6 · 바구니 앞을 막는 배치 5/5 · "가져와" 2/2 — HALTED · 무응답 · 폭주 0.
   파지 첫 시도 성공은 대체로 6번 중 5~6번(빈손이면 위치를 다시 보고 한 번 더). 운반 41번 중 39번이 "회전 → 직진 → 회전 → 투입" 한 모양.
 
+## 1-1. 로봇 사용 종료 (10-13)
+
+- 마지막 실기는 10-13: 최종 확인 판 모두 성공 + 린트 수정 코드(`55ac594`)로 정리 2/2 · 가져와 1/1. Pi 는 이 코드 그대로다.
+- Pi 에만 있던 ACT 체크포인트는 노트북 `project/hardware/grippers/host/act_v5_all_180_120k_120000` 에 같은 파일이 있다(해시 일치).
+  Host 모델(Geti · 손 · whisper)은 노트북 `host/models/` 에만 있다(저장소 제외).
+- 이후 vla_robot 실행 코드를 바꾸면 시험 · `host/tools/sim_regress.py` 로 확인하고, 동작이 바뀌는 것은 다음 실기 때 한 판 돌려 본다.
+
 ## 2. 하루 순서
 
 1. **기동** — [pi_deploy.md §4](pi_deploy.md): Pi 켬 → 차체·팔 배터리 확인 → Pi 코드 갱신(`git fetch` / `checkout`) →
@@ -61,7 +68,11 @@ Host 설정은 `host/config/host.yaml` 하나. 값마다 근거(날짜·실측)�
 | `tools/ops/pi_power.sh`(Pi 호스트) | Pi 5 전력(W) · 온도 · CPU 상위 프로세스 — 배터리 비교 |
 | `tools/ops/pi_preflight.sh --beep` | 기동 전 장치 · 보드 쓰기 방향 점검 |
 
-시험(ROS 없이): `host` 에서 `pytest`(239) · Pi 쪽 `vla_common` 과 `vla_robot_mission/test/test_base_recovery.py`(87).
+시험(ROS 없이): `host` 에서 `pytest`(241) · Pi 쪽 `vla_common` 과 `vla_robot_mission/test/test_base_recovery.py`(87).
+
+**CI**(`.github/workflows/ci.yml`, 10-13 정리 — main 에도 반영 #205): push 마다 4개 작업이 나란히 돈다 — 린트(ruff · black, 버전 고정) ·
+루트 `tests/` · vla_robot Host 시험(Python 3.11) · vla_robot Pi 쪽 시험(Python 3.10, Pi 의 ROS 2 Humble 과 같다).
+vla_robot 린트는 `vla_robot/ruff.toml`(py310 · 140자 · E/F/B)을 따르고 black 은 쓰지 않는다. 로컬에서 미리 보려면 `ruff check .`(저장소 루트).
 
 ## 6. 알려진 한계
 
