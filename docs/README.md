@@ -14,7 +14,15 @@ Grippers 최종 시스템(코드: [`vla_robot/`](../vla_robot/)) 문서입니다
 | [../vla_robot/README.md](../vla_robot/README.md) | 구성 · 디렉터리 · 설치 · 캘리브레이션 · 첫 기동 |
 | [../vla_robot/host/README.md](../vla_robot/host/README.md) | Host(노트북) 실행 · 도구 |
 
-설계 문서(구성도 · 인터페이스 · 상태도 · 시퀀스 · 결정 기록 · 결과)는 현재 코드 기준으로 새로 쓰는 중입니다.
+## 설계
+
+| 문서 | 내용 |
+|---|---|
+| [architecture.md](architecture.md) | **시스템 구성** — 역할 분담(Host · Pi) · 구성도 · 어디서 무엇이 도나 · 한 사이클 · 설계 원칙 · 설정 파일 |
+| [interfaces.md](interfaces.md) | **인터페이스** — Host ↔ Pi UDP(HostCommand · PiStatus · 완료 보고 방식) · ROS 2 노드 · 토픽 · 서비스 · 액션 |
+| [modules.md](modules.md) | **폴더 · 모듈** — 저장소 구조 · 의존 관계 · 모듈별 역할 · 시험 |
+
+상태도 · 시퀀스 · 결정 기록 · 결과는 이어서 추가합니다.
 
 ## 운영
 
