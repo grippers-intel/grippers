@@ -158,6 +158,17 @@ class VlaGraspNode(Node):
         if hot:
             raise GraspAborted(f"서보 온도 상한({self.max_temp_c:.0f}°C) 초과: {', '.join(hot)}")
 
+    def _grip_harder(self, chunk: np.ndarray, label: str) -> np.ndarray:
+        """grip_close_pct_by_label 에 있는 라벨이면, 정책이 닫는 구간(명령 < grip_close_below_pct)의 그리퍼 목표를 더
+        닫는다 — 목표와 실제(물건에 막힌 개도)의 차이만큼 서보가 세게 쥔다. 다른 관절·여는 구간은 그대로."""
+        close = self.pcfg.grip_close_pct_by_label.get(label)
+        if close is None:
+            return chunk
+        out = np.array(chunk, dtype=np.float32, copy=True)
+        g = out[:, GRIPPER_INDEX]
+        g[g < self.pcfg.grip_close_below_pct] = close
+        return out
+
     def _play(self, chunk: np.ndarray, goal_handle) -> None:
         if not self._chunk_client.wait_for_server(timeout_sec=2.0):
             raise GraspAborted("arm/execute_chunk 서버가 없다")
@@ -238,6 +249,7 @@ class VlaGraspNode(Node):
                         f"청크 {chunks + 1} 명령 lift 처음 {lift_cmd[0]:.0f} 최소 {lift_cmd.min():.0f} "
                         f"최대 {lift_cmd.max():.0f} 끝 {lift_cmd[-1]:.0f}"
                         + (f" · {stop_at} 스텝에서 사이클 끝({reason})" if stop_at is not None else ""))
+                    chunk = self._grip_harder(chunk, label)
                     if stop_at is not None:
                         # 사이클이 끝나는 지점까지만 재생한다. 재상승이면 골짜기 바닥에서
                         # 끊기므로 팔이 다시 뻗지 않는다.

@@ -239,6 +239,11 @@ class PolicyConfig:
     retry_rise_deg: float = 30.0
     max_frame_age_s: float = 1.0
     min_frame_change: float = 0.5
+    # 이 라벨들은 정책이 그리퍼를 닫는 동안(명령 < grip_close_below_pct) 목표를 이 값(%)으로 더 닫아 세게 쥔다
+    # (2026-10-13: 학습 안 한 블루투스 스피커를 쥐고 들다 미끄러졌다). 학습한 기물에는 넣지 않는다 — 축구공은 세게
+    # 조이면 튀어 나갔다(10-08). 비어 있으면 정책 그대로.
+    grip_close_pct_by_label: dict[str, float] = field(default_factory=dict)
+    grip_close_below_pct: float = 20.0
 
 
 @dataclass(frozen=True)
