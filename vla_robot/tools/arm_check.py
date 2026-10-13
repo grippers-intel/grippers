@@ -26,7 +26,7 @@ def main() -> int:
         print(f"{'id':>2} {'관절':<14} {'응답':<4} {'homing(EEPROM/파일)':<20} {'한계':<12} "
               f"{'raw':>5} {'부하':>5} {'온도':>4} {'토크':<4}")
         raw_all = []
-        for sid, name, joint in zip(SERVO_IDS, JOINT_NAMES, calib.joints):
+        for sid, name, joint in zip(SERVO_IDS, JOINT_NAMES, calib.joints, strict=True):
             online = bus.ping(sid)
             if not online:
                 problems.append(f"servo {sid} 응답 없음")
@@ -57,7 +57,7 @@ def main() -> int:
             problems.append(f"전압 낮음 {volt:.1f}V")
         if all(r is not None for r in raw_all):
             pol = calib.raw_to_policy(raw_all)
-            print("정책 단위: " + ", ".join(f"{n}={v:+.1f}" for n, v in zip(JOINT_NAMES, pol)))
+            print("정책 단위: " + ", ".join(f"{n}={v:+.1f}" for n, v in zip(JOINT_NAMES, pol, strict=True)))
         if bus.stats.read_failures:
             print(f"읽기 재시도 {bus.stats.read_failures}회 / 읽기 {bus.stats.reads}회")
     finally:

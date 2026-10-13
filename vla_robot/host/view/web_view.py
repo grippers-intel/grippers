@@ -76,7 +76,8 @@ def close_app_windows() -> int:
 def window_geometry(height: int = 0) -> tuple[int, int, int, int]:
     """(너비, 높이, x, y) — 화면 배율 반영(크롬 --window-size 는 배율 적용 뒤 크기다).
     height=0 이면 화면 작업 영역(작업 표시줄 제외)에 맞춘다. 2026-10-05: 125 % 배율 노트북에서 860 높이가
-    작업 영역 816 을 넘어 아래가 잘렸다. 비율은 팀원 run-windows.bat(460 x 860)에서 스테이지를 476 으로 넓힌 만큼 폭만 늘렸다(10-05, Map 버튼)."""
+    작업 영역 816 을 넘어 아래가 잘렸다.
+    비율은 팀원 run-windows.bat(460 x 860)에서 스테이지를 476 으로 넓힌 만큼 폭만 늘렸다(10-05, Map 버튼)."""
     w0, h0, margin = 504, 860, 24      # 스테이지 476 x 768 + 창 여백(팀원 원본 432 -> 460 과 같은 28 px)
     avail = None
     if sys.platform.startswith("win"):
@@ -256,7 +257,8 @@ class WebView:
             return "Next·Prev 는 MANUAL 에서 한 단계씩 넘길 때 씁니다 — AUTO 를 눌러 MANUAL 로"
         if action == "prev":
             return None
-        if getattr(fsm, "order", None) is None and getattr(fsm, "command_mode", "auto") == "instructed"                 and fsm.state.name == "SEARCH_TARGET":
+        if getattr(fsm, "order", None) is None and getattr(fsm, "command_mode", "auto") == "instructed" \
+                and fsm.state.name == "SEARCH_TARGET":
             return "지시 대기 중 — 먼저 명령을 주세요(입력창·마이크)"
         if not fsm.ready_to_advance:
             return "아직 넘길 단계가 아닙니다 — Next 가 밝아지면 누르세요"

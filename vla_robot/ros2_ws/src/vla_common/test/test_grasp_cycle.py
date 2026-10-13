@@ -10,7 +10,7 @@ EXT, DROP, RISE, RET = -50.0, 60.0, 30.0, -95.0
 def ramp(*points, n=20):
     """구간별 직선으로 궤적을 만든다."""
     out = []
-    for a, b in zip(points, points[1:]):
+    for a, b in zip(points, points[1:], strict=False):
         out.append(np.linspace(a, b, n))
     return np.concatenate(out)
 

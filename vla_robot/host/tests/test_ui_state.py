@@ -151,7 +151,6 @@ def test_map_view_while_waiting(cfg):
 def test_next_explains_why_it_does_nothing(cfg):
     from dataclasses import replace
     from view.web_view import WebView
-    from voice.voice_input import VoiceInput
     c = replace(cfg, instruction=replace(cfg.instruction, mode="instructed"))
     fsm = MissionFSM(c)
     pose = type("P", (), {"ok": True, "x": 1.0, "y": 0.4, "yaw_deg": 90.0, "xy": (1.0, 0.4), "fresh": True})()
@@ -167,7 +166,6 @@ def test_next_explains_why_it_does_nothing(cfg):
 
 def test_held_piece_disappears_when_gripper_opens(cfg):
     """PLACE 중 Pi 가 job_stage=release 를 보내면 화면에서 쥔 기물을 지운다."""
-    from vla_common.protocol import PiStatus
     seen = []
     clock = FakeClock()
     world = SimWorld(cfg, clock=clock, seed=1)

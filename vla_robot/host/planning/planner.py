@@ -331,7 +331,7 @@ class GridPathPlanner:
             return None
         # 로봇이 경로(지난 출발점부터의 꺾은선) 위에 있는가, 어느 구간에 있는가
         best, seg = 9.9, 0
-        for k, (a, b) in enumerate(zip(pts, pts[1:])):
+        for k, (a, b) in enumerate(zip(pts, pts[1:], strict=False)):
             d, _t = segment_circle_clearance(a, b, robot_xy)
             if d < best:
                 best, seg = d, k
@@ -457,7 +457,7 @@ class GridPathPlanner:
         free = np.ones((self.ny, self.nx), dtype=bool)
         for x0, x1, y0, y1 in self._active_keepouts(robot_xy):
             free &= ~((self._gx > x0) & (self._gx < x1) & (self._gy > y0) & (self._gy < y1))
-        for (ox, oy), r in zip(obstacles, radii):
+        for (ox, oy), r in zip(obstacles, radii, strict=True):
             d = math.hypot(ox - robot_xy[0], oy - robot_xy[1])
             if d <= 1e-6:
                 continue

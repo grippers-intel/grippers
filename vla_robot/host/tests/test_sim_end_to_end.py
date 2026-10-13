@@ -1,4 +1,3 @@
-import pytest
 
 from mission.host_fsm import HostState, MissionFSM
 from sim.sim_world import SimWorld

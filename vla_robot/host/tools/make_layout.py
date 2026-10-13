@@ -162,7 +162,7 @@ def main() -> int:
 
     four = [getattr(args, f"m{mid}") for mid in (1, 2, 3, 4)]
     if all(v is not None for v in four):
-        points = {mid: (v[0] / 100.0, v[1] / 100.0) for mid, v in zip((1, 2, 3, 4), four)}
+        points = {mid: (v[0] / 100.0, v[1] / 100.0) for mid, v in zip((1, 2, 3, 4), four, strict=True)}
         how = "네 점 실측"
     elif None not in (args.x1, args.y1, args.width, args.depth):
         points = rectangle(args.x1 / 100.0, args.y1 / 100.0,

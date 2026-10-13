@@ -50,7 +50,7 @@ def open_from_args(args):
         bus = FeetechBus(port, cfg.arm.baudrate, retries=cfg.arm.read_retries).open()
     except BusError as exc:
         print(f"버스를 열지 못했다: {exc}\n  arm_driver_node 가 떠 있으면 먼저 멈출 것.")
-        raise SystemExit(2)
+        raise SystemExit(2) from None
     return cfg, calib, bus
 
 

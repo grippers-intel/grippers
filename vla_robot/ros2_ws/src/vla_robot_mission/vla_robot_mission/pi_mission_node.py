@@ -224,7 +224,7 @@ class RosJobRunner:
             pose = self._poses.get(name)
             if pose is None or not pose.measured:
                 continue
-            err = max(abs(a - b) for a, b in zip(now[:GRIPPER_INDEX], pose.values[:GRIPPER_INDEX]))
+            err = max(abs(a - b) for a, b in zip(now[:GRIPPER_INDEX], pose.values[:GRIPPER_INDEX], strict=True))
             if err < best_err:
                 best_name, best_err = name, err
         if best_err > tol:

@@ -39,7 +39,7 @@ def main() -> int:
     try:
         todo = []
         print(f"{'id':>2} {'관절':<14} {'homing EEPROM -> 파일':<24} {'한계 EEPROM -> 파일':<26}")
-        for sid, joint in zip(SERVO_IDS, calib.joints):
+        for sid, joint in zip(SERVO_IDS, calib.joints, strict=True):
             if not bus.ping(sid):
                 print(f"servo {sid} 응답 없음 — 중단")
                 return 2

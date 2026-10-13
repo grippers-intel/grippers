@@ -1,0 +1,19 @@
+# vla_robot 은 저장소 루트(domain/, py312)와 따로 도는 하위 프로젝트다:
+#   - Pi 노드(ros2_ws/src/vla_*)는 ROS 2 Humble 의 Python 3.10 에서 돈다 → py310 문법까지만.
+#   - Host(host/)는 Windows Python 3.11.
+# 실제 버그를 잡는 규칙(E·F·B)만 켠다. 줄 길이는 한국어 주석이 길어 140.
+# import 정렬(I)은 끈다 — host 는 host_config 를 먼저 import 해야 경로가 잡힌다.
+line-length = 140
+target-version = "py310"
+
+[lint]
+select = ["E", "F", "B"]
+# w, l(폭·길이)처럼 짧은 이름을 문맥에서 쓴다.
+ignore = ["E741"]
+
+[lint.per-file-ignores]
+# 저장소 밖에서 바로 실행하는 시험·도구는 sys.path 를 먼저 잡고 import 한다.
+"host/tests/*.py" = ["E402"]
+"host/tools/*.py" = ["E402"]
+# 배치 표(한 판 = 한 줄)는 줄을 나누면 비교하기 어렵다.
+"host/tools/sim_regress.py" = ["E402", "E501"]

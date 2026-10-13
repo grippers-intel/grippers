@@ -176,7 +176,7 @@ def main() -> int:
                     pose = localizer.update(cams, dets)
                     piece_detector.set_idle(fsm.idle)          # 지시 대기 중에는 Geti 를 2 s 간격으로(10-08 CPU)
                     obs = []
-                    for idx, cam, frame in zip(indices, cams, frames):
+                    for idx, cam, frame in zip(indices, cams, frames, strict=True):
                         if frame is not None:
                             piece_detector.submit(idx, frame)
                         obs.append([o for o in observations_from_detections(cam, piece_detector.latest(idx),
@@ -220,7 +220,7 @@ def main() -> int:
                             hand_detector.set_active(want)
                             if not want:
                                 hand_tracker.reset()
-                        for idx, frame in zip(indices, frames):
+                        for idx, frame in zip(indices, frames, strict=True):
                             if frame is not None:
                                 hand_detector.submit(idx, frame)
                         hobs = hand_observations(cams, [hand_detector.latest(i) for i in indices],
@@ -233,7 +233,7 @@ def main() -> int:
                                                       for h in hands) or "손 없음") + raw)
                         hand_spots = spots
                     if args.show_cams:
-                        for idx, cam, frame, det in zip(indices, cams, frames, dets):
+                        for idx, cam, frame, det in zip(indices, cams, frames, dets, strict=True):
                             if frame is not None:
                                 over = draw_overlay(frame.copy(), cam, det, pose, cfg.aruco.robot_marker_id)
                                 for s in (hand_detector.latest(idx) or []) if hand_detector.ok else []:

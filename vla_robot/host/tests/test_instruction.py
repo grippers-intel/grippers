@@ -199,8 +199,8 @@ def test_fetch_hands_the_piece_over(cfg):
         fsm.set_order(Order((label,), "one", "fetch", f"{label} 가져와"))
         sent = []
         orig = world.link.send
-        world.link.send = lambda cmd: (sent.append(cmd), orig(cmd))[1]
-        assert _run_with_hands(c, clock, world, fsm, 8000, until=lambda: fsm.finished_order is not None), \
+        world.link.send = lambda cmd, sent=sent, orig=orig: (sent.append(cmd), orig(cmd))[1]
+        assert _run_with_hands(c, clock, world, fsm, 8000, until=lambda fsm=fsm: fsm.finished_order is not None), \
             f"{spot}: state={fsm.state.name} events={list(fsm.events)}"
         assert world.pieces_in_box("hand") == [label], (spot, list(fsm.events))
         assert world.pieces_in_box("basket") == []

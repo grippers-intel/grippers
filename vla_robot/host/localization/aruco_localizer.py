@@ -45,7 +45,7 @@ def detect(detector: aruco.ArucoDetector, gray: np.ndarray) -> dict[int, np.ndar
     out: dict[int, np.ndarray] = {}
     if ids is None:
         return out
-    for c, i in zip(corners, ids.ravel().tolist()):
+    for c, i in zip(corners, ids.ravel().tolist(), strict=True):
         if i not in out:
             out[int(i)] = c.reshape(4, 2).astype(np.float64)
     return out
@@ -172,7 +172,7 @@ class Camera:
             except cv2.error:
                 continue
             if n:
-                cand.extend(zip(rvs, tvs))
+                cand.extend(zip(rvs, tvs, strict=True))
         best = None
         for rv, tv in cand:
             rv, tv = cv2.solvePnPRefineLM(obj, img, self.K, self.dist, rv, tv)
@@ -242,7 +242,7 @@ class RobotLocalizer:
     def update(self, cams: list[Camera], dets: list[dict[int, np.ndarray]]) -> Pose:
         now = self._clock()
         xs, ys, cs, ss, ws, per_cam = [], [], [], [], [], {}
-        for cam, det in zip(cams, dets):
+        for cam, det in zip(cams, dets, strict=True):
             cam.solve_extrinsics(det)
             if not cam.ready or self.cfg.robot_marker_id not in det:
                 continue

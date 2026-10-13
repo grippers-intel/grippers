@@ -63,7 +63,7 @@ def run_landmarker(landmarker, bgr: np.ndarray, ox: int = 0, oy: int = 0) -> lis
     rgb = np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
     res = landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
     out = []
-    for lms, hd in zip(res.hand_landmarks, res.handedness):
+    for lms, hd in zip(res.hand_landmarks, res.handedness, strict=True):
         pts = np.array([[p.x * w + ox, p.y * h + oy] for p in lms])
         out.append(HandSighting(pts, float(hd[0].score) if hd else 0.0))
     return out
@@ -123,14 +123,14 @@ def locate_hands(cams, sightings_per_cam, hcfg) -> list[HandPoint]:
     고정 높이 0.32 로 푼 두 카메라 위치가 y 로 24 cm 갈라져 손이 둘로 보였다 — 각 카메라가
     자기에게서 먼 쪽으로 민다). 짝이 없는 손만 `hand_z_m` 평면으로 푼다."""
     rays = []                                   # (카메라 번호, 광선, 손)
-    for ci, (cam, sightings) in enumerate(zip(cams, sightings_per_cam)):
+    for ci, (cam, sightings) in enumerate(zip(cams, sightings_per_cam, strict=True)):
         if not sightings or cam is None or not cam.ready:
             continue
         for s in sightings:
             if s.score >= hcfg.min_conf:
                 rays.append((ci, _ray(cam, s.palm), s, cam))
     pairs = []
-    for i, (ca, ra, sa, _) in enumerate(rays):
+    for i, (ca, ra, _sa, _) in enumerate(rays):
         for j in range(i + 1, len(rays)):
             cb, rb, sb, _ = rays[j]
             if ca == cb:

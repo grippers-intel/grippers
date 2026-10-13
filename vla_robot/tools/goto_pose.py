@@ -114,9 +114,9 @@ def main() -> int:
             target[GRIPPER_INDEX] = start[GRIPPER_INDEX]
 
         print(f"{'관절':<14} {'현재':>8} {'목표':>8} {'이동':>8}")
-        for name, a, b in zip(JOINT_NAMES, start, target):
+        for name, a, b in zip(JOINT_NAMES, start, target, strict=True):
             print(f"{name:<14} {a:8.1f} {b:8.1f} {b - a:+8.1f}")
-        span = max(abs(b - a) for a, b in zip(start[:GRIPPER_INDEX], target[:GRIPPER_INDEX]))
+        span = max(abs(b - a) for a, b in zip(start[:GRIPPER_INDEX], target[:GRIPPER_INDEX], strict=True))
         duration = args.duration if args.duration > 0 else max(
             1.0, span / max(cfg.arm.pose_speed_deg_s, 1.0))
         print(f"\n가장 큰 관절 이동 {span:.1f}도 · 이동 시간 {duration:.1f}초 · 전압 {volt}V")
@@ -127,7 +127,7 @@ def main() -> int:
             return 1
 
         # 토크를 켜기 전에 목표를 현재 위치로 맞춘다(RAM 에 남은 옛 목표로 튀지 않게).
-        bus.write_goal_positions(dict(zip(SERVO_IDS, raw)))
+        bus.write_goal_positions(dict(zip(SERVO_IDS, raw, strict=True)))
         bus.set_goal_velocity(SERVO_IDS, args.speed)
         bus.set_torque(SERVO_IDS, True)
         time.sleep(0.1)
@@ -138,8 +138,8 @@ def main() -> int:
         for k in range(1, steps + 1):
             s = k / steps
             s = s * s * (3.0 - 2.0 * s)          # smoothstep — 시작·끝을 부드럽게
-            point = [a + (b - a) * s for a, b in zip(start, target)]
-            bus.write_goal_positions(dict(zip(SERVO_IDS, calib.policy_to_raw(point))))
+            point = [a + (b - a) * s for a, b in zip(start, target, strict=True)]
+            bus.write_goal_positions(dict(zip(SERVO_IDS, calib.policy_to_raw(point), strict=True)))
             remaining = started + k / rate - time.monotonic()
             if remaining > 0:
                 time.sleep(remaining)
@@ -151,7 +151,7 @@ def main() -> int:
                 print("도착 확인용 읽기 실패")
                 return 2
             final = calib.raw_to_policy(now_raw)
-            errs = [abs(a - b) for a, b in zip(final, target)]
+            errs = [abs(a - b) for a, b in zip(final, target, strict=True)]
             if args.keep_gripper:
                 errs[GRIPPER_INDEX] = 0.0
             if _arrived(errs) or time.monotonic() > deadline:
@@ -161,7 +161,7 @@ def main() -> int:
         worst = max(errs)
         ok = _arrived(errs)
         print()
-        print("도착: " + "  ".join(f"{n[:6]}={v:+.1f}" for n, v in zip(JOINT_NAMES, final)))
+        print("도착: " + "  ".join(f"{n[:6]}={v:+.1f}" for n, v in zip(JOINT_NAMES, final, strict=True)))
         print(f"최대 오차 {worst:.1f} ({JOINT_NAMES[errs.index(worst)]})"
               + ("" if ok else "  ⚠️ 목표에 못 미쳤다 — 걸렸거나 전압 부족"))
         if args.release:

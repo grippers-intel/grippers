@@ -153,7 +153,7 @@ class ArmDriverNode(Node):
     def _write_goals(self, raw) -> None:
         """목표 위치를 쓰고 기억한다. 그리퍼는 **보낸 목표**가 실제 위치와 다를 수 있다(아래)."""
         raw = [int(v) for v in raw]
-        self.bus.write_goal_positions(dict(zip(SERVO_IDS, raw)))
+        self.bus.write_goal_positions(dict(zip(SERVO_IDS, raw, strict=True)))
         self._goal_raw = raw
         self._goal_at = time.monotonic()
 
@@ -242,7 +242,7 @@ class ArmDriverNode(Node):
                 res.ok = True
                 res.message = "ok" + self._servo_error_note()
             else:
-                res.message = f"읽기 실패 servo {[s for s, o in zip(SERVO_IDS, online) if not o]}"
+                res.message = f"읽기 실패 servo {[s for s, o in zip(SERVO_IDS, online, strict=True) if not o]}"
         except Exception as exc:  # noqa: BLE001 — 서비스는 죽지 않는다
             res.message = f"예외: {exc}"
         return res
@@ -404,7 +404,7 @@ class ArmDriverNode(Node):
                 return False
             s = k / n
             s = s * s * (3.0 - 2.0 * s)
-            point = [a + (b - a) * s for a, b in zip(start, goal)]
+            point = [a + (b - a) * s for a, b in zip(start, goal, strict=True)]
             self._write_goals(self.calib.policy_to_raw(point))
             if feedback is not None:
                 feedback(k / n)
@@ -430,6 +430,8 @@ class ArmDriverNode(Node):
                 target = list(pose.values)
             else:
                 target = [float(v) for v in req.target]
+            if len(target) != NUM_JOINTS:
+                raise ValueError(f"목표는 {NUM_JOINTS}개여야 한다: {len(target)}")
             if not all(math.isfinite(v) for v in target):
                 raise ValueError("목표에 NaN/Inf 가 있다")
             self._check_voltage()
@@ -438,7 +440,7 @@ class ArmDriverNode(Node):
             start = self._start_policy()
             if req.gripper_mode == 1:
                 target[GRIPPER_INDEX] = start[GRIPPER_INDEX]
-            span = max(abs(b - a) for a, b in zip(start[:GRIPPER_INDEX], target[:GRIPPER_INDEX]))
+            span = max(abs(b - a) for a, b in zip(start[:GRIPPER_INDEX], target[:GRIPPER_INDEX], strict=True))
             duration = req.duration_s if req.duration_s > 0 else max(
                 0.5, span / max(self.cfg.arm.pose_speed_deg_s, 1.0))
             fb = MoveToPose.Feedback()
@@ -454,7 +456,7 @@ class ArmDriverNode(Node):
                 return result
             final = self._wait_arrival(target, req.gripper_mode == 1)
             result.final_policy_state = [float(v) for v in final]
-            errors = [abs(a - b) for a, b in zip(final, target)]
+            errors = [abs(a - b) for a, b in zip(final, target, strict=True)]
             if req.gripper_mode == 1:
                 errors[GRIPPER_INDEX] = 0.0
             worst = max(errors)
@@ -489,7 +491,7 @@ class ArmDriverNode(Node):
         deadline = time.monotonic() + POSE_SETTLE_MAX_S
         while True:
             now = self._read_policy()
-            errs = [abs(a - b) for a, b in zip(now, target)]
+            errs = [abs(a - b) for a, b in zip(now, target, strict=True)]
             if ignore_gripper:
                 errs[GRIPPER_INDEX] = 0.0
             if self._arrived(errs) or time.monotonic() > deadline:
