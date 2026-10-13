@@ -10,7 +10,8 @@ Grippers 최종 시스템(코드: [`vla_robot/`](../vla_robot/)) 문서입니다
 | [behavior.md](behavior.md) | 주행·미션 동작과 그것을 정하는 설정 키 |
 | [pi_deploy.md](pi_deploy.md) | Pi 배포 · 기동 · 하루 마무리(안전 종료) · 무응답 대처 · 배터리 측정 |
 | [map_rebuild.md](map_rebuild.md) | 장판·마커를 옮겼을 때 맵 다시 만들기 |
-| [layout/workspace_layout.md](layout/workspace_layout.md) | 작업장 배치도(평면 · 입면) |
+| [map_rebuild.md](map_rebuild.md) 의 표 | **현재 작업장 배치**(REV.2) — 장판 · 마커 · 바구니 · 카메라 |
+| [layout/workspace_layout.md](layout/workspace_layout.md) | 옛 세트장(REV.1, 09-05) 도면 기록 — 지금 배치와 다름 |
 | [../vla_robot/README.md](../vla_robot/README.md) | 구성 · 디렉터리 · 설치 · 캘리브레이션 · 첫 기동 |
 | [../vla_robot/host/README.md](../vla_robot/host/README.md) | Host(노트북) 실행 · 도구 |
 
