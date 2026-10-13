@@ -91,7 +91,8 @@ def test_silence_only_is_no_speech(cfg):
 
 def test_listen_transcribe_final_and_take(cfg):
     v, model = _voice(cfg, _signal())
-    assert v.toggle() is None and v.phase == "listening"
+    # 가짜 마이크는 신호를 실시간보다 빨리 다 넣는다 — 확인하기 전에 이미 "인식 중"으로 넘어갔을 수 있다(CI 에서 자주).
+    assert v.toggle() is None and v.phase in ("listening", "transcribing", "final")
     assert _wait(lambda: v.phase == "final"), v.phase
     assert v.text == "퀸을 바구니에 넣어줘"                    # 끝 마침표는 뗀다
     assert model.seen[1]["language"] == "ko" and "퀸" in model.seen[1]["initial_prompt"]
