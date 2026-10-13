@@ -232,13 +232,14 @@ def test_held_stays_gone_while_manual_waits_after_place(cfg):
 
 
 def test_piece_states_idle_done_outside():
-    """10-07: 바구니 앞 띠의 나이트가 "done" 이라 GUI 에서 초록. 바구니 안만 done, 구역 밖은 outside(회색)."""
+    """10-07: 바구니 앞 띠의 나이트가 "done" 이라 GUI 에서 초록 — 구역 밖은 outside(회색).
+    10-13: 바구니 안 기물은 지도에서 뺀다(예전 "done")."""
     from host_config import load_host_config
     from view.ui_state import UiState
     ui = UiState(load_host_config(None))
     st = {p["label"]: p["state"] for p in ui._workspace_pieces(
         {"queen": [(0.90, 0.90)], "knight": [(1.106, 1.307)], "rook": [(0.99, 1.65)]})}
-    assert st == {"queen": "idle", "knight": "outside", "rook": "done"}
+    assert st == {"queen": "idle", "knight": "outside"}
 
 
 def test_held_piece_is_not_drawn_on_the_map(cfg):
@@ -287,3 +288,12 @@ def test_banner_for_a_reset_the_host_asked_for_under_estop(cfg):
                   base_recovering=True, base_recoveries=3)
     s = ui.build(pose, {}, fsm, st, 0.0, 10.0)
     assert s["notice"]["code"] == "BASE"
+
+
+def test_pieces_already_in_the_basket_are_not_drawn(cfg):
+    """10-13 사용자: 정리가 끝난 나이트가 지도에서 바구니 안에 보였다 — 지도에서 뺀다. 구역 밖 기물은 회색으로 남긴다."""
+    ui = UiState(cfg)
+    bx, by, _yaw = next(iter(cfg.arena.boxes.values()))
+    out = ui._workspace_pieces({"knight": [(bx, by)], "rook": [(0.50, 0.90)], "queen": [(1.10, 1.39)]})
+    labels = {p["label"]: p["state"] for p in out}
+    assert "knight" not in labels and labels["rook"] == "idle" and labels["queen"] == "outside"
