@@ -114,10 +114,10 @@ class UiState:
 
     # ------------------------------------------------------------------
     def _workspace_pieces(self, pmap) -> list[dict]:
-        """기물 상태: 작업 구역 안 = "idle"(정리할 것) · 바구니(상자) 안 = "done"(초록) · 그 밖 = "outside".
+        """기물 상태: 작업 구역 안 = "idle"(정리할 것) · 그 밖 = "outside"(회색). 바구니(상자) 안 기물은 그리지 않는다.
 
-        10-07: 바구니 앞 띠(y 1.305 위)의 나이트가 "done" 으로 가 GUI 에서 대상처럼 초록이었다. GUI 는
-        done 과 대상만 초록으로 칠하므로, 바구니 안이 아닌 구역 밖 기물은 "outside"(회색)로 보낸다.
+        10-07: 바구니 앞 띠(y 1.305 위)의 나이트가 "done" 으로 가 GUI 에서 대상처럼 초록이었다 — 구역 밖은 "outside".
+        10-13 사용자: 정리가 끝난 나이트가 지도에서 바구니 안에 계속 보였다 — 넣은 개수는 완료 화면이 보여 주니 지도에서는 뺀다.
         """
         a = self.cfg.arena
         bw, bl = a.box_size[0], a.box_size[1]
@@ -127,7 +127,9 @@ class UiState:
             for i, (x, y) in enumerate(pts):
                 inside = a.workspace_x[0] <= x <= a.workspace_x[1] and a.workspace_y[0] <= y <= a.workspace_y[1]
                 in_box = any(x0 <= x <= x1 and y0 <= y <= y1 for x0, x1, y0, y1 in boxes)
-                state = "idle" if inside else ("done" if in_box else "outside")
+                if in_box:
+                    continue                    # 이미 넣은 기물
+                state = "idle" if inside else "outside"
                 out.append({"id": f"{label}#{i}", "label": label, "x": round(x, 3), "y": round(y, 3), "state": state})
         return out
 
