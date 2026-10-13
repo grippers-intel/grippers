@@ -2,489 +2,108 @@
 
 # 🤖 Grippers
 
-**바닥에 흩어진 물건을 스스로 정리하고, 요청하면 가져다주는 모바일 매니퓰레이터**
+**장판 위 물건을 스스로 찾아 바구니에 정리하고, 부탁하면 사람 손에 가져다주는 모바일 매니퓰레이터**
 
-⭐ 팀 프로젝트입니다 — 이슈와 제안 환영합니다 🙏
+탑뷰 카메라 2대 · 메카넘 차체 · SO-ARM101 팔 · 학습된 파지 정책(ACT)
 
 </div>
 
 ---
 
-> [!NOTE]
-> **저장소 정리 중 (2026-10-13)** — 실제로 동작하는 최종 시스템은 **[`vla_robot/`](vla_robot/)** 입니다
-> (한 장 요약: [`docs/handover.md`](docs/handover.md), 문서 목차: [`docs/`](docs/)). 아래 내용은 8월 초기 설계 기준이며,
-> 그 코드와 문서(`domain/` · `tests/` · `grippers_*` · `tools/` · 옛 `docs/`)는 [`legacy/`](legacy/) 로 옮겼습니다. 이 README 는 곧 최종 시스템 기준으로 다시 씁니다.
+## 무엇을 하나
 
-> [!IMPORTANT]
-> **주제 변경 (8/12)** — *무인 멸균 암실 장물 반출* → *바닥 물건 정리 + 요청 배달*.
-> 하드웨어·아키텍처는 유지, 미션 시나리오와 FSM 구조가 바뀌었습니다.
->
-> ⚠️ **`domain/` 코드는 아직 이전 주제 기준입니다.** 이 README는 to-be 설계이며
-> 코드 마이그레이션은 [`class_diagram.md` §5](legacy/docs/design/class_diagram.md) 의 PR 10건으로 진행합니다 (M2, 8/22).
->
-> 📅 **일정 조정 (8/13)** — M1 재시작으로 **범위 축소**. 파지 정책 학습을 Stretch로 강등하고
-> freeze를 2단으로 분리했습니다. → [`milestones.md`](legacy/docs/ops/milestones.md)
-
-## Table of Contents
-
-- [🚀 About](#-about)
-- [📖 Documentation](#-documentation)
-- [🎯 Mission](#-mission)
-- [✨ Key Features](#-key-features)
-- [🧱 Architecture](#-architecture)
-- [🔩 Hardware](#-hardware)
-- [📁 Repository Structure](#-repository-structure)
-- [⚡ Quick Start](#-quick-start)
-- [📅 Milestones](#-milestones)
-- [👥 Team](#-team)
-- [🤝 Contributing](#-contributing)
-- [📃 License](#-license)
-- [📚 References](#-references)
-
-> **파일명 규약** — `docs/` 하위 문서는 **snake_case(언더스코어)** 로 통일합니다.
->
-> **용어** — **Grippers**는 시스템 전체(모바일 매니퓰레이터)를 가리킵니다.
-> 팔 끝단 부품은 **엔드이펙터**로 표기해 구분합니다.
-
----
-
-## 🚀 About
-
-> **확정 문장**
->
-> 사용자가 노트북 관제 콘솔에서 **음성 또는 텍스트로 명령**하면, 로봇이 바닥을 스스로 관측해 흩어진 물건을 찾고,
-> **범주에 맞는 색 상자**에 넣어 정리한다. **형상이 달라도 같은 범주면 같은 상자로 간다.**
-> 사용자가 특정 물건을 요청하면 그것을 찾아 **가져다준다.**
-
-### 왜 이 문제인가
-
-정리는 로봇 태스크로서 특이한 성질이 하나 있습니다 — **목표 상태가 목록으로 주어지지 않습니다.**
-
-"A를 B로 옮겨라"는 목표가 명시된 문제이고, 경로만 풀면 됩니다. 반면 "정리해라"는 **무엇이 몇 개 있는지조차 모르는 상태에서 시작**하고,
-로봇이 물체 하나를 옮길 때마다 바닥 상태가 바뀝니다. 그래서 **관측 → 판단 → 행동이 매 사이클 닫혀야** 하고,
-이것이 이 프로젝트가 선형 시퀀스가 아니라 **루프 FSM**을 쓰는 이유입니다.
-
-한 번 실행하고 끝나는 대본은 이 문제를 풀 수 없습니다. 그 차이가 시연에서 그대로 드러납니다.
-
-### AI가 필요한 이유
-
-세 가지가 겹칩니다.
-
-| 조건 | 규칙 기반으로 안 되는 이유 |
+| 지시 (입력창 · 마이크) | 로봇이 하는 일 |
 |---|---|
-| **물체 종류를 형상으로 분류** | 목적지가 종류에 따라 갈리므로 분류가 판단의 근거. 색으로 풀면 학습이 필요 없어짐 |
-| **범주 내 형상이 다양함** | 정육면체·축구공형 다면체·오각별기둥이 전부 `toy`. **각진 것 · 둥근 것 · 별 모양이 같은 상자로** 갑니다 — 개별 형상을 외우는 방식으로는 처음 보는 형상에서 실패 |
-| **자연어가 미션 파라미터를 변경** | "블록은 파란 상자에 넣어줘" → 배치 규칙 자체가 바뀜. 고정 대본과 구분되는 지점 |
+| "모두 정리해줘" · "장난감만 정리해줘" | 작업장 안 해당 기물을 하나씩 찾아 집어 **바구니에 넣는다** — 다 없어질 때까지 |
+| "룩 가져와" | 룩을 집어 장판 위에 보이는 **사람 손 앞으로 가서 ㄱ자 자세로 건넨다** |
 
-> [!NOTE]
-> **물체 색과 상자 색을 일부러 맞추지 않습니다.** 맞추면 색 세그멘테이션만으로 전체 문제가 풀려
-> 학습 기반 인식의 명분이 사라집니다. **물체는 형상·종류로 분류(학습), 상자는 색 랜드마크로 탐색(LAB 세그멘테이션 · 견고성 우선)** —
-> 두 축을 의도적으로 분리했습니다.
+- **대상 기물 6종**(3D 프린팅): 장난감 3 — 상자 · 축구공 · 별, 체스말 3 — 나이트 · 퀸 · 룩
+- **실기 결과**(교육장, 2026-10-13 최종 확인): 6기물 정리 6/6 · 바구니 앞을 막는 배치 5/5 · 가져와 2/2 — 멈춤(HALTED) · 무응답 · 폭주 0.
+  파지 첫 시도는 대체로 6번 중 5~6번 성공, 빈손이면 위치를 다시 보고 한 번 더 → [결과](docs/results.md)
 
-### 정직한 서술 — end-to-end VLA가 아닙니다
+## 어떻게 동작하나
 
-이 프로젝트는 **Vision-Language-Action을 모듈형으로 분해한 파이프라인**입니다.
+```mermaid
+flowchart LR
+  CAM["탑뷰 카메라 ×2"] --> HOST
+  subgraph HOST["노트북 (Host)"]
+    direction TB
+    S["ArUco 로 로봇 위치 · 기물 검출 · 손 검출"]
+    L["지시 해석 (Claude API) · 음성 (faster-whisper)"]
+    F["미션 상태머신 · 경로 계획"]
+    S --> F
+    L --> F
+  end
+  HOST -- "속도 · 상태 (UDP)" --> PI
+  PI -- "작업 결과 · 전압 (UDP)" --> HOST
+  subgraph PI["로봇 위 Raspberry Pi 5 (ROS 2)"]
+    direction TB
+    M["미션 노드 — 속도 실행 · 팔 작업 순서 · 안전"]
+    G["파지 — ACT 정책 (그리퍼 카메라 + 관절 → 관절)"]
+    A["팔 드라이버 — 서보 6개"]
+    M --> G --> A
+  end
+  PI --> W["메카넘 바퀴"]
+  A --> ARM["SO-ARM101"]
+```
 
-| | 본 프로젝트 | end-to-end VLA |
-|---|---|---|
-| 모듈 간 전달 | **심볼** (`toy`, `BLUE`) | 학습된 특징 벡터 |
-| 행동 결정 | 상태 머신 + 기하 계획 | 모델 가중치 |
-| 학습 대상 | 검출기 · 파지 정책 | 정책 전체 |
+- **공간은 노트북이, 실행은 Pi 가** — 위치 · 지도 · 경로 · 속도는 노트북이 정하고, Pi 는 받은 속도와 팔 작업만 실행합니다(명령에 좌표가 없음).
+- **언어는 해석, 행동은 학습** — 자연어는 Claude 가 "어떤 기물을 몇 개, 정리/가져오기"로 바꾸고, 집는 동작은 시연 데이터로 학습한 ACT 정책이 합니다.
+  파지 정책 자체는 언어를 받지 않습니다(그래서 학습한 6종만 집을 수 있음 — [한계](docs/results.md#4-알려진-한계)).
+- 정리는 목표가 목록으로 주어지지 않는 문제입니다 — 무엇이 몇 개 있는지 모른 채 시작하고 하나 옮길 때마다 바닥이 바뀝니다.
+  그래서 **관측 → 판단 → 행동**을 매 사이클(10 Hz) 다시 닫는 상태머신으로 풉니다.
 
-발표에서 "VLA 모델을 구현했다"고 말하지 않습니다. 5주 안에 정책 학습 데이터를 모을 수 없었고,
-모듈형이 **부분 검증과 병목 측정에 유리해 의도적으로 분해**했습니다. 모듈 명칭도 `VLA-V/L/A` 에서
-**`perception` / `language` / `action`** 으로 바꿔, 이름이 실제보다 큰 주장을 하지 않게 했습니다.
+자세히 → [시스템 구성](docs/architecture.md) · [상태도](docs/state_machine.md) · [시퀀스](docs/sequences.md)
 
----
+## 하드웨어
 
-## 📖 Documentation
-
-README는 개요만 담고, 상세는 아래 문서로 나눠져 있습니다.
-
-| 문서 | 내용 |
+| 구분 | 구성 |
 |---|---|
-| [`objects.md`](legacy/docs/subsystems/objects.md) | 물체 구성 · 클래스 체계 · 3D 프린팅 체스말 · 시연 구성 |
-| [`perception.md`](legacy/docs/subsystems/perception.md) | 인식 구성 — **해상도 요구사항 · 호모그래피 · 검정 상자 · 가림** |
-| [`console.md`](legacy/docs/subsystems/console.md) | 노트북 관제 콘솔 — GUI · 음성 · **네트워크 리스크** |
-| [`ai_components.md`](legacy/docs/subsystems/ai_components.md) | 학습 범위 · 데이터 · 가속기 선택 근거 · HEF 파이프라인 |
-| [`setup.md`](legacy/docs/ops/setup.md) | 설치 · 실행 · 테스트 · 트러블슈팅 |
-| [`milestones.md`](legacy/docs/ops/milestones.md) | 일정 · 미결 사항 · 리스크 · 측정 결과 |
-| [`failure_definition.md`](legacy/docs/ops/failure_definition.md) | **무엇을 실패로 셀 것인가** — 지표 계수 규칙 |
-| [`pose_planning.md`](legacy/docs/subsystems/pose_planning.md) | ⏸ 보류된 자세 재조정 설계 (재도입 절차 포함) |
-| **설계 다이어그램** | |
-| [`state_machine.md`](legacy/docs/design/state_machine.md) | **FSM 전이 단일 소스** |
-| [`class_diagram.md`](legacy/docs/design/class_diagram.md) | 값 객체 · 포트 · State · 노드 계층 · 마이그레이션 |
-| [`sequences.md`](legacy/docs/design/sequences.md) | 시퀀스 다이어그램 |
-| [`architecture.puml`](legacy/docs/design/architecture.puml) | PlantUML 버전 |
-| [`workspace_layout.html`](legacy/docs/design/workspace_layout.html) | **작업 공간 배치도 (Rev.I · 8/20 팀 확정)** — 평면도 · 지점별 기하 · 커버리지 · 배치 규칙 |
+| 이동 | MentorPi 메카넘 4륜 (제조사 차체 보드 · ROS 2 드라이버) |
+| 로봇 컴퓨터 | Raspberry Pi 5 — Docker 컨테이너 `IntelPi`(ROS 2 Humble) |
+| 팔 | SO-ARM101 팔로워 · Feetech STS3215 ×6 · TPU 그리퍼 + 그리퍼 카메라(USB) |
+| 탑뷰 | Logitech C920 ×2 — 장판 앞 · 뒤 긴 변 가운데, 높이 1.60 m · ArUco 마커 |
+| 노트북 | Windows · 기물 검출은 내장 그래픽(OpenVINO) |
+| 작업장 | 장판 1.980 × 1.830 m · 바구니 1개 → [배치도](docs/layout/workspace_layout.md) |
 
-기여 방법은 [CONTRIBUTING](CONTRIBUTING.md) 참고.
+## 빠르게 띄우기
 
----
+1. **Pi** — 컨테이너에서 스택 기동(소스 경로 런치): [docs/pi_deploy.md §4](docs/pi_deploy.md)
+2. **노트북**:
+   ```powershell
+   cd vla_robot\host
+   .venv\Scripts\python.exe run_host.py --pi-ip <Pi IP> --mode instructed
+   ```
+   시연 UI 가 `http://127.0.0.1:8765/` 로 열립니다. 로봇 없이 보려면 `--sim`.
+3. 하루 순서 · 끝낼 때 안전 종료 → [docs/handover.md](docs/handover.md)
 
-## 🎯 Mission
+설치 · 캘리브레이션 · 첫 기동 → [vla_robot/README.md](vla_robot/README.md) · Host 도구 → [vla_robot/host/README.md](vla_robot/host/README.md)
 
-| 모드 | 행동을 결정하는 것 | 진입 명령 |
-|---|---|---|
-| **TIDY** | 규칙 (`placement_rule`) | "장난감 정리해줘" |
-| **FETCH** | 사람의 지시 | "체스말 가져와" |
-
-두 모드는 **같은 하드웨어·포트·파지 로직**을 쓰고, **파지 이후 목적지 결정에서만 갈라집니다.**
-분기는 `GraspState.execute()` 의 마지막 한 줄입니다.
-
-### 작업 공간
-
-**울타리 1.80 × 1.80 m 정사각형 · 탑뷰 웹캠 2대 대향 (8/20 팀 확정).**
+## 저장소
 
 ```
-  웹캠 1                  1.80 m                  웹캠 2
-  H 1.65  ┌──▶  ┌───────────────────┐  ◀──┐  H 1.65
-  후퇴 .95│     │ 🟢               🔵 │     │후퇴 .95
-  피치 44°└──   │                   │   ──┘  피치 44°
-                │    ▪   ⬡    ■     │ 1.80 m
-                │         ♞         │
-                │  🤖 IDLE          │
-                └───────────────────┘
-       바닥 소요 3.70 × 1.80 m · 2대 이중 관측 76%
-
-  🟢🔵 상자   0.29 × 0.35 m · 높이 0.22 m · 먼 쪽 양쪽 모서리 (실물 보유)
-  ■●★ toy     정육면체 · 축구공형 다면체 · 오각별기둥 (폭 40 mm)
-  ♞   체스말   나이트 · 퀸 · 룩 — 3D 프린팅
-              물체 최소 이격 0.30 m · 상자 앞 정렬 통로 0.50 m
+vla_robot/      최종 시스템 — host/(노트북) · ros2_ws/src/vla_*(Pi) · tools/
+docs/           문서 — 목차는 docs/README.md
+legacy/         2026년 8월 초기 설계의 코드와 문서 (기록용)
+ros2_ws/src/    MentorPi 제조사 ROS 2 패키지 (원본 참고)
+docker/  third_party/   Pi 컨테이너 정의 · SO-ARM 제공 자료
 ```
 
-| 항목 | 확정값 |
+## 문서
+
+| | |
 |---|---|
-| 울타리 | **1.80 × 1.80 m** · 높이 0.25 m 권장 |
-| 탑뷰 웹캠 | **C270 ×2 대향** · 1280×720 · 실측 `f = 1410 px` |
-| 설치 | 높이 **1.65 m** · 후퇴 **0.95 m** · 피치 44.1° |
-| 고도각 | 29.7 ~ 51.6° |
-| 최악점 | **1.87 mm/px** — **40 mm 물체가 21.4 px** (검출 하한 20 px) · 45 mm 면 24.1 px |
-| 물체 폭 | **40 mm** — 검출 하한 37.4 mm 와 그리퍼 설계 상한 45 mm 사이 |
-| 실효 커버 시작 | 0.21 m (울타리 0.25 기준) |
-
-> [!NOTE]
-> **"작업 공간 네 모서리가 한 화면에" 는 이 기하에서 성립하지 않습니다** — 가로 7% 초과입니다.
-> 2대 대향이라 근거리 모서리는 맞은편 카메라가 담당하고, 합집합으로 전 구역이 덮이므로 운용에는 문제가 없습니다.
-> **세팅 확인 절차는 "네 모서리" 가 아니라 카메라별 담당 구역 기준으로 판정합니다.**
->
-> ⏸ **네 모서리 ArUco 기지점 방식은 채택하지 않습니다 (8/20).** A2 호모그래피는 **카메라별로 기지점을 따로** 잡아 후퇴 0.95 m 를 유지합니다.
-> 재도입하려면 **후퇴 1.20 m · 바닥 4.20 × 1.80 m** 가 필요합니다 — 설치 공간에 여유가 생기면 그때 판단합니다.
-
-**도면 · 지점별 기하 · 커버리지 · 배치 규칙 전문 → [`workspace_layout.html`](legacy/docs/design/workspace_layout.html)**
-*(GitHub 은 HTML 을 렌더하지 않습니다 — 내려받아 브라우저로 열어 보세요)*
-
-### 클래스 체계
-
-**수거 대상은 2 클래스 × 형상 3종으로 확정했습니다 (8/14).**
-
-| 클래스 | 포함 개체 = 학습 대상 | 상자 | 상태 |
-|---|---|---|---|
-| `toy` | **정육면체 · 축구공형 다면체 · 오각별기둥** — 3D 프린팅 | 🟢 초록 | **개정 (8/20)** |
-| `chess` | **나이트 · 퀸 · 룩** — 3D 프린팅, 스케일 확대 | 🔵 파랑 | **확정 (8/14)** |
-| *(⏸ 보류)* | 방해 선택지 — ⚫ 검정 · 🔴 빨강 | — | **미사용 (8/20)** |
-
-- `toy` **3형상을 개정했습니다 (8/20)** — 원기둥 · 육각기둥을 빼고 **축구공형 다면체 · 오각별기둥**을 넣었습니다. 시판 가베는 3×3 cm 로 검출 하한에 미달해 8/14 에 이미 3D 프린트로 전환했고, 이제 형상도 가베 교구를 따르지 않습니다.
-- **원기둥을 뺀 것이 핵심입니다** — 세운 원기둥은 체스말(룩)과 측면 실루엣·종횡비가 겹쳐 문서상 유일한 🔴 혼동 쌍이었습니다. 그 쌍이 사라집니다.
-- **축구공형은 유일하게 둥근 실루엣**이라, 모델이 *"`toy` = 각진 것"* 이라는 지름길을 학습하는 걸 막습니다.
-- `chess` 는 **나이트 · 퀸 · 룩 3종을 우선** 학습합니다.
-- 두 클래스 모두 **학습 대상과 시연 투입 물체가 동일**합니다 — 별도의 미학습 형상을 두지 않습니다.
-- **상자는 🟢 초록 · 🔵 파랑 2개로 확정했습니다 (8/20).** ⚫ 검정 · 🔴 빨강 방해 선택지는 쓰지 않습니다.
-- 🔴 **검정을 뺀 이유는 원거리 오검출입니다.** 먼 지점에서는 **🟢 초록 · 🔵 파랑이 모두 검정으로 잡힙니다.** 방해 선택지로 두려던 상자가 실제 목적지 두 개를 삼키는 구조라, 색 랜드마크 탐색의 전제가 무너집니다.
-- ⏸ 클래스를 늘릴 때 상자 · `placement_rule` 을 함께 추가할 수 있도록 구조는 유지합니다. **⚫ 를 되살리려면 원거리 색 분리가 먼저 해결돼야 하고**, 밝은 테두리 · ArUco 병행 대책도 폐기가 아니라 ⏸ 보류입니다.
-
-> **`toy` 안에 형상이 다른 개체가 여러 개 있는 것이 핵심 주장입니다.** 정육면체와 축구공형은
-> 실루엣이 다른데 같은 상자로 갑니다 — 색 매칭이나 대본으로는 만들 수 없는 장면이며,
-> 모델이 **범주를 배웠다는 증거**입니다.
-
-상세 → [`objects.md`](legacy/docs/subsystems/objects.md)
-
-### FSM — 루프 구조
-
-```
-IDLE → SCAN ─┬─ (미처리 대상 0개) ──────────────────────→ DONE
-             │
-             └─ SELECT → APPROACH → GRASP ─┬─ TIDY  → TRANSPORT → POSE_PLAN ─┬─ INSERT ─┐
-                                            │                                 └─ REJECT ─┤
-                                            └─ FETCH → DELIVER → HANDOVER ───────────────┤
-                          ┌──────────────────────────────────────────────────────────────┘
-                          └──→ SCAN 복귀 (루프)
-```
-
-**루프가 핵심입니다.** 로봇 자신의 행동으로 바뀐 바닥 상태를 매 사이클 재관측하며,
-파지에 실패해도 미션이 끝나지 않고 다음 물체로 진행합니다.
-
-전이 그래프의 단일 소스는 [`docs/design/state_machine.md`](legacy/docs/design/state_machine.md) 입니다.
-
-### 유즈케이스
-
-| # | 시나리오 | 검증 대상 |
-|---|---|---|
-| 1 | 정상 정리 — N개 모두 올바른 상자에 | 전체 파이프라인 + **반복 루프** |
-| 2 | **범주 내 형상 변화** — 정육면체 ↔ 축구공형, 나이트 ↔ 룩 이 같은 상자로 | **범주를 배웠다는 증거** ★ |
-| 3 | 파지 실패 후 복구 | 재시도 루프, **실패해도 미션 계속** |
-
-> **유즈케이스 2가 이 프로젝트의 중심 주장입니다.** 자세 재조정이 보류되면서
-> "판단하는 능력"의 근거가 기하 계산에서 **범주 일반화**로 옮겨갔습니다.
-> 색 매칭·대본·하드코딩 어느 것으로도 만들 수 없는 유일한 장면입니다.
-
-### 성공 기준 (M4 측정 대상)
-
-| 지표 | 목표 | 측정 방법 |
-|---|---|---|
-| 정리 완료율 | **90% 이상** | **20 인스턴스**(4개 × 5회) 중 올바른 상자에 들어간 개수 |
-| 오배치 횟수 | **0회** | **상자 2개 (8/20 확정)** → 무작위 기준선 **50%.** 원기둥 제거로 최대 위협이던 원기둥 ↔ 룩 쌍이 사라졌고, **남은 관찰 대상은 오각별기둥 ↔ 룩** (둘 다 세운 기둥) |
-| 가구·상자 접촉 | **0회** | 🔴 측정 수단 미정 |
-| 물체당 사이클 시간 | 60초 이내 | 2×2 m 기준 추정 58초 — 울타리 1.80 확정으로 보수적인 값 |
-| FETCH 대상 정확도 | 미정 | 지시한 종류를 가져온 비율 |
-| 음성 명령 인식률 | 미정 | STT 결과가 의도와 일치한 비율 |
-| **오실행률 (음성)** | **0%** | STT 오인식이 **확인 없이** 실행된 횟수 |
-
-> [!IMPORTANT]
-> **오배치 0회에 무작위 기준선을 병기하는 이유** — 상자가 2개이므로 **아무렇게나 넣어도 50%는 맞습니다.**
-> 8/20 확정으로 기준선이 25% → **50%** 로 올라가, **이 지표 하나만으로는 분류가 동작한다는 근거가 되지 못합니다.**
-> 발표에서는 **분류 정확도(2클래스)와 함께 제시**하고, 오배치는 "기준선 대비" 가 아니라 **절대 0회** 를 목표로 서술합니다.
-> 기준선 없이 "정확도 90%"라고 쓰면 성능 주장이 성립하지 않습니다.
->
-> **완료율은 20 인스턴스(4개 × 5회) 기준**입니다. 4개 단회로는 90%를 측정할 수 없습니다.
-
-### 성공 등급
-
-| 등급 | 범위 | 목표 시점 |
-|---|---|---|
-| 🥉 **Minimum** | 가베 1개 · 고정 위치 → 파지 → 상자 투입 | M2 종료 (8/23) |
-| 🥈 **Target** | 4개 자율 반복 정리 + **범주 일반화(`toy` 형상 3종 · `chess` 기물 3종)** + 파지 재시도 + FETCH + 음성 | M3–M4 (8/30–9/4) |
-| 🥇 **Stretch** | **파지 정책 시연 학습**, 학습에 쓰지 않은 체스 세트 투입, **3~4번째 범주 추가(자세 재조정 부활)**, 밀집·겹침, 동적 장애물, 자유 문형, 웨이크워드 | 여유 시 |
-
----
-
-## ✨ Key Features
-
-| | 기능 | 상세 |
-|---|---|---|
-| 🎲 | **범주 일반화** — 형상이 달라도 같은 범주면 같은 상자 | [objects](legacy/docs/subsystems/objects.md) |
-| 🔁 | **재관측 루프** — 행동으로 바뀐 바닥을 매 사이클 다시 관측, 실패해도 미션 계속 | [state_machine](legacy/docs/design/state_machine.md) |
-| 🗣️ | **명령이 미션 파라미터를 변경** — "체스말은 검은 상자에" → `placement_rule` 갱신 | [console](legacy/docs/subsystems/console.md) |
-| 🦾 | **부하 기반 파지 검증** — 힘센서 없이 서보 부하로 판정, 실패 시 재스캔 후 재시도 | [sequences](legacy/docs/design/sequences.md) |
-| 🖥️ | **노트북 관제 콘솔** — GUI + 음성. 실행 위치를 옮겨도 도메인 diff 0줄 | [console](legacy/docs/subsystems/console.md) |
-| 📷 | **단안 인식** — 모서리 웹캠 + 바닥면 호모그래피. 깊이 카메라 없음 | [perception](legacy/docs/subsystems/perception.md) |
-| 🔌 | **전원 도메인 분리** — 팔 서보는 3S LiPo 전용, GND만 스타 접지 | — |
-
----
-
-## 🧱 Architecture
-
-### Ports & Adapters
-
-도메인 로직을 하드웨어에서 분리합니다. 태스크 로직은 ROS2도 서보 SDK도 알지 못합니다.
-
-| Port | 책임 | Real Adapter | Fake Adapter |
-|---|---|---|---|
-| `BaseDriver` | 주행, 상자 정렬, 오도메트리 | `Ros2MecanumBase` | `FakeBase` |
-| `ArmDriver` | 관절/직교 이동, 엔드이펙터, 부하, 자세 재조정 | `FeetechArm` | `FakeArm` |
-| `Perception` | **바닥 스캔**, 검출, 치수, 상자 색 탐색 | `LearnedPerception` | `ScriptedPerception` |
-| `CommandInterpreter` | 텍스트 → `MissionSpec` | `LanguageAdapter` | `ScriptedInterpreter` |
-
-- 각 포트는 **Real 어댑터와 Fake 어댑터를 둘 다** 가집니다
-- **CI는 매 push마다 Fake 어댑터로 전체 미션 파이프라인을 실행**합니다 — 인터페이스 불일치를 통합 시점이 아니라 커밋 시점에 검출
-- 로봇 1대를 5명이 나눠 쓰는 병목을 구조로 해소하기 위한 설계입니다
-
-> `Perception.scan_floor()` 는 **목록을 반환**하므로 원소 타입(`Detection`) 정의가 선행되어야 합니다.
-> **음성은 포트를 추가하지 않습니다** — `voice_io` 가 기존 명령 토픽에 발행할 뿐입니다.
-
-### ROS2 노드 분할
-
-> [!WARNING]
-> **기능 축으로 나누지 않습니다.** 주행·검출·파지는 동시에 도는 것이 아니라 **순차 단계**입니다.
-> 순차 단계를 노드로 쪼개면 동시성 이득 없이 직렬화 지연·분산 상태·브레이크포인트 불가만 남습니다.
->
-> **분할 기준은 둘 — 동시에 도는가, 하드웨어를 소유하는가.**
-
-| 노드 | 실행 위치 | 책임 | 분리 근거 | 오너 |
-|---|---|---|---|---|
-| `mission_orchestrator` | 로봇 | FSM 전체. 포트를 호출해 순차 로직 진행 | 순차 로직은 한 프로세스에 — 디버거 추적 가능 | 이승용 |
-| `perception` | 로봇 | **웹캠 2대 소유**, 바닥면 호모그래피, 상자 색 탐색, 클리어런스 | 상시 구동 + 디바이스 소유 | 김동혁 · 김희수 |
-| `inference` | 로봇 | 검출 추론 전담 | **Hailo-10H 독점 소유** | 김동혁 |
-| `arm_driver` | 로봇 | Feetech SDK, 관절/직교 이동, 엔드이펙터, 부하 | 상시 구동 + 디바이스 소유 | 임성혁 |
-| `base_driver` | 로봇 | 메카넘 주행, LiDAR | 상시 구동 + 디바이스 소유 | 조현우 |
-| **`voice_io`** | **노트북** | STT → `/command` 발행, `/mission/state` → TTS | **노트북 오디오 장치 소유** | 김희수 |
-| `hud` | 노트북 | 대시보드 — `/mission/state` 만 구독 | 시연 중 끊겨도 미션에 영향 없어야 함 | 김희수 |
-
-> [!CAUTION]
-> **`/cmd_vel` 발행 주체는 언제나 `base_driver` 하나뿐입니다.** 둘이 되면 명령이 경합해
-> 로봇이 떨리거나 타이밍에 따라만 재현되는 버그가 납니다.
-
-### 관측성 3원칙
-
-- **상태 전이를 토픽으로 발행** — `/mission/state` 를 `transient_local` QoS로. 중간에 붙어도 현재 상태 즉시 파악. HUD·TTS 모두 이 토픽 하나만 구독
-- **포트 호출을 전부 로깅** — 인자와 반환값을 남기면 그것이 곧 재현 가능한 시나리오
-- **`ros2 bag record -a` 습관화** — 실기 시행은 되돌릴 수 없고, 로봇 1대를 5명이 나눠 쓰므로 **녹화가 곧 시간**
-
-### 코드 리뷰 기준
-
-| 제약 | 목적 |
-|---|---|
-| 원시값(`float`, `tuple`) 직접 전달 금지 | 단위·좌표계 혼동 차단 |
-| `else` 사용 지양 | 조건 분기 대신 State 객체가 다음 상태를 반환 |
-| 클래스당 인스턴스 변수 2개 이하 지향 | God Node 방지 (루프 상태는 `MissionContext` 하나로 묶음) |
-| **호모그래피 입력은 바운딩 박스 아래쪽 모서리** | 비스듬한 시점에서 중심점 사용 시 5~19 cm 위치 오차 |
-
-### 단위 규약
-
-```
-각도: radian (필드명 _rad)      길이: m (_m)
-개구 폭: mm (_mm) — 각도 아님    부하: 0.0~1.0
-GUI 표시·문서만 도(°) 허용 — 변환은 경계에서 한 번
-```
-
-### 운영 규칙
-
-- 파라미터 선언은 **launch 또는 노드 중 한 쪽에서만** — 중복 시 `ParameterAlreadyDeclaredException`
-- `ROS_DOMAIN_ID` 는 팀 전체 동일값 고정 (노트북·로봇 간 통신 전제)
-- 노드 경계 = 파일 경계 = 오너 경계
-
----
-
-## 🔩 Hardware
-
-**예산 30만원.** 주요 장비는 교육장 보유이며 발주는 웹캠·상자·물체·소모품 중심입니다.
-
-| 구분 | 사양 | 상태 |
-|---|---|---|
-| 이동 베이스 | **MentorPi** (메카넘 4륜) | ✅ 보유 |
-| 컴퓨트 | **Raspberry Pi 5** / Ubuntu 24.04 · 빌드는 `IntelPi` 컨테이너 | ✅ 보유 |
-| AI 가속기 | **Raspberry Pi AI HAT+ 2** (Hailo-10H, 8GB) | ✅ **8/11 장착** |
-| 로봇 암 | **SO-ARM101** 리더/팔로워 2대 · Feetech STS3215 ×6 | ✅ 보유 |
-| **탑뷰 웹캠 2대** | **Logitech C270 ×2 대향** · 1280×720 · 실측 `f = 1410 px` · **높이 1.65 m · 후퇴 0.95 m (8/20 확정)** | ✅ 확정 |
-| **로봇 탑재 웹캠** | USB — 근거리 파지 확인 · 클리어런스 | 발주 |
-| **웹캠 거치 수단** | **보유 스탠드로 높이 1.65 m 거치 (8/20 확정)** — 발주 없음. 카메라 고정이 호모그래피의 전제 | ✅ 확정 |
-| **상자 2개** | 🟢 초록 · 🔵 파랑 · **0.29 × 0.35 m · 높이 0.22 m** · **먼 쪽 양쪽 모서리** · ⚫🔴 는 ⏸ 미사용 | ✅ 보유 |
-| **`toy` 3형상** | **정육면체 · 축구공형 다면체 · 오각별기둥 (8/20 개정)** · 3D 프린팅 · **폭 40 mm** (검출 하한 37.4 · 그리퍼 설계 상한 45) | 자작 |
-| **체스말** | **나이트 · 퀸 · 룩 3종** · 3D 프린팅 · 스케일 3종 × 색 3~4종 | 자작 (실측 후) |
-| 시연용 노트북 | 관제 콘솔 + STT/TTS. ROS 2 통신 가능해야 함 | ⚠️ 사양 확인 |
-| 접촉 감지 · E-STOP | 성공 기준 측정 · 안전 | 🔴 결정 필요 |
-| 팔 전용 전원 · 크래들 | 3S LiPo · Transport Pose 안착 | 발주 / 자작 |
-| 전용 라우터 / 핫스팟 | 시연장 WiFi AP 격리 대비 | ⚠️ 권장 |
-
-**발주 전 확인 필수**
-
-- 🔴 **추론 입력 해상도** — `imgsz=640` 으로 넣으면 물체가 절반으로 줄어 **11~15 px** 이 됩니다. **네이티브 1280 으로 추론하고 학습도 같은 해상도**로 맞춰야 합니다. `scan_floor()` 는 사이클당 1~4 회라 연산은 감당됩니다 → [perception](legacy/docs/subsystems/perception.md)
-- **설치 높이 1.65 m · 후퇴 0.95 m (8/20 팀 확정)** — 이전 1.6 m 는 Houdini 합성 데이터 생성 높이가 유일한 근거였지만, 지금 값은 **C270 실측 화각(`f = 1410 px`)에서 역산한 기하**입니다. 검토안이던 2.10 m 는 채택하지 않았습니다 → [`workspace_layout.html`](legacy/docs/design/workspace_layout.html)
-- **울타리 1.80 × 1.80 m 확정 (8/20)** — 2×2 m 안 폐기. 바닥 소요가 **3.70 × 1.80 m** 로 팀 초안(4.88)보다 1.2 m 작습니다. 고도각 · 슬랜트 · 검출 픽셀 수의 기준이 확정되어 M2 데이터 생성 기준이 고정됩니다
-- ⚠️ **한 변 치수는 재확인 대상입니다** — 팀 확정은 **1.80**, 프레임 역산은 **1.88** 이었습니다. 가벽 조립 후 실측할 것. 80 mm 차이가 근거리 모서리 `u` 를 30 px 움직입니다
-- ⚠️ **가림 대책은 2대 대향과 배치 규칙입니다.** 고도각이 **29.7 ~ 51.6°** 로 이전 단일 카메라(30°)보다 낫지만, 최악점(중앙선 측면 · 38.7°)에서 0.10 m 물체의 가림이 0.125 m 입니다. **물체 최소 이격 0.30 m** 를 지키고 A2 실측에 가림 케이스를 포함할 것
-- **`toy` 3형상은 3D 프린트로 전환 (8/14)** — 시판 가베 실측이 **3×3 cm** 로 검출 하한에 미달했습니다. 체스말과 같은 파이프라인이라 크기 · 색을 직접 통제할 수 있고, Asset SSoT 가 `toy` 까지 확장됩니다. 발주에서는 제외
-- ⚠️ **오각별기둥은 파지 검증이 필요합니다** — 5회 대칭이라 **마주보는 평행면이 0쌍**입니다(짝수각 기둥은 n/2쌍). 평행 조가 닫힐 때 접촉점이 어긋나 물체가 회전할 수 있고, 폭 40 mm 기준 별 끝의 두께가 얇아 인필 15~20% 에서 파손 위험이 있습니다. **TPU 조의 순응·마찰이 이를 얼마나 흡수하는지 M2-P1 출력 후 실측**할 것
-- ✅ **그리퍼 개구 폭 실측 완료 (8/20)** — TPU 인쇄본 **파지 상한 50 mm**, 접근 클리어런스를 보면 설계 상한 **45 mm** 입니다. `toy` 폭 40 mm 와 체스말 넥 지름이 이 값에서 확정됩니다. **바닥 파지 리치는 계속 진행** — 리더암 텔레오퍼레이션 30분
-
-전원 도메인·실측 항목 → [`milestones.md`](legacy/docs/ops/milestones.md)
-
----
-
-## 📁 Repository Structure
-
-```
-grippers/
-├── README.md               # 개요 + 문서 지도
-├── CONTRIBUTING.md         # 브랜치·PR·품질 기준        ← 이슈/PR 화면에 자동 링크
-├── LICENSE                 # MIT (+ LeRobot Apache 2.0 고지)  ← GitHub 탭 생성
-├── pyproject.toml          # ruff / black 설정 — 벤더 코드는 lint 대상에서 제외
-├── .gitignore
-├── .gitmodules             # third_party/soarm_provided_d
-├── .github/
-│   ├── CODEOWNERS          #   경로별 리뷰어 자동 지정
-│   ├── pull_request_template.md
-│   ├── ISSUE_TEMPLATE/     #   task.yml, bug.yml, config.yml
-│   └── workflows/
-│       └── ci.yml          #   lint → test → colcon build → docker build
-├── domain/                 # 순수 Python. 하드웨어 의존성 없음 (ROS2 import 금지)
-│   ├── task/               #   State 제너레이터 기반 루프 FSM
-│   ├── values.py           #   Detection, BoxObservation, MissionSpec, MissionContext 등
-│   ├── ports/              #   인터페이스 정의 (ABC) — 포트 4종
-│   └── adapters/
-│       ├── real/           #   ROS2 액션/서비스 클라이언트
-│       └── fake/           #   테스트용 구현 (CI에서 사용)
-├── ros2_ws/
-│   └── src/
-│       ├── grippers_interfaces/  # 공통 msg/srv/action (노드 간 유일한 접점)
-│       ├── grippers_base/        # base_driver_node
-│       ├── grippers_arm/         # arm_driver_node — soarm_lab(third_party) 래핑
-│       ├── grippers_perception/  # perception_node — 카메라 소유, 검출, 상자 탐색
-│       ├── grippers_inference/   # inference_node — Hailo-10H 전담
-│       ├── grippers_mission/     # mission_orchestrator_node — domain FSM을 스레드 분리 실행
-│       ├── grippers_console/     # ⭐ 노트북 실행 — voice_io_node, hud_node
-│       ├── grippers_bringup/     # launch 재조합
-│       └── (app/ bringup/ driver/ interfaces/ navigation/ peripherals/
-│            simulations/ slam/ yolov5_ros2/ 등 — MentorPi 벤더 소스 보존. lint 제외)
-├── third_party/
-│   └── soarm_provided_d/   # git submodule — soarm_lab (FK/IK/시뮬/실물 백엔드)
-├── tests/                  # pytest — 하드웨어·ROS2 불필요, domain/ + Fake 어댑터만 사용
-├── docs/                   # snake_case 통일 · 각 폴더에 README.md(폴더 안내)
-│   ├── design/             #   ── 설계 ──
-│   │   ├── state_machine.md    #   ⭐ FSM 전이 단일 소스
-│   │   ├── class_diagram.md    #   클래스 다이어그램 (Mermaid) + 마이그레이션 계획
-│   │   ├── sequences.md        #   시퀀스 다이어그램
-│   │   ├── architecture.puml   #   같은 구조의 PlantUML 버전
-│   │   ├── hld.md              #   High Level Design — 인터페이스 명세 ⚠️ 갱신 대기
-│   │   └── error_budget.md     #   오차 전파 분석 ⚠️ 갱신 대기
-│   ├── subsystems/         #   ── 서브시스템 ──
-│   │   ├── objects.md          #   물체 구성 · 클래스 체계 · 3D 프린팅 · 시연 구성
-│   │   ├── perception.md       #   인식 — 해상도 · 호모그래피 · 검정 상자 · 가림
-│   │   ├── console.md          #   노트북 관제 콘솔 — GUI · 음성 · 네트워크
-│   │   ├── ai_components.md    #   학습 범위 · 데이터 · 가속기 근거 · HEF 파이프라인
-│   │   └── pose_planning.md    #   ⏸ 보류된 자세 재조정 (재도입 절차 포함)
-│   └── ops/                #   ── 운영 ──
-│       ├── setup.md            #   설치 · 실행 · 테스트 · 트러블슈팅
-│       ├── milestones.md       #   일정 · 미결 사항 · 리스크 · 측정 결과
-│       ├── measurements.md     #   실측 리포트
-│       ├── failure_definition.md # 무엇을 실패로 셀 것인가 — 계수 규칙
-│       ├── purchase_ledger.md  #   구매 장부
-│       └── rejected_designs.md #   채택하지 않은 설계와 근거
-└── hardware/               # 마운트·크래들 도면, BOM, 배선도
-```
-
-> **`grippers_console` 이 노트북에서 도는 유일한 패키지입니다.** 나머지는 전부 로봇 온보드입니다.
-> 이 경계가 곧 "노트북이 다 하는 것 아니냐"에 대한 답입니다.
-
-> **루트 2개 파일은 GitHub가 특별 취급합니다.** `LICENSE` 는 저장소 첫 화면 README 위에
-> **탭으로 표시**되고, `CONTRIBUTING.md` 는 이슈·PR 생성 화면에 자동 링크됩니다.
-> 그래서 이 둘만 `docs/` 가 아니라 루트에 둡니다.
-
-> **lint 범위**: `pyproject.toml` 이 MentorPi 벤더 패키지와 `third_party/` 를 ruff·black 대상에서 제외합니다.
-> 검사 대상은 `domain/`, `tests/`, `ros2_ws/src/grippers_*` 입니다.
-
----
-
-## ⚡ Quick Start
-
-```bash
-# 하드웨어 없이 도메인 로직 검증 (ROS2도 불필요)
-git clone --recurse-submodules https://github.com/grippers-intel/grippers.git
-cd grippers && export PYTHONPATH="$PWD:$PYTHONPATH"
-python3 -m pytest tests/ -v
-```
-
-`IDLE → SCAN → ... → DONE` 루프가 **유한 스텝 안에 종료되면** 도메인 로직은 정상입니다.
-
-실기 실행·컨테이너 설정·트러블슈팅 → [`setup.md`](legacy/docs/ops/setup.md)
-
----
-
-## 📅 Milestones
-
-> **최종 발표: 2026년 9월 8일 (화)**
-
-| 마일스톤 | 기간 | 핵심 완료 조건 |
-|---|---|---|
-| **M1 · 설계 (축소)** | ~8/14 | 바닥 파지 리치 실측(게이트) · 발주 · 배포판 확정 · Tier-1 freeze |
-| **M2 · 기반 재구축** | 8/15–8/22 | 마이그레이션 10 PR · 호모그래피 · 2범주 검출 · CI 그린 |
-| **M3 · 실기 통합** | 8/23–8/30 | **1개 End-to-end 성공** · 네트워크 실측 · 컷오프 |
-| **M4 · 확장 + 측정** | 8/31–9/4 | **4개 반복 정리** · FETCH · 측정 20회 · 9/4 freeze |
-| **M5 · 발표 준비** | 9/1–9/8 | 9/6 포스터 제출 · **9/8 발표** |
-
-담당별 작업·미결 사항·리스크 → [`milestones.md`](legacy/docs/ops/milestones.md)
-
----
+| **처음이면** | [handover.md](docs/handover.md) — 지금 상태 한 장 |
+| 설계 | [시스템 구성](docs/architecture.md) · [인터페이스](docs/interfaces.md) · [폴더 · 모듈](docs/modules.md) · [상태도](docs/state_machine.md) · [시퀀스](docs/sequences.md) |
+| 판단과 결과 | [결정 기록](docs/decisions.md) · [결과 · 알려진 한계](docs/results.md) |
+| 운영 | [Pi 배포 · 기동 · 종료](docs/pi_deploy.md) · [동작과 설정](docs/behavior.md) · [맵 다시 만들기](docs/map_rebuild.md) |
+| 전체 목차 | [docs/README.md](docs/README.md) |
+
+## 개발
+
+- 시험: `vla_robot/host` 에서 `pytest` (Host 241) · Pi 쪽 순수 로직 87 — CI 가 push · PR 마다 실행
+- 린트: 저장소 루트에서 `ruff check .`
+- 브랜치 · PR · 병합 규칙 → [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## 👥 Team
 
@@ -496,37 +115,13 @@ python3 -m pytest tests/ -v
 | **조현우** | [@kica927](https://github.com/kica927) | 중심잡기 · 코드 수장 · ROS2 | 구조 설계, 자세 안정화, ROS2 노드·통신, 코드 리뷰 |
 | **김희수** | [@Hease](https://github.com/Hease) | Perception · 데이터 · UI/UX · 음성 | 데이터셋, 검출 학습, **노트북 관제 콘솔**, STT/TTS, 시각화 |
 
-**공통 책임** — 본인 영역 unittest 작성 · 타인 PR 1일 내 review · 금요일 마일스톤 progress 업데이트 · 막히면 24시간 내 공유
-
----
-
-## 🤝 Contributing
-
-`main` 직접 push 금지, topic branch → PR → review → merge.
-브랜치·품질 기준·Git 운영 체계 → [CONTRIBUTING.md](CONTRIBUTING.md)
-
----
-
 ## 📃 License
 
-본 프로젝트 코드는 MIT License로 배포합니다. 자세한 내용은 [LICENSE](LICENSE) 참고.
-
-LeRobot 기반 구성 요소는 **Apache License 2.0** 을 따릅니다. 해당 코드를 포함하거나 파생한 파일에는 원 라이선스 고지를 유지합니다.
-
----
+코드는 MIT License — [LICENSE](LICENSE). LeRobot 기반 구성 요소는 **Apache License 2.0** 을 따르며, 해당 코드를 포함하거나 파생한 파일에는 원 라이선스 고지를 유지합니다.
 
 ## 📚 References
 
-- [LeRobot / SO-ARM101](https://github.com/huggingface/lerobot)
-- [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/) · [ROS 2 Humble](https://docs.ros.org/en/humble/)
-- [ROS 2 DDS 튜닝](https://docs.ros.org/en/jazzy/How-To-Guides/DDS-tuning.html)
-- [Raspberry Pi AI HAT+ 2](https://www.raspberrypi.com/documentation/accessories/ai-hat-plus.html)
-- [Hailo Model Zoo — DFC 요구 사양](https://github.com/hailo-ai/hailo_model_zoo/blob/master/docs/GETTING_STARTED.rst)
-- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) · [Vosk](https://alphacephei.com/vosk/)
-- [rosbridge_suite](https://github.com/RobotWebTools/rosbridge_suite)
-
-<div align="center">
-
-[⬆ Back to top](#-grippers)
-
-</div>
+- [LeRobot](https://github.com/huggingface/lerobot) — SO-ARM101 · ACT 학습 · 추론
+- [ROS 2 Humble](https://docs.ros.org/en/humble/)
+- [OpenCV ArUco](https://docs.opencv.org/4.x/d5/dae/tutorial_aruco_detection.html) · [OpenVINO](https://docs.openvino.ai/) · [Intel Geti](https://docs.geti.intel.com/)
+- [MediaPipe Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker) · [faster-whisper](https://github.com/SYSTRAN/faster-whisper) · [Claude API](https://docs.anthropic.com/)
