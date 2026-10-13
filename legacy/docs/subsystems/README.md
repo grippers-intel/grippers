@@ -14,4 +14,4 @@
 
 ---
 
-[← 문서 색인](../README.md) · [← README](../../README.md)
+[← 문서 색인](../README.md) · [← README](../../../README.md)

@@ -12,18 +12,18 @@
 
 > [!NOTE]
 > **저장소 정리 중 (2026-10-13)** — 실제로 동작하는 최종 시스템은 **[`vla_robot/`](vla_robot/)** 입니다
-> (한 장 요약: [`vla_robot/docs/handover.md`](vla_robot/docs/handover.md)). 아래 내용과 `docs/` 는 8월 초기 설계 기준이며,
-> 그 코드(`domain/` · `tests/` · `grippers_*` · `tools/`)는 [`legacy/`](legacy/) 로 옮겼습니다. 이 README 는 곧 최종 시스템 기준으로 다시 씁니다.
+> (한 장 요약: [`docs/handover.md`](docs/handover.md), 문서 목차: [`docs/`](docs/)). 아래 내용은 8월 초기 설계 기준이며,
+> 그 코드와 문서(`domain/` · `tests/` · `grippers_*` · `tools/` · 옛 `docs/`)는 [`legacy/`](legacy/) 로 옮겼습니다. 이 README 는 곧 최종 시스템 기준으로 다시 씁니다.
 
 > [!IMPORTANT]
 > **주제 변경 (8/12)** — *무인 멸균 암실 장물 반출* → *바닥 물건 정리 + 요청 배달*.
 > 하드웨어·아키텍처는 유지, 미션 시나리오와 FSM 구조가 바뀌었습니다.
 >
 > ⚠️ **`domain/` 코드는 아직 이전 주제 기준입니다.** 이 README는 to-be 설계이며
-> 코드 마이그레이션은 [`class_diagram.md` §5](docs/design/class_diagram.md) 의 PR 10건으로 진행합니다 (M2, 8/22).
+> 코드 마이그레이션은 [`class_diagram.md` §5](legacy/docs/design/class_diagram.md) 의 PR 10건으로 진행합니다 (M2, 8/22).
 >
 > 📅 **일정 조정 (8/13)** — M1 재시작으로 **범위 축소**. 파지 정책 학습을 Stretch로 강등하고
-> freeze를 2단으로 분리했습니다. → [`milestones.md`](docs/ops/milestones.md)
+> freeze를 2단으로 분리했습니다. → [`milestones.md`](legacy/docs/ops/milestones.md)
 
 ## Table of Contents
 
@@ -103,20 +103,20 @@ README는 개요만 담고, 상세는 아래 문서로 나눠져 있습니다.
 
 | 문서 | 내용 |
 |---|---|
-| [`objects.md`](docs/subsystems/objects.md) | 물체 구성 · 클래스 체계 · 3D 프린팅 체스말 · 시연 구성 |
-| [`perception.md`](docs/subsystems/perception.md) | 인식 구성 — **해상도 요구사항 · 호모그래피 · 검정 상자 · 가림** |
-| [`console.md`](docs/subsystems/console.md) | 노트북 관제 콘솔 — GUI · 음성 · **네트워크 리스크** |
-| [`ai_components.md`](docs/subsystems/ai_components.md) | 학습 범위 · 데이터 · 가속기 선택 근거 · HEF 파이프라인 |
-| [`setup.md`](docs/ops/setup.md) | 설치 · 실행 · 테스트 · 트러블슈팅 |
-| [`milestones.md`](docs/ops/milestones.md) | 일정 · 미결 사항 · 리스크 · 측정 결과 |
-| [`failure_definition.md`](docs/ops/failure_definition.md) | **무엇을 실패로 셀 것인가** — 지표 계수 규칙 |
-| [`pose_planning.md`](docs/subsystems/pose_planning.md) | ⏸ 보류된 자세 재조정 설계 (재도입 절차 포함) |
+| [`objects.md`](legacy/docs/subsystems/objects.md) | 물체 구성 · 클래스 체계 · 3D 프린팅 체스말 · 시연 구성 |
+| [`perception.md`](legacy/docs/subsystems/perception.md) | 인식 구성 — **해상도 요구사항 · 호모그래피 · 검정 상자 · 가림** |
+| [`console.md`](legacy/docs/subsystems/console.md) | 노트북 관제 콘솔 — GUI · 음성 · **네트워크 리스크** |
+| [`ai_components.md`](legacy/docs/subsystems/ai_components.md) | 학습 범위 · 데이터 · 가속기 선택 근거 · HEF 파이프라인 |
+| [`setup.md`](legacy/docs/ops/setup.md) | 설치 · 실행 · 테스트 · 트러블슈팅 |
+| [`milestones.md`](legacy/docs/ops/milestones.md) | 일정 · 미결 사항 · 리스크 · 측정 결과 |
+| [`failure_definition.md`](legacy/docs/ops/failure_definition.md) | **무엇을 실패로 셀 것인가** — 지표 계수 규칙 |
+| [`pose_planning.md`](legacy/docs/subsystems/pose_planning.md) | ⏸ 보류된 자세 재조정 설계 (재도입 절차 포함) |
 | **설계 다이어그램** | |
-| [`state_machine.md`](docs/design/state_machine.md) | **FSM 전이 단일 소스** |
-| [`class_diagram.md`](docs/design/class_diagram.md) | 값 객체 · 포트 · State · 노드 계층 · 마이그레이션 |
-| [`sequences.md`](docs/design/sequences.md) | 시퀀스 다이어그램 |
-| [`architecture.puml`](docs/design/architecture.puml) | PlantUML 버전 |
-| [`workspace_layout.html`](docs/design/workspace_layout.html) | **작업 공간 배치도 (Rev.I · 8/20 팀 확정)** — 평면도 · 지점별 기하 · 커버리지 · 배치 규칙 |
+| [`state_machine.md`](legacy/docs/design/state_machine.md) | **FSM 전이 단일 소스** |
+| [`class_diagram.md`](legacy/docs/design/class_diagram.md) | 값 객체 · 포트 · State · 노드 계층 · 마이그레이션 |
+| [`sequences.md`](legacy/docs/design/sequences.md) | 시퀀스 다이어그램 |
+| [`architecture.puml`](legacy/docs/design/architecture.puml) | PlantUML 버전 |
+| [`workspace_layout.html`](legacy/docs/design/workspace_layout.html) | **작업 공간 배치도 (Rev.I · 8/20 팀 확정)** — 평면도 · 지점별 기하 · 커버리지 · 배치 규칙 |
 
 기여 방법은 [CONTRIBUTING](CONTRIBUTING.md) 참고.
 
@@ -171,7 +171,7 @@ README는 개요만 담고, 상세는 아래 문서로 나눠져 있습니다.
 > ⏸ **네 모서리 ArUco 기지점 방식은 채택하지 않습니다 (8/20).** A2 호모그래피는 **카메라별로 기지점을 따로** 잡아 후퇴 0.95 m 를 유지합니다.
 > 재도입하려면 **후퇴 1.20 m · 바닥 4.20 × 1.80 m** 가 필요합니다 — 설치 공간에 여유가 생기면 그때 판단합니다.
 
-**도면 · 지점별 기하 · 커버리지 · 배치 규칙 전문 → [`workspace_layout.html`](docs/design/workspace_layout.html)**
+**도면 · 지점별 기하 · 커버리지 · 배치 규칙 전문 → [`workspace_layout.html`](legacy/docs/design/workspace_layout.html)**
 *(GitHub 은 HTML 을 렌더하지 않습니다 — 내려받아 브라우저로 열어 보세요)*
 
 ### 클래스 체계
@@ -197,7 +197,7 @@ README는 개요만 담고, 상세는 아래 문서로 나눠져 있습니다.
 > 실루엣이 다른데 같은 상자로 갑니다 — 색 매칭이나 대본으로는 만들 수 없는 장면이며,
 > 모델이 **범주를 배웠다는 증거**입니다.
 
-상세 → [`objects.md`](docs/subsystems/objects.md)
+상세 → [`objects.md`](legacy/docs/subsystems/objects.md)
 
 ### FSM — 루프 구조
 
@@ -214,7 +214,7 @@ IDLE → SCAN ─┬─ (미처리 대상 0개) ──────────�
 **루프가 핵심입니다.** 로봇 자신의 행동으로 바뀐 바닥 상태를 매 사이클 재관측하며,
 파지에 실패해도 미션이 끝나지 않고 다음 물체로 진행합니다.
 
-전이 그래프의 단일 소스는 [`docs/design/state_machine.md`](docs/design/state_machine.md) 입니다.
+전이 그래프의 단일 소스는 [`docs/design/state_machine.md`](legacy/docs/design/state_machine.md) 입니다.
 
 ### 유즈케이스
 
@@ -262,12 +262,12 @@ IDLE → SCAN ─┬─ (미처리 대상 0개) ──────────�
 
 | | 기능 | 상세 |
 |---|---|---|
-| 🎲 | **범주 일반화** — 형상이 달라도 같은 범주면 같은 상자 | [objects](docs/subsystems/objects.md) |
-| 🔁 | **재관측 루프** — 행동으로 바뀐 바닥을 매 사이클 다시 관측, 실패해도 미션 계속 | [state_machine](docs/design/state_machine.md) |
-| 🗣️ | **명령이 미션 파라미터를 변경** — "체스말은 검은 상자에" → `placement_rule` 갱신 | [console](docs/subsystems/console.md) |
-| 🦾 | **부하 기반 파지 검증** — 힘센서 없이 서보 부하로 판정, 실패 시 재스캔 후 재시도 | [sequences](docs/design/sequences.md) |
-| 🖥️ | **노트북 관제 콘솔** — GUI + 음성. 실행 위치를 옮겨도 도메인 diff 0줄 | [console](docs/subsystems/console.md) |
-| 📷 | **단안 인식** — 모서리 웹캠 + 바닥면 호모그래피. 깊이 카메라 없음 | [perception](docs/subsystems/perception.md) |
+| 🎲 | **범주 일반화** — 형상이 달라도 같은 범주면 같은 상자 | [objects](legacy/docs/subsystems/objects.md) |
+| 🔁 | **재관측 루프** — 행동으로 바뀐 바닥을 매 사이클 다시 관측, 실패해도 미션 계속 | [state_machine](legacy/docs/design/state_machine.md) |
+| 🗣️ | **명령이 미션 파라미터를 변경** — "체스말은 검은 상자에" → `placement_rule` 갱신 | [console](legacy/docs/subsystems/console.md) |
+| 🦾 | **부하 기반 파지 검증** — 힘센서 없이 서보 부하로 판정, 실패 시 재스캔 후 재시도 | [sequences](legacy/docs/design/sequences.md) |
+| 🖥️ | **노트북 관제 콘솔** — GUI + 음성. 실행 위치를 옮겨도 도메인 diff 0줄 | [console](legacy/docs/subsystems/console.md) |
+| 📷 | **단안 인식** — 모서리 웹캠 + 바닥면 호모그래피. 깊이 카메라 없음 | [perception](legacy/docs/subsystems/perception.md) |
 | 🔌 | **전원 도메인 분리** — 팔 서보는 3S LiPo 전용, GND만 스타 접지 | — |
 
 ---
@@ -368,8 +368,8 @@ GUI 표시·문서만 도(°) 허용 — 변환은 경계에서 한 번
 
 **발주 전 확인 필수**
 
-- 🔴 **추론 입력 해상도** — `imgsz=640` 으로 넣으면 물체가 절반으로 줄어 **11~15 px** 이 됩니다. **네이티브 1280 으로 추론하고 학습도 같은 해상도**로 맞춰야 합니다. `scan_floor()` 는 사이클당 1~4 회라 연산은 감당됩니다 → [perception](docs/subsystems/perception.md)
-- **설치 높이 1.65 m · 후퇴 0.95 m (8/20 팀 확정)** — 이전 1.6 m 는 Houdini 합성 데이터 생성 높이가 유일한 근거였지만, 지금 값은 **C270 실측 화각(`f = 1410 px`)에서 역산한 기하**입니다. 검토안이던 2.10 m 는 채택하지 않았습니다 → [`workspace_layout.html`](docs/design/workspace_layout.html)
+- 🔴 **추론 입력 해상도** — `imgsz=640` 으로 넣으면 물체가 절반으로 줄어 **11~15 px** 이 됩니다. **네이티브 1280 으로 추론하고 학습도 같은 해상도**로 맞춰야 합니다. `scan_floor()` 는 사이클당 1~4 회라 연산은 감당됩니다 → [perception](legacy/docs/subsystems/perception.md)
+- **설치 높이 1.65 m · 후퇴 0.95 m (8/20 팀 확정)** — 이전 1.6 m 는 Houdini 합성 데이터 생성 높이가 유일한 근거였지만, 지금 값은 **C270 실측 화각(`f = 1410 px`)에서 역산한 기하**입니다. 검토안이던 2.10 m 는 채택하지 않았습니다 → [`workspace_layout.html`](legacy/docs/design/workspace_layout.html)
 - **울타리 1.80 × 1.80 m 확정 (8/20)** — 2×2 m 안 폐기. 바닥 소요가 **3.70 × 1.80 m** 로 팀 초안(4.88)보다 1.2 m 작습니다. 고도각 · 슬랜트 · 검출 픽셀 수의 기준이 확정되어 M2 데이터 생성 기준이 고정됩니다
 - ⚠️ **한 변 치수는 재확인 대상입니다** — 팀 확정은 **1.80**, 프레임 역산은 **1.88** 이었습니다. 가벽 조립 후 실측할 것. 80 mm 차이가 근거리 모서리 `u` 를 30 px 움직입니다
 - ⚠️ **가림 대책은 2대 대향과 배치 규칙입니다.** 고도각이 **29.7 ~ 51.6°** 로 이전 단일 카메라(30°)보다 낫지만, 최악점(중앙선 측면 · 38.7°)에서 0.10 m 물체의 가림이 0.125 m 입니다. **물체 최소 이격 0.30 m** 를 지키고 A2 실측에 가림 케이스를 포함할 것
@@ -377,7 +377,7 @@ GUI 표시·문서만 도(°) 허용 — 변환은 경계에서 한 번
 - ⚠️ **오각별기둥은 파지 검증이 필요합니다** — 5회 대칭이라 **마주보는 평행면이 0쌍**입니다(짝수각 기둥은 n/2쌍). 평행 조가 닫힐 때 접촉점이 어긋나 물체가 회전할 수 있고, 폭 40 mm 기준 별 끝의 두께가 얇아 인필 15~20% 에서 파손 위험이 있습니다. **TPU 조의 순응·마찰이 이를 얼마나 흡수하는지 M2-P1 출력 후 실측**할 것
 - ✅ **그리퍼 개구 폭 실측 완료 (8/20)** — TPU 인쇄본 **파지 상한 50 mm**, 접근 클리어런스를 보면 설계 상한 **45 mm** 입니다. `toy` 폭 40 mm 와 체스말 넥 지름이 이 값에서 확정됩니다. **바닥 파지 리치는 계속 진행** — 리더암 텔레오퍼레이션 30분
 
-전원 도메인·실측 항목 → [`milestones.md`](docs/ops/milestones.md)
+전원 도메인·실측 항목 → [`milestones.md`](legacy/docs/ops/milestones.md)
 
 ---
 
@@ -466,7 +466,7 @@ python3 -m pytest tests/ -v
 
 `IDLE → SCAN → ... → DONE` 루프가 **유한 스텝 안에 종료되면** 도메인 로직은 정상입니다.
 
-실기 실행·컨테이너 설정·트러블슈팅 → [`setup.md`](docs/ops/setup.md)
+실기 실행·컨테이너 설정·트러블슈팅 → [`setup.md`](legacy/docs/ops/setup.md)
 
 ---
 
@@ -482,7 +482,7 @@ python3 -m pytest tests/ -v
 | **M4 · 확장 + 측정** | 8/31–9/4 | **4개 반복 정리** · FETCH · 측정 20회 · 9/4 freeze |
 | **M5 · 발표 준비** | 9/1–9/8 | 9/6 포스터 제출 · **9/8 발표** |
 
-담당별 작업·미결 사항·리스크 → [`milestones.md`](docs/ops/milestones.md)
+담당별 작업·미결 사항·리스크 → [`milestones.md`](legacy/docs/ops/milestones.md)
 
 ---
 

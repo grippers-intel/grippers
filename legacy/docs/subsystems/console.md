@@ -131,4 +131,4 @@ GUI를 **입력 채널**과 **관측 채널**로 분리해서 봅니다.
 
 ---
 
-[← README](../../README.md) · [Documentation](../README.md#-documentation)
+[← README](../../../README.md) · [Documentation](../README.md#-documentation)

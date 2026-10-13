@@ -102,7 +102,7 @@ SEARCH_TARGET -> APPROACH_PIECE -> GRASP -> CARRY_TO_DEST -> NUDGE_BOX -> PLACE 
 전선 상태: SEARCH/HALTED=IDLE(stop) · APPROACH_PIECE=APPROACH · CARRY/FACE_HAND=CARRY · NUDGE=APPROACH_BOX ·
 GRASP/PLACE=해당 작업(stop) · ESTOP 래치=ESTOP.
 
-주행·정차·회전의 자세한 규칙과 설정 키는 [`docs/behavior.md`](../docs/behavior.md).
+주행·정차·회전의 자세한 규칙과 설정 키는 [`docs/behavior.md`](../../docs/behavior.md).
 
 - 매 사이클 명령을 반드시 하나 보낸다. pose 를 잃으면 stop 을 보낸다.
 - GRASP/PLACE 중에는 pose 와 무관하게 같은 상태를 계속 보낸다(팔이 마커를 가리는 건 정상).

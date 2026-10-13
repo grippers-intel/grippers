@@ -42,4 +42,4 @@ FSM 상태(`POSE_PLAN` · `REJECT`)와 시퀀스는 이미 문서화되어 있�
 
 ---
 
-[← README](../../README.md) · [Documentation](../README.md#-documentation)
+[← README](../../../README.md) · [Documentation](../README.md#-documentation)

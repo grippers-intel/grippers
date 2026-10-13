@@ -9,6 +9,7 @@
 | `tests/` | 위 코드의 하드웨어 없는 시험 — CI 의 "Legacy unit tests" 가 계속 돌린다 (`tests/`) |
 | `ros2_ws/src/grippers_*` | 초기 설계의 ROS 2 패키지 7개 (`ros2_ws/src/grippers_*`) |
 | `tools/` | 바닥 호모그래피 실측(a2) · Hailo DFC 환경 · 팔 실기 시험 스크립트 (`tools/`) |
+| `docs/` | 초기 설계 문서 — HLD · 클래스/상태/시퀀스 다이어그램 · 서브시스템 · 운영(일정·실측·실패 정의·뺀 설계) (`docs/`) — 내용은 그대로 |
 
 - 폴더 안의 상대 위치는 원래 그대로라, 시험이 쓰는 경로(`legacy/tests` → `legacy/domain`, `legacy/ros2_ws/...`)가 그대로 맞습니다.
 - 커밋 기록은 git 에 그대로 남아 있습니다(`git log --follow legacy/domain/...`).

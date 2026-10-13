@@ -17,7 +17,7 @@ Grippers 프로젝트에 기여해주셔서 감사합니다. 팀 내부 규칙�
 | **Slave** | 김동혁 | Conflict 해결 주도, 커밋 로그·`git blame` 추적, 사고 시 원인 커밋 특정 |
 
 대형 리팩터링은 사전 공지 후 단독 PR로 분리합니다 (conflict 지옥 방지).
-**주제 전환 마이그레이션은 [`docs/design/class_diagram.md` §5](docs/design/class_diagram.md) 의 순서를 따릅니다** —
+**주제 전환 마이그레이션은 [`docs/design/class_diagram.md` §5](legacy/docs/design/class_diagram.md) 의 순서를 따릅니다** —
 값 객체 → 포트 → Fake → `states.py` 순으로, 순서를 바꾸면 재작성 내내 CI가 빨간불입니다.
 
 ### 품질
@@ -45,7 +45,7 @@ black .
 > [`legacy/`](legacy/) 로 옮겼고 더 이상 진행하지 않습니다(기록용).
 
 초기 설계의 `domain/` 재작성은
-[`docs/design/class_diagram.md` §5](docs/design/class_diagram.md) 의 PR 10건 순서를 따랐습니다.
+[`docs/design/class_diagram.md` §5](legacy/docs/design/class_diagram.md) 의 PR 10건 순서를 따랐습니다.
 
 ```
 값 객체 → 포트 → Fake 어댑터 → states.py → 실제 어댑터 → 테스트
@@ -62,6 +62,6 @@ Fake 어댑터가 `states.py` 보다 먼저 들어가지 않으면 재작성 내
 ## 문서
 
 - `docs/` 하위는 **snake_case**
-- FSM 전이는 [`docs/design/state_machine.md`](docs/design/state_machine.md) 가 **단일 소스** — 다른 문서에 중복 정의하지 마세요
+- FSM 전이는 [`docs/design/state_machine.md`](legacy/docs/design/state_machine.md) 가 **단일 소스** — 다른 문서에 중복 정의하지 마세요
 - 설계 변경 시 README 문서 지도와 해당 docs 문서를 함께 갱신
 

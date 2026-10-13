@@ -1,35 +1,33 @@
-# Grippers — 문서 색인
+# 문서
 
-프로젝트 개요는 [최상위 README](../README.md) 를 먼저 보세요.
+Grippers 최종 시스템(코드: [`vla_robot/`](../vla_robot/)) 문서입니다. 처음이면 **[handover.md](handover.md)** 한 장부터 보십시오.
 
-| 폴더 | 성격 | 내용 |
-|---|---|---|
-| 📐 [`design/`](design/) | **코드보다 앞서는 계약** — 변경은 PR + 3인 합의 | FSM · 클래스 · 시퀀스 · 인터페이스 명세 |
-| 🧩 [`subsystems/`](subsystems/) | 담당 영역별 설계와 제약 | 물체 · 인식 · 콘솔 · AI |
-| 🛠 [`ops/`](ops/) | 프로젝트를 굴리는 문서 | 일정 · 실행 · 실측 기록 |
+## 현재 시스템
 
-> **파일명 규약** — snake_case(언더스코어).
-> 새 문서는 위 세 폴더 중 하나에 넣고, 해당 폴더의 `README.md` 표에 한 줄 추가하세요.
-
----
-
-## 어디부터 읽을까
-
-| 상황 | 순서 |
+| 문서 | 내용 |
 |---|---|
-| **처음 합류** | [README](../README.md) → [`state_machine.md`](design/state_machine.md) → [`class_diagram.md`](design/class_diagram.md) |
-| **코드 작업 시작** | [`class_diagram.md`](design/class_diagram.md) §5 → [CONTRIBUTING](../CONTRIBUTING.md) → [`setup.md`](ops/setup.md) |
-| 인식 담당 | [`perception.md`](subsystems/perception.md) → [`objects.md`](subsystems/objects.md) → [`ai_components.md`](subsystems/ai_components.md) |
-| 콘솔·음성 담당 | [`console.md`](subsystems/console.md) → [`sequences.md`](design/sequences.md) §5 |
-| 하드웨어·발주 | [`objects.md`](subsystems/objects.md) → [`perception.md`](subsystems/perception.md) (해상도 요구사항) |
-| 일정 확인 | [`milestones.md`](ops/milestones.md) |
-| 측정·시연 집계 | [`failure_definition.md`](ops/failure_definition.md) → [`measurements.md`](ops/measurements.md) |
+| [handover.md](handover.md) | **한 장 요약** — 무엇이 되나 · 하루 순서 · 설정 · 알려진 한계 · 다음 단계 |
+| [behavior.md](behavior.md) | 주행·미션 동작과 그것을 정하는 설정 키 |
+| [pi_deploy.md](pi_deploy.md) | Pi 배포 · 기동 · 하루 마무리(안전 종료) · 무응답 대처 · 배터리 측정 |
+| [map_rebuild.md](map_rebuild.md) | 장판·마커를 옮겼을 때 맵 다시 만들기 |
+| [layout/workspace_layout.md](layout/workspace_layout.md) | 작업장 배치도(평면 · 입면) |
+| [../vla_robot/README.md](../vla_robot/README.md) | 구성 · 디렉터리 · 설치 · 캘리브레이션 · 첫 기동 |
+| [../vla_robot/host/README.md](../vla_robot/host/README.md) | Host(노트북) 실행 · 도구 |
 
-## 지금 주의할 것
+설계 문서(구성도 · 인터페이스 · 상태도 · 시퀀스 · 결정 기록 · 결과)는 현재 코드 기준으로 새로 쓰는 중입니다.
 
-- **FSM 전이는 [`state_machine.md`](design/state_machine.md) 가 단일 소스** — 다른 문서에 중복 정의 금지
-- **[`hld.md`](design/hld.md) · [`error_budget.md`](design/error_budget.md) 는 주제 변경 이전 기준** — 참조 전 확인
+## 운영
 
----
+| 문서 | 내용 |
+|---|---|
+| [ops/purchase_ledger.md](ops/purchase_ledger.md) | 구매 장부 운영 규칙 |
 
-[← README](../README.md)
+## 초기 설계 (기록용)
+
+2026년 8월 초기 설계의 코드와 문서는 [`legacy/`](../legacy/) 에 그대로 있습니다(지금 코드와 다름). 지금도 읽을 만한 것:
+
+| 문서 | 내용 |
+|---|---|
+| [measurements.md](../legacy/docs/ops/measurements.md) | 측정 원칙(시행 횟수 · 신뢰구간 · 조건 통제)과 M1 하드웨어 실측 |
+| [failure_definition.md](../legacy/docs/ops/failure_definition.md) | 무엇을 실패로 셀 것인가 — 계수 규칙 |
+| [rejected_designs.md](../legacy/docs/ops/rejected_designs.md) | 판단해서 뺀 설계와 근거 |
