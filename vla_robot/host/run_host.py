@@ -183,7 +183,7 @@ def main() -> int:
                                                                             cfg.detector.conf_threshold,
                                                                             cfg.tracker.piece_radius_by_label)
                                     if on_mat(cfg.arena, o.x, o.y)])      # 장판 밖 검출은 버린다(10-12)
-                    pmap = tracker.update(obs, t0)
+                    pmap = fsm.filter_handed(tracker.update(obs, t0), t0)   # 방금 사람에게 건넨 기물은 뺀다(10-13)
                     if args.log_piece and t0 - piece_log_at >= 1.0:
                         piece_log_at = t0
                         want = args.log_piece.split(",")

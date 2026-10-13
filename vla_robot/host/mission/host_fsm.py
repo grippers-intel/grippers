@@ -194,6 +194,7 @@ class MissionFSM:
         self._zone_first_logged: Optional[XY] = None
         self._zone_first_cache: Optional[tuple] = None
         self._tie_logged: Optional[tuple] = None
+        self._handed: list[tuple[str, XY, float]] = []   # 사람에게 건넨 기물(라벨, 손 위치, 이때까지 거른다)
         self._prev_step_now: Optional[float] = None
         self._along_turning = False
         self._along_logged = False
@@ -1055,6 +1056,10 @@ class MissionFSM:
             if self._should_advance():
                 where = f"hand {self.hand_spot}" if self.dest_kind == "hand" else self.dest_box
                 self._log(f"{self.target_label} delivered to {where}")
+                if self.dest_kind == "hand" and self.target_label:
+                    at = self.hand_xy or self.dest_xy
+                    if at is not None:
+                        self._handed.append((self.target_label, at, self._now + self.HANDED_HOLD_S))
                 if self.order is not None:
                     self.order.done += 1
                     self.order.handed += int(self.dest_kind == "hand")
@@ -1775,6 +1780,19 @@ class MissionFSM:
             if pl.x0 <= stop[0] <= pl.x1 and not self._zone_spot_blockers(stop, near):
                 return True
         return False
+
+    #: 사람에게 건넨 기물은 이만큼 동안 손 자리 근처 검출을 지도에서 뺀다(10-13: 건넨 나이트가 사람 손에서 두 개로 보였다)
+    HANDED_HOLD_S = 60.0
+    HANDED_R = 0.45
+
+    def filter_handed(self, pmap: PieceMap, now: float) -> PieceMap:
+        """방금 사람에게 건넨 기물(같은 라벨, 손 자리 HANDED_R 안)을 지도에서 뺀다 — 사람이 들고 있는 동안 높이 때문에
+        카메라마다 다른 자리로 찍혀 두 개로 보이고, 대상·장애물로도 잡힌다. HANDED_HOLD_S 뒤에는 다시 본다(내려놓았으면 기물이다)."""
+        self._handed = [h for h in self._handed if now < h[2]]
+        if not self._handed or not pmap:
+            return pmap
+        return {lb: [p for p in pts if not any(lb == h[0] and _dist(p, h[1]) <= self.HANDED_R for h in self._handed)]
+                for lb, pts in pmap.items()}
 
     def _nearest_piece(self, pmap: PieceMap, robot_xy: XY, skips: list[XY],
                        labels: Optional[tuple[str, ...]] = None) -> Optional[tuple[str, XY]]:
