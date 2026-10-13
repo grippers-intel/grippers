@@ -102,6 +102,10 @@ policy:
   retry_rise_deg: 30.0
   max_frame_age_s: 1.0
   min_frame_change: 0.5
+  # 학습 안 한 물건 시험(10-13): 이 라벨은 정책이 닫는 동안 그리퍼 목표를 더 닫아 세게 쥔다. 학습한 기물에는 넣지 말 것.
+  grip_close_pct_by_label:
+    speaker: 0.0
+  grip_close_below_pct: 20.0
 
 grasp_check:
   enabled: true
