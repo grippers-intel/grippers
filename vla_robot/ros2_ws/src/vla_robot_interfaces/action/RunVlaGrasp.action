@@ -1,0 +1,25 @@
+# VLA 정책 루프로 파지 한 번을 수행한다.
+#
+#   그리퍼캠 프레임 + GetArmState.policy_state -> 정책 -> 청크 -> ExecuteJointChunk -> 반복
+#
+# ok=true 는 "정책 동작이 끝까지 돌았다(뻗었다가 복귀했다)"는 뜻이다.
+# "물체를 집었다"는 판정은 호출부(pi_mission_node)가 그리퍼 개구율/부하로 따로 한다.
+string label
+float32 timeout_s
+---
+bool ok
+string message
+uint32 chunks
+float32 elapsed_s
+# 파지 확인용 관측치. **판정은 여기서 하지 않는다** — 호출부(pi_mission_node)가 설정대로 가른다.
+#
+# ⚠️ 파지 확인(그리퍼캠 근접 변화)은 여기에 없다. 팔이 시작 자세로 돌아온 뒤에야 비교가
+#   성립하고, 그 복귀를 시키는 것은 미션이라 미션이 직접 잰다(vla_common.grasp_check).
+# gripper_percent / gripper_load: 기록용. ⚠️ TPU 턱에서는 이 둘로 파지를 가를 수 없다
+#   (실측: 빈손 6.6~12.2% / 부하 0.13~0.18, 룩을 쥔 상태 10.9% / 0.17 — 완전히 겹친다).
+float32 gripper_percent
+float32 gripper_load
+---
+uint32 chunk
+float32 elapsed_s
+float32 last_inference_ms

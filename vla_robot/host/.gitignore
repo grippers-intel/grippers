@@ -1,0 +1,6 @@
+.venv/
+.ov_cache/
+models/
+__pycache__/
+.pytest_cache/
+logs/

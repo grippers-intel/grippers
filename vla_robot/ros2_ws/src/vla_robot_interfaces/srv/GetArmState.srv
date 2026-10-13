@@ -1,0 +1,19 @@
+# 팔 상태를 한 번에 읽는다. 시리얼 포트는 arm_driver_node 가 독점하므로
+# 다른 노드는 반드시 이 서비스로만 읽는다.
+#
+# 배열은 전부 길이 6, 인덱스 0..5 = servo 1..6
+# (shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper).
+---
+bool ok
+string message
+bool[6] online
+int32[6] position_raw
+# LeRobot 정규화 단위 = 정책의 observation.state.
+# servo 1..5 는 도(DEGREES), servo 6 은 0..100 개구율(RANGE_0_100).
+# ok=false 이면 의미 없음.
+float32[6] policy_state
+# |Present_Load| / 1023
+float32[6] load_ratio
+int32[6] temperature_c
+float32 voltage_v
+bool torque_on

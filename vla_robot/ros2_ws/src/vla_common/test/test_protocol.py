@@ -1,0 +1,145 @@
+import json
+
+import pytest
+
+from vla_common.protocol import (HostCommand, JobResult, JobTracker, PiStatus,
+                                 ProtocolError, State)
+
+
+def test_host_command_roundtrip():
+    cmd = HostCommand(State.APPROACH, linear_x=0.15, angular_z=0.0, label="queen", seq=7)
+    assert HostCommand.from_bytes(cmd.to_bytes()) == cmd
+
+
+@pytest.mark.parametrize("patch", [
+    {"v": 99},
+    {"state": "FLY"},
+    {"linear_x": "fast"},
+    {"linear_x": float("nan")},
+    {"stop": "yes"},
+    {"label": "x" * 100},
+])
+def test_host_command_rejects_bad_packets(patch):
+    body = json.loads(HostCommand(State.IDLE).to_bytes())
+    body.update(patch)
+    raw = json.dumps(body).encode()
+    with pytest.raises(ProtocolError):
+        HostCommand.from_bytes(raw)
+
+
+def test_garbage_is_rejected():
+    with pytest.raises(ProtocolError):
+        HostCommand.from_bytes(b"\xff\x00not json")
+
+
+def _status(job_id=0, result=None, boot="A", busy=False):
+    return PiStatus(boot_id=boot, state=State.IDLE, busy=busy, job_id=job_id,
+                    result=result, base_ok=True, watchdog=False)
+
+
+def test_status_roundtrip():
+    st = _status(3, JobResult(2, State.GRASP, True, "ok"))
+    assert PiStatus.from_bytes(st.to_bytes()) == st
+
+
+def test_job_tracker_ignores_old_result_and_accepts_new():
+    tracker = JobTracker()
+    before = _status(job_id=2, result=JobResult(2, State.GRASP, True))
+    tracker.arm(State.GRASP, before)
+    # 같은 옛 결과가 반복돼도 완료가 아니다
+    assert tracker.poll(before) is None
+    assert tracker.poll(_status(job_id=3, busy=True, result=JobResult(2, State.GRASP, True))) is None
+    done = tracker.poll(_status(job_id=3, result=JobResult(3, State.GRASP, False, "empty")))
+    assert done is not None and done.job_id == 3 and not done.ok
+    # 한 번 넘겨준 뒤에는 무장 해제
+    assert not tracker.armed
+
+
+def test_job_tracker_ignores_other_action():
+    tracker = JobTracker()
+    tracker.arm(State.PLACE, _status())
+    assert tracker.poll(_status(job_id=1, result=JobResult(1, State.GRASP, True))) is None
+
+
+def test_job_tracker_armed_before_any_status_ignores_stale_result():
+    tracker = JobTracker()
+    tracker.arm(State.GRASP, None)
+    stale = _status(job_id=4, result=JobResult(4, State.GRASP, True))
+    assert tracker.poll(stale) is None           # 옛 결과는 기준이 된다
+    assert tracker.poll(_status(job_id=5, busy=True, result=JobResult(4, State.GRASP, True))) is None
+    done = tracker.poll(_status(job_id=5, result=JobResult(5, State.GRASP, True)))
+    assert done is not None and done.job_id == 5
+
+
+def test_status_rejects_non_integer_ack_seq():
+    body = json.loads(_status().to_bytes())
+    body["ack_seq"] = "x"
+    with pytest.raises(ProtocolError):
+        PiStatus.from_bytes(json.dumps(body).encode())
+
+
+def test_job_tracker_handles_pi_restart():
+    tracker = JobTracker()
+    tracker.arm(State.GRASP, _status(job_id=9, result=JobResult(9, State.GRASP, True), boot="A"))
+    # Pi 재시작: 번호가 1 부터 다시
+    done = tracker.poll(_status(job_id=1, result=JobResult(1, State.GRASP, True), boot="B"))
+    assert done is not None and done.job_id == 1
+
+
+def test_arm_yaw_survives_the_wire():
+    """PLACE 에서 팔이 틀 각도. 좌표가 아니라 각도 하나만 건넌다."""
+    cmd = HostCommand(State.PLACE, stop=True, label="rook", arm_yaw_deg=-12.5)
+    back = HostCommand.from_bytes(cmd.to_bytes())
+    assert back.arm_yaw_deg == -12.5
+
+
+def test_arm_yaw_defaults_to_zero_for_old_senders():
+    """이 키를 모르는 예전 Host 의 패킷도 받아야 한다 — 0 이면 팔은 포즈 그대로 간다."""
+    raw = json.dumps({"v": 1, "state": State.PLACE, "stop": True}).encode("utf-8")
+    assert HostCommand.from_bytes(raw).arm_yaw_deg == 0.0
+
+
+def test_arm_yaw_must_be_finite():
+    raw = json.dumps({"v": 1, "state": State.PLACE, "arm_yaw_deg": "left"}).encode("utf-8")
+    with pytest.raises(ProtocolError):
+        HostCommand.from_bytes(raw)
+
+
+def test_recovery_fields_round_trip_and_default_off():
+    from vla_common.protocol import HostCommand, PiStatus
+    cmd = HostCommand("CARRY", stop=True, recover_base=True)
+    assert HostCommand.from_bytes(cmd.to_bytes()).recover_base is True
+    assert HostCommand.from_bytes(HostCommand("IDLE").to_bytes()).recover_base is False
+    st = PiStatus("b", "IDLE", False, 0, None, True, False, base_recovering=True, base_recoveries=3)
+    back = PiStatus.from_bytes(st.to_bytes())
+    assert back.base_recovering is True and back.base_recoveries == 3
+
+
+def test_place_pose_round_trip_and_old_packets():
+    """손에 건네기(handover). 키가 없는 옛 Host 패킷은 "" = 상자 투입이다."""
+    cmd = HostCommand("PLACE", stop=True, place_pose="handover")
+    assert HostCommand.from_bytes(cmd.to_bytes()).place_pose == "handover"
+    old = json.dumps({"v": 1, "seq": 1, "state": "PLACE"}).encode()
+    assert HostCommand.from_bytes(old).place_pose == ""
+    bad = json.dumps({"v": 1, "seq": 1, "state": "PLACE", "place_pose": "throw"}).encode()
+    with pytest.raises(ProtocolError):
+        HostCommand.from_bytes(bad)
+
+
+def test_voltages_round_trip_and_old_packets():
+    st = PiStatus(boot_id="b", state="IDLE", busy=False, job_id=0, result=None, base_ok=True,
+                  watchdog=False, battery_v=7.522, arm_v=11.9)
+    back = PiStatus.from_bytes(st.to_bytes())
+    assert back.battery_v == 7.522 and back.arm_v == 11.9
+    old = json.dumps({"v": 1, "boot_id": "b", "state": "IDLE", "busy": False, "job_id": 0,
+                      "result": None, "base_ok": True, "watchdog": False}).encode()
+    assert PiStatus.from_bytes(old).battery_v == 0.0          # 옛 Pi = 모름
+
+
+def test_job_stage_round_trip():
+    st = PiStatus(boot_id="b", state="PLACE", busy=True, job_id=3, result=None, base_ok=True,
+                  watchdog=False, job_stage="release")
+    assert PiStatus.from_bytes(st.to_bytes()).job_stage == "release"
+    old = json.dumps({"v": 1, "boot_id": "b", "state": "IDLE", "busy": False, "job_id": 0,
+                      "result": None, "base_ok": True, "watchdog": False}).encode()
+    assert PiStatus.from_bytes(old).job_stage == ""

@@ -1,0 +1,163 @@
+# vla_robot — Pi 쪽 설정의 단일 원본.
+#
+# 모든 노드가 이 파일을 직접 읽는다(ROS 파라미터로 따로 선언하지 않는다).
+# 모르는 키가 있으면 노드가 기동을 거부한다 — 오타가 조용히 무시되지 않게.
+# 파일 경로는 이 yaml 기준 상대경로로 적어도 된다.
+# 기본값과 각 값의 근거는 vla_common/config.py 에 있다.
+
+arm:
+  port: /dev/soarm                 # udev 심볼릭 링크 또는 /dev/serial/by-id/... 경로
+  baudrate: 1000000
+  calibration_file: arm_calibration.json
+  poses_file: arm_poses.yaml
+  verify_homing_offsets: true
+  torque_on_start: true
+  min_voltage_v: 10.5
+  max_servo_temp_c: 60.0        # 이 온도 이상이면 이동 거부 (STS3215 자체 보호는 70°C 근처)
+  servo_temp_valid_max_c: 100.0 # 이보다 높게 읽히면 읽기 오류로 보고 무시(09-30 servo 2 150°C)
+  max_step_deg: 5.0
+  max_chunk_steps: 500
+  chunk_acceleration: 30
+  pose_speed_deg_s: 45.0
+  pose_rate_hz: 30.0
+  gripper_speed_pct_s: 80.0
+  read_retries: 3
+  state_rate_hz: 10.0
+
+base:
+  cmd_vel_topic: controller/cmd_vel
+  feedback_topic: odom_raw
+  feedback_timeout_s: 1.0
+  battery_topic: /ros_robot_controller/battery   # UInt16 mV -> Host 화면 VEH 칸(2026-10-02)
+  max_linear_mps: 0.15
+  max_angular_rad_s: 0.5
+  reject_mixed_rotation: true
+  watchdog_s: 0.5
+  publish_hz: 20.0
+  # 자동 복구: 보드가 쓰기를 조용히 무시하는 고장(09-23·09-30). Host 가 탑뷰로 감지해 요청하면
+  # 컨트롤러 노드를 다시 띄운다. 사람이 부저로 진단하던 것을 대신한다.
+  recover_script: /grippers/vla_deploy/vla_robot/tools/ops/rrc_recover.sh
+  recover_timeout_s: 40.0
+  recover_cooldown_s: 5.0
+  # 스택 기동 직후 컨트롤러 선제 재기동(10-01: 스택을 새로 띄울 때마다 첫 주행 무응답). 부저 없음.
+  recover_on_start: true
+  recover_on_start_delay_s: 3.0
+  # 소음 정리 재기동(10-05): 회전 뒤 서 있으면 바퀴가 우는데 컨트롤러를 다시 띄우면 멎었다.
+  # 움직인 뒤 팔 작업 시작 때 · 3 s 넘게 서 있을 때 한 번. 도는 동안 Host 는 바퀴 명령을 기다린다.
+  quiet_reset: true
+  quiet_reset_on_job: true
+  quiet_reset_idle_s: 3.0
+  # 10-12 base_trace: 재기동 뒤 오래(10~43분) 서 있다 출발하면 보드가 첫 명령을 안 받았다 — 그런 출발 전에 미리 재기동.
+  quiet_reset_stale_s: 60.0
+
+link:
+  bind_ip: 0.0.0.0
+  command_port: 5005
+  status_port: 5006
+  status_hz: 10.0
+  fixed_host_ip: ""
+
+gripper_cam:
+  device: /dev/gripper_cam
+  width: 1280
+  height: 720
+  fps: 30
+  fourcc: MJPG
+  rotate_180: true
+  publish_hz: 10.0
+  publish_width: 320               # 발행만 줄인다(캡처는 1280x720). 정책 입력이 180x320 이다
+  publish_height: 180              # 0,0 이면 원본 크기 — 2.76MB/장이라 토픽이 2.3Hz 로 떨어진다
+  topic: gripper_cam/image_raw
+  reopen_after_s: 2.0
+  # 팔 작업이 없을 때는 받기만 하고 이 간격마다 한 장만 푼다(10-12 배터리 후보). 0 = 늘 다 푼다(지금).
+  # 10-13 교육장 실측(지시 대기, tools/ops/pi_power.sh): 0 이면 Pi 3.42 W · 그리퍼캠 노드 CPU 41.5 % →
+  # 0.5 로 2.8~3.0 W · 9.6 %. 파지 2/2 정상(작업 시작에 곧바로 15 fps 로 돌아온다).
+  idle_period_s: 0.5
+
+policy:
+  source: local                    # local(Pi CPU) | remote(policy_server)
+  checkpoint: /shared/act_v5_all_180_120k_120000
+  device: cpu
+  url: http://192.168.0.2:8770
+  remote_timeout_s: 5.0
+  image_color: rgb                 # ⚠️ README "색 순서" 참고. 실기에서 반드시 확인
+  image_size: [0, 0]               # [0,0] = train_config.json 에서 읽음 (v5: 180x320)
+  freeze_wrist_roll: true
+  wrist_roll_value: 0.067
+  n_action_steps: 0
+  fps: 30.0
+  timeout_s: 45.0
+  max_chunks: 8                    # 최후 안전장치. 실제 중단은 아래 재시도 감지가 한다
+  extended_lift_deg: -50.0
+  returned_lift_deg: -95.0
+  # 재시도 감지(상대값, 2026-09-30): 최고점에서 60° 이상 내려왔다가 골짜기에서 30° 이상
+  # 다시 오르면 2차 시도 → 골짜기에서 끝낸다. 절대값 -60 은 저점 -58 회차를 놓쳤다.
+  retry_drop_deg: 60.0
+  retry_rise_deg: 30.0
+  max_frame_age_s: 1.0
+  min_frame_change: 0.5
+  # 학습 안 한 물건 시험(10-13): 이 라벨은 정책이 닫는 동안 그리퍼 목표를 더 닫아 세게 쥔다. 학습한 기물에는 넣지 말 것.
+  grip_close_pct_by_label:
+    speaker: 0.0
+  grip_close_below_pct: 20.0
+
+grasp_check:
+  enabled: true
+  # image | opening | none
+  #
+  # ⚠️ 2026-09-22 실기: TPU 턱에서는 개구율도 부하도 빈손과 겹친다.
+  #      빈손 닫힘  개구율 6.6~12.2 %  부하 0.13~0.18
+  #      룩을 쥠    개구율 10.9 %      부하 0.17      <- 구분 불가
+  #    TPU 가 무르기 때문이다. 물체에 닿은 뒤에도 패드가 눌리며 서보가 더 들어가고,
+  #    같은 변형에 힘이 천천히 올라 부하도 안 튄다. 물린 위치(턱 끝 vs 경첩 쪽 목)도 값을 바꾼다.
+  #    "부하가 낮으면 성공"으로 뒤집는 대응은 거짓 실패를 거짓 성공으로 옮길 뿐이다 —
+  #    빈 그리퍼로 상자까지 가서 허공에 내려놓고 재시도도 안 하게 된다.
+  #
+  #    같은 날 그리퍼캠 근접 ROI 는 10배 갈렸다: 빈손끼리 0.0 % · 룩을 쥔 상태 30~33 %.
+  method: image
+  # 2026-09-23 여섯 기물 전부 실측 — 이 값으로 **확정**한다.
+  #   빈손 0.0~6.9 | 퀸 27.1 · 룩 30.3~33.3 · 나이트 35.4 · 별 36.9 · 축구공 40.1 · 상자 40.6
+  # 빈손 최대와 기물 최소 사이가 20%p 라 양쪽에서 충분히 떨어져 있다.
+  # 2026-09-30 실기(주행 포함 13회): 빈손 0.1~9.9 | 쥠 26.3~82.1. soccer 가 11.6% 로 "쥠" 판정을
+  # 받았는데 빈손이었다(투입 뒤 장판에 그대로) — 10 -> 18(두 무리의 가운데쯤).
+  image_changed_percent: 18.0
+  image_roi: [0.42, 0.97, 0.33, 0.67]   # y0,y1,x0,x1 비율 — 화면 아래 중앙(턱 바로 앞)
+  image_pixel_threshold: 30.0
+  min_gripper_percent: 20.0        # method: opening 일 때만. 위 경고 참고
+  min_load_ratio: 0.0              # TPU 에서는 분리가 안 된다
+
+place:
+  carry_pose: carry
+  drop_pose: drop
+  # 바구니 앞 정차점(Host 가 box_approach_margin_m 만큼 띄워 세운다)에서 팔의
+  # base(servo 1)를 이만큼 더 튼다. 차체를 제자리 회전시키는 것보다 싸고 정확하다 —
+  # 차체는 0.5 rad/s 에 데드밴드가 있어 몇 도짜리 회전을 못 내고 위치추정만 흔든다.
+  #
+  # ⚠️ 파지(GRASP)에는 쓰지 않는다. 정책이 관절 목표를 절대값으로 내서 첫 청크에 지워진다.
+  # 재는 법: tools/goto_pose.py --pose drop --base-yaw <도> --keep-gripper
+  # 고정 몫(팔 장착 오프셋). ⚠️ **잠정값이다 — 확정 아님.**
+  # 2026-09-22 첫 GRASP -> PLACE 를 0 으로 성공했지만, 그때 차와 바구니는 손으로
+  # 세워 둔 배치였다. 맵을 다시 만들고 Host 가 dest_xy 에 정차시킨 **실제 자리**에서
+  # 다시 재야 한다: tools/goto_pose.py --pose drop --base-yaw <도> --keep-gripper
+  base_yaw_deg: 0.0
+  host_yaw_sign: -1.0           # 2026-09-22 실기 확인: servo 1 음수 = 로봇 기준 왼쪽(반시계).
+                                # map 은 반시계가 + 라 부호가 반대다
+  max_base_yaw_deg: 15.0
+  release_percent: 60.0
+  settle_s: 0.5
+  return_pose: idle
+  # 사람 손에 건네기(Host 가 place_pose=handover 로 보낼 때). 팔을 위로 다 뻗고 wrist_flex 만 직각(ㄱ자).
+  # ⚠️ arm_poses.yaml 의 handover 는 아직 measured: false — 실측 전에는 건네기 작업이 "실측되지 않았다"로 실패한다.
+  handover_pose: handover
+  handover_wait_s: 1.0             # ㄱ자에 도착한 뒤 열기 전 대기(사람이 손을 맞출 시간)
+
+mission:
+  cycle_hz: 20.0
+  start_pose: idle
+  grasp_timeout_s: 90.0
+  place_timeout_s: 45.0
+  known_pose_tolerance_deg: 20.0
+  # 파지 뒤 조이는 세기: 목표 = 지금 개도 − 값(%). 없는 라벨은 정책 목표(끝까지 닫힘)로 세게 조인다(09-30 soccer 낙하 대응).
+  # 10-08: soccer 를 세게 조이자 복귀 중 공이 튀어 나갔다 — 기존(idle 개도 6.9 % · 공에서 약 3 %p 더 닫힘)과 비슷하게.
+  hold_squeeze_pct_by_label:
+    soccer: 3.0

@@ -1,0 +1,347 @@
+# vla_robot — Host(노트북) 설정의 단일 원본.
+# 모르는 키가 있으면 run_host.py 가 기동을 거부한다. 기본값·근거는 host_config.py.
+# 좌표계(map): 원점 = **장판 앞쪽 왼쪽 모서리**, +x 오른쪽(긴 변 1.980), +y 뒤쪽(상자·CAM B),
+# yaw = +x 기준 반시계(도), 단위 m. 줄자로 장판 가장자리에서 잰 값이 그대로 좌표다.
+# 배치도 REV.2 (2026-09-29): 장판 가로 배치 · 상자 1개 · 카메라는 앞뒤 긴 변 가운데 1.60 m.
+
+aruco:
+  dictionary: DICT_4X4_50
+  robot_marker_id: 0
+  robot_marker_size_m: 0.080       # 실측: 검은 사각형 바깥 변
+  # 바닥 -> 마커 중심, 팔 idle 자세(마커가 기울어 있어 중심점 높이다). 2026-09-30: 줄자 28 cm ·
+  # 두 카메라 교차법 281.7 mm (08-27 값 0.270 은 서보 보정 고정 전 idle 자세였다).
+  # 틀리면 카메라 한 대만 볼 때 y 로 밀린다(12 mm -> 1~2 cm). 두 대 평균은 거의 안 변한다.
+  robot_marker_height_m: 0.282
+  floor_marker_size_m: 0.120      # 실측(2026-09-29): 검은 사각형 120 mm · 흰 여백 포함 종이 140 mm
+  # 마커 중심. 인쇄물 윗변이 +y 를 향하게 붙일 것.
+  # 종이(140 mm) 좌우 변을 **장판 좌우 끝에 딱 붙인다** — 중심이 끝에서 0.070.
+  # 앞뒤는 가장자리에서 0.525(종이 변 0.455). 카메라마다 4장이 보이는 자리다.
+  # ⚠️ 세트장을 만들면서 이 좌표에 붙인다 — docs/map_rebuild.md
+  floor_markers:
+    1: [0.070, 0.525]
+    2: [1.910, 0.525]
+    3: [0.070, 1.305]
+    4: [1.910, 1.305]
+  yaw_offset_deg: 85.7             # 2026-09-06 정지 실측. 주행 방식으로 재측정 권장
+  pose_hold_s: 1.0
+  min_floor_markers: 2
+  max_extrinsic_reproj_px: 3.0
+  extrinsic_lock_frames: 30
+  extrinsic_relock_px: 4.0
+  extrinsic_relock_frames: 15
+
+arena:
+  # 작업 경계 = **장판 가장자리**. 가벽 없이 장판 위에서 움직인다. 장판 실측 1.980 × 1.830 m
+  # (2026-09-29 재실측 — 처음 잰 2.050 × 1.835 는 틀렸다), 긴 변이 좌우. 경로계획기가 여기서 robot_radius_wall_m 을 빼 주행 경계를 만든다.
+  # 장판을 새로 재면: python tools/make_layout.py --mat <가로cm> <세로cm>
+  wall_x: [0.0, 1.980]
+  wall_y: [0.0, 1.830]
+  # 기물이 놓이는 곳 = **바닥 마커 네 장 중심 안쪽**. 밖에 있는 기물은 대상에서 뺀다
+  # (상자 안에 들어간 것도 여기서 걸러진다).
+  workspace_x: [0.070, 1.910]
+  workspace_y: [0.525, 1.305]
+  box_size: [0.210, 0.350, 0.220]  # 폭(x) · 길이(y) · 높이
+  # 상자는 하나다(최종 발표 피드백). 뒤쪽 긴 변 가운데, **뒷면을 장판 뒤끝에 붙인다**.
+  # 입구가 앞(-y, yaw 180). 입구 y = 1.655 - 0.175 = 1.480.
+  boxes:
+    basket: [0.990, 1.655, 180.0]
+
+cameras:
+  indices: [0, 1]
+  width: 1280
+  height: 720
+  hfov_deg: 70.4
+  calib_dir: calib                 # host/ 기준. cam{index}.npz (K, dist)
+  # C920 수동 초점, **카메라별** {인덱스: 값}. 오토포커스를 끄기만 하면 최근접(250)에 멈춰
+  # 바닥 마커를 못 잡은 적이 있다. 0 = 먼 곳. 팀이 쓰던 값이다(hardware/grippers/host/
+  # capture_dataset.py — Geti 학습 영상도 이 값). 캘리브레이션도 같은 값으로 해야 한다.
+  # 표에 없는 카메라나 음수는 오토포커스만 끈다.
+  focus:
+    0: 5
+    1: 0
+  # 지시 대기 중(ESTOP·HALTED·손 검출 중 제외)에는 0.3 s 마다만 영상 풀기·ArUco. 사이에는 grab 만(버퍼 비우기). 0 = 끔
+  idle_process_period_s: 0.3
+
+detector:
+  kind: geti                       # geti | none
+  deployment_dir: models/geti_deployment
+  # 10-12 교육장 실측(i7-11800H): 내장 그래픽(Intel UHD, OpenVINO GPU.0) 한 장 255 ms · CPU 4스레드 690 ms.
+  # run_host 전체(작업 중, 카메라 2대) CPU 16스레드의 46.6 % → 20.3 %, 검출 결과 같음(위치 1 mm 안).
+  # 외장 RTX 3050(GPU.1)은 OpenVINO 커널이 없어 못 올린다. 못 올리면 CPU 로 돌아간다.
+  device: GPU.0
+  cache_dir: .ov_cache
+  min_infer_interval_s: 0.3
+  # 10-08 집 실측(카메라 2대분, 1280×720): 0.3 s 간격 CPU 16스레드의 36 % · 1.5 s 간격 17 %.
+  idle_infer_interval_s: 2.0       # 지시 대기 · HALTED · ESTOP 동안 — 기물은 사람이 옮길 때만 움직인다
+  num_threads: 4                   # OpenVINO 스레드(카메라당). 기본 862 ms → 4 스레드 726 ms, CPU 같음
+  conf_threshold: 0.6
+  empty_labels: ["No object", "Empty"]
+
+hands:
+  # 탑뷰 손 검출(MediaPipe, 2026-10-01). 손 = 가져다줄 곳(기물·장애물 아님).
+  # pip install mediapipe + models/hand_landmarker.task (tools/hand_probe.py 설명). 없으면 손 없이 돈다.
+  # full 프레임으로 9곳(앞·양옆 가장자리, 장판 위 30~35 cm) 모두 잡혔다(10-01 실측).
+  enabled: true
+  model_path: models/hand_landmarker.task
+  min_infer_interval_s: 0.2
+  min_conf: 0.4                    # 10-05 0.5 -> 0.4: 실기에서 원이 끊김. 오인식은 가장자리 구역 + 지속 시간이 거른다
+  num_hands: 2
+  # 두 카메라가 같은 손을 보면 광선 교차로 높이까지 푼다(10-01: 높이 고정이면 45 cm 로 든 손이
+  # 앞/뒤 카메라에서 y 로 24 cm 갈라져 둘로 보였다). 광선 사이가 pair_max_gap_m 넘으면 다른 손.
+  pair_max_gap_m: 0.08
+  # 10-08: 손 하나가 15~20 cm 떨어진 둘로 보였다(광선 짝을 못 지어 카메라마다 높이 평면으로 풂). 짝 없는 두 카메라의
+  # 손이 이 안이면 같은 손 — 더 곧게 내려다보는 카메라 것 하나만 쓴다. 한 대만 봐도 손이다(로봇 마커와 같은 생각).
+  same_hand_m: 0.35
+  max_z_m: 1.0
+  hand_z_m: 0.32                   # 한 대만 볼 때 쓰는 높이(받는 자세). 바닥(0)으로 풀면 수십 cm 밀린다
+  edges: [front, left, right]      # 뒤(상자 쪽)는 뒤 카메라 바로 아래라 30 cm 에서 22 % 만 보인다
+  edge_band_m: 0.50                # 10-05 0.35 -> 0.50: 실측 손이 가장자리에서 0.25~0.34 안쪽이라 경계를 들락날락
+  outside_m: 0.30
+  # 10-08 0.15 -> 0.35: 손을 내밀며 움직이면 15 cm 넘게 옮겨 새 손이 생기고, 옛 자리는 hold_s(2 s) 동안 남아 둘로 보였다
+  # (바닥 마커 1번 근처 왼쪽 가장자리). 같은 손 판정(same_hand_m)과 같은 거리.
+  merge_dist_m: 0.35
+  confirm_s: 0.6                   # 10-05 1.0 -> 0.6: 이만큼 계속 보여야 손
+  hold_s: 2.0                      # 10-05 1.0 -> 2.0: 잠깐 놓쳐도 지도에서 지우지 않는다
+  max_hands: 2
+
+tracker:
+  merge_dist_m: 0.08
+  hold_s: 1.5
+  confirm_s: 1.2
+  label_decay: 0.85
+  max_per_label: 2
+  # 넓은 기물의 바닥 반경(m). 위치는 bbox 아래쪽 = 카메라에 가장 가까운 가장자리라, 넓은 기물은 중심이
+  # 그만큼 카메라 반대쪽에 있다. 10-05: 두 카메라 사이의 별이 보는 카메라에 따라 반대로 쏠려 파지가 짧았다.
+  # 재는 법: run_host --log-piece star 로 별을 장판 가운데 두면 두 카메라 값의 y 차이 ≈ 2 x 반경.
+  piece_radius_by_label:
+    star: 0.023                    # 10-05 장판 가운데 실측: 앞 카메라 y 0.877 · 뒤 0.923 -> 차이 4.6 cm / 2
+    box: 0.021                     # 10-05 장판 가운데 실측: 앞 0.881 · 뒤 0.923 -> 차이 4.2 cm / 2
+    # 10-05 같은 날 y 0.9 줄(두 카메라가 다 보는 띠)에 나란히 두고 앞·뒤 카메라 y 차이 / 2.
+    # x 쪽 1.3~1.6 cm 차이는 기물과 상관없이 늘 같은 두 카메라 사이 어긋남이라 반경에 넣지 않았다.
+    # 키 큰 체스 말이 밑면(~2 cm)보다 크다 — bbox 아래쪽이 밑면 앞보다 더 카메라 쪽으로 잡힌다.
+    queen: 0.027                   # 앞 0.874 · 뒤 0.928
+    knight: 0.024                  # 앞 0.881 · 뒤 0.929
+    rook: 0.025                    # 앞 0.884 · 뒤 0.934
+    soccer: 0.017                  # 앞 0.880 · 뒤 0.913~0.916
+
+planner:
+  cell_m: 0.025                    # 0.05 는 벽 옆 8 cm 통로가 사라져 "경로 없음"
+  robot_radius_wall_m: 0.20
+  # 기물 회피는 **차체 모양**으로 본다(2026-09-30). 기물 중심에서 로봇 마커 중심까지
+  #   직진할 때: 반폭 0.10 + 기물 0.03 + 여유 0.03 = 0.16
+  #   꺾는 점(제자리 회전): 대각선 반지름 0.16 + 0.03 + 0.03 = 0.22
+  # 마커가 차체 앞에서 13 cm(차체 길이 25 의 절반 12.5)라 회전 중심과 거의 같다.
+  # 한 원(0.25)으로 뭉쳤을 때는 51 cm 떨어진 기물 사이가 막혀 실기에서 HALTED 가 났다.
+  robot_width_m: 0.20
+  robot_length_m: 0.25
+  piece_obstacle_radius_m: 0.02      # 기물 40 mm
+  obstacle_margin_m: 0.02           # 2026-09-30 저녁 0.03 -> 0.02 (더 가깝게 지나간다)
+  # 마커 중심이 설 수 있는 앞뒤 범위 = 장판 거의 전체. 앞뒤 끝 띠는 카메라가 로봇 마커를
+  # 못 본다(1.60 m 에서 앞 0.25 미만 · 뒤 1.58 초과) — 그래서 뺐다.
+  drive_area_y: [0.25, 1.575]
+  # 상자 둘레 진입 금지(주행 구역을 넓히면서 생겼다). 좌우·뒤는 로봇 반경만큼,
+  # 앞은 정차점까지(= mission.box_approach_margin_m 이하여야 정차점에 설 수 있다).
+  box_keepout_side_m: 0.20
+  box_keepout_front_m: 0.22
+  waypoint_step_m: 0.15
+  axis_leg_tolerance_m: 0.03
+  yaw_tolerance_deg: 5.0
+  yaw_enter_deg: 12.0              # 회전 복귀 문턱. 하나로 쓰면 좌우로 떤다
+  yaw_enter_clear_deg: 25.0        # 앞길이 비어 있으면 이만큼 틀어질 때까지 계속 직진(09-30 저녁)
+  # 좁은 틈(10-07): 가는 직선이 기물의 제자리 회전 반경(0.20 m) 안을 지나면 틈 밖에서 2.5° 까지 맞추고
+  # 들어가고, 틈 안에서는 20° 까지 틀어져도 돌지 않는다(안에서 돌면 모서리가 기물을 쓴다). 후진은 없다.
+  narrow_yaw_tolerance_deg: 2.5
+  narrow_entry_enter_deg: 5.0
+  narrow_entry_zone_m: 0.15        # 10-07: 직진 중 5° 재정렬은 입구 바로 앞(회전 반경 밖 15 cm)에서만 — 구간 전체에 걸면 조금 가고 돈다
+  narrow_hold_enter_deg: 20.0
+  no_turn_near_m: 0.15             # 부분목표가 이 안이면 뒤로 가지 않는 한 다시 돌지 않는다
+  min_heading_dist_m: 0.05
+  # 10-08 base_trace 35번: 회전 뒤 직진을 시작하면 회전 방향으로 7.5 ± 1.5° 더 돈다(회전 크기와 무관, 0.4 s 서도 그대로).
+  turn_lead_deg: 7.0               # 그만큼 덜 돌고 멈춘다(0.5 s 넘게 돈 회전만)
+  obstacle_hold_cycles: 8
+  obstacle_match_m: 0.06
+  carry_ignore_radius_m: 0.30
+
+drive:
+  turn_exit_max_m: 0.30            # 10-07: 틈 안에서 돌면 옆 기물을 쓸 때 앞이 비었으면 이만큼까지 앞으로 나간 뒤 돈다(후진 없음)
+  # ⚠️ 데드밴드가 배터리 전압을 따라 오른다(8.4V: 0.10 겨우, 8.0V: 0.10 안 움직임).
+  #    Pi 가 0.15 m/s, 0.5 rad/s 로 자르므로 그보다 크게 줘도 소용없다.
+  linear_mps: 0.15
+  # 회전은 오차에 비례(30° 아래부터 줄임), 최저 0.25. 0.5 고정으로는 목표 근처에서 좌우로 떨었다.
+  # ⚠️ 0.25 는 잠정 — 회전 데드밴드를 실측하면 고칠 것.
+  rotation_rad_s: 0.5
+  rotation_min_rad_s: 0.25
+  rotation_slow_deg: 30.0
+  nudge_mps: 0.15
+  # 10-08: 회전 뒤 서기(turn_settle_s)는 0.4 s 서도 직진 시작 회전이 그대로라 뺐다 — planner.turn_lead_deg 로 일찍 멈춘다.
+  # 10-08: 파지·투입 직전 반대 회전(unwind_*)을 뺐다 — 정차 소음은 Pi 소음 정리 재기동(팔 작업 시작 때)이 맡는다.
+
+mission:
+  cycle_hz: 10.0
+  # 마커 중심 기준. 2026-09-30: 0.27~0.31 에서 시작한 파지 6/6 성공, 0.33 이상·0.25 는 모두 빈손.
+  # 트리거(0.33)에서 멈춘 뒤 정면을 맞추고, 범위 밖이면 천천히 앞뒤로 움직여 범위 안에서 잡는다.
+  grasp_trigger_dist_m: 0.33
+  grasp_dist_min_m: 0.26
+  grasp_dist_max_m: 0.31
+  grasp_dist_by_label:             # 기물별 범위 [min, max]. 없으면 위 값
+    # 10-01: 0.27 에서 두 번 다 그리퍼가 star 를 지나쳤다 -> [0.30, 0.33]. 그때는 위치가 카메라 쪽 가장자리라
+    # ±2.3 cm 틀렸다. 10-05 반경 보정(tracker.piece_radius_by_label) 뒤 0.323 에서 "별과 거리가 멀었다"(빈손) -> 당긴다.
+    star: [0.28, 0.31]
+    # 10-07 6기물 두 판: 0.260 · 0.262 · 0.267 빈손, 0.288 · 0.293 성공 — 가까이서 시작하면 지나친다.
+    box: [0.28, 0.31]
+    # 10-07 (반경 보정 뒤): 0.268 · 0.269 · 0.270 · 0.280(+9°) · 0.292 빈손, 0.293 · 0.297 · 0.300 · 0.302 성공
+    # (10-05 에도 0.261 두 번 빈손 → 0.268 성공). 가까이서 시작하면 놓친다 -> 아래 끝을 2 cm 올린다.
+    soccer: [0.28, 0.31]
+  grasp_creep_lead_s: 0.25         # 멈추라고 해도 더 가는 만큼(속도 x 시간)을 미리 뺀다
+  grasp_settle_s: 0.5              # 앞뒤로 움직인 뒤 이만큼 서서 다시 잰다
+  grasp_zone_hysteresis_m: 0.05
+  # 파지 전 정면 맞추기 · 실패 시 다시 보고 재시도 (2026-09-30: 18°·30° 어긋난 채 파지해 둘 다 실패)
+  grasp_face_tol_deg: 6.0
+  grasp_retry_max: 1
+  grasp_retry_settle_s: 2.5        # 10-05: 밀린 공을 옛 위치로 다시 잡았다 -> 지도가 새 위치를 잡을 때까지 선다
+  target_track_m: 0.10
+  place_trigger_dist_m: 0.35
+  # 상자 앞면에서 정차점(마커)까지. 2026-09-30 저녁: 0.15 -> 0.22. 정차점에서 제자리 회전해도
+  # 차체 모서리(반대각 0.16)가 상자에 닿지 않는 거리다 — 진입점 경유와 상자 앞 후진을 뺐다.
+  # 차체 앞은 상자에서 9 cm, 정차점 = (0.990, 1.260), planner.box_keepout_front_m 경계와 같다.
+  box_approach_margin_m: 0.22
+  # 바구니 투입 목표. 상자는 yaw180 = 입구가 작업구역 쪽이다. 목표는 상자 중심이 아니라
+  # 입구 안쪽의 작은 사각형이다(x[0.960,1.020] y[1.480,1.510], 중심 0.990,1.495).
+  insert_half_width_m: 0.03
+  insert_inset_depth_m: 0.03
+  # 차는 상자 정면(dest_xy)에 서기만 한다. 투입 방향은 **팔의 base 가** 맞춘다 —
+  # 남는 좌우 각도를 Host 가 재서 HostCommand.arm_yaw_deg 로 보낸다.
+  # idle 자세 마커에서 투하 지점까지. ⚠️ 마커가 팔에 붙어 있어 기준 자세가 중요하다.
+  # 2026-09-23 실측: 마커(idle) -> 차체 앞 0.13 + 차체 앞 -> 턱 0.19 = 0.32
+  arm_reach_m: 0.32
+  place_arrive_tol_m: 0.04      # 덜 붙어도 되는 한도 — 그래도 턱이 테두리를 6 cm 넘는다
+  place_min_gap_m: 0.05         # 더 붙어도 되는 한도 — 그래도 제자리 회전이 상자에 안 닿는다
+  place_aim_margin_m: 0.04      # 판정 목표보다 이만큼 더 안쪽을 겨눈다(허용치보다 커야 한다)
+  max_arm_yaw_deg: 15.0         # Pi 의 place.max_base_yaw_deg 와 같은 값. 밖이면 차체를 돌린다
+  place_turn_to_deg: 12.0       # 차체를 돌리게 되면 이 안까지만 돈다(나머지는 팔). 정면까진 안 맞춘다
+  carry_line_block_s: 5.0       # 10-07: 정차점 근처에서 직선이 5 s 계속 막히면 HALTED("정차점 옆 OO 치워 주세요")
+  # 바구니 정차 구역(10-07): y 는 정차점 그대로, x 는 가운데 ±8 cm 안에서 차체가 기물에 안 닿는 가장 가운데 자리.
+  # 입구 21 cm · 팔 끝 ±15° = ±8 cm 라 좌우로 비켜 서도 입구 안에 넣는다. 겨누는 점도 최대 6 cm 같이 옮긴다.
+  basket_stop_zone_half_m: 0.10    # 10-07 오후 0.08 -> 0.10(입구 반폭 10.5) — "조금 더 러프하게"
+  # 자리 검사는 실제로 서는 방식대로(10-07 실기: 0.95 를 골랐는데 0.964 · 79° 로 서서 나이트와 1.2 cm):
+  basket_stop_turn_deg: 15.0       # 팔이 ±15° 를 메우니 몸은 그만큼 틀어진 채 선다
+  basket_stop_pos_err_m: 0.02      # 정차 위치 좌우 오차
+  basket_stop_clear_m: 0.015       # 차체 바깥면–기물 가장자리 1.5 cm 이상이면 설 수 있다
+  # 10-07: 옆에서 비스듬히(61°) 들어가 정차점에서 30° 돌아야 했고 나이트에 붙었다 → 아래에서 똑바로 들어간다.
+  basket_low_margin_m: 0.12        # 정차점보다 12 cm 넘게 아래에서 잡았으면 "아래에서 들어가기"
+  basket_approach_cone_deg: 15.0   # 정차점까지 방향이 정면 ±15° 안일 때만 곧장 들어간다
+  basket_pre_stop_m: 0.30          # 아니면 먼저 정차점 바로 아래 30 cm 지점으로(이미 그보다 위면 지금 높이에서 옆으로)
+  # 10-07 6기물: 상자를 넣고 공으로 떠나며 "앞으로 빠져나가기"가 바구니 쪽으로 10.7 cm 돌진(앞면이 바구니 1 cm 넘음).
+  basket_near_m: 0.35              # 바구니 사각형에서 이 안이면 앞으로 나가기보다 반대 방향 회전을 먼저
+  basket_front_clear_m: 0.02       # 앞으로 빠져나가기는 바구니 앞면 2 cm 안으로 나가지 않는다
+  # 10-08 6기물: 정차점 옆 8~9 cm 에서 정차점까지 185° · 203° 돌고 다시 46° · 57°, 퀸은 5 cm 안이라 바구니 반대로 6 cm 직진.
+  # 정차점 12 cm 안이고 겨누는 점으로 가는 선이 입구를 벽에서 2 cm 안쪽으로 지나면, 그 선을 보고 서서 곧장 붙는다.
+  place_here_max_m: 0.12
+  # 10-08 사용자: 정해 둔 정차점이 아니라 가장 가까운 정차 지역으로 — 구역(가운데 ±10 cm)에서 로봇에 가장 가까운 자리.
+  basket_stop_free_bonus_m: 0.04   # 떠날 때 어느 쪽으로든 돌 수 있는 자리는 4 cm 더 가깝게 친다(10-07 나이트)
+  # 10-08 사용자: 정차점까지 직선으로 가고 도착해서 yaw 만 맞추면 안 되나 — 직선·도착 회전이 비면 1.6 m 안에서는 곧장 간다.
+  place_direct_max_m: 1.6
+  place_here_gap_m: 0.01           # 정차점 거리 + 1 cm 까지 붙는다
+  place_here_max_gap_m: 0.10       # 정차점보다 10 cm 넘게 멀면 정차점으로 간다
+  basket_rim_margin_m: 0.02        # 오늘 2.4 · 2.6 cm 에서 넣은 것은 잘 들어갔다(별 확인)
+  place_lateral_tol_m: 0.08        # 정차점에서 옆으로 8 cm 안이어야 도착(10-07 별: 13 cm 옆에서 넣었다).
+                                   # 10-08 상자: 6.5 cm 옆에서 잡아 6 cm 에 걸려 정차점까지 +120° 돌고 5 cm 간 뒤 +83° — 6 -> 8
+  basket_stop_zone_retry_s: 3.0    # 10-07: 잡은 순간 지도로 막혀 HALTED — 운반을 이으며 3 s 다시 보고 그래도 없으면 멈춘다
+  basket_stop_step_m: 0.02
+  basket_aim_shift_max_m: 0.06
+  place_arm_only_max_short_deg: 10.0   # 10-07: 몸을 돌리면 바구니 옆 기물에 닿으면 팔로만 — 모자란 각이 이 이하일 때(10° = 끝에서 ~5.6 cm)
+  nudge_max_m: 0.40             # 이만큼 밀고도 정면에 못 서면 재접근
+  nudge_timeout_s: 25.0         # 상자 앞에서 이만큼 맴돌면 운반 단계로 돌아가 재접근
+  piece_dest_box:                  # 상자가 하나라 전부 같은 곳으로 간다
+    queen: basket
+    knight: basket
+    rook: basket
+    star: basket
+    soccer: basket
+    box: basket
+  skip_radius_m: 0.10
+  skip_expiry_s: 90.0
+  place_retry_max: 2
+  grasp_timeout_s: 120.0
+  place_timeout_s: 60.0
+  blocked_timeout_s: 10.0          # 길이 없어 서 있으면: APPROACH=보류, CARRY=HALTED
+  # 차체 무응답 자동 복구: 움직이라고 1.5 s 보냈는데 1 cm · 2° 도 안 움직이면 Pi 에 컨트롤러
+  # 재기동을 요청한다(보드가 쓰기를 조용히 무시하는 고장, 09-23·09-30). 연달아 2번이면 HALTED.
+  base_stall_s: 1.5
+  base_stall_move_m: 0.01
+  base_stall_turn_deg: 2.0
+  base_recover_timeout_s: 45.0
+  base_recover_max: 2
+  # 차체 폭주 감지: 직진을 멈춘 지 1 s 지났는데 0.5 s 동안 5 cm 넘게 움직이면 같은 복구(보드 리셋).
+  # 09-30: 상자 앞에서 회전만 보냈는데 1 m 를 달려 장판 밖으로 나갔고 정지 명령도 먹지 않았다.
+  base_runaway_move_m: 0.05
+  base_runaway_window_s: 0.5
+  base_runaway_grace_s: 1.0
+  # 회전 폭주 감지: 회전 명령이 바뀐 지 1 s 뒤, 1 s 동안 돌라고 안 했는데(또는 반대로) 6° 넘게 돌면 같은 복구.
+  # 10-05: 제자리에서 반시계 ~8°/s 로 굳어 yaw-/yaw+·ESTOP 을 모두 무시했다(위치 감지로는 못 잡음).
+  base_spin_turn_deg: 6.0
+  base_spin_window_s: 1.0
+  base_spin_grace_s: 1.0
+
+link:
+  bind_ip: 0.0.0.0
+  command_port: 5005
+  status_port: 5006
+  stop_burst: 8
+
+handover:
+  # "가져와" 지시 — 집은 기물을 사람 손에 건넨다. 보이는 손에서 가장 가까운 위치를 고르고, 그 정차점에 가서
+  # 손 쪽을 본 뒤(남는 각도는 팔 base, ±15°) Pi 에 PLACE(place_pose=handover)를 보낸다. Pi 는 ㄱ자 자세에서 연다.
+  # 이름: [손 x, 손 y, 정차 x, 정차 y] (m). 정차점 = 손에서 팔 길이(0.32)+여유만큼 장판 안쪽.
+  # 앞(F)은 주행 구역(y 0.25~) 안쪽으로 물렸다. ⚠️ handover 자세를 잰 뒤 실제 그리퍼 끝 위치로 다시 맞출 것.
+  spots:
+    F1: [0.33, 0.12, 0.33, 0.47]
+    F2: [0.99, 0.12, 0.99, 0.47]
+    F3: [1.65, 0.12, 1.65, 0.47]
+    L1: [0.075, 0.26, 0.43, 0.40]
+    L2: [0.075, 0.915, 0.43, 0.915]
+    L3: [0.075, 1.56, 0.43, 1.45]
+    R1: [1.905, 0.26, 1.55, 0.40]
+    R2: [1.905, 0.915, 1.55, 0.915]
+    R3: [1.905, 1.56, 1.55, 1.45]
+  match_radius_m: 0.40             # 보이는 손을 이 거리 안의 위치로 본다
+  hand_wait_s: 20.0                # 정차점에서 손이 안 보이면 이만큼 기다린 뒤 바구니로
+  arrive_tol_m: 0.08
+
+voice:
+  # 시연 UI 마이크 버튼 = 노트북 내장 마이크 -> faster-whisper(오프라인) -> 들은 문장 확인 -> 전송 -> Claude 해석.
+  # 모델: models/whisper-small (464 MB, 저장소 밖) — 받기: python tools/try_voice.py --download
+  enabled: true
+  model_dir: models/whisper-small
+  language: ko
+  threads: 8                       # 한 문장 ~2.6 s (10-01 노트북, 한국어 합성 음성 6문장)
+  beam_size: 1
+  prompt: "퀸, 룩, 나이트, 별, 축구공, 공, 상자, 바구니, 체스 말, 가져와, 정리해, 넣어줘, 치워줘"
+  calib_s: 0.3                     # 마이크를 연 직후 이만큼 주변 소음을 잰다
+  speech_ratio: 3.0
+  min_rms: 0.01
+  silence_s: 0.9                   # 말이 끝나고 이만큼 조용하면 자동으로 멈춘다
+  no_speech_s: 5.0
+  max_s: 8.0
+
+instruction:
+  # 사람 지시 -> Claude(claude-opus-5-5)가 대상 라벨·개수·의도(정리/가져오기)로 해석. 시연 UI 입력창으로 받는다.
+  # 키는 ANTHROPIC_API_KEY 환경변수(사용자 환경변수로 한 번 등록) — 여기·저장소에 두지 않는다.
+  # mode: auto = 지금처럼 보이는 기물을 모두 정리하되 지시가 오면 그것부터 · instructed = 지시가 있을 때만 움직인다
+  mode: auto
+  model: claude-opus-5-5
+  effort: low                      # 분류 한 번 — 깊게 생각할 일이 아니다
+  timeout_s: 20.0
+
+view:
+  # web: 팀원 시연 UI(ui/grippers-ui.html)를 크롬/엣지 앱 창으로 — run_host 가 127.0.0.1:web_port 로 상태를 준다.
+  # cv : 예전 OpenCV 지도 창(디버그용). 명령줄 --view 로 바꿀 수 있다.
+  kind: web
+  web_port: 8765
+  window_height: 0                 # 0 = 화면(작업 표시줄 제외)에 맞춤. 125 % 배율 노트북에서 860 이 넘쳐 잘렸다(10-05)
+  # 디버그 패널(d) 배터리 칸. Pi 가 보내는 전압(V)을 [0 %, 100 %] 구간으로 바꿔 막대로, 글자는 전압 그대로.
+  veh_v_range: [6.8, 8.4]          # 차체 2S — 완충 8.4 (10-01 실측 8.44 -> 한 판 뒤 8.06)
+  arm_v_range: [10.5, 12.6]        # 팔 서보 전원 — arm.min_voltage_v 10.5 가 0 %
+  veh_low_v: 7.2                   # 이 아래면 "충전" 알림
+  px_per_m: 350.0                  # cv 전용
+  panel_width_px: 380              # cv 전용
