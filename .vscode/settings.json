@@ -27,8 +27,8 @@
   // pyproject.toml의 line-length = 100 과 맞춤
   "editor.rulers": [100],
 
-  // domain/ 을 import 경로로 인식 (테스트·자동완성용)
-  "python.analysis.extraPaths": ["."],
+  // legacy/domain 을 `import domain` 으로 인식 (테스트·자동완성용)
+  "python.analysis.extraPaths": ["legacy"],
 
   // 벤더 코드는 검색·탐색에서 제외해 작업 시야를 좁힘
   // (파일이 사라지는 게 아니라 검색 결과에서만 빠집니다)

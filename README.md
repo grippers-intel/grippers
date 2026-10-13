@@ -10,6 +10,11 @@
 
 ---
 
+> [!NOTE]
+> **저장소 정리 중 (2026-10-13)** — 실제로 동작하는 최종 시스템은 **[`vla_robot/`](vla_robot/)** 입니다
+> (한 장 요약: [`vla_robot/docs/handover.md`](vla_robot/docs/handover.md)). 아래 내용과 `docs/` 는 8월 초기 설계 기준이며,
+> 그 코드(`domain/` · `tests/` · `grippers_*` · `tools/`)는 [`legacy/`](legacy/) 로 옮겼습니다. 이 README 는 곧 최종 시스템 기준으로 다시 씁니다.
+
 > [!IMPORTANT]
 > **주제 변경 (8/12)** — *무인 멸균 암실 장물 반출* → *바닥 물건 정리 + 요청 배달*.
 > 하드웨어·아키텍처는 유지, 미션 시나리오와 FSM 구조가 바뀌었습니다.

@@ -44,9 +44,9 @@ jobs:
       - name: black --check
         run: black --check .
 
-  # ── 하드웨어 불필요 unittest: domain/ + Fake 어댑터 기반 전체 미션 파이프라인 ──
+  # ── 초기 설계(legacy/) 시험: domain/ + Fake 어댑터 기반 미션 파이프라인 — 하드웨어 불필요 ──
   test:
-    name: Unit tests (Fake adapters)
+    name: Legacy unit tests (domain, Fake adapters)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -63,12 +63,12 @@ jobs:
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
           pip install pytest pytest-cov
 
-      # domain/, ports/, adapters/fake는 ROS2·하드웨어 의존성이 없는 순수 Python이라
-      # 패키징(pyproject) 없이도 PYTHONPATH만 잡아주면 바로 import 가능합니다.
-      - name: Run domain / Fake-adapter test suite
+      # legacy/domain 은 ROS2·하드웨어 의존성이 없는 순수 Python이라
+      # PYTHONPATH 에 legacy/ 만 잡아주면 `import domain` 으로 바로 쓸 수 있습니다.
+      - name: Run legacy domain / Fake-adapter test suite
         env:
-          PYTHONPATH: ${{ github.workspace }}
-        run: pytest tests/ -v --cov=domain --cov-report=term-missing --cov-report=xml
+          PYTHONPATH: ${{ github.workspace }}/legacy
+        run: pytest legacy/tests/ -v --cov=domain --cov-report=term-missing --cov-report=xml
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4

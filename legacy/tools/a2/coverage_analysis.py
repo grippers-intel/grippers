@@ -72,7 +72,7 @@ COVER_START_MM = 256.0  # 담당 구역이 시작하는 y. blind_band(1650, 950)
 # 통과 조건으로 삼는 꼴이 되고 좌우 설치 오차를 1 mm 도 못 받는다.
 CORNER_OLD = (2050.0, 1400.0)  # 8/19 오전에 검토했다가 폐기한 모서리 배치
 TALLER = (1900.0, 900.0)  # 더 높은 거치가 가능할 때의 대안 (#149 D3)
-OUT = Path(__file__).resolve().parents[2] / "docs" / "assets" / "vision"
+OUT = Path(__file__).resolve().parents[3] / "docs" / "assets" / "vision"
 
 
 def _rig(h: float, s: float, pitch_deg: float, layout: str):

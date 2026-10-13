@@ -285,9 +285,9 @@ Pi 5 에서는 **공식 5 V/5 A 어댑터일 때만** USB 주변장치에 1.6 A 
 
 | 그림 | 무엇을 보이는가 |
 |---|---|
-| ![배치 전수 탐색](../../docs/assets/vision/fig1_placement_sweep.png) | 30 mm 는 어느 배치에서도 20 px 에 못 닿는다 — FOV 를 만족하는 **2547 조합** 중 최대 17.7 px. 주황 점선이 가벽 가림 띠다 |
-| ![물체 크기](../../docs/assets/vision/fig2_object_size.png) | 확정 배치에서 물체 폭 37 mm 가 검출 하한과 만나는 지점 (확정 규격은 40 mm) |
-| ![배치 비교](../../docs/assets/vision/fig3_layout_compare.png) | 모서리 배치와 변 중앙 배치의 차이 |
+| ![배치 전수 탐색](../../../docs/assets/vision/fig1_placement_sweep.png) | 30 mm 는 어느 배치에서도 20 px 에 못 닿는다 — FOV 를 만족하는 **2547 조합** 중 최대 17.7 px. 주황 점선이 가벽 가림 띠다 |
+| ![물체 크기](../../../docs/assets/vision/fig2_object_size.png) | 확정 배치에서 물체 폭 37 mm 가 검출 하한과 만나는 지점 (확정 규격은 40 mm) |
+| ![배치 비교](../../../docs/assets/vision/fig3_layout_compare.png) | 모서리 배치와 변 중앙 배치의 차이 |
 
 읽는 법 셋을 짚어 둔다.
 
