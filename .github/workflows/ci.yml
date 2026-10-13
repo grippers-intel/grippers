@@ -2,6 +2,12 @@ name: CI
 
 # README "Testing": 매 push마다 lint + unittest + Fake 어댑터 기반 전체 미션 파이프라인 실행
 # README "Contributing > 품질": PR마다 lint + unittest 자동 실행
+#
+# 2026-10-13 정리:
+#   - 도구 버전을 고정한다. 최신을 받으면 코드를 안 바꿔도 새 규칙·포맷으로 어느 날 빨간불이 된다.
+#   - lint 와 test 를 따로 돌린다. 줄 길이 하나로 테스트 결과까지 안 보이던 것을 막는다.
+#   - vla_robot(하위 프로젝트)이 있는 브랜치는 그 시험도 돌린다 — Host(Python 3.11)와 Pi 노드 쪽(ROS 2 Humble 의 3.10).
+#     ruff 는 vla_robot/ruff.toml 을 따르고, black 은 루트 pyproject 에서 vla_robot 을 뺀다.
 on:
   push:
     branches: ["**"]
@@ -11,6 +17,10 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  RUFF_VERSION: "0.17.0"
+  BLACK_VERSION: "26.10.1"
 
 jobs:
   # ── 정적분석 (ruff) + 포맷 검사 (black) ───────────────────────────────
@@ -26,7 +36,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install lint tools
-        run: pip install ruff black
+        run: pip install "ruff==${RUFF_VERSION}" "black==${BLACK_VERSION}"
 
       - name: ruff check
         run: ruff check .
@@ -38,7 +48,6 @@ jobs:
   test:
     name: Unit tests (Fake adapters)
     runs-on: ubuntu-24.04
-    needs: lint
     steps:
       - uses: actions/checkout@v4
 
@@ -67,3 +76,62 @@ jobs:
           name: coverage-xml
           path: coverage.xml
           retention-days: 14
+
+  # ── vla_robot Host(노트북) 시험: 카메라·로봇 없이 시뮬·단위 시험 ──────────
+  vla-robot-host:
+    name: vla_robot Host tests (Python 3.11)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for vla_robot
+        id: has
+        run: echo "found=$([ -f vla_robot/host/requirements.txt ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.11
+        if: steps.has.outputs.found == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # requirements.txt 중 시험에 필요한 것만(검출 SDK·mediapipe·마이크 장치는 시험이 쓰지 않는다).
+      - name: Install dependencies
+        if: steps.has.outputs.found == 'true'
+        run: |
+          pip install --upgrade pip
+          pip install numpy opencv-contrib-python-headless pyyaml pytest \
+            anthropic==1.11.0 faster-whisper==1.2.1 \
+            -e vla_robot/ros2_ws/src/vla_common
+
+      - name: pytest (host)
+        if: steps.has.outputs.found == 'true'
+        working-directory: vla_robot/host
+        run: pytest -q
+
+  # ── vla_robot Pi 노드 쪽 순수 Python 시험(ROS 없이) ─────────────────────
+  vla-robot-pi:
+    name: vla_robot Pi-side tests (Python 3.10)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for vla_robot
+        id: has
+        run: echo "found=$([ -d vla_robot/ros2_ws/src/vla_common ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.10
+        if: steps.has.outputs.found == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        if: steps.has.outputs.found == 'true'
+        run: pip install numpy opencv-python-headless pyyaml pytest
+
+      - name: pytest (vla_common + base recovery)
+        if: steps.has.outputs.found == 'true'
+        working-directory: vla_robot/ros2_ws/src
+        env:
+          PYTHONPATH: vla_common:vla_robot_mission
+        run: pytest -q vla_common/test vla_robot_mission/test/test_base_recovery.py
