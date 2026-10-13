@@ -43,7 +43,7 @@ def main() -> int:
         if raw is None:
             print("위치 읽기 실패")
             return 2
-        bus.write_goal_positions(dict(zip(SERVO_IDS, raw)))
+        bus.write_goal_positions(dict(zip(SERVO_IDS, raw, strict=True)))
         bus.set_torque(free, False)
 
         stop = threading.Event()
@@ -55,7 +55,7 @@ def main() -> int:
                 if r is not None:
                     latest["raw"] = r
                     pol = calib.raw_to_policy(r)
-                    line = " ".join(f"{n[:6]}={v:+6.1f}" for n, v in zip(JOINT_NAMES, pol))
+                    line = " ".join(f"{n[:6]}={v:+6.1f}" for n, v in zip(JOINT_NAMES, pol, strict=True))
                     print("\r" + line + "   ", end="", flush=True)
                 time.sleep(0.2)
 
@@ -69,7 +69,7 @@ def main() -> int:
         raw = bus.read_positions(SERVO_IDS) or latest.get("raw")
         # 저장 여부와 무관하게 현재 자세에서 토크를 다시 켠다.
         if raw is not None:
-            bus.write_goal_positions(dict(zip(SERVO_IDS, raw)))
+            bus.write_goal_positions(dict(zip(SERVO_IDS, raw, strict=True)))
         bus.set_torque(SERVO_IDS, True)
         if answer.strip().lower() == "q" or raw is None:
             print("저장하지 않았다. 토크는 다시 켰다.")

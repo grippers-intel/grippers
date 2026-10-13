@@ -864,7 +864,8 @@ class MissionFSM:
                 return self._step_place(pi_status)
             return self._stop(f"at box (arm {residual:+.1f}도)")
         if gap < -m.place_min_gap_m and dist <= m.place_trigger_dist_m:
-            # 정차점을 크게 지나쳤다(드문 경우). 멀리서 곧장 오는 중(place_direct_max_m)이면 해당 없다. 여기서 돌면 차체가 상자에 닿고, 시퀀서는 뒤에 있는
+            # 정차점을 크게 지나쳤다(드문 경우). 멀리서 곧장 오는 중(place_direct_max_m)이면 해당 없다.
+            # 여기서 돌면 차체가 상자에 닿고, 시퀀서는 뒤에 있는
             # 정차점을 보려고 180° 돌려 한다 — 돌지 않고 상자에서 곧장 물러난다.
             return self._back_away_from_box(pose, "overshoot — back off")
         if along and abs(residual) <= limit:
@@ -936,7 +937,8 @@ class MissionFSM:
         enter = None
         if dist > 1e-6 and all(segment_circle_clearance(pose.xy, ahead, o)[0] >= self._planner.turn_safe for o in others):
             c = self.cfg.planner
-            enter = 90.0 if dist < c.no_turn_near_m else                 max(c.yaw_enter_deg, math.degrees(math.asin(min(1.0, m.place_lateral_tol_m / dist))))
+            enter = 90.0 if dist < c.no_turn_near_m else max(
+                c.yaw_enter_deg, math.degrees(math.asin(min(1.0, m.place_lateral_tol_m / dist))))
         # 길게 곧장 갈 때는 출발 방향을 좁게(2.5°) 맞춘다 — 5° 로 1 m 가면 옆 8.7 cm 라 가는 중에 다시 서서 맞췄다(10-08 시뮬).
         c = self.cfg.planner
         tol = c.narrow_yaw_tolerance_deg if dist > self.LONG_RUN_M else None
@@ -1472,7 +1474,7 @@ class MissionFSM:
                 return pt
             y += 0.025
         if not quiet:
-            self._log(f"pre-stop: 정차점 아래에 기물 없는 점이 없다 — 정차점으로 바로 간다")
+            self._log("pre-stop: 정차점 아래에 기물 없는 점이 없다 — 정차점으로 바로 간다")
         return None
 
     def _approach_turn_sweeps(self, pose: Pose) -> bool:

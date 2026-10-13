@@ -91,7 +91,7 @@ def main() -> int:
                 yaws.append(pose.yaw_deg)
                 cams_seen.append(pose.n_cams)
             if args.show:
-                for cam, f, d in zip(cams, frames, dets):
+                for cam, f, d in zip(cams, frames, dets, strict=True):
                     if f is not None:
                         cv2.imshow(cam.name, draw_overlay(f, cam, d, pose,
                                                           cfg.aruco.robot_marker_id))

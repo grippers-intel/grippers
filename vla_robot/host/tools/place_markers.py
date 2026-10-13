@@ -178,7 +178,7 @@ def main() -> int:
             pose = loc.update(cams, dets)
 
             cv2.imshow("STATUS", status_panel(cfg, cams, dets, pose))
-            for cam, f, d in zip(cams, frames, dets):
+            for cam, f, d in zip(cams, frames, dets, strict=True):
                 if f is not None:
                     cv2.imshow(cam.name, draw_view(f, cam, d, cfg.aruco.robot_marker_id))
             if (cv2.waitKey(1) & 0xFF) == ord("q"):

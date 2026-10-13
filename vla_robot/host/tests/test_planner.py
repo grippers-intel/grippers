@@ -25,7 +25,7 @@ def test_detours_around_obstacle_with_clearance(cfg):
     assert blocked == "piece"
     path = p.last_path
     assert len(path) > 2
-    for a, b in zip(path, path[1:]):
+    for a, b in zip(path, path[1:], strict=False):
         assert segment_circle_clearance(a, b, obstacle)[0] >= p.safe - 1e-6
 
 
@@ -111,7 +111,7 @@ def test_corners_keep_the_turning_clearance(cfg):
     path = p.last_path
     assert len(path) > 2, "이 배치는 돌아가야 한다"
     assert not p._turn_conflicts(path, obstacles, robot, target)
-    for a, b in zip(path, path[1:]):
+    for a, b in zip(path, path[1:], strict=False):
         for o in obstacles:
             assert segment_circle_clearance(a, b, o)[0] >= p.safe - 1e-6
 
@@ -142,7 +142,7 @@ def test_path_goes_around_the_box(cfg):
     assert blocked != "blocked"
     path = p.last_path
     assert len(path) > 2
-    for a, b in zip(path, path[1:]):
+    for a, b in zip(path, path[1:], strict=False):
         assert not segment_hits_rect(a, b, rect)
 
 
@@ -151,7 +151,7 @@ def test_stop_point_is_reachable_from_the_front(cfg):
     rect = _keepout(p)
     _sub, _corner, blocked = p.update((0.990, 0.60), (0.990, rect[2]), [])
     assert blocked is None
-    for a, b in zip(p.last_path, p.last_path[1:]):
+    for a, b in zip(p.last_path, p.last_path[1:], strict=False):
         assert not segment_hits_rect(a, b, rect)
 
 
@@ -172,7 +172,7 @@ def test_path_never_cuts_through_a_piece_the_robot_is_already_close_to(cfg):
     robot = (1.00, 0.72)                   # 13 cm — safe(0.16) 안
     _sub, _corner, blocked = p.update(robot, (1.00, 1.20), [piece])
     assert blocked != "blocked"
-    for a, b in zip(p.last_path, p.last_path[1:]):
+    for a, b in zip(p.last_path, p.last_path[1:], strict=False):
         d, _t = segment_circle_clearance(a, b, piece)
         assert d >= math.dist(robot, piece) - p.ESCAPE_SLACK_M - 1e-6, "기물 쪽으로 더 파고들면 안 된다"
 

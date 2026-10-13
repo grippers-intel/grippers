@@ -142,7 +142,7 @@ def run_static(cfg, eyes: Eyes, facing: str, seconds: float) -> int:
     else:
         print("다른 축으로도 재서 같은 방향·같은 크기인지 확인하십시오.")
         print("한 축만으로는 놓기 오차와 실제 어긋남을 구분할 수 없습니다.")
-        print(f"\n두 축이 일치하면 host.yaml 의 aruco: 블록을 이렇게 고치십시오")
+        print("\n두 축이 일치하면 host.yaml 의 aruco: 블록을 이렇게 고치십시오")
         print(f"    yaw_offset_deg: {new:.1f}      # 지금 {cfg.aruco.yaw_offset_deg}")
     return 0
 
@@ -215,7 +215,7 @@ def run_drive(cfg, eyes: Eyes, pi_ip: str, runs: int, distance: float, speed: fl
     if abs(mean) < NEGLIGIBLE_DEG:
         print("\n치우침이 작습니다 — 고칠 필요 없습니다.")
     else:
-        print(f"\nhost.yaml 의 aruco: 블록을 이렇게 고치십시오")
+        print("\nhost.yaml 의 aruco: 블록을 이렇게 고치십시오")
         print(f"    yaw_offset_deg: {new:.1f}      # 지금 {cfg.aruco.yaw_offset_deg}")
     return 0
 

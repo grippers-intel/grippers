@@ -468,7 +468,7 @@ def test_carry_still_avoids_other_pieces_next_to_the_robot(cfg):
     path = fsm.nav_path
     assert path is not None
     from planning.planner import segment_circle_clearance
-    for a, b in zip(path, path[1:]):
+    for a, b in zip(path, path[1:], strict=False):
         assert segment_circle_clearance(a, b, (1.00, 0.92))[0] >= fsm._planner.safe - 1e-6
 
 

@@ -7,7 +7,9 @@
 운반(CARRY+NUDGE)마다 움직임 모양(R = 제자리 회전, F = 직진)과 돈 각도. 바구니 접근 "한 모양"은 RFR · RF · R 이다.
 시뮬은 회전 뒤 직진 시작 때 7.5° 더 도는 실차 특성(base_trace)을 흉내 낸다 — 기물을 밀지는 않는다(간격만 잰다).
 """
-import math, random, sys
+import math
+import random
+import sys
 from collections import defaultdict
 sys.path[:0] = [str(__import__("pathlib").Path(__file__).resolve().parents[1])]
 from host_config import load_host_config
@@ -93,7 +95,8 @@ def run(pieces, seed, max_s=600.0):
     done = len([p for p in world.pieces if p.in_box])
     return {"done": done, "n": len(labels), "t": clock.t, "halts": halts,
             "min_gap": dict(min_gap), "carries": carries,
-            "notes": sorted(e for e in seen if any(k in e for k in ("skip", "HALT", "missed", "approach again", "FAILED", "폭주", "turn other way", "빠듯")))}
+            "notes": sorted(e for e in seen if any(k in e for k in (
+                "skip", "HALT", "missed", "approach again", "FAILED", "폭주", "turn other way", "빠듯")))}
 
 
 def show(name, r):

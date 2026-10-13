@@ -17,7 +17,7 @@ def test_mid_is_zero_degrees(calib):
     raw = [int(j.mid) for j in calib.joints]
     raw[5] = calib.joints[5].range_min
     pol = calib.raw_to_policy(raw)
-    for j, v in zip(calib.joints[:5], pol[:5]):
+    for v in pol[:5]:
         assert abs(v) < 360.0 / 4095 * 1.0  # int(mid) 절삭 오차 1틱 이내
     assert pol[5] == pytest.approx(0.0)
 
@@ -39,7 +39,7 @@ def test_degrees_are_not_clamped(calib):
 def test_roundtrip_within_one_tick(calib):
     raw = [2008, 900, 3024, 2868, 2047, 2100]
     back = calib.policy_to_raw(calib.raw_to_policy(raw))
-    for a, b in zip(raw, back):
+    for a, b in zip(raw, back, strict=True):
         assert abs(a - b) <= 1
 
 

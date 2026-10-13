@@ -104,7 +104,7 @@ def to_map(cam: Camera, px: np.ndarray, z: float):
 
 
 def draw(frame: np.ndarray, hands: list[HandSighting], labels: list[str], color) -> None:
-    for hd, label in zip(hands, labels):
+    for hd, label in zip(hands, labels, strict=True):
         pts = hd.pts.astype(int)
         for a, b in CONNECTIONS:
             cv2.line(frame, tuple(pts[a]), tuple(pts[b]), color, 2)
@@ -191,7 +191,7 @@ def run_live(args, cfg, landmarker) -> int:
     print(f"모드 {mode} · 조각 {args.tile}px · 손 높이 {args.hand_z} m — q 종료, m 으로 full/tile 전환")
     try:
         while True:
-            for cam, frame in zip(cams, read_frames(caps)):
+            for cam, frame in zip(cams, read_frames(caps), strict=True):
                 if frame is None:
                     continue
                 if not cam.locked:

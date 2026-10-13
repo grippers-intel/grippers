@@ -17,7 +17,6 @@ OpenCV 창에 포커스를 두고 조작한다(추가 의존성 없이 Windows/m
 from __future__ import annotations
 
 import argparse
-import socket
 import sys
 import time
 from pathlib import Path

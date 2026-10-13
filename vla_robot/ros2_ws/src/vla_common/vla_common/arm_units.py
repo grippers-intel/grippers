@@ -134,7 +134,7 @@ class ArmCalibration:
         if len(raw6) != NUM_JOINTS:
             raise ValueError(f"raw 는 6개여야 한다: {len(raw6)}")
         out = []
-        for j, raw in zip(self.joints, raw6):
+        for j, raw in zip(self.joints, raw6, strict=True):
             raw = float(raw)
             if j.is_gripper:
                 bounded = min(j.range_max, max(j.range_min, raw))
@@ -148,7 +148,7 @@ class ArmCalibration:
         if len(values6) != NUM_JOINTS:
             raise ValueError(f"값은 6개여야 한다: {len(values6)}")
         out = []
-        for j, value in zip(self.joints, values6):
+        for j, value in zip(self.joints, values6, strict=True):
             value = float(value)
             if j.is_gripper:
                 if j.drive_mode:

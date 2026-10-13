@@ -46,7 +46,7 @@ def _coerce(tp, value, key: str):
             return tuple(_coerce(args[0], v, f"{key}[{i}]") for i, v in enumerate(value))
         if len(args) != len(value):
             raise ConfigError(f"{key}: 항목 {len(args)}개가 필요하다 ({len(value)}개)")
-        return tuple(_coerce(a, v, f"{key}[{i}]") for i, (a, v) in enumerate(zip(args, value)))
+        return tuple(_coerce(a, v, f"{key}[{i}]") for i, (a, v) in enumerate(zip(args, value, strict=True)))
     if origin is dict:
         k_tp, v_tp = typing.get_args(tp)
         if not isinstance(value, dict):

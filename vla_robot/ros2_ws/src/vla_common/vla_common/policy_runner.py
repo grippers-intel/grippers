@@ -64,7 +64,7 @@ def _load_config_tolerant(checkpoint: str):
         try:
             choice = PreTrainedConfig.get_choice_class(raw["type"])
         except Exception:  # noqa: BLE001
-            raise first_error
+            raise first_error from None
         allowed = {f.name for f in dataclasses.fields(choice)} | {"type"}
         dropped = sorted(set(raw) - allowed)
         if not dropped:
