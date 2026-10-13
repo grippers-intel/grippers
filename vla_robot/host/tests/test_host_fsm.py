@@ -689,3 +689,14 @@ def test_tie_message_is_logged_once(cfg):
 
 def _d(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def test_piece_handed_to_a_person_is_left_off_the_map_for_a_while(cfg):
+    """10-13: 건넨 나이트가 사람 손에서 두 개로 보였다. 건넨 뒤 HANDED_HOLD_S 동안 손 자리 근처 같은 라벨은 뺀다."""
+    fsm = MissionFSM(cfg)
+    fsm._handed = [("knight", (0.28, 0.82), 100.0)]
+    pmap = {"knight": [(0.37, 0.88), (0.30, 0.95), (1.20, 0.90)], "rook": [(0.30, 0.85)]}
+    out = fsm.filter_handed(pmap, 50.0)
+    assert out["knight"] == [(1.20, 0.90)]                  # 손 근처 두 개는 빠지고 멀리 있는 다른 나이트는 남는다
+    assert out["rook"] == [(0.30, 0.85)]                    # 다른 라벨은 그대로
+    assert fsm.filter_handed(pmap, 101.0) == pmap           # 시간이 지나면 다시 본다(내려놓았으면 기물이다)
