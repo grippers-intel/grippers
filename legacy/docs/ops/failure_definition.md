@@ -207,4 +207,4 @@
 
 ---
 
-[← 운영](README.md) · [← README](../../README.md)
+[← 운영](README.md) · [← README](../../../README.md)

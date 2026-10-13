@@ -137,4 +137,4 @@ MVP 경로는 기하 계산 기반 파지입니다.
 
 ---
 
-[← README](../../README.md) · [Documentation](../README.md#-documentation)
+[← README](../../../README.md) · [Documentation](../README.md#-documentation)

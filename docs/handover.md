@@ -5,11 +5,11 @@
 
 | 문서 | 내용 |
 |---|---|
-| [README](../README.md) | 구성도 · 디렉터리 · 설치 · 캘리브레이션 · 첫 기동 |
+| [README](../vla_robot/README.md) | 구성도 · 디렉터리 · 설치 · 캘리브레이션 · 첫 기동 |
 | [docs/pi_deploy.md](pi_deploy.md) | Pi 배포 · 기동 · **하루 마무리(안전 종료)** · 무응답 대처 · 배터리 측정 |
 | [docs/behavior.md](behavior.md) | 주행·미션 동작과 그것을 정하는 설정 키 |
 | [docs/map_rebuild.md](map_rebuild.md) | 장판·마커를 옮겼을 때 맵 다시 만들기 |
-| [host/README.md](../host/README.md) | Host(노트북) 실행·도구 |
+| [host/README.md](../vla_robot/host/README.md) | Host(노트북) 실행·도구 |
 
 ## 1. 지금 무엇이 되나
 

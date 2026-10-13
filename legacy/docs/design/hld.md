@@ -399,7 +399,7 @@ H_proj(φ) = L·|sin φ| + w·|cos φ| ≤ H_gap − margin
 | [`error_budget.md`](error_budget.md) | 오차 전파 |
 | [`rejected_designs.md`](../ops/rejected_designs.md) | 채택하지 않은 설계 |
 | [`measurements.md`](../ops/measurements.md) | 실측 데이터 |
-| [`purchase_ledger.md`](../ops/purchase_ledger.md) | 구매 장부 |
+| [`purchase_ledger.md`](../../../docs/ops/purchase_ledger.md) | 구매 장부 |
 
 ---
 
