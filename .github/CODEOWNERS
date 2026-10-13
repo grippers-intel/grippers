@@ -2,50 +2,36 @@
 # CODEOWNERS — Grippers
 #
 # 아이디 ↔ 실명 ↔ 역할
-#   @sysy009   이승용   Git Master · VLA-L(Language) · 전체 설계 총괄
-#   @Feroninn  김동혁   Git Slave · VLA-V(Vision) · 발주
-#   @alex7663  임성혁   VLA-A(Action) · 하드웨어 총괄
+#   @sysy009   이승용   Git Master · Action · 전체 설계 총괄
+#   @Feroninn  김동혁   Git Slave · Vision · 발주
+#   @alex7663  임성혁   Language · 하드웨어 총괄
 #   @kica927   조현우   중심잡기 · 코드 수장 · ROS2
 #   @Hease     김희수   Perception · 데이터 · UI/UX
 #
 # 규칙: 위에서 아래로 읽으며 "마지막으로 매칭된 줄"만 적용됨 (누적 아님)
 #      따라서 넓은 경로를 먼저, 구체적인 경로를 나중에 쓴다.
-# 파일명 규약: docs/ 하위 문서는 snake_case(언더스코어)
+# main 규칙이 코드 오너 리뷰를 요구한다 — 여기 오너로 적으면 그 경로를 바꾸는 PR 은 그 사람의 승인이 필요하다.
+# 2026-10-13 저장소 정리: 최종 시스템 vla_robot/ · 초기 설계 legacy/ 기준으로 경로를 다시 맞췄다
+#   (없어진 /domain/ · /ports/ · /adapters/ · /tests/ · /vla/ · /perception/ · /hud/ · /hardware/ 규칙 삭제).
 # ─────────────────────────────────────────────────────────
 
 # 기본 소유자 — 전체 설계 총괄
 *                           @sysy009
 
+# ── 최종 시스템 ─────────────────────────────────────────
+/vla_robot/                 @sysy009
+
 # ── 문서 ────────────────────────────────────────────────
 /docs/                      @sysy009
 /README.md                  @sysy009
 
-# ── 도메인 · 아키텍처 (코드 수장 + 설계 총괄) ─────────────
-/domain/                    @kica927 @sysy009
-/ports/                     @kica927 @sysy009
-/adapters/                  @kica927
+# ── 초기 설계 기록(고치지 않음) — 원래 domain · ROS2 오너 ──
+/legacy/                    @sysy009 @kica927
 
-# ── ROS2 · 주행 · 중심잡기 ──────────────────────────────
+# ── MentorPi 제조사 ROS2 패키지 ─────────────────────────
 /ros2_ws/                   @kica927
-/tests/                     @kica927
-
-# ── VLA (V/L/A 3인) ────────────────────────────────────
-/vla/                       @alex7663 @sysy009 @Feroninn
-
-# ── 인식 · 데이터 (perception 노드 오너) ─────────────────
-/perception/                @Hease @Feroninn
-
-# ── UI · 대시보드 ──────────────────────────────────────
-/hud/                       @Hease
-
-# ── 하드웨어 ───────────────────────────────────────────
-/hardware/                  @alex7663
 
 # ── 저장소 설정 · CI (Git Master + Slave) ───────────────
 /.github/                   @sysy009 @Feroninn
 /pyproject.toml             @kica927
 /.gitignore                 @Feroninn
-
-# ── VLA 인터페이스 — 8/14 freeze, 3인 합의 필수 ──────────
-# (반드시 /docs/ 규칙보다 아래에 위치할 것 — 마지막 매칭이 이김)
-/docs/vla_interface.md      @alex7663 @sysy009 @Feroninn
