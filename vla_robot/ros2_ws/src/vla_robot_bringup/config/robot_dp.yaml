@@ -73,8 +73,8 @@ gripper_cam:
   topic: gripper_cam/image_raw
   reopen_after_s: 2.0
   # 팔 작업이 없을 때는 받기만 하고 이 간격마다 한 장만 푼다(10-12 배터리 후보). 0 = 늘 다 푼다(지금).
-  # 10-13 Pi 전력 측정(tools/ops/pi_power.sh)으로 효과를 본 뒤 0.5 로 켤지 정한다.
-  idle_period_s: 0.0
+  # 10-13 실측: 0.5 로 Pi 3.42 → 2.8~3.0 W(robot.yaml 과 같게).
+  idle_period_s: 0.5
 
 policy:
   # DP 6만 스텝을 노트북 RTX 3050 에서 돌린다(10-12). 노트북에서 먼저:
